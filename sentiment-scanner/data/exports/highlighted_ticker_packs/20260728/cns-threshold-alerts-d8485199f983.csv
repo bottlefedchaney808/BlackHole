@@ -1,0 +1,5 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+SPCX,1,60,0.467,0.033,0.0,60,23.3,40.0,0.6
+SLS,2,60,0.467,0.033,0.0,60,40.0,23.3,0.6
+SNDK,3,60,0.333,0.0,0.0,60,23.3,16.7,0.6
+BE,4,60,0.333,0.0,0.0,60,30.0,16.7,0.6

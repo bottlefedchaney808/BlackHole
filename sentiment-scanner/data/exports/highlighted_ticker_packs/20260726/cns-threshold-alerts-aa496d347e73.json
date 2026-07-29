@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "group_id": "cns-threshold-alerts-aa496d347e73",
+  "group_name": "cns-threshold-alerts",
+  "created_at": "2026-07-26T17:55:16.051364+00:00",
+  "source_run_id": "20260726T175421Z",
+  "priority": "high",
+  "thesis_summary": "2 highlighted tickers crossing CNS threshold",
+  "tickers": [
+    {
+      "symbol": "DOGE.X",
+      "rank": 1,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 66.7,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "NVCR",
+      "rank": 2,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    }
+  ],
+  "downstream_hints": {
+    "volatility_suite": true,
+    "var_suite": true,
+    "options_suite": false
+  }
+}

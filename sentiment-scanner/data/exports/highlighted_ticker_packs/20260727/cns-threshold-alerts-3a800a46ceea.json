@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "group_id": "cns-threshold-alerts-3a800a46ceea",
+  "group_name": "cns-threshold-alerts",
+  "created_at": "2026-07-27T15:51:22.905126+00:00",
+  "source_run_id": "20260727T155028Z",
+  "priority": "high",
+  "thesis_summary": "9 highlighted tickers crossing CNS threshold",
+  "tickers": [
+    {
+      "symbol": "SPCX",
+      "rank": 1,
+      "cns": 60,
+      "war_score": 0.533,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 30.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "INTC",
+      "rank": 2,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "SOXL",
+      "rank": 3,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 30.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "VCX",
+      "rank": 4,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.033,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "MU",
+      "rank": 5,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.1,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 33.3,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "AMKR",
+      "rank": 6,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.1,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 23.3,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "NVDA",
+      "rank": 7,
+      "cns": 60,
+      "war_score": 0.333,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 23.3,
+      "bearish_pct": 16.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "AMD",
+      "rank": 8,
+      "cns": 60,
+      "war_score": 0.333,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 36.7,
+      "bearish_pct": 16.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "AAPL",
+      "rank": 9,
+      "cns": 60,
+      "war_score": 0.333,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 16.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    }
+  ],
+  "downstream_hints": {
+    "volatility_suite": true,
+    "var_suite": true,
+    "options_suite": false
+  }
+}

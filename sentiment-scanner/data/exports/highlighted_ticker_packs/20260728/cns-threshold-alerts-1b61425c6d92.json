@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "group_id": "cns-threshold-alerts-1b61425c6d92",
+  "group_name": "cns-threshold-alerts",
+  "created_at": "2026-07-28T13:03:43.250794+00:00",
+  "source_run_id": "20260728T130003Z",
+  "priority": "high",
+  "thesis_summary": "10 highlighted tickers crossing CNS threshold",
+  "tickers": [
+    {
+      "symbol": "CRWV",
+      "rank": 1,
+      "cns": 60,
+      "war_score": 0.533,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 46.7,
+      "bearish_pct": 26.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "DJT",
+      "rank": 2,
+      "cns": 60,
+      "war_score": 0.467,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 40.0,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "STX",
+      "rank": 3,
+      "cns": 60,
+      "war_score": 0.467,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "INTC",
+      "rank": 4,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 26.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "AMD",
+      "rank": 5,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.133,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "SNDK",
+      "rank": 6,
+      "cns": 60,
+      "war_score": 0.333,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 30.0,
+      "bearish_pct": 16.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "MU",
+      "rank": 7,
+      "cns": 60,
+      "war_score": 0.333,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 16.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "CRMD",
+      "rank": 8,
+      "cns": 55,
+      "war_score": 0.267,
+      "thesis_ratio": 0.233,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 13.3,
+      "bearish_pct": 20.0,
+      "confidence": 0.575,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "UPS",
+      "rank": 9,
+      "cns": 55,
+      "war_score": 0.067,
+      "thesis_ratio": 0.2,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 16.7,
+      "bearish_pct": 3.3,
+      "confidence": 0.575,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "KO",
+      "rank": 10,
+      "cns": 55,
+      "war_score": 0.0,
+      "thesis_ratio": 0.3,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 33.3,
+      "bearish_pct": 0.0,
+      "confidence": 0.575,
+      "social_sources": [
+        "stocktwits"
+      ]
+    }
+  ],
+  "downstream_hints": {
+    "volatility_suite": true,
+    "var_suite": true,
+    "options_suite": false
+  }
+}

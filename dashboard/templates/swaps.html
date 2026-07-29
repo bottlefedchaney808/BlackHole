@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Swap trades -- FinancialDevelopment Dashboard{% endblock %}
+
+{% macro page_link(p) -%}
+/swaps?page={{ p }}&per_page={{ per_page }}{% if regulator %}&regulator={{ regulator }}{% endif %}{% if asset_class %}&asset_class={{ asset_class }}{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<h1>Swap trades</h1>
+<p class="sub">
+  {{ total | num }} matching row{{ '' if total == 1 else 's' }} in <code>swap_trades</code>
+  &middot; page {{ page }} of {{ pages }}
+  {% if regulator or asset_class %}
+    &middot; filtered by
+    {% if regulator %}<span class="pill plain">regulator={{ regulator }}</span>{% endif %}
+    {% if asset_class %}<span class="pill plain">asset_class={{ asset_class }}</span>{% endif %}
+  {% endif %}
+</p>
+
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Filter</h2><span class="note">query params: regulator, asset_class, page, per_page</span></header>
+  <div class="body">
+    <form class="runform" method="get" action="/swaps">
+      <div class="field">
+        <label for="regulator">Regulator</label>
+        <select id="regulator" name="regulator">
+          <option value="">(all)</option>
+          {% for r in regulators %}
+            <option value="{{ r }}" {{ 'selected' if r == regulator else '' }}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="asset_class">Asset class</label>
+        <select id="asset_class" name="asset_class">
+          <option value="">(all)</option>
+          {% for a in asset_classes %}
+            <option value="{{ a }}" {{ 'selected' if a == asset_class else '' }}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="per_page">Rows / page</label>
+        <input id="per_page" name="per_page" value="{{ per_page }}" size="5">
+      </div>
+      <button type="submit">Apply</button>
+      <a href="/swaps" style="align-self:center;">reset</a>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <header>
+    <h2>Recent trades</h2>
+    <span class="note">ordered by ingested_at desc</span>
+  </header>
+  {% if not rows %}
+    <div class="body"><div class="empty">
+      {% if total %}Nothing on this page -- try page 1.{% else %}No swap trades match. Run the ingest (backfill.py / poll_ingest.py) to populate swap_trades.{% endif %}
+    </div></div>
+  {% else %}
+  <div class="tablewrap scrollbox">
+    <table>
+      <thead><tr>
+        {% for c in columns %}
+          <th class="{{ 'num' if c in notional_cols else '' }}">{{ c }}</th>
+        {% endfor %}
+      </tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          {% for c in columns %}
+            {% if c in notional_cols %}
+              <td class="num">{{ row[c] | usd }}</td>
+            {% elif c in ('underlying_asset_name', 'upi_underlier_name', 'company_name') %}
+              <td class="wrap">{{ row[c] if row[c] is not none else '--' }}</td>
+            {% elif c in ('ingested_at',) %}
+              <td class="mono small">{{ row[c] | ts }}</td>
+            {% else %}
+              <td class="small">{{ row[c] if row[c] is not none else '--' }}</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pager">
+    {% if page > 1 %}
+      <a href="{{ page_link(1) }}">&laquo; first</a>
+      <a href="{{ page_link(page - 1) }}">&lsaquo; prev</a>
+    {% else %}
+      <span class="muted">&laquo; first</span><span class="muted">&lsaquo; prev</span>
+    {% endif %}
+    <span class="muted small">page {{ page }} / {{ pages }}</span>
+    {% if page < pages %}
+      <a href="{{ page_link(page + 1) }}">next &rsaquo;</a>
+      <a href="{{ page_link(pages) }}">last &raquo;</a>
+    {% else %}
+      <span class="muted">next &rsaquo;</span><span class="muted">last &raquo;</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

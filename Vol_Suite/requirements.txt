@@ -1,0 +1,40 @@
+# Vol_Suite runtime dependencies
+#
+#   python -m venv .venv
+#   .venv\Scripts\Activate.ps1          # PowerShell
+#   pip install -r requirements.txt
+#
+# Python 3.10+ (uses match-free syntax but relies on 3.10-era typing behavior).
+# Everything below is a genuine import somewhere in the suite -- no yfinance:
+# yahoo was purged from this project (see index_membership._fetch_holdings_yfinance,
+# kept only as a no-op stub). ThetaData via api.potatohedge.com is the sole
+# market-data source, with stockanalysis.com as the only outside fallback
+# (ETF constituent weights, which ThetaData doesn't carry).
+
+# --- Core numerics ---
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10            # norm/ttest_ind (backtest_stage3), minimize (SABR fit)
+
+# --- Data access ---
+httpx>=0.24            # thetadata_client -- the only HTTP client on the hot path
+
+# --- Charting ---
+matplotlib>=3.7
+
+# --- GARCH / term structure (garch_analysis.py) ---
+arch>=6.0
+statsmodels>=0.14
+
+# --- PDF report composer (vs_utils.compose_pdf_report, volatility_suite.py) ---
+reportlab>=4.0
+pillow>=10.0
+
+#data
+thetadata 
+
+#date
+datetime
+
+#typing 
+typing

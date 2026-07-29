@@ -1,0 +1,30 @@
+# Credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor/IDE
+.vs/
+
+# Generated outputs (module runs write timestamped files here and at the
+# project root -- these are run artifacts, not source)
+outputs/
+*_hedging_heatmap_*.png
+*_variance_swap_plots_*.png
+*_garch_*.png
+*_gamma_records_*.csv
+correlation_matrix_*.csv
+correlation_pairs_*.csv
+correlation_heatmap_*.png
+correlation_matrix_table_*.png
+correlation_summary_*.png
+basket_summary_*.csv
+screener_*.csv
+screener_*.png
+*_variance_swap_strikes_*.csv
+*_variance_swap_summary_*.csv
+Screenshot *.png

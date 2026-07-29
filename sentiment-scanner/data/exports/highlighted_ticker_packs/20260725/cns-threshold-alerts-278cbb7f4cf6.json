@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "group_id": "cns-threshold-alerts-278cbb7f4cf6",
+  "group_name": "cns-threshold-alerts",
+  "created_at": "2026-07-25T21:35:37.183897+00:00",
+  "source_run_id": "20260725T213442Z",
+  "priority": "high",
+  "thesis_summary": "6 highlighted tickers crossing CNS threshold",
+  "tickers": [
+    {
+      "symbol": "ETH",
+      "rank": 1,
+      "cns": 85,
+      "war_score": 0.333,
+      "thesis_ratio": 0.3,
+      "pump_ratio": 0.033,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 16.7,
+      "confidence": 0.725,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "DOT.X",
+      "rank": 2,
+      "cns": 60,
+      "war_score": 0.467,
+      "thesis_ratio": 0.033,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 53.3,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "BONK.X",
+      "rank": 3,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.033,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 53.3,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "DASH",
+      "rank": 4,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.133,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "TSSI",
+      "rank": 5,
+      "cns": 60,
+      "war_score": 0.333,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 53.3,
+      "bearish_pct": 16.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "NEAR.X",
+      "rank": 6,
+      "cns": 55,
+      "war_score": 0.067,
+      "thesis_ratio": 0.167,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 46.7,
+      "bearish_pct": 3.3,
+      "confidence": 0.575,
+      "social_sources": [
+        "stocktwits"
+      ]
+    }
+  ],
+  "downstream_hints": {
+    "volatility_suite": true,
+    "var_suite": true,
+    "options_suite": false
+  }
+}

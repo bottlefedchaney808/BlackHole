@@ -1,0 +1,5 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+SPCX,1,60,0.533,0.033,0.0,60,26.7,30.0,0.6
+AMZN,2,60,0.467,0.1,0.0,60,33.3,23.3,0.6
+QQQ,3,60,0.4,0.067,0.0,60,26.7,20.0,0.6
+F,4,55,0.067,0.167,0.0,60,50.0,3.3,0.575

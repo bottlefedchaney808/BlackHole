@@ -1,0 +1,56 @@
+# Secrets -- never commit real credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments (each suite has its own)
+.venv/
+venv/
+
+# Editor / IDE
+.vs/
+.claude/worktrees/
+
+# Caches
+.cache/
+.shared_cache/
+.pytest_cache/
+.scheduler.lock/
+
+# Logs
+*.log
+
+# Stray FUSE/editor temp files from the 9p WSL mount
+.fuse_hidden*
+
+# Generated reports / run artifacts (regenerate on demand)
+comparison_*.csv
+comparison_*.pdf
+outputs/
+*_hedging_heatmap_*.png
+*_variance_swap_plots_*.png
+*_garch_*.png
+*_gamma_records_*.csv
+correlation_matrix_*.csv
+correlation_pairs_*.csv
+correlation_heatmap_*.png
+correlation_matrix_table_*.png
+correlation_summary_*.png
+basket_summary_*.csv
+screener_*.csv
+screener_*.png
+*_variance_swap_strikes_*.csv
+*_variance_swap_summary_*.csv
+Screenshot *.png
+
+# DTCC/swaps ingestion pipeline: raw pulls, derived DB, per-run output dirs
+CFTC_SLICE_EQUITIES_*/
+dtcc_data/
+swaps.db
+swaps.db-shm
+swaps.db-wal
+orchestrator_output/
+dashboard/dashboard_*.log

@@ -1,0 +1,5 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+SLS,1,60,0.4,0.067,0.0,60,53.3,20.0,0.6
+SNDK,2,60,0.333,0.1,0.0,60,33.3,16.7,0.6
+BE,3,60,0.333,0.033,0.0,60,33.3,16.7,0.6
+QQQ,4,60,0.333,0.0,0.0,60,16.7,26.7,0.6

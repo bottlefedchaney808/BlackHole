@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ suite }} output -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<h1>Latest {{ suite }} output</h1>
+<p class="sub">
+  {% if spec %}{{ spec.label }} &middot; {{ spec.hint }}{% else %}unknown suite{% endif %}
+</p>
+
+<div class="panel">
+  <header><h2>Suites</h2><span class="note">newest matching file wins</span></header>
+  <div class="body">
+    {% for key, s in suites.items() %}
+      <a href="/suites/{{ key }}"
+         class="pill {{ 'plain' if key == suite else '' }}"
+         style="margin-right:8px; {{ '' if key == suite else 'border-color:var(--border); color:var(--muted);' }}">
+        {{ key }} &middot; {{ s.label }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+{% if spec and not path %}
+  <div class="panel"><div class="body">
+    <div class="empty">
+      <strong>Nothing produced yet.</strong><br>
+      No file matched {{ spec.hint }}.<br>
+      <span class="small">Trigger a run from the <a href="/">overview page</a>; output shows up here once the suite writes it.</span>
+    </div>
+    <details style="margin-top:12px;">
+      <summary class="muted small" style="cursor:pointer;">globs searched</summary>
+      <pre class="json" style="margin-top:8px;">{% for g in spec.globs %}{{ g }}
+{% endfor %}</pre>
+    </details>
+  </div></div>
+{% elif path %}
+  <div class="panel">
+    <header>
+      <h2 class="mono" style="font-size:13px;">{{ rel_path }}</h2>
+      <span class="note">modified {{ modified | ts }} UTC</span>
+    </header>
+
+    {% if view and view.kind == 'table' %}
+      <div class="tablewrap scrollbox">
+        <table>
+          <thead><tr>{% for h in view.headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+          <tbody>
+          {% for row in view.rows %}
+            <tr>
+              {% for cell in row %}
+                <td class="small">{{ cell if cell not in (none, '') else '--' }}</td>
+              {% endfor %}
+              {% for _ in range(view.headers | length - row | length) %}<td class="muted">--</td>{% endfor %}
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="pager muted small">
+        {{ view.rows | length }} row{{ '' if view.rows | length == 1 else 's' }} shown
+        {% if view.truncated %}(truncated -- open the file for the rest){% endif %}
+      </div>
+
+    {% elif view and view.kind == 'pairs' %}
+      <div class="body">
+        <div class="kv">
+          {% for k, v in view.pairs %}
+            <div>{{ k }}</div><div class="val">{{ v if v != '' else '--' }}</div>
+          {% endfor %}
+        </div>
+        <details style="margin-top:14px;">
+          <summary class="muted small" style="cursor:pointer;">raw JSON</summary>
+          <pre class="json" style="margin-top:8px;">{{ view.raw }}</pre>
+        </details>
+      </div>
+
+    {% elif view and view.kind == 'raw' %}
+      <div class="body"><pre class="json">{{ view.raw }}</pre></div>
+
+    {% else %}
+      <div class="body"><div class="empty">File found but it is empty.</div></div>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}

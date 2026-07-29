@@ -1,0 +1,9 @@
+# VaR Tools — Python environment
+# Activate: .venv\Scripts\activate
+# Install:  uv pip install -r requirements.txt --python .venv/Scripts/python.exe
+
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+httpx>=0.24
+xlrd>=2.0      # only needed to read the reference Excel during dev/testing

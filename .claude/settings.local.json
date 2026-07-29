@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jq --version)",
+      "Bash(claude --version)",
+      "Bash(ls -la ~/.claude 2>&1 | head -30; echo \"---claude.json---\"; ls -la ~/.claude.json 2>&1; echo \"---home---\"; echo $HOME)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

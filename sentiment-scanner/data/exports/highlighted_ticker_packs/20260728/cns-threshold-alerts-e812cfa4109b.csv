@@ -1,0 +1,6 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+DJT,1,60,0.467,0.0,0.0,60,23.3,26.7,0.6
+SNDK,2,60,0.4,0.033,0.0,60,33.3,20.0,0.6
+PLTR,3,60,0.4,0.0,0.0,60,36.7,20.0,0.6
+CLS,4,60,0.333,0.033,0.0,60,40.0,16.7,0.6
+REPL,5,60,0.333,0.067,0.0,60,16.7,16.7,0.6

@@ -1,0 +1,6 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+JPM,1,85,0.333,0.2,0.0,60,16.7,23.3,0.725
+SOXL,2,60,0.6,0.067,0.0,60,33.3,30.0,0.6
+SPCX,3,60,0.4,0.033,0.0,60,20.0,33.3,0.6
+SNDK,4,60,0.333,0.067,0.0,60,16.7,16.7,0.6
+INTC,5,60,0.333,0.0,0.0,60,16.7,26.7,0.6

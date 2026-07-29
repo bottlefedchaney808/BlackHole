@@ -1,0 +1,5 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+DJT,1,60,0.4,0.033,0.0,60,20.0,23.3,0.6
+NBIS,2,60,0.4,0.033,0.0,60,23.3,20.0,0.6
+SOXL,3,60,0.333,0.0,0.0,60,20.0,16.7,0.6
+MU,4,60,0.333,0.0,0.0,60,36.7,16.7,0.6

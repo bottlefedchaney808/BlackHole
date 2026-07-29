@@ -1,0 +1,6 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+SOXL,1,60,0.4,0.0,0.0,60,30.0,20.0,0.6
+SNDK,2,60,0.333,0.1,0.0,60,30.0,16.7,0.6
+UCO,3,60,0.333,0.033,0.0,60,16.7,33.3,0.6
+SPY,4,60,0.333,0.0,0.0,60,16.7,23.3,0.6
+ASML,5,55,0.133,0.167,0.0,60,6.7,13.3,0.575

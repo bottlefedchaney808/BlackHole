@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "group_id": "cns-threshold-alerts-b4ec3c57a97f",
+  "group_name": "cns-threshold-alerts",
+  "created_at": "2026-07-28T16:25:15.939888+00:00",
+  "source_run_id": "20260728T162159Z",
+  "priority": "high",
+  "thesis_summary": "4 highlighted tickers crossing CNS threshold",
+  "tickers": [
+    {
+      "symbol": "SPCX",
+      "rank": 1,
+      "cns": 60,
+      "war_score": 0.533,
+      "thesis_ratio": 0.033,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 30.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "AMZN",
+      "rank": 2,
+      "cns": 60,
+      "war_score": 0.467,
+      "thesis_ratio": 0.1,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 33.3,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "QQQ",
+      "rank": 3,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "F",
+      "rank": 4,
+      "cns": 55,
+      "war_score": 0.067,
+      "thesis_ratio": 0.167,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 50.0,
+      "bearish_pct": 3.3,
+      "confidence": 0.575,
+      "social_sources": [
+        "stocktwits"
+      ]
+    }
+  ],
+  "downstream_hints": {
+    "volatility_suite": true,
+    "var_suite": true,
+    "options_suite": false
+  }
+}

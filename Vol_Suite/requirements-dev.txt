@@ -1,0 +1,17 @@
+# Development / test dependencies.
+#
+#   pip install -r requirements-dev.txt
+#
+# Installs the runtime deps too, so this is the only line you need in a fresh
+# venv you intend to run the test suite in.
+
+-r requirements.txt
+
+pytest>=7.4
+
+# Only used by diagnostics/probe_stockanalysis.py -- stockanalysis.com blocks
+# plain-urllib TLS fingerprints, and curl_cffi impersonates a real browser.
+# Not needed to run the suite or the tests; install if you're debugging the
+# ETF-holdings fallback specifically.
+requests>=2.31
+curl_cffi>=0.6

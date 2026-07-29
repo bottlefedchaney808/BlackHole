@@ -1,0 +1,4 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+UCO,1,60,0.4,0.033,0.0,60,20.0,33.3,0.6
+AMD,2,60,0.333,0.1,0.0,60,33.3,16.7,0.6
+SNDK,3,60,0.333,0.1,0.0,60,46.7,16.7,0.6

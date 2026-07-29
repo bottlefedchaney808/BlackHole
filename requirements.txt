@@ -1,0 +1,59 @@
+# FinancialDevelopment — shared root virtual environment
+#
+# Union of dependencies for: Options_Suite, Vol_Suite, VaR_Tools_Simulations,
+# sentiment-scanner, and the root DTCC ingestion pipeline.
+#
+#   python -m venv .venv
+#   .venv\Scripts\Activate.ps1          # PowerShell
+#   pip install -r requirements.txt
+#
+# Pins below are taken from what was already installed and working in each
+# suite's per-suite .venv (all built on Python 3.12.10), chosen to minimize
+# behavior change when the suites switch over to this shared environment.
+#
+# Deliberately EXCLUDED:
+#   - cupy-cuda12x / nvidia-*-cu12 (CUDA/GPU stack) -- GPU support is opt-in
+#     per-machine, not a shared-venv default. Options_Suite falls back to CPU
+#     automatically, or set OPTIONS_SUITE_FORCE_CPU=1 to force it.
+#   - psycopg2-binary -- leftover from an abandoned Postgres path; the project
+#     is SQLite-only (see swaps.db / setup_db.py).
+
+# --- Core numerics ---
+numpy==2.5.1
+pandas==3.0.5
+scipy==1.18.0
+
+# --- HTTP / networking ---
+httpx==0.28.1
+requests==2.34.2
+websockets==16.1
+curl_cffi==0.15.0
+
+# --- Market data ---
+thetadata==1.0.9
+yfinance==1.5.1
+
+# --- Parsing / scraping ---
+beautifulsoup4==4.15.0
+xlrd==2.0.2
+
+# --- Charting / reporting ---
+matplotlib==3.11.1
+reportlab==5.0.0
+pillow==12.3.0
+
+# --- Stats / vol modeling (Vol_Suite garch_analysis.py, backtest_stage3.py) ---
+arch==8.0.0
+statsmodels==0.14.6
+
+# --- Config / scheduling ---
+python-dotenv==1.2.2
+APScheduler==3.11.3
+
+# --- Testing ---
+pytest==9.1.1
+
+# --- Dashboard / API (FastAPI live app) ---
+fastapi==0.140.13
+uvicorn==0.51.0
+jinja2==3.1.6

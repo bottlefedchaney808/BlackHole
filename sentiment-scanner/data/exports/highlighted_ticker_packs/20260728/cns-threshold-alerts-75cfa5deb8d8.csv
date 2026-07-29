@@ -1,0 +1,6 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+BE,1,60,0.467,0.0,0.0,60,23.3,26.7,0.6
+SPCX,2,60,0.4,0.033,0.0,60,20.0,33.3,0.6
+IONQ,3,60,0.333,0.033,0.0,60,23.3,16.7,0.6
+AMD,4,60,0.333,0.1,0.0,60,23.3,16.7,0.6
+QQQ,5,60,0.333,0.0,0.0,60,23.3,16.7,0.6
