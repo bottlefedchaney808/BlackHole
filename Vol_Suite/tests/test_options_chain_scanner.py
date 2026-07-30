@@ -121,7 +121,7 @@ def test_extract_chain_data_from_df():
     import pandas as pd
     from options_chain_scanner import _extract_chain_data_from_df
 
-    # Create a test DataFrame with mock data
+    # Create a test DataFrame with mock data (same columns as options_chain_scanner output)
     df = pd.DataFrame({
         'strike': [100, 105, 110, 100, 105, 110],
         'right': ['C', 'C', 'C', 'P', 'P', 'P'],
@@ -130,7 +130,8 @@ def test_extract_chain_data_from_df():
         'theta': [-0.05, -0.04, -0.03, -0.05, -0.04, -0.03],
         'vega': [0.25, 0.3, 0.25, 0.25, 0.3, 0.25],
         'vanna': [0.01, 0.02, 0.01, 0.01, 0.02, 0.01],
-        'bid_ask_spread': [0.1, 0.05, 0.1, 0.1, 0.05, 0.1],
+        'bid': [0.5, 0.3, 0.2, 0.5, 0.3, 0.2],
+        'ask': [0.6, 0.35, 0.3, 0.6, 0.35, 0.3],
         'oi': [100, 500, 200, 100, 500, 200],
     })
 

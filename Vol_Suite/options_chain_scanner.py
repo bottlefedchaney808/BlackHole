@@ -165,7 +165,7 @@ def _extract_chain_data_from_df(scan_result_df: pd.DataFrame, option_type: str =
 
     Args:
         scan_result_df: DataFrame from scan_result.df with columns:
-                        strike, right, delta, gamma, theta, vega, vanna, bid_ask_spread, oi
+                        strike, right, delta, gamma, theta, vega, vanna, bid, ask, oi
         option_type: 'call' or 'put'
 
     Returns:
@@ -177,6 +177,9 @@ def _extract_chain_data_from_df(scan_result_df: pd.DataFrame, option_type: str =
     if len(filtered) == 0:
         raise ValueError(f"No {option_type} options found in scan result")
 
+    # Calculate bid-ask spread from bid and ask columns
+    bid_ask_spread = (filtered['ask'] - filtered['bid']).fillna(0.0).tolist()
+
     return {
         'strikes': filtered['strike'].tolist(),
         'delta': filtered['delta'].tolist(),
@@ -184,7 +187,7 @@ def _extract_chain_data_from_df(scan_result_df: pd.DataFrame, option_type: str =
         'theta': filtered['theta'].tolist(),
         'vega': filtered['vega'].tolist(),
         'vanna': filtered['vanna'].tolist(),
-        'bid_ask_spread': filtered['bid_ask_spread'].tolist(),
+        'bid_ask_spread': bid_ask_spread,
         'open_interest': filtered['oi'].tolist(),
     }
 
