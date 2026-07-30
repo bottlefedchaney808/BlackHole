@@ -19,7 +19,9 @@ from upi_decoder import OpenFigiClient, decode_one
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'swaps.db')
+# SWAPS_DB_PATH env var overrides, e.g. for a mounted Docker volume; see
+# .env.example / docker-compose.yml
+DB_PATH = os.environ.get('SWAPS_DB_PATH') or os.path.join(os.path.dirname(__file__), 'swaps.db')
 DEFAULT_BATCH_SIZE = 5000
 DEFAULT_MAX_BATCHES = 20
 

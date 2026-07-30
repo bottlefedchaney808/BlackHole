@@ -1,16 +1,17 @@
-"""Shared JSON schema validators for all 5 inter-suite artifacts.
+"""Shared JSON schema validators for all 6 inter-suite artifacts.
 
 Each validator accepts dict data (as parsed from JSON) and raises ValueError
 on the first violation.  This module mirrors and supplements the inline
 validation in each suite with a central, importable copy suitable for testing
 and cross-suite tooling.
 
-The 5 artifacts:
+The 6 artifacts:
   1. suite_context.json  — schema_version=1  (Vol_Suite → everyone via --context)
   2. options_result.json — no schema_version (Options_Suite → Vol_Suite)
   3. var_result.json     — no schema_version (VaR_Tools_Simulations → Vol_Suite)
   4. Sentiment pack JSON — no schema_version (sentiment-scanner ticker pack)
   5. Sentiment context   — schema_version=2  (sentiment-scanner context export)
+  6. vol_result.json     — schema_version=1  (Vol_Suite → orchestrator)
 """
 
 from __future__ import annotations
@@ -44,6 +45,59 @@ def _warn_missing_schema_version(data: Dict[str, Any], artifact: str) -> None:
             f"(backward-compatibility path)",
             stacklevel=2,
         )
+
+
+# ── 0. sentiment block (shared by artifacts 1 and 5) ────────────────────
+
+#: The four fields that make up a sentiment block, in canonical order.  This is
+#: the only part of suite_context.json that the orchestrator mutates after the
+#: producer stage, so it is factored out here and validated on its own.
+SENTIMENT_BLOCK_KEYS = ("manifest_path", "pack_json_path", "group_id",
+                        "ranked_tickers")
+
+
+def validate_sentiment_block(block: Any, strict: bool = False,
+                             path: str = "sentiment") -> None:
+    """Validate the sentiment block shared by two artifacts.
+
+    It appears embedded in suite_context.json (artifact 1) and as the
+    top-level ``sentiment`` object of the sentiment context export
+    (artifact 5).  The two differ only in strictness:
+
+    ``strict=False`` — the suite_context flavour.  ``manifest_path`` must be a
+    non-empty string; ``pack_json_path`` and ``group_id`` may be null, because
+    ``build_suite_context`` fills them in only once a pack exists.
+
+    ``strict=True`` — the context-export flavour.  All three path/id fields
+    must be non-empty strings, because the producer has by then actually
+    written a pack and has nothing to be uncertain about.
+
+    *path* prefixes the error messages so a caller validating a nested copy
+    can say where it lives.  Raises ValueError on the first violation.
+    """
+    _require(isinstance(block, dict), f"{path} must be an object")
+
+    for key in SENTIMENT_BLOCK_KEYS:
+        _require(key in block, f"Missing required field: {path}.{key}")
+
+    _require(isinstance(block["manifest_path"], str) and block["manifest_path"].strip(),
+             f"{path}.manifest_path must be a non-empty string")
+
+    if strict:
+        _require(isinstance(block["pack_json_path"], str)
+                 and block["pack_json_path"].strip(),
+                 f"{path}.pack_json_path must be a non-empty string")
+        _require(isinstance(block["group_id"], str) and block["group_id"].strip(),
+                 f"{path}.group_id must be a non-empty string")
+    else:
+        _require(block["pack_json_path"] is None
+                 or isinstance(block["pack_json_path"], str),
+                 f"{path}.pack_json_path must be null or string")
+        _require(block["group_id"] is None or isinstance(block["group_id"], str),
+                 f"{path}.group_id must be null or string")
+
+    _require(isinstance(block["ranked_tickers"], list),
+             f"{path}.ranked_tickers must be a list")
 
 
 # ── 1. suite_context.json ───────────────────────────────────────────────
@@ -105,19 +159,8 @@ def validate_suite_context(data: Dict[str, Any]) -> None:
              "basket.weights must sum to a positive value")
 
     # ── sentiment ─────────────────────────────────────────────────────
-    sentiment = data["sentiment"]
-    _require(isinstance(sentiment, dict), "sentiment must be an object")
-    for key in ("manifest_path", "pack_json_path", "group_id", "ranked_tickers"):
-        _require(key in sentiment, f"Missing required field: sentiment.{key}")
-    _require(isinstance(sentiment["manifest_path"], str) and sentiment["manifest_path"].strip(),
-             "sentiment.manifest_path must be a non-empty string")
-    _require(sentiment["pack_json_path"] is None
-             or isinstance(sentiment["pack_json_path"], str),
-             "sentiment.pack_json_path must be null or string")
-    _require(sentiment["group_id"] is None or isinstance(sentiment["group_id"], str),
-             "sentiment.group_id must be null or string")
-    _require(isinstance(sentiment["ranked_tickers"], list),
-             "sentiment.ranked_tickers must be a list")
+    # Lenient flavour: pack_json_path/group_id are null until a pack exists.
+    validate_sentiment_block(data["sentiment"], strict=False)
 
     # ── var ────────────────────────────────────────────────────────────
     var = data["var"]
@@ -310,18 +353,156 @@ def validate_sentiment_context(data: Dict[str, Any]) -> None:
              and data["created_at_utc"].strip(),
              "created_at_utc must be a non-empty string")
 
-    sentiment = data.get("sentiment")
-    _require(isinstance(sentiment, dict), "sentiment must be an object")
-    for key in ("manifest_path", "pack_json_path", "group_id", "ranked_tickers"):
-        _require(key in sentiment, f"Missing required field: sentiment.{key}")
-    _require(isinstance(sentiment["manifest_path"], str)
-             and sentiment["manifest_path"].strip(),
-             "sentiment.manifest_path must be a non-empty string")
-    _require(isinstance(sentiment["pack_json_path"], str)
-             and sentiment["pack_json_path"].strip(),
-             "sentiment.pack_json_path must be a non-empty string")
-    _require(isinstance(sentiment["group_id"], str)
-             and sentiment["group_id"].strip(),
-             "sentiment.group_id must be a non-empty string")
-    _require(isinstance(sentiment["ranked_tickers"], list),
-             "sentiment.ranked_tickers must be a list")
+    # Strict flavour: the producer has written a pack, so every path/id is real.
+    validate_sentiment_block(data.get("sentiment"), strict=True)
+
+
+# ── 6. vol_result.json ──────────────────────────────────────────────────
+
+VOL_RESULT_SCHEMA_VERSION = 1
+
+#: Keys every ``vol_result.json`` carries regardless of status. They are
+#: required even on the error path — empty dict / empty list rather than
+#: absent — so a consumer can read ``payload["gamma_records"]`` unconditionally
+#: and branch on ``status``, instead of guarding every access with ``.get()``.
+VOL_RESULT_REQUIRED_KEYS = (
+    "suite", "status", "ticker", "timestamp",
+    "vol_surface", "dealer_positioning", "gamma_records",
+)
+
+#: Scalar summary of one variance-swap replication leg. Only ``ticker`` and
+#: ``fair_vol_pct`` are required; the rest of the leg (spot, forward, ATM IV,
+#: convexity premium, strike count) is present in practice but a leg that
+#: partially resolved is still more useful than no leg at all.
+_VOL_LEG_REQUIRED = ("ticker", "fair_vol_pct")
+
+#: Per-record fields of the dealer gamma ladder.
+_GAMMA_RECORD_REQUIRED = (
+    "strike", "expiry", "right", "oi", "gamma", "dollar_gamma", "iv", "tte",
+)
+
+
+def _validate_vol_leg(leg: Any, label: str) -> None:
+    """One replication leg: ``None`` when that leg failed, else an object."""
+    if leg is None:
+        return
+    _require(isinstance(leg, dict), f"vol_surface.{label} must be null or an object")
+    for key in _VOL_LEG_REQUIRED:
+        _require(key in leg, f"Missing required field: vol_surface.{label}.{key}")
+    _require(isinstance(leg["ticker"], str) and leg["ticker"].strip(),
+             f"vol_surface.{label}.ticker must be a non-empty string")
+    _require(leg["fair_vol_pct"] is None or _is_number(leg["fair_vol_pct"]),
+             f"vol_surface.{label}.fair_vol_pct must be numeric or null")
+
+
+def validate_vol_result(data: Dict[str, Any]) -> None:
+    """Validate a vol_result.json payload produced by
+    Vol_Suite/volatility_suite.py::run_context_mode() (and by its interactive
+    unified flow, which writes the identical artifact).
+
+    This is the contract that replaced the orchestrator's old habit of
+    *scripting Vol_Suite's stdin* and then synthesizing a result by listing
+    files in the output directory. Because that synthesis could not tell a
+    successful run from one where every data fetch failed — both leave a
+    directory of files behind — the interesting half of this validator is what
+    it demands for ``status == "ok"``:
+
+      * ``vol_surface`` must carry the run's identity (focus/index ticker, the
+        pinned expiry, target_years) and both legs, each either a real leg or
+        an explicit ``null``.
+      * ``dealer_positioning`` must carry an explicit boolean ``available``,
+        and when it is true, the scalars that make the block meaningful.
+      * at least one of {focus leg, index leg, dealer positioning} must
+        actually be present. A payload where all three are empty is a failed
+        run wearing a success label, and is rejected.
+
+    Accepts both success (status='ok') and error (status='error') shapes.
+    Raises ValueError on the first violation.
+    """
+    _require(isinstance(data, dict), "vol_result must be a JSON object")
+
+    _warn_missing_schema_version(data, "vol_result")
+
+    for key in VOL_RESULT_REQUIRED_KEYS:
+        _require(key in data, f"Missing required field: {key}")
+
+    if "schema_version" in data:
+        _require(data["schema_version"] == VOL_RESULT_SCHEMA_VERSION,
+                 f"schema_version must be {VOL_RESULT_SCHEMA_VERSION}")
+    _require(data["suite"] == "vol", "suite must be 'vol'")
+    _require(data["status"] in ("ok", "error"), "status must be 'ok' or 'error'")
+    _require(isinstance(data["ticker"], str), "ticker must be a string")
+    _require(isinstance(data["timestamp"], str) and data["timestamp"].strip(),
+             "timestamp must be a non-empty string")
+
+    vol_surface = data["vol_surface"]
+    dealer = data["dealer_positioning"]
+    records = data["gamma_records"]
+    _require(isinstance(vol_surface, dict), "vol_surface must be an object")
+    _require(isinstance(dealer, dict), "dealer_positioning must be an object")
+    _require(isinstance(records, list), "gamma_records must be a list")
+
+    if data["status"] == "error":
+        _require(isinstance(data.get("error"), str) and data["error"].strip(),
+                 "error must be a non-empty string for status='error'")
+        return
+
+    # ── status == 'ok' from here down ────────────────────────────────
+    _require(data["ticker"].strip(),
+             "ticker must be a non-empty string for status='ok'")
+
+    for key in ("focus_ticker", "index_ticker", "expiration", "target_years",
+                "focus", "index", "basket"):
+        _require(key in vol_surface, f"Missing required field: vol_surface.{key}")
+    _require(isinstance(vol_surface["focus_ticker"], str) and vol_surface["focus_ticker"].strip(),
+             "vol_surface.focus_ticker must be a non-empty string")
+    _require(isinstance(vol_surface["index_ticker"], str) and vol_surface["index_ticker"].strip(),
+             "vol_surface.index_ticker must be a non-empty string")
+    _require(isinstance(vol_surface["expiration"], str) and vol_surface["expiration"].strip(),
+             "vol_surface.expiration must be a non-empty string")
+    _require(_is_number(vol_surface["target_years"]),
+             "vol_surface.target_years must be numeric")
+    _validate_vol_leg(vol_surface["focus"], "focus")
+    _validate_vol_leg(vol_surface["index"], "index")
+    _require(vol_surface.get("vol_spread_pts") is None
+             or _is_number(vol_surface["vol_spread_pts"]),
+             "vol_surface.vol_spread_pts must be numeric or null")
+
+    basket = vol_surface["basket"]
+    _require(isinstance(basket, dict), "vol_surface.basket must be an object")
+    for key in ("tickers", "weights"):
+        _require(key in basket, f"Missing required field: vol_surface.basket.{key}")
+    _require(isinstance(basket["tickers"], list),
+             "vol_surface.basket.tickers must be a list")
+    _require(isinstance(basket["weights"], list)
+             and len(basket["weights"]) == len(basket["tickers"]),
+             "vol_surface.basket.weights must match vol_surface.basket.tickers length")
+    _require(basket.get("dispersion_score") is None or _is_number(basket["dispersion_score"]),
+             "vol_surface.basket.dispersion_score must be numeric or null")
+
+    _require("available" in dealer, "Missing required field: dealer_positioning.available")
+    _require(_is_bool(dealer["available"]), "dealer_positioning.available must be boolean")
+    _require(isinstance(dealer.get("sign_model"), str),
+             "dealer_positioning.sign_model must be a string")
+    if dealer["available"]:
+        for key in ("spot", "total_net_gamma", "total_net_dollar_gamma",
+                    "hedge_requirement", "gamma_flip_level"):
+            _require(key in dealer, f"Missing required field: dealer_positioning.{key}")
+            _require(dealer[key] is None or _is_number(dealer[key]),
+                     f"dealer_positioning.{key} must be numeric or null")
+
+    total = data.get("gamma_records_total", len(records))
+    _require(isinstance(total, int) and not _is_bool(total) and total >= 0,
+             "gamma_records_total must be a non-negative integer")
+    _require(len(records) <= total,
+             f"gamma_records has {len(records)} rows but gamma_records_total is {total}")
+    _require(_is_bool(data.get("gamma_records_truncated", False)),
+             "gamma_records_truncated must be boolean")
+    for i, rec in enumerate(records):
+        _require(isinstance(rec, dict), f"gamma_records[{i}] must be an object")
+        for key in _GAMMA_RECORD_REQUIRED:
+            _require(key in rec, f"gamma_records[{i}] missing required field: {key}")
+
+    _require(bool(vol_surface["focus"]) or bool(vol_surface["index"]) or dealer["available"],
+             "status='ok' but the payload is empty: no focus leg, no index leg, "
+             "and dealer_positioning.available is false")

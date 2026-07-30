@@ -28,18 +28,23 @@ from __future__ import annotations
 import csv
 import glob
 import json
+import logging
 import os
 import sqlite3
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # --------------------------------------------------------------------------
 # paths / repo imports
@@ -53,6 +58,16 @@ if ROOT not in sys.path:
 import orchestrator  # noqa: E402  (path is set immediately above)
 from db_loader import SwapsLoader  # noqa: E402
 from swaps_query import SwapsQuery  # noqa: E402
+from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary  # noqa: E402
+from dashboard.auth import verify_api_key, get_client_ip  # noqa: E402
+from shared.logging import setup_logging, get_metrics  # noqa: E402
+
+# Setup structured JSON logging
+logger = setup_logging(
+    name='dashboard',
+    level=logging.INFO,
+    use_json=True,
+)
 
 DB_PATH = orchestrator.DB_PATH
 SUITE_ROOTS = orchestrator.SUITE_ROOTS
@@ -60,6 +75,11 @@ SUITE_ROOTS = orchestrator.SUITE_ROOTS
 TEMPLATES = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, 'templates'))
 
 app = FastAPI(title='FinancialDevelopment Dashboard')
+
+# Rate limiter: max 1 run per 60s per IP, max 10 concurrent
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # --------------------------------------------------------------------------
@@ -210,29 +230,29 @@ def _orchestrator_runs(limit: int = 20) -> Tuple[List[Dict[str, Any]], Optional[
         raw = [dict(r) for r in conn.execute(
             'SELECT id, run_type, focus_json, started_at, completed_at, status '
             'FROM orchestrator_runs ORDER BY id DESC LIMIT ?;', (limit,))]
+
+        for row in raw:
+            focus: Dict[str, Any] = {}
+            try:
+                focus = json.loads(row.get('focus_json') or '{}') or {}
+            except Exception:
+                focus = {}
+            row['focus'] = focus
+            row['ticker'] = focus.get('ticker') or '--'
+            bits = []
+            if focus.get('expiration_date'):
+                bits.append(str(focus['expiration_date']))
+            if focus.get('option_type'):
+                bits.append(str(focus['option_type']))
+            if focus.get('strike') is not None:
+                bits.append(f"K={focus['strike']}")
+            row['focus_summary'] = ' '.join(bits) or '--'
+            row['live'] = row['id'] in _RUNS
+        return raw, None
     except Exception as e:
         return [], f'{type(e).__name__}: {e}'
     finally:
         conn.close()
-
-    for row in raw:
-        focus: Dict[str, Any] = {}
-        try:
-            focus = json.loads(row.get('focus_json') or '{}') or {}
-        except Exception:
-            focus = {}
-        row['focus'] = focus
-        row['ticker'] = focus.get('ticker') or '--'
-        bits = []
-        if focus.get('expiration_date'):
-            bits.append(str(focus['expiration_date']))
-        if focus.get('option_type'):
-            bits.append(str(focus['option_type']))
-        if focus.get('strike') is not None:
-            bits.append(f"K={focus['strike']}")
-        row['focus_summary'] = ' '.join(bits) or '--'
-        row['live'] = row['id'] in _RUNS
-    return raw, None
 
 
 # --------------------------------------------------------------------------
@@ -629,10 +649,13 @@ def swaps(request: Request,
 
 
 @app.post('/run/{suite_or_unified}')
+@limiter.limit("1/60s")  # Max 1 run per 60 seconds per IP
 async def trigger_run(suite_or_unified: str, request: Request,
-                      background_tasks: BackgroundTasks):
+                      background_tasks: BackgroundTasks,
+                      _: str = Depends(verify_api_key)):
     """Kick off run_suite(<name>, ...) or run_unified(...) in the background.
 
+    Requires API key in Authorization header.
     Returns immediately with a run_id -- these take up to
     orchestrator.DEFAULT_TIMEOUT_SEC (1800s) per child, so the response cannot
     wait on the result. Poll GET /runs/{run_id}.
@@ -654,7 +677,12 @@ async def trigger_run(suite_or_unified: str, request: Request,
             'error': f'shared interpreter not found: {orchestrator.SHARED_PYTHON}'})
 
     started_at = _iso_utc_now()
+    client_ip = get_client_ip(request)
     run_type = 'dashboard:unified' if kind == 'unified' else f'dashboard:suite:{kind}'
+
+    # Include client_ip in focus for audit trail
+    focus['_client_ip'] = client_ip
+
     run_id: Any = _insert_run_row(run_type, focus, started_at)
     if run_id is None:
         # DB unavailable -- still runnable, just not durably recorded.
@@ -771,6 +799,231 @@ def suite_output(request: Request, suite: str):
     })
 
 
+# --------------------------------------------------------------------------
+# cross-source analytics endpoints
+# --------------------------------------------------------------------------
+
+@app.get('/trades')
+def get_trades(
+    source: Optional[str] = None,
+    days_back: int = 30,
+    limit: int = 1000,
+):
+    """Get swap trades, optionally filtered by data source(s).
+
+    Query params:
+      - source: Comma-separated source names (e.g., 'DTCC,CME'). If omitted, returns all.
+      - days_back: Number of days to look back (default 30)
+      - limit: Maximum rows to return (default 1000)
+
+    Returns:
+        List of trade dicts with data_source field, or error dict
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        # Parse source filter
+        sources = []
+        if source:
+            sources = [s.strip().upper() for s in source.split(',') if s.strip()]
+
+        if sources:
+            builder = CrossSourceQueryBuilder(DB_PATH)
+            trades = builder.query_by_sources(sources, days_back=days_back, limit=limit)
+        else:
+            # No source filter: return all trades
+            conn = _db()
+            if not conn:
+                return {'error': f'swaps.db not found at {DB_PATH}'}
+            try:
+                rows = [dict(r) for r in conn.execute(
+                    f"""SELECT * FROM swap_trades
+                       WHERE effective_date >= date('now', '-{days_back} days')
+                       ORDER BY effective_date DESC, dissemination_id DESC
+                       LIMIT ?;""", (limit,))]
+                trades = rows
+            finally:
+                conn.close()
+
+        return {
+            'count': len(trades),
+            'sources_requested': sources if sources else ['all'],
+            'days_back': days_back,
+            'trades': trades,
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+@app.get('/instruments/{upi}')
+def get_instrument(upi: str, resolve_cross_source: bool = True):
+    """Resolve an instrument (UPI) across data sources.
+
+    Args:
+        upi: UPI to look up
+        resolve_cross_source: If true, show all occurrences across sources (default true)
+
+    Returns:
+        Dict with instrument info and trades by source
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        builder = CrossSourceQueryBuilder(DB_PATH)
+
+        if resolve_cross_source:
+            trades = builder.resolve_instrument_across_sources(upi)
+        else:
+            trades = builder.resolve_instrument_across_sources(upi, sources=['DTCC'])
+
+        if not trades:
+            return {'upi': upi, 'found': False, 'message': 'UPI not found in any source'}
+
+        # Group by source
+        by_source = {}
+        for trade in trades:
+            source = trade.get('data_source', 'unknown')
+            if source not in by_source:
+                by_source[source] = []
+            by_source[source].append(trade)
+
+        # Extract common fields from first trade
+        first_trade = trades[0]
+        return {
+            'upi': upi,
+            'found': True,
+            'underlier_asset_name': first_trade.get('underlying_asset_name'),
+            'asset_class': first_trade.get('asset_class'),
+            'upi_underlier_name': first_trade.get('upi_underlier_name'),
+            'total_trades_across_sources': len(trades),
+            'trades_by_source': {
+                source: len(trade_list)
+                for source, trade_list in by_source.items()
+            },
+            'sources': list(by_source.keys()),
+            'sample_trades': by_source,  # Full trade details grouped by source
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+@app.get('/analytics/cross-source-notional')
+def cross_source_notional(
+    source: Optional[str] = None,
+    days_back: int = 30,
+):
+    """Get total notional aggregated across data sources.
+
+    Query params:
+      - source: Comma-separated source names. If omitted, includes all available sources.
+      - days_back: Number of days to aggregate (default 30)
+
+    Returns:
+        Dict with total notional and per-source breakdown
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        # Parse source filter
+        sources = []
+        if source:
+            sources = [s.strip().upper() for s in source.split(',') if s.strip()]
+        else:
+            # No filter: discover all sources present in database
+            conn = _db()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('SELECT DISTINCT data_source FROM swap_trades;')
+                    sources = [row[0] for row in cur.fetchall() if row[0]]
+                finally:
+                    conn.close()
+
+        if not sources:
+            return {
+                'total_notional': 0,
+                'by_source': {},
+                'days_back': days_back,
+                'message': 'No sources found in database',
+            }
+
+        builder = CrossSourceQueryBuilder(DB_PATH)
+        total = builder.aggregate_notional_cross_source(sources, days_back=days_back)
+        by_source = builder.aggregate_notional_by_source(sources, days_back=days_back)
+
+        return {
+            'total_notional': total,
+            'by_source': by_source,
+            'sources_included': sources,
+            'days_back': days_back,
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+@app.get('/analytics/timeseries')
+def timeseries_by_source(
+    source: Optional[str] = None,
+    days_back: int = 90,
+):
+    """Get daily time-series data by source.
+
+    Returns daily aggregates (notional, trade count) for each source over the
+    requested period.
+
+    Query params:
+      - source: Comma-separated source names. If omitted, includes all sources.
+      - days_back: Number of days to look back (default 90)
+
+    Returns:
+        Dict mapping source name -> list of daily aggregates
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        # Parse source filter
+        sources = []
+        if source:
+            sources = [s.strip().upper() for s in source.split(',') if s.strip()]
+        else:
+            # Discover all sources
+            conn = _db()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('SELECT DISTINCT data_source FROM swap_trades;')
+                    sources = [row[0] for row in cur.fetchall() if row[0]]
+                finally:
+                    conn.close()
+
+        if not sources:
+            return {'timeseries': {}, 'message': 'No sources found'}
+
+        start_date = (datetime.now(timezone.utc).date()
+                     - timedelta(days=days_back))
+        end_date = datetime.now(timezone.utc).date()
+
+        builder = CrossSourceQueryBuilder(DB_PATH)
+        timeseries = builder.timeseries_by_source(sources, start_date=start_date,
+                                                  end_date=end_date)
+
+        return {
+            'timeseries': timeseries,
+            'sources': sources,
+            'period': {
+                'start_date': str(start_date),
+                'end_date': str(end_date),
+                'days': days_back,
+            },
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
 @app.get('/health')
 def health():
     return {
@@ -781,4 +1034,140 @@ def health():
         'shared_python_exists': os.path.exists(orchestrator.SHARED_PYTHON),
         'in_flight': [k for k, v in _RUNS.items()
                       if v.get('status') in ('queued', 'running')],
+        'available_data_sources': orchestrator.discover_adapters(),
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Query Performance Monitoring Endpoints
+# ──────────────────────────────────────────────────────────────────────────
+
+@app.get('/metrics/queries')
+def metrics_queries(limit: int = 10):
+    """Get top slowest queries with execution statistics.
+
+    Returns:
+        - Top N slowest queries by average duration
+        - Execution count, max/min/avg duration
+        - Last execution timestamp
+    """
+    try:
+        from shared.query_monitor import get_query_monitor
+        monitor = get_query_monitor()
+        top_queries = monitor.get_top_slow_queries(limit=limit)
+        return {
+            'top_slow_queries': top_queries,
+            'count': len(top_queries),
+        }
+    except Exception as e:
+        return {
+            'error': f'{type(e).__name__}: {e}',
+            'top_slow_queries': [],
+            'count': 0,
+        }
+
+
+@app.get('/metrics/slow-queries')
+def metrics_slow_queries(limit: int = 100):
+    """Get recent slow query executions (> threshold).
+
+    Returns:
+        - List of last N slow query records
+        - Query text (truncated), execution time, row count
+        - EXPLAIN QUERY PLAN analysis for each slow query
+    """
+    try:
+        from shared.query_monitor import get_query_monitor
+        monitor = get_query_monitor()
+        slow_queries = monitor.get_slow_queries(limit=limit)
+        return {
+            'slow_queries': slow_queries,
+            'count': len(slow_queries),
+            'threshold_sec': monitor.slow_query_threshold_sec,
+        }
+    except Exception as e:
+        return {
+            'error': f'{type(e).__name__}: {e}',
+            'slow_queries': [],
+            'count': 0,
+        }
+
+
+@app.get('/metrics/health')
+def metrics_health():
+    """Get query performance health summary with index suggestions.
+
+    Returns:
+        - Query execution statistics (avg, p95, max duration)
+        - Index suggestions based on EXPLAIN analysis
+        - Performance alerts/warnings
+    """
+    try:
+        from shared.query_monitor import get_query_monitor
+        monitor = get_query_monitor()
+        slow_queries = monitor.get_slow_queries(limit=100)
+
+        # Aggregate stats
+        total_slow_queries = len(slow_queries)
+        avg_duration = 0.0
+        max_duration = 0.0
+        full_scans = 0
+        index_issues = []
+
+        if slow_queries:
+            durations = [q['duration_sec'] for q in slow_queries]
+            avg_duration = sum(durations) / len(durations)
+            max_duration = max(durations)
+
+            # Analyze for index issues
+            for query in slow_queries:
+                plan_analysis = query.get('plan_analysis')
+                if plan_analysis:
+                    full_scans += plan_analysis.get('full_scans', 0)
+                    for issue in plan_analysis.get('issues', []):
+                        if issue not in index_issues:
+                            index_issues.append(issue)
+
+        # Generate health status
+        status = 'healthy'
+        alerts = []
+
+        if max_duration > 5.0:
+            status = 'degraded'
+            alerts.append(f'Query exceeding 5s detected (max {max_duration:.2f}s)')
+
+        if full_scans > 5:
+            status = 'degraded'
+            alerts.append(f'Multiple full table scans detected ({full_scans})')
+
+        if total_slow_queries > 50:
+            status = 'warning'
+            alerts.append(f'High number of slow queries ({total_slow_queries})')
+
+        # Index suggestions
+        suggestions = []
+        if full_scans > 0:
+            suggestions.append(
+                'Create indexes on frequently scanned columns (WHERE clauses)'
+            )
+        if len(index_issues) > 3:
+            suggestions.append(
+                'Review query plans and consider composite indexes for common filters'
+            )
+
+        return {
+            'status': status,
+            'total_slow_queries': total_slow_queries,
+            'avg_duration_sec': round(avg_duration, 3),
+            'max_duration_sec': round(max_duration, 3),
+            'full_table_scans': full_scans,
+            'alerts': alerts,
+            'index_suggestions': suggestions,
+            'threshold_sec': monitor.slow_query_threshold_sec,
+        }
+    except Exception as e:
+        return {
+            'error': f'{type(e).__name__}: {e}',
+            'status': 'unknown',
+            'total_slow_queries': 0,
+        }

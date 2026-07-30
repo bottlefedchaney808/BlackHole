@@ -3,21 +3,29 @@
 Walks all available cumulative EOD files (starting after the currently
 recorded ``last_cumulative_date``), loads them in ascending date order, then
 tops up with any live slices published after the last cumulative day.
+
+Supports graceful shutdown: pressing Ctrl+C will finish the current batch,
+update state, and exit cleanly.
 """
 import logging
 import re
 import time
 from datetime import date
+from typing import Optional
+
+from shared.logging import setup_logging, log_operation, get_metrics
 
 from dtcc_api_client import list_live_slices, list_cumulative, download_zip
 from dtcc_parser import parse_swap_zip
 from db_loader import SwapsLoader
+from shutdown_signal import GracefulShutdown
 
-logging.basicConfig(
+# Setup structured JSON logging
+logger = setup_logging(
+    name='backfill',
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+    use_json=True,
 )
-logger = logging.getLogger(__name__)
 
 TARGETS = [("SEC", "EQ"), ("CFTC", "EQ")]
 
@@ -37,24 +45,62 @@ def _extract_date(file_name: str) -> str:
 
 def _load_entry(loader, regulator, asset, zip_url, source_file, scrape_date, start_time):
     """Download, parse, and upsert a single entry. Returns (fetched, inserted, updated)."""
-    zip_bytes = download_zip(zip_url)
-    records = parse_swap_zip(zip_bytes, regulator, asset, source_file=source_file)
-    result = loader.upsert_trades(records)
-    duration = int(time.time() - start_time)
-    loader.log_scrape(
-        scrape_date=scrape_date,
-        fetched=len(records),
-        inserted=result.get("inserted", 0),
-        updated=result.get("updated", 0),
-        errors=0,
-        status="success",
-        duration=duration,
-    )
-    return len(records), result.get("inserted", 0), result.get("updated", 0)
+    with log_operation(
+        'backfill_entry',
+        metadata={
+            'regulator': regulator,
+            'asset': asset,
+            'source_file': source_file,
+        }
+    ) as op_context:
+        zip_bytes = download_zip(zip_url)
+        records = parse_swap_zip(zip_bytes, regulator, asset, source_file=source_file)
+        result = loader.upsert_trades(records)
+        duration = int(time.time() - start_time)
+
+        # Record metrics
+        metrics = get_metrics()
+        metrics.add_upsert_batch(len(records), duration / 1000.0)
+
+        op_context.rows_affected = len(records)
+
+        loader.log_scrape(
+            scrape_date=scrape_date,
+            fetched=len(records),
+            inserted=result.get("inserted", 0),
+            updated=result.get("updated", 0),
+            errors=0,
+            status="success",
+            duration=duration,
+        )
+
+        logger.info(
+            f"Successfully loaded {len(records)} records",
+            extra={
+                'regulator': regulator,
+                'asset': asset,
+                'source_file': source_file,
+                'fetched': len(records),
+                'inserted': result.get("inserted", 0),
+                'updated': result.get("updated", 0),
+                'duration_sec': duration / 1000.0,
+            }
+        )
+
+        return len(records), result.get("inserted", 0), result.get("updated", 0)
 
 
-def backfill_target(regulator: str, asset: str) -> dict:
-    """Backfill all available cumulative history plus trailing live slices for one target."""
+def backfill_target(regulator: str, asset: str, shutdown: Optional[GracefulShutdown] = None) -> dict:
+    """Backfill all available cumulative history plus trailing live slices for one target.
+
+    Args:
+        regulator: Regulatory body (e.g., 'SEC', 'CFTC')
+        asset: Asset class (e.g., 'EQ')
+        shutdown: Optional GracefulShutdown manager for checking shutdown requests
+
+    Returns:
+        Summary dict with files_processed, records_loaded, errors counts
+    """
     loader = SwapsLoader()
     state = loader.get_state(regulator, asset)
     last_cum_date = state["last_cumulative_date"] if state else None
@@ -87,6 +133,15 @@ def backfill_target(regulator: str, asset: str) -> dict:
         if last_cum_date is not None and entry_date <= last_cum_date:
             continue
 
+        # Check if shutdown has been requested; if so, finish current state and exit
+        if shutdown and shutdown.is_requested():
+            logger.info(
+                "Shutdown requested during cumulative processing for %s/%s. "
+                "Exiting at entry_date=%s (last processed=%s)",
+                regulator, asset, entry_date, last_cumulative_day_processed,
+            )
+            break
+
         start_time = time.time()
         logger.info(
             "Processing cumulative day %s for %s/%s (%s)",
@@ -98,15 +153,22 @@ def backfill_target(regulator: str, asset: str) -> dict:
                 entry["fullFilePath"], entry["fileName"],
                 scrape_date=entry_date, start_time=start_time,
             )
+            # CRITICAL: Update state WITHIN the try block so if set_state fails, we know about it
+            # and don't silently lose state. This ensures atomicity: either both upsert and
+            # set_state succeed, or both are considered failed.
             loader.set_state(regulator, asset, last_cumulative_date=entry_date)
             files_processed += 1
             records_loaded += fetched
             last_cumulative_day_processed = entry_date
+            logger.info(
+                "Successfully processed cumulative day %s for %s/%s",
+                entry_date, regulator, asset,
+            )
         except Exception as e:
             errors += 1
             duration = int(time.time() - start_time)
             logger.error(
-                "Failed processing cumulative day %s for %s/%s: %s",
+                "Failed processing cumulative day %s for %s/%s: %s (state NOT updated; resume will retry)",
                 entry_date, regulator, asset, e,
             )
             loader.log_scrape(
@@ -136,6 +198,15 @@ def backfill_target(regulator: str, asset: str) -> dict:
 
     max_slice_id = None
     for slice_entry in eligible_slices:
+        # Check if shutdown has been requested; if so, finish current state and exit
+        if shutdown and shutdown.is_requested():
+            logger.info(
+                "Shutdown requested during live slice processing for %s/%s. "
+                "Exiting with last_live_slice_id=%s",
+                regulator, asset, max_slice_id,
+            )
+            break
+
         slice_id = slice_entry.get("sliceId")
         start_time = time.time()
         slice_date = (slice_entry.get("dissemDTM") or "")[:10] or str(date.today())
@@ -153,11 +224,13 @@ def backfill_target(regulator: str, asset: str) -> dict:
             records_loaded += fetched
             if max_slice_id is None or slice_id > max_slice_id:
                 max_slice_id = slice_id
+            # CRITICAL: Update state WITHIN the try block for atomicity (same as cumulative above)
+            loader.set_state(regulator, asset, last_live_slice_id=slice_id)
         except Exception as e:
             errors += 1
             duration = int(time.time() - start_time)
             logger.error(
-                "Failed processing live slice %s for %s/%s: %s",
+                "Failed processing live slice %s for %s/%s: %s (state NOT updated; resume will retry)",
                 slice_id, regulator, asset, e,
             )
             loader.log_scrape(
@@ -172,9 +245,6 @@ def backfill_target(regulator: str, asset: str) -> dict:
             )
             # continue to the next slice regardless
 
-    if max_slice_id is not None:
-        loader.set_state(regulator, asset, last_live_slice_id=max_slice_id)
-
     summary = {
         "regulator": regulator,
         "asset": asset,
@@ -187,10 +257,35 @@ def backfill_target(regulator: str, asset: str) -> dict:
 
 
 if __name__ == "__main__":
+    from shutdown_signal import create_shutdown_manager
+
+    # Create and register shutdown manager for graceful Ctrl+C handling
+    shutdown = create_shutdown_manager()
+
     summaries = []
     for regulator, asset in TARGETS:
-        summaries.append(backfill_target(regulator, asset))
+        logger.info("=" * 60)
+        logger.info(f"Starting backfill for {regulator}/{asset}")
+        logger.info("=" * 60)
+        try:
+            summary = backfill_target(regulator, asset, shutdown=shutdown)
+            summaries.append(summary)
 
+            # Check if shutdown was requested during this target
+            if shutdown.is_requested():
+                logger.info("Shutdown requested: stopping backfill after current target")
+                break
+        except Exception as e:
+            logger.error("Backfill for %s/%s failed: %s", regulator, asset, e)
+            summaries.append({
+                "regulator": regulator,
+                "asset": asset,
+                "files_processed": 0,
+                "records_loaded": 0,
+                "errors": 1,
+            })
+
+    # Print summary table
     header = f"{'Regulator':<10}{'Asset':<8}{'Files':<10}{'Records':<12}{'Errors':<8}"
     print("\n" + header)
     print("-" * len(header))
@@ -199,3 +294,6 @@ if __name__ == "__main__":
             f"{s['regulator']:<10}{s['asset']:<8}{s['files_processed']:<10}"
             f"{s['records_loaded']:<12}{s['errors']:<8}"
         )
+
+    # Cleanup shutdown manager
+    shutdown.cleanup()

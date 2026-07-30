@@ -99,8 +99,10 @@ def build_suite_context(
     options_suite_root: str = DEFAULT_OPTIONS_SUITE_ROOT,
     var_suite_root: str = DEFAULT_VAR_SUITE_ROOT,
     sentiment_suite_root: str = DEFAULT_SENTIMENT_SUITE_ROOT,
+    data_sources: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     ranked = [str(t).upper() for t in (sentiment_ranked_tickers or []) if str(t).strip()]
+    sources = [str(s).upper() for s in (data_sources or []) if str(s).strip()]
     context = {
         "schema_version": 1,
         "run_id": str(run_id),
@@ -151,6 +153,7 @@ def build_suite_context(
             "var_suite_root": _to_abs_path_str(var_suite_root),
             "sentiment_suite_root": _to_abs_path_str(sentiment_suite_root),
         },
+        "data_sources": sources,  # Multi-source support: list of enabled sources (DTCC, CME, OTC, etc.)
     }
     validate_suite_context(context)
     return context

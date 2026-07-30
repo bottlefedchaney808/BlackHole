@@ -17,29 +17,122 @@ Two things differ from `_run_child_suite`, both deliberate:
    frequently going to be run from a bare `python` on PATH, so pinning the
    interpreter is the only way the children reliably see their dependencies.
 
-2. It knows that not every suite speaks `--context/--context-out`. Options_Suite
-   and VaR_Tools_Simulations do (both expose `run_context_mode`).
+2. It knows that not every suite speaks `--context/--context-out`. Options_Suite,
+   VaR_Tools_Simulations and Vol_Suite all do (each exposes `run_context_mode`).
    sentiment-scanner does not -- it is the *producer* end of the chain and
    exposes `--export-context <path>` instead, which is why it runs first.
-   Vol_Suite has no context CLI at all; see `_VOL_NOTE` below.
+
+Vol_Suite used to be the exception, and it was the weakest joint in this file.
+`volatility_suite.py` had no argparse at all -- `main()` went straight to
+`input()` -- so driving it headless meant feeding its prompt sequence on
+scripted stdin ("1", "1", ticker, then a run of blank lines and y/n answers),
+coupled to the exact prompt ORDER inside `run_focus_workflow`. And because it
+wrote nothing to `--context-out`, its result payload had to be *synthesized*
+here by listing files in the output directory -- which meant a run where every
+data fetch failed and a run that worked perfectly were nearly indistinguishable,
+since both leave files behind.
+
+Vol_Suite now has a real `--context/--context-out` mode and publishes its own
+validated `vol_result.json` (schema: `shared/schemas.py::validate_vol_result`)
+carrying the vol surface, dealer positioning and gamma records it actually
+computed. Both hacks are therefore gone: no scripted stdin, no synthesized
+payload, and Vol_Suite goes through the identical launch/validate path as every
+other consumer suite.
+
+Dependency edges between stages are validated explicitly rather than inferred
+from exit codes. Every suite must leave a marker file in the run's output_dir
+(`<suite>_result.json`), and `_validate_suite_output` checks it for presence,
+parseability, schema conformance and -- for Vol_Suite -- the required CSV side
+artifacts before the next stage is allowed to consume it. The rules live in
+`shared/suite_validation.py`; each PASS/FAIL verdict is written to
+`orchestrator_runs` so a bad handoff is diagnosable from the audit trail alone.
+By default a FAIL is reported and the chain continues degraded (the historical
+behaviour); `--fail-on-suite-error` turns it into a hard abort.
+
+The context itself gets the same treatment where it is mutated. `run_unified`
+folds the sentiment producer's block back into the shared context, and that is
+the one write to an object every later stage reads. It runs through
+`shared/context_audit.py` as an audited transaction -- baseline hash, schema
+check before, fold, schema and scope check after -- and a mutation that does not
+survive the second check is rolled back in place and fails the run outright.
+`--fail-on-suite-error` has no say here: a suite failing is a judgement call
+about how much degradation to tolerate, whereas a context that just failed
+validation is not something the remaining stages can be run against at all. Each
+audit lands in `orchestrator_runs` as a `context_audit:sentiment` row carrying
+before/after hashes, the changed keys and the per-check verdicts.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import logging
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from shared.logging import setup_logging, log_operation, get_metrics, LogContext
+
+# Setup structured JSON logging
+logger = setup_logging(
+    name='orchestrator',
+    level=logging.INFO,
+    use_json=True,
+)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# `shared` is a root-level package. When orchestrator.py is launched by path
+# from another cwd, ROOT is not automatically importable, so pin it before the
+# shared import below.
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from shared.context_audit import (  # noqa: E402  (path pinned immediately above)
+    ContextMutationAudit,
+    audit_sentiment_mutation,
+)
+from shared.suite_validation import (  # noqa: E402  (path pinned immediately above)
+    ValidationResult,
+    marker_filename,
+    validate_suite_output,
+)
+
+def _find_shared_python() -> str:
+    """Locate the interpreter in the consolidated root `.venv`, cross-platform.
+
+    Every child suite is launched with this interpreter, never `sys.executable`
+    -- see the module docstring. Windows venvs place it at
+    `.venv/Scripts/python.exe`; POSIX venvs (Linux/Mac) place it at
+    `.venv/bin/python` (often alongside a `python3` symlink). We check the
+    real filesystem rather than branching on `os.name` alone so a venv created
+    inside e.g. WSL or Git Bash on Windows still resolves correctly.
+    """
+    venv_dir = Path(ROOT) / '.venv'
+    candidates = [
+        venv_dir / 'Scripts' / 'python.exe',  # Windows
+        venv_dir / 'bin' / 'python3',         # Linux / Mac
+        venv_dir / 'bin' / 'python',          # Linux / Mac fallback
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    # Nothing found -- return the platform-appropriate default path anyway so
+    # the `os.path.exists(SHARED_PYTHON)` check below fails with a clear
+    # "shared interpreter not found" message instead of a confusing crash.
+    default = venv_dir / 'Scripts' / 'python.exe' if os.name == 'nt' else venv_dir / 'bin' / 'python'
+    return str(default)
+
+
 # The consolidated virtualenv. Every child is launched with this interpreter,
 # never with `sys.executable` -- see the module docstring.
-SHARED_PYTHON = os.path.join(ROOT, '.venv', 'Scripts', 'python.exe')
+SHARED_PYTHON = _find_shared_python()
 
 SUITE_ROOTS = {
     'options': os.path.join(ROOT, 'Options_Suite'),
@@ -52,21 +145,39 @@ SUITE_ROOTS = {
 # environment override, so raising it for a slow box raises it everywhere.
 DEFAULT_TIMEOUT_SEC = int(os.environ.get('SUITE_CHILD_TIMEOUT_SEC', '1800'))
 
-DB_PATH = os.path.join(ROOT, 'swaps.db')
+# SWAPS_DB_PATH env var overrides, e.g. for a mounted Docker volume; see
+# .env.example / docker-compose.yml
+DB_PATH = os.environ.get('SWAPS_DB_PATH') or os.path.join(ROOT, 'swaps.db')
 
-# Vol_Suite's entrypoint is `volatility_suite.py`; there is no `main.py` and no
-# argparse in it at all -- `main()` goes straight to `input()`. It therefore
-# cannot be driven by `--context`, and passing those flags is harmless only
-# because sys.argv is never read. Running it headless means feeding its prompts
-# on stdin, which `_vol_stdin_script()` does on a best-effort basis. When that
-# drifts, the child dies on EOFError and the stderr tail comes back in the
-# result dict rather than being swallowed.
-_VOL_NOTE = ("Vol_Suite has no --context CLI; driven via scripted stdin. "
-             "If prompts change, this run fails loudly with an EOFError tail.")
+
+def _warn_if_schema_outdated() -> None:
+    """Startup check: warn on stderr if swaps.db is behind the latest
+    migration in migrations/, but never block startup over it.
+
+    A stale schema is a "go run setup_db.py --migrate" nudge, not a reason
+    to abort a suite run -- most orchestrator runs don't touch swap_trades
+    columns that a pending migration would add, and get_recent_swap_activity
+    already treats a cold/missing swaps.db as an optional enrichment. Import
+    of setup_db is done lazily, and any failure here (e.g. setup_db.py
+    itself missing) is swallowed, for the same reason.
+    """
+    try:
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+        import setup_db
+        setup_db.check_schema_version(DB_PATH)
+    except Exception as e:
+        logger.warning(f"Schema version check skipped: {e}")
+
 
 # Per-suite launch spec. `flags` is a callable taking (ctx_path, out_path) so
 # the sentiment producer can use its own flag names without a special case at
 # the call site.
+#
+# `writes_context_out` is True for every entry now. It was a real distinction
+# only while Vol_Suite had no `--context-out` writer; keeping the key means a
+# future producer-shaped suite can be added without reintroducing an implicit
+# rule about which suites are exempt from the marker invariant.
 _SUITE_SPECS: Dict[str, Dict[str, Any]] = {
     'options': {
         'entrypoint': 'main.py',
@@ -90,14 +201,10 @@ _SUITE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     'vol': {
         'entrypoint': 'volatility_suite.py',
-        'flags': lambda ctx, out: ['--context', ctx, '--context-out', out],
-        # False, because volatility_suite.py has no --context-out writer -- it
-        # publishes its work as files in VS_OUTPUT_DIR instead. Demanding a
-        # result JSON it never writes would mark every successful Vol_Suite run
-        # as failed, so a clean exit is synthesized into a payload from the
-        # output directory. See _synthesize_vol_payload.
-        'writes_context_out': False,
-        'note': _VOL_NOTE,
+        'flags': lambda ctx, out: ['--context', ctx, '--context-out', out,
+                                   '--no-loop'],
+        'writes_context_out': True,
+        'note': 'vol_result.json: vol surface + dealer positioning + gamma records',
     },
 }
 
@@ -318,6 +425,7 @@ def build_context(focus: Dict[str, Any],
         options_suite_root=SUITE_ROOTS['options'],
         var_suite_root=SUITE_ROOTS['var'],
         sentiment_suite_root=SUITE_ROOTS['sentiment'],
+        data_sources=focus.get('data_sources') or [],  # Multi-source: pass enabled sources
     )
 
     if focus.get('include_swap_activity', True):
@@ -336,76 +444,73 @@ def _timedelta_days(days: int):
 
 
 # --------------------------------------------------------------------------
-# child launching
+# output validation
 # --------------------------------------------------------------------------
 
-def _vol_stdin_script(context: Dict[str, Any]) -> str:
-    """Best-effort answers for volatility_suite.py's prompt sequence (mode 1).
+def _validate_suite_output(suite_name: str,
+                           output_dir: str,
+                           payload: Optional[Dict[str, Any]] = None,
+                           focus: Optional[Dict[str, Any]] = None,
+                           strict: Optional[bool] = None) -> ValidationResult:
+    """Check that *suite_name* left usable output in *output_dir*, and log it.
 
-    Blank lines take each prompt's documented default, so this only has to
-    supply the two answers that have no default -- run mode and focus ticker --
-    plus enough trailing blanks to satisfy the expiry selector and the tail-end
-    y/n prompts. It is inherently coupled to the prompt order in
-    `run_focus_workflow`; when that changes, the child EOFs and the failure is
-    reported rather than hidden.
+    Thin orchestrator-side wrapper over
+    `shared.suite_validation.validate_suite_output`: it resolves the focus
+    ticker for the `{ticker}` glob patterns, prints the PASS/FAIL breakdown, and
+    writes one `validate:<suite>` row into `orchestrator_runs` carrying every
+    individual check. The verdict is returned rather than raised so the caller
+    decides whether a FAIL degrades the run or aborts it.
     """
-    ticker = context['focus']['ticker']
-    return "\n".join([
-        "1",       # run mode: standard focus workflow
-        "1",       # input mode: manual focus ticker
-        ticker,    # focus ticker
-        "",        # keep ticker as entered
-        "",        # index choice -> default
-        "",        # basket size -> default 10
-        "",        # expiry selection -> default
-        "",        # dealer sign model -> default 3
-        "n",       # options chain scanner
-        "n",       # compile PDF
-    ]) + "\n"
+    focus = focus or {}
+    started_at = _iso_utc_now()
+
+    result = validate_suite_output(
+        suite_name,
+        output_dir,
+        payload=payload,
+        ticker=focus.get('ticker'),
+        strict=strict,
+    )
+
+    print("  " + result.report().replace('\n', '\n  '))
+
+    log_run(f'validate:{result.suite}', focus, started_at, _iso_utc_now(),
+            result.status, result.to_dict())
+    return result
 
 
-def _synthesize_vol_payload(context: Dict[str, Any], output_dir: str,
-                            stdout_tail: str) -> Dict[str, Any]:
-    """Build a result payload for Vol_Suite from its filesystem output.
+def _audit_sentiment_fold(context: Dict[str, Any],
+                          sentiment_result: Optional[Dict[str, Any]],
+                          focus: Optional[Dict[str, Any]] = None
+                          ) -> ContextMutationAudit:
+    """Fold the producer's sentiment block into *context* under audit, and log it.
 
-    Vol_Suite's actual deliverable is the set of PNG/CSV/TXT artifacts it drops
-    in VS_OUTPUT_DIR plus `unified_run_summary.txt` -- it has no
-    `--context-out`. Rather than inventing a fake vol block, this reports what
-    it really produced, in the same `suite`/`status`/`timestamp` shape the
-    other children's payloads use, so downstream handling stays uniform.
+    Thin orchestrator-side wrapper over
+    `shared.context_audit.audit_sentiment_mutation`, in the same shape as
+    `_validate_suite_output` above: it runs the baseline -> mutate -> re-validate
+    transaction, prints the concise before/after diff, and writes one
+    `context_audit:sentiment` row into `orchestrator_runs` whose `results_json`
+    is the full audit entry (before/after hashes and snapshots, the changed
+    keys, the per-check breakdown, and whether a rollback happened).
+
+    The verdict is returned rather than raised. `context` comes back either
+    mutated-and-valid (PASS) or restored to the pre-mutation baseline (FAIL) --
+    never in the rejected intermediate state.
     """
-    files: List[str] = []
-    try:
-        for entry in sorted(os.listdir(output_dir)):
-            full = os.path.join(output_dir, entry)
-            if os.path.isfile(full) and not entry.endswith('.json'):
-                files.append(entry)
-    except OSError:
-        pass
+    focus = focus if focus is not None else context.get('focus', {})
+    started_at = _iso_utc_now()
 
-    summary_text = ''
-    summary_path = os.path.join(output_dir, 'unified_run_summary.txt')
-    if os.path.exists(summary_path):
-        try:
-            with open(summary_path, 'r', encoding='utf-8') as f:
-                summary_text = f.read().strip()
-        except OSError:
-            pass
+    audit = audit_sentiment_mutation(context, sentiment_result)
 
-    return {
-        'suite': 'vol',
-        'status': 'ok',
-        'ticker': context['focus']['ticker'],
-        'produced_files': files,
-        'output_dir': output_dir,
-        'summary': summary_text,
-        'stdout_tail': stdout_tail,
-        'timestamp': _iso_utc_now(),
-        'notes': 'Payload synthesized by orchestrator: ' + _VOL_NOTE,
-    }
+    print("  " + audit.report().replace('\n', '\n  '))
+
+    log_run('context_audit:sentiment', focus, started_at, _iso_utc_now(),
+            audit.status, audit.to_dict())
+    return audit
 
 
-def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
+def run_suite(name: str, context: dict, timeout: int = 1800,
+              validate: bool = True) -> dict:
     """Launch one child suite in context mode and return its result JSON.
 
     Same command shape as Vol_Suite's `_run_child_suite` -- context written to
@@ -418,12 +523,22 @@ def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
     timeout, or an unreadable/absent result file, returns a dict with an
     `error` key and the captured stderr, so a caller can branch on
     `'error' in result` without exception handling.
+
+    With `validate=True` (the default) the child's marker file is checked
+    against `shared/suite_validation.py` before the payload is returned. A
+    failed check is folded into the same `error` key rather than raising, so a
+    suite that exits 0 with unusable output is indistinguishable to callers from
+    one that crashed -- which is the point: both mean "do not feed this
+    downstream". The verdict is attached under `_validation` either way, so a
+    PASS is auditable too. Pass `validate=False` to get the raw pre-validation
+    behaviour (used by the tests that exercise the runner itself).
     """
     if name not in SUITE_ROOTS:
         raise ValueError(f"Unknown suite {name!r}; expected one of "
                          f"{sorted(SUITE_ROOTS)}")
 
     started_at = _iso_utc_now()
+    start_time = time.time()
     spec = _SUITE_SPECS[name]
     suite_root = SUITE_ROOTS[name]
     entrypoint = os.path.join(suite_root, spec['entrypoint'])
@@ -434,7 +549,10 @@ def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
     # The context file goes in the run's own output dir when there is one so it
     # survives the run for debugging; a temp file otherwise.
     ctx_path = os.path.join(output_dir, f'suite_context_{name}.json')
-    out_path = os.path.join(output_dir, f'{name}_result.json')
+    # The child's `--context-out` target IS the marker validation looks for, so
+    # the filename comes from the validation module rather than being spelled
+    # twice and left to drift.
+    out_path = os.path.join(output_dir, marker_filename(name))
 
     def _fail(message: str, stderr: str = '', returncode: Optional[int] = None) -> dict:
         result = {
@@ -483,8 +601,6 @@ def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
     env['PYTHONIOENCODING'] = 'utf-8'
     env['PYTHONUTF8'] = '1'
 
-    stdin_text = _vol_stdin_script(context) if name == 'vol' else None
-
     print(f"  [{name}] running {spec['entrypoint']} (timeout {timeout}s)... "
           f"output is captured, so this will look idle until it finishes.")
     if spec['note']:
@@ -498,8 +614,12 @@ def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
             capture_output=True,
             text=True,
             timeout=timeout,
-            **({'input': stdin_text} if stdin_text is not None
-               else {'stdin': subprocess.DEVNULL}),
+            # stdin closed for every child, with no exceptions. Vol_Suite used
+            # to be fed a scripted prompt sequence here; now that it has a real
+            # --context mode, a child that reaches an interactive prompt is a
+            # bug, and EOF makes it die with a readable traceback instead of
+            # hanging on a pipe nobody is watching.
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         stderr = e.stderr if isinstance(e.stderr, str) else (e.stderr or b'').decode(errors='replace')
@@ -533,16 +653,52 @@ def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
                 _iso_utc_now(), 'error', result)
         return result
 
-    if not spec['writes_context_out'] and not os.path.exists(out_path):
-        payload = _synthesize_vol_payload(context, output_dir, stdout_tail)
-        payload['_orchestrator'] = {
-            'command': ' '.join(command),
-            'context_path': ctx_path,
-            'context_out': None,
-            'returncode': proc.returncode,
-            'started_at': started_at,
-            'completed_at': _iso_utc_now(),
-        }
+    def _finalize(payload: Any, context_out: Optional[str]) -> Any:
+        """Attach provenance, validate the marker, log, return.
+
+        Every success path ends here so validation cannot be bypassed by
+        whichever branch a future edit adds a `return` to.
+        """
+        if isinstance(payload, dict):
+            payload.setdefault('suite', name)
+            payload['_orchestrator'] = {
+                'command': ' '.join(command),
+                'context_path': ctx_path,
+                'context_out': context_out,
+                'returncode': proc.returncode,
+                'started_at': started_at,
+                'completed_at': _iso_utc_now(),
+            }
+
+        if not validate:
+            log_run(f'suite:{name}', context.get('focus', {}), started_at,
+                    _iso_utc_now(), 'ok', payload)
+            return payload
+
+        verdict = _validate_suite_output(
+            name, output_dir,
+            payload=payload if isinstance(payload, dict) else None,
+            focus=context.get('focus', {}))
+
+        if isinstance(payload, dict):
+            payload['_validation'] = verdict.to_dict()
+
+        if not verdict.passed:
+            result = {
+                'suite': name,
+                'error': (f'{name} output validation FAILED: '
+                          + '; '.join(verdict.errors)),
+                'stderr': stderr_tail or stdout_tail,
+                'returncode': proc.returncode,
+                'command': ' '.join(command),
+                'started_at': started_at,
+                'validation': verdict.to_dict(),
+                'payload': payload,
+            }
+            log_run(f'suite:{name}', context.get('focus', {}), started_at,
+                    _iso_utc_now(), 'invalid', result)
+            return result
+
         log_run(f'suite:{name}', context.get('focus', {}), started_at,
                 _iso_utc_now(), 'ok', payload)
         return payload
@@ -576,27 +732,16 @@ def run_suite(name: str, context: dict, timeout: int = 1800) -> dict:
                 _iso_utc_now(), 'error', result)
         return result
 
-    if isinstance(payload, dict):
-        payload.setdefault('suite', name)
-        payload['_orchestrator'] = {
-            'command': ' '.join(command),
-            'context_path': ctx_path,
-            'context_out': out_path,
-            'returncode': proc.returncode,
-            'started_at': started_at,
-            'completed_at': _iso_utc_now(),
-        }
-
-    log_run(f'suite:{name}', context.get('focus', {}), started_at,
-            _iso_utc_now(), 'ok', payload)
-    return payload
+    return _finalize(payload, out_path)
 
 
 # --------------------------------------------------------------------------
 # unified flow
 # --------------------------------------------------------------------------
 
-def run_unified(focus: Dict[str, Any]) -> Dict[str, Any]:
+def run_unified(focus: Dict[str, Any],
+                fail_on_suite_error: Optional[bool] = None,
+                validate: bool = True) -> Dict[str, Any]:
     """Mirror of Vol_Suite's mode-2 dependency order, headless.
 
     sentiment -> vol -> {options, var}. sentiment runs first because it is the
@@ -608,13 +753,26 @@ def run_unified(focus: Dict[str, Any]) -> Dict[str, Any]:
     neither reads the other's output, exactly as `run_unified_flow` launches
     them independently off the one context file.
 
-    A failing upstream stage does not abort the run: the chain continues with
-    whatever context it has, and each stage's error dict is returned under its
-    own key. This matches `run_unified_flow`, which reports per-child
-    `failed(rc=...)` in its summary rather than raising.
+    Each stage's output is validated before the next stage is allowed to
+    consume it -- `run_suite` checks the marker file and folds any validation
+    failure into the same `error` key a crash produces, so "exited 0 but wrote
+    nothing usable" and "died" are handled identically here.
+
+    What happens next depends on `fail_on_suite_error`:
+
+    * False (default) -- a failing upstream stage does not abort the run: the
+      chain continues with whatever context it has and each stage's error dict
+      is returned under its own key. This matches `run_unified_flow`, which
+      reports per-child `failed(rc=...)` in its summary rather than raising.
+    * True -- the first failing stage aborts the chain. Downstream stages are
+      recorded as `skipped` with the name of the stage that blocked them, rather
+      than being run against input already known to be bad and failing later for
+      a reason that has nothing to do with their own logic.
     """
     started_at = _iso_utc_now()
     results: Dict[str, Any] = {}
+    if fail_on_suite_error is None:
+        fail_on_suite_error = bool(focus.get('fail_on_suite_error', False))
 
     controls = {
         'run_options_suite': True,
@@ -623,35 +781,82 @@ def run_unified(focus: Dict[str, Any]) -> Dict[str, Any]:
     }
     context = build_context(focus, controls=controls)
     output_dir = context['output_dir']
+    timeout = int(focus.get('timeout') or DEFAULT_TIMEOUT_SEC)
     print(f"\n[unified] run_id={context['run_id']} output_dir={output_dir}")
+    if fail_on_suite_error:
+        print("[unified] --fail-on-suite-error: the first invalid or failed "
+              "stage aborts the chain.")
+
+    aborted_by: Optional[str] = None
+
+    def _skip(stage: str) -> Dict[str, Any]:
+        # A context-audit abort is unconditional; a suite abort only happens
+        # under --fail-on-suite-error. The reason has to say which, or a reader
+        # of the skipped record goes looking for a flag that was never set.
+        reason = (
+            'the context mutation audit FAILED and the context was rolled back'
+            if aborted_by == 'context_audit'
+            else f'upstream stage {aborted_by!r} failed validation '
+                 'and --fail-on-suite-error is set')
+        return {
+            'suite': stage,
+            'status': 'skipped',
+            'skipped': True,
+            'error': f'skipped: {reason}',
+            'blocked_by': aborted_by,
+            'timestamp': _iso_utc_now(),
+        }
 
     # ---- 1. sentiment-scanner (producer) ----
     print("\n[unified] Stage 1/3: sentiment-scanner (context producer)...")
-    sentiment_result = run_suite('sentiment', context,
-                                 timeout=int(focus.get('timeout') or DEFAULT_TIMEOUT_SEC))
+    sentiment_result = run_suite('sentiment', context, timeout=timeout,
+                                 validate=validate)
     results['sentiment'] = sentiment_result
 
-    # Fold the producer's sentiment block back into the shared context so the
-    # downstream suites see the manifest this run actually produced, not the
-    # stale default path build_context guessed at.
-    if 'error' not in sentiment_result:
-        block = sentiment_result.get('sentiment') or {}
-        for key in ('manifest_path', 'pack_json_path', 'group_id', 'ranked_tickers'):
-            value = block.get(key)
-            if value:
-                context['sentiment'][key] = value
+    # ---- 1b. audited fold of the producer's sentiment block ----
+    # The producer's block goes back into the shared context so the downstream
+    # suites see the manifest this run actually produced, not the stale default
+    # path build_context guessed at. This is the only mutation of the context
+    # after it was built and validated, and everything downstream reads the
+    # object it edits, so it runs as an audited transaction: baseline check ->
+    # fold -> schema + scope check, with a rollback to the baseline and a failed
+    # run if either check fails. Only a VALIDATED sentiment payload is folded in;
+    # an unvalidated one could overwrite a working default manifest path with a
+    # half-written one and poison every later stage.
+    print("\n[unified] Stage 1b/3: context mutation audit (sentiment block)...")
+    context_audit = _audit_sentiment_fold(context, sentiment_result,
+                                          focus=context.get('focus', {}))
+    if not context_audit.passed:
+        # Unlike a suite failure, this is not degradable by --fail-on-suite-error:
+        # the context is the input to every remaining stage, so running them
+        # against one that just failed validation would only produce failures
+        # that say nothing about the suites themselves.
+        aborted_by = 'context_audit'
+    elif 'error' in sentiment_result and fail_on_suite_error:
+        aborted_by = 'sentiment'
 
     # ---- 2. Vol_Suite (consumes sentiment, produces vol surface / dealer positioning) ----
-    print("\n[unified] Stage 2/3: Vol_Suite (dealer positioning / vol surface)...")
-    results['vol'] = run_suite('vol', context,
-                               timeout=int(focus.get('timeout') or DEFAULT_TIMEOUT_SEC))
+    if aborted_by:
+        print(f"\n[unified] Stage 2/3 SKIPPED (blocked by {aborted_by}).")
+        results['vol'] = _skip('vol')
+    else:
+        print("\n[unified] Stage 2/3: Vol_Suite (dealer positioning / vol surface)...")
+        results['vol'] = run_suite('vol', context, timeout=timeout,
+                                   validate=validate)
+        if 'error' in results['vol'] and fail_on_suite_error:
+            aborted_by = 'vol'
 
     # ---- 3. Options_Suite + VaR_Tools_Simulations (consume Vol_Suite's context) ----
-    print("\n[unified] Stage 3/3: Options_Suite and VaR_Tools_Simulations...")
-    results['options'] = run_suite('options', context,
-                                   timeout=int(focus.get('timeout') or DEFAULT_TIMEOUT_SEC))
-    results['var'] = run_suite('var', context,
-                               timeout=int(focus.get('timeout') or DEFAULT_TIMEOUT_SEC))
+    if aborted_by:
+        print(f"\n[unified] Stage 3/3 SKIPPED (blocked by {aborted_by}).")
+        results['options'] = _skip('options')
+        results['var'] = _skip('var')
+    else:
+        print("\n[unified] Stage 3/3: Options_Suite and VaR_Tools_Simulations...")
+        results['options'] = run_suite('options', context, timeout=timeout,
+                                       validate=validate)
+        results['var'] = run_suite('var', context, timeout=timeout,
+                                   validate=validate)
 
     combined = {
         'run_id': context['run_id'],
@@ -660,6 +865,16 @@ def run_unified(focus: Dict[str, Any]) -> Dict[str, Any]:
         'focus': context['focus'],
         'swap_activity_rows': len(context.get('swap_activity') or []),
         'results': results,
+        'fail_on_suite_error': bool(fail_on_suite_error),
+        'aborted_by': aborted_by,
+        'validation': {
+            stage: (r.get('_validation') or r.get('validation') or {}).get('status')
+            for stage, r in results.items()
+        },
+        # Kept out of `results` on purpose: that dict is the per-suite tally
+        # (`ok == len(results)` decides the run status), and the audit is not a
+        # suite. It has its own row in orchestrator_runs either way.
+        'context_audit': context_audit.to_dict(),
         'started_at': started_at,
         'completed_at': _iso_utc_now(),
     }
@@ -674,10 +889,224 @@ def run_unified(focus: Dict[str, Any]) -> Dict[str, Any]:
               file=sys.stderr)
 
     ok = sum(1 for r in results.values() if 'error' not in r)
-    status = 'ok' if ok == len(results) else ('partial' if ok else 'error')
+    if not context_audit.passed:
+        # 'error', not 'aborted': nothing here was a judgement call about how
+        # much failure to tolerate. The context mutation did not survive
+        # validation, the context was rolled back, and the run failed.
+        status = 'error'
+    elif aborted_by:
+        # 'aborted' rather than 'partial': the missing stages were never
+        # attempted, so reporting them as partial results would overstate what
+        # the run actually knows.
+        status = 'aborted'
+    else:
+        status = 'ok' if ok == len(results) else ('partial' if ok else 'error')
     combined['status'] = status
     log_run('unified', context['focus'], started_at, combined['completed_at'],
             status, combined)
+    return combined
+
+
+# --------------------------------------------------------------------------
+# multi-source orchestration
+# --------------------------------------------------------------------------
+
+def discover_adapters() -> List[str]:
+    """Discover enabled data sources via DATA_SOURCES environment variable.
+
+    Reads comma-separated source names from DATA_SOURCES env var. Each source
+    name should map to an available adapter (DTCC, CME, OTC, etc.).
+
+    Returns:
+        List of enabled source names. Defaults to ['DTCC'] if env var is unset.
+    """
+    data_sources_str = os.environ.get('DATA_SOURCES', 'DTCC').strip()
+    if not data_sources_str:
+        return ['DTCC']
+
+    sources = [s.strip().upper() for s in data_sources_str.split(',') if s.strip()]
+    logger.info(f"Discovered {len(sources)} enabled data sources: {', '.join(sources)}")
+    return sources or ['DTCC']
+
+
+def _get_adapter_for_source(source_name: str) -> Optional[Any]:
+    """Load the adapter module for a given source name.
+
+    Maps source names (DTCC, CME, OTC) to adapter modules in adapters/ directory.
+    Adapters are expected to have a class named <Source>Adapter.
+
+    Returns:
+        Instantiated adapter, or None if the source is not available.
+    """
+    adapters_dir = os.path.join(ROOT, 'adapters')
+    if not os.path.isdir(adapters_dir):
+        logger.warning(f"adapters/ directory not found at {adapters_dir}")
+        return None
+
+    source_lower = source_name.lower()
+    module_path = os.path.join(adapters_dir, f'{source_lower}_adapter.py')
+
+    if not os.path.exists(module_path):
+        logger.warning(f"Adapter module not found for {source_name}: {module_path}")
+        return None
+
+    try:
+        # Dynamically import the adapter module
+        spec = importlib.util.spec_from_file_location(
+            f'adapters.{source_lower}_adapter', module_path)
+        if not spec or not spec.loader:
+            logger.error(f"Could not load spec for {source_name} adapter")
+            return None
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Find the adapter class (e.g., DTCCAdapter, CMEAdapter, OTCAdapter)
+        adapter_class_name = f'{source_name.upper()}Adapter'
+        if not hasattr(module, adapter_class_name):
+            logger.error(f"Adapter class {adapter_class_name} not found in {module_path}")
+            return None
+
+        adapter_class = getattr(module, adapter_class_name)
+        return adapter_class()
+
+    except Exception as e:
+        logger.error(f"Failed to load adapter for {source_name}: {e}")
+        return None
+
+
+def run_unified_sources(tickers: List[str],
+                       target_years: float = 0.25,
+                       sources: Optional[List[str]] = None,
+                       timeout: int = None) -> Dict[str, Any]:
+    """Orchestrate parallel data ingestion from multiple sources, then run unified suite.
+
+    This is the main entry point for cross-source analytics. It:
+    1. Discovers or validates enabled data sources (env var DATA_SOURCES)
+    2. Launches parallel adapters for each source to ingest swap data
+    3. Aggregates results before passing to Vol_Suite
+    4. Runs the unified suite (sentiment -> vol -> options + var)
+
+    Args:
+        tickers: List of focus ticker(s) to analyze
+        target_years: Time to expiration in fractional years (default 0.25)
+        sources: Override list of sources to use (if None, uses discover_adapters())
+        timeout: Per-suite timeout in seconds (default uses DEFAULT_TIMEOUT_SEC)
+
+    Returns:
+        Dict with:
+            - run_id: Unique run identifier
+            - sources_ingested: List of sources that provided data
+            - trades_by_source: Dict mapping source name -> trade count
+            - total_trades_ingested: Sum across all sources
+            - unified_result: The combined suite output
+            - started_at: ISO timestamp
+            - completed_at: ISO timestamp
+
+    Raises:
+        ValueError: If tickers list is empty or sources list is invalid.
+    """
+    if not tickers:
+        raise ValueError("tickers list cannot be empty")
+
+    if timeout is None:
+        timeout = DEFAULT_TIMEOUT_SEC
+
+    if sources is None:
+        sources = discover_adapters()
+    else:
+        sources = [s.upper() for s in sources]
+        logger.info(f"Using override sources: {', '.join(sources)}")
+
+    started_at = _iso_utc_now()
+    run_id = _run_id_now()
+
+    print(f"\n[multi-source] run_id={run_id}")
+    print(f"[multi-source] Tickers: {', '.join(tickers)}")
+    print(f"[multi-source] Sources to ingest: {', '.join(sources)}")
+    print(f"[multi-source] Target years: {target_years}")
+
+    # ---- Stage 1: Parallel data ingestion from all sources ----
+    print("\n[multi-source] Stage 1/3: Parallel data ingestion...")
+
+    trades_by_source: Dict[str, int] = {}
+    ingestion_errors: Dict[str, str] = {}
+
+    # Import here to avoid circular dependency
+    try:
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+        from db_loader import SwapsLoader
+    except Exception as e:
+        raise RuntimeError(f"Failed to import db_loader: {e}")
+
+    loader = SwapsLoader(DB_PATH)
+
+    # Ingest from each source sequentially (can be parallelized with threading/multiprocessing)
+    for source in sources:
+        logger.info(f"Ingesting from {source}...")
+        adapter = _get_adapter_for_source(source)
+
+        if not adapter:
+            msg = f"Adapter not available for {source}"
+            ingestion_errors[source] = msg
+            trades_by_source[source] = 0
+            logger.warning(msg)
+            continue
+
+        try:
+            # Fetch trades from this source (no date filter for full backfill)
+            trades = adapter.fetch_trades()
+            trade_records = [t.to_dict() for t in trades] if trades else []
+
+            if trade_records:
+                result = loader.upsert_trades(trade_records, data_source=adapter)
+                trades_by_source[source] = len(trade_records)
+                logger.info(
+                    f"  {source}: upserted {len(trade_records)} trades "
+                    f"(inserted={result.get('inserted')}, updated={result.get('updated')})")
+            else:
+                trades_by_source[source] = 0
+                logger.info(f"  {source}: no trades fetched")
+
+        except Exception as e:
+            msg = f"Ingestion from {source} failed: {e}"
+            ingestion_errors[source] = msg
+            trades_by_source[source] = 0
+            logger.error(msg)
+
+    # ---- Stage 2: Run unified suite with aggregated data ----
+    total_trades = sum(trades_by_source.values())
+    print(f"\n[multi-source] Stage 2/3: Aggregated {total_trades} trades from {len(sources)} sources")
+
+    # Build focus for the first ticker (orchestrator is single-ticker-focused for now)
+    focus = {
+        'ticker': tickers[0].upper(),
+        'option_type': 'call',
+        'target_years': float(target_years),
+        'data_sources': sources,  # Pass sources to context
+    }
+
+    print(f"[multi-source] Stage 3/3: Running unified suite (ticker={focus['ticker']})...")
+    unified_result = run_unified(focus, fail_on_suite_error=False, validate=True)
+
+    # ---- Combine results ----
+    combined = {
+        'run_id': run_id,
+        'sources_requested': sources,
+        'sources_ingested': [s for s in sources if trades_by_source.get(s, 0) > 0],
+        'trades_by_source': trades_by_source,
+        'total_trades_ingested': total_trades,
+        'ingestion_errors': ingestion_errors or None,
+        'unified_result': unified_result,
+        'started_at': started_at,
+        'completed_at': _iso_utc_now(),
+    }
+
+    # Log the multi-source orchestration run
+    log_run('multi_source', focus, started_at, combined['completed_at'],
+            'ok' if total_trades > 0 else 'partial', combined)
+
     return combined
 
 
@@ -696,14 +1125,46 @@ def _summarize(combined: Dict[str, Any]) -> str:
         f"swap_activity_rows={combined['swap_activity_rows']}",
         f"status={combined['status']}",
     ]
+    if combined.get('aborted_by'):
+        reason = ('context mutation audit FAILED'
+                  if combined['aborted_by'] == 'context_audit'
+                  else '--fail-on-suite-error')
+        lines.append(f"aborted_by={combined['aborted_by']} ({reason})")
+
+    audit = combined.get('context_audit') or {}
+    if audit:
+        mutated = audit.get('mutations_detected') or []
+        line = (f"context_audit={audit.get('validation_status')} "
+                f"mutations={len(mutated)}")
+        if audit.get('rolled_back'):
+            line += " ROLLED_BACK"
+        lines.append(line)
+        # Concise diff: the changed keys, not the values and not the contexts.
+        for key in mutated[:8]:
+            lines.append(f"  mutated: {key}")
+        if len(mutated) > 8:
+            lines.append(f"  ... and {len(mutated) - 8} more mutated key(s)")
+        for err in audit.get('validation_errors') or []:
+            lines.append(f"  context_audit: {err}")
+
     for name, result in combined['results'].items():
+        validation = (result.get('_validation') or result.get('validation') or {})
+        verdict = validation.get('status')
+        if result.get('skipped'):
+            lines.append(f"{name}=SKIPPED ({result.get('blocked_by')} failed upstream)")
+            continue
         if 'error' in result:
             lines.append(f"{name}=FAILED: {result['error']}")
+            for err in validation.get('errors') or []:
+                lines.append(f"  {name} validation: {err}")
             if result.get('stderr'):
                 first = result['stderr'].splitlines()
                 lines.append(f"  {name} stderr tail: {first[-1] if first else ''}")
         else:
-            lines.append(f"{name}=ok ({result.get('status', 'ok')})")
+            suffix = f", validation={verdict}" if verdict else ''
+            lines.append(f"{name}=ok ({result.get('status', 'ok')}{suffix})")
+            for warning in validation.get('warnings') or []:
+                lines.append(f"  {name} validation WARN: {warning}")
     return "\n".join(lines)
 
 
@@ -744,20 +1205,39 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help=f'Per-child timeout in seconds (default {DEFAULT_TIMEOUT_SEC}).')
     parser.add_argument('--json', action='store_true',
                         help='Print the full combined result as JSON instead of a summary.')
+    parser.add_argument('--fail-on-suite-error', action='store_true',
+                        help='Abort the unified chain at the first suite whose '
+                             'output fails validation, instead of continuing '
+                             'downstream against known-bad input. Downstream '
+                             'stages are reported as skipped. Exit code 1.')
+    parser.add_argument('--no-validate', action='store_true',
+                        help='Skip explicit output validation entirely '
+                             '(pre-validation behaviour; for debugging a suite '
+                             'whose marker contract is in flux).')
     args = parser.parse_args(argv)
+
+    _warn_if_schema_outdated()
+
+    if args.no_validate and args.fail_on_suite_error:
+        parser.error('--no-validate and --fail-on-suite-error are contradictory: '
+                     'there is nothing to fail on with validation disabled.')
 
     focus = _focus_from_args(args)
     focus['timeout'] = args.timeout
+    focus['fail_on_suite_error'] = bool(args.fail_on_suite_error)
 
     if args.unified:
-        combined = run_unified(focus)
+        combined = run_unified(focus,
+                               fail_on_suite_error=bool(args.fail_on_suite_error),
+                               validate=not args.no_validate)
         print("\n" + ("=" * 60))
         print(json.dumps(combined, indent=2, default=str) if args.json
               else _summarize(combined))
         return 0 if combined['status'] == 'ok' else 1
 
     context = build_context(focus)
-    result = run_suite(args.suite, context, timeout=args.timeout)
+    result = run_suite(args.suite, context, timeout=args.timeout,
+                       validate=not args.no_validate)
     print("\n" + ("=" * 60))
     print(json.dumps(result, indent=2, default=str))
     return 1 if 'error' in result else 0

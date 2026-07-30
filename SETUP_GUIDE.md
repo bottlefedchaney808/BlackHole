@@ -89,6 +89,78 @@ Keep this process running:
 
 ---
 
+## Schema Migrations
+
+`swaps.db`'s schema is defined by numbered SQL files in `migrations/`
+(`001_initial.sql`, `002_add_data_source.sql`, ...), tracked in a
+`schema_version` table (`version`, `applied_at`, `migration_name`). This
+replaces hand-editing `setup_db.py`'s `CREATE TABLE` statements whenever the
+schema needs to change.
+
+### Applying migrations
+
+```bash
+python setup_db.py              # apply any pending migrations (default action)
+python setup_db.py --migrate    # same, explicit
+```
+
+Both are idempotent -- running against an up-to-date database logs
+`Schema already at vN; nothing to apply.` and exits 0. This is what
+`python setup_db.py` has always meant for a fresh database (Quick Start
+step 2 above still works unchanged); it now also carries forward any schema
+changes added since your `swaps.db` was created.
+
+### Checking status without applying
+
+```bash
+python setup_db.py --status
+```
+
+Prints the current schema version, the latest version available in
+`migrations/`, and which migrations (if any) are pending, without touching
+the database.
+
+### Adding a new migration
+
+1. Add a new file `migrations/NNN_short_description.sql`, where `NNN` is the
+   next integer after the highest existing migration (zero-padded to at
+   least 3 digits, e.g. `003_add_data_quality_flag.sql`).
+2. Write plain SQL (`ALTER TABLE`, `CREATE TABLE IF NOT EXISTS`,
+   `CREATE INDEX IF NOT EXISTS`, ...). It runs inside its own transaction, so
+   a mid-file failure rolls back that file's statements rather than leaving
+   the schema half-migrated.
+3. Run `python setup_db.py --migrate`. The runner discovers the new file
+   automatically -- nothing else to register.
+4. Do not edit or renumber a migration file once it has been applied to any
+   database (including your own dev `swaps.db`); ship a new migration
+   instead. `schema_version` records only the version number and name, not
+   file contents, so an edited file silently diverges from what already ran
+   elsewhere.
+
+### Startup warning
+
+`orchestrator.py` checks `swaps.db`'s schema version once at startup and
+logs a `WARNING` to stderr if it's behind the latest migration on disk --
+for example:
+
+```
+WARNING swaps.db schema is v1, latest available is v2. Pending migrations: 002_add_data_source. Run: python setup_db.py --migrate
+```
+
+This never blocks the run; it's a nudge, not a gate. A missing `swaps.db`
+(first run, before `setup_db.py` has been run at all) produces no warning.
+
+### File Reference (migrations)
+
+| File | Purpose |
+|------|---------|
+| `migrations/*.sql` | Numbered, ordered schema changes |
+| `schema_version` table (inside `swaps.db`) | Records which migrations have been applied and when |
+| `setup_db.migrate(db_path)` | Programmatic entry point; applies pending migrations |
+| `setup_db.get_schema_status(db_path)` | Read-only version/pending check, used by the startup warning |
+
+---
+
 ## Using the Query API
 
 ### In Your Sentiment Scanner
@@ -233,7 +305,8 @@ Verify:
 | File | Purpose |
 |------|---------|
 | `swaps.db` | SQLite database (created automatically) |
-| `setup_db.py` | Initialize database schema (run once) |
+| `setup_db.py` | Initialize/migrate database schema (`--migrate`, `--status`) |
+| `migrations/*.sql` | Numbered schema migrations, see "Schema Migrations" above |
 | `dtcc_scraper.py` | Fetch & parse DTCC CSV |
 | `db_loader.py` | Load data into database |
 | `scheduled_ingest.py` | Daily ingestion scheduler |

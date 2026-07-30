@@ -28,12 +28,27 @@ as child processes. The two modes used to diverge -- mode 2 wrote a context
 and, unless a child suite was explicitly requested, ran no analysis at all --
 which is exactly why "Compile outputs into single PDF? y" in mode 2 used to
 produce nothing: there were no sections to compile. See FIX_PLAN_20260725.md.
+
+A third, non-interactive entry point -- run_context_mode (`--context PATH
+--context-out PATH`) -- runs that same `_run_core_analysis` pipeline with every
+prompt answered from a validated suite_context.json instead of stdin, and
+publishes a machine-readable `vol_result.json` (schema in shared/schemas.py,
+`validate_vol_result`). This is the mode the root `orchestrator.py` drives.
+Before it existed, the orchestrator had to *script Vol_Suite's stdin* -- a list
+of blank lines and "y"/"n" answers coupled to the exact prompt order in
+run_focus_workflow -- and, because nothing was written to `--context-out`, had
+to synthesize a fake result payload by listing files in the output directory.
+Both of those hacks are gone: the prompt order is now free to change, and
+Vol_Suite reports its own vol surface / dealer positioning / gamma records
+rather than having them inferred from filenames.
 """
+import argparse
+import math
 import os
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,6 +59,7 @@ from suite_context import (
     DEFAULT_SENTIMENT_SUITE_ROOT,
     DEFAULT_VAR_SUITE_ROOT,
     build_suite_context,
+    read_suite_context,
     write_suite_context,
 )
 
@@ -500,6 +516,326 @@ def _run_child_suite(
     }
 
 
+# ---------------------------------------------------------------------------
+# vol_result.json -- the machine-readable side of a Vol_Suite run
+#
+# Everything below turns the objects the pipeline already computes (variance
+# swap result dicts, a DealerPositioningResult, correlation BasketStats) into
+# JSON that another process can rely on. The formal contract lives in
+# shared/schemas.py::validate_vol_result; these helpers are the producer side
+# of it.
+# ---------------------------------------------------------------------------
+
+VOL_RESULT_SCHEMA_VERSION = 1
+
+# gamma_records is genuinely large -- a liquid name's chain runs to several
+# thousand rows, which is a ~500 KB JSON blob nobody downstream reads in full.
+# The full set is already written to CSV by dealer_positioning; the JSON keeps
+# the highest-|dollar gamma| rows (the ones that actually drive the hedging
+# picture) and says how many it dropped. Set to 0 to disable the cap.
+_MAX_GAMMA_RECORDS = int(os.environ.get("VS_VOL_RESULT_MAX_GAMMA_RECORDS", "500"))
+
+
+def _iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce pipeline values into something json.dump can emit *and* another
+    process can parse.
+
+    Two hazards, both routine in this codebase and both silent:
+
+    - NaN/Infinity. Every module here returns float('nan') for "not available"
+      (see GammaRecord.delta, _extract_greek_field, the RV lookbacks). Python's
+      json writes those as bare `NaN`/`Infinity` tokens, which are not JSON --
+      strict parsers in any other language reject the whole file. They become
+      null.
+    - numpy scalars and arrays. DealerPositioningResult is half np.ndarray and
+      its scalars are np.float64, which json.dump raises TypeError on. Handled
+      without importing numpy at module scope (this module deliberately does
+      its heavy imports lazily inside functions).
+    """
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    item = getattr(value, "item", None)          # numpy scalar
+    if callable(item) and getattr(value, "shape", None) == ():
+        try:
+            return _json_safe(item())
+        except Exception:
+            pass
+    tolist = getattr(value, "tolist", None)      # numpy array
+    if callable(tolist):
+        try:
+            return _json_safe(tolist())
+        except Exception:
+            pass
+    return str(value)
+
+
+_VARIANCE_LEG_FIELDS = (
+    "S0", "F", "T_years",
+    "fair_variance_annualized",
+    "fair_variance_swap_strike_vol",
+    "fair_variance_swap_strike_vol_pct",
+    "atm_strike", "atm_implied_vol", "atm_implied_vol_pct",
+    "convexity_premium_vol_pct",
+    "num_strikes_used", "K_min", "K_max",
+)
+
+
+def _variance_leg_summary(ticker: str, result: Optional[dict]) -> Optional[Dict[str, Any]]:
+    """One replication leg, flattened for the handoff.
+
+    Deliberately drops `strike_table` -- it is a dict of parallel numpy arrays
+    over every strike used, which is both enormous and already exported to CSV
+    by variance_swap_live.export_csv. Consumers wanting per-strike detail read
+    that file; this block is the scalar summary.
+    """
+    if not isinstance(result, dict):
+        return None
+    summary: Dict[str, Any] = {"ticker": str(ticker).upper()}
+    for key in _VARIANCE_LEG_FIELDS:
+        if key in result:
+            summary[key] = _json_safe(result[key])
+    # Stable short alias for the one number every consumer wants, so nobody
+    # has to spell fair_variance_swap_strike_vol_pct to get at it.
+    summary["fair_vol_pct"] = summary.get("fair_variance_swap_strike_vol_pct")
+    return summary
+
+
+_DEALER_SCALAR_FIELDS = (
+    "ticker", "spot", "forward", "dividend_yield",
+    "total_net_gamma", "total_net_dollar_gamma",
+    "hedge_requirement", "gamma_flip_level",
+    "highest_gamma_strike", "total_gamma_exposure",
+    "num_expiries", "num_records",
+    "greek_days_window",
+    "has_delta_data", "has_vanna_data", "has_charm_data",
+    "hedge_equiv_option_strike", "hedge_equiv_option_right",
+    "hedge_equiv_option_contracts",
+)
+
+
+def _dealer_positioning_summary(result: Any, sign_model: str,
+                                csv_path: Optional[str] = None) -> Dict[str, Any]:
+    """The scalar dealer-positioning read, plus an explicit `available` flag.
+
+    `available` is the load-bearing field: dealer positioning is the step most
+    likely to come back empty (no chain, no greeks, a ThetaData outage), and
+    without a flag saying so, a block of zeros is indistinguishable from a
+    genuinely flat book. Consumers branch on `available`, never on whether the
+    numbers look plausible.
+    """
+    payload: Dict[str, Any] = {
+        "available": result is not None,
+        "sign_model": str(sign_model),
+        "gamma_records_csv": csv_path,
+    }
+    if result is None:
+        return payload
+    for key in _DEALER_SCALAR_FIELDS:
+        if hasattr(result, key):
+            payload[key] = _json_safe(getattr(result, key))
+    payload["sign_model"] = str(getattr(result, "sign_model", sign_model) or sign_model)
+    return payload
+
+
+_GAMMA_RECORD_FIELDS = (
+    "strike", "expiry", "right", "oi",
+    "gamma", "dollar_gamma", "iv", "tte",
+    "bid", "ask", "delta", "vanna", "charm",
+)
+
+
+def _gamma_records_payload(result: Any) -> Tuple[List[Dict[str, Any]], int, bool]:
+    """(records, total_before_truncation, was_truncated)."""
+    raw = list(getattr(result, "gamma_records", None) or []) if result is not None else []
+    total = len(raw)
+    truncated = False
+    if _MAX_GAMMA_RECORDS > 0 and total > _MAX_GAMMA_RECORDS:
+        def _abs_dollar_gamma(rec: Any) -> float:
+            val = _json_safe(getattr(rec, "dollar_gamma", None))
+            return abs(float(val)) if isinstance(val, (int, float)) else 0.0
+        raw = sorted(raw, key=_abs_dollar_gamma, reverse=True)[:_MAX_GAMMA_RECORDS]
+        truncated = True
+    records = [
+        {field: _json_safe(getattr(rec, field, None)) for field in _GAMMA_RECORD_FIELDS}
+        for rec in raw
+    ]
+    return records, total, truncated
+
+
+def _build_vol_surface(artifacts: Dict[str, Any]) -> Dict[str, Any]:
+    """The `vol_surface` block of vol_result.json.
+
+    "Vol surface" here means what this suite actually measures: the two
+    replication legs (index and focus ticker) at one shared, pinned expiry,
+    the spread between them, and the basket correlation context that decides
+    whether that spread is a dispersion signal or just a spread. It is not a
+    strike x expiry IV grid -- Vol_Suite computes those inside
+    vol_surface_reference/dealer_positioning as an intermediate, and they are
+    published as plots/CSV, not as JSON.
+    """
+    vs = artifacts.get("variance_swap", {})
+    return {
+        "focus_ticker": artifacts.get("focus_ticker"),
+        "index_ticker": artifacts.get("index_ticker"),
+        "expiration": artifacts.get("expiration"),
+        "target_years": artifacts.get("target_years"),
+        "focus": vs.get("focus"),
+        "index": vs.get("index"),
+        "vol_spread_pts": vs.get("vol_spread_pts"),
+        "basket": artifacts.get("basket", {}),
+        "opportunities": artifacts.get("opportunities", ""),
+    }
+
+
+def _build_vol_result(*, artifacts: Dict[str, Any], context: Optional[Dict[str, Any]],
+                      output_dir: str, produced: List[str],
+                      summary: str = "") -> Dict[str, Any]:
+    """Assemble a schema-valid vol_result payload from a completed run."""
+    vol_surface = _build_vol_surface(artifacts)
+    dealer = artifacts.get("dealer_positioning", {"available": False,
+                                                  "sign_model": artifacts.get("sign_model", "")})
+
+    # 'ok' means "at least one of the three blocks carries real content". A run
+    # where every leg failed is reported as an error even though the process
+    # exited cleanly -- otherwise the orchestrator books a total data outage as
+    # a successful stage.
+    produced_something = bool(vol_surface.get("focus") or vol_surface.get("index")
+                              or dealer.get("available"))
+    status = "ok" if produced_something else "error"
+
+    payload: Dict[str, Any] = {
+        "schema_version": VOL_RESULT_SCHEMA_VERSION,
+        "suite": "vol",
+        "status": status,
+        "ticker": str(artifacts.get("focus_ticker") or ""),
+        "run_id": (context or {}).get("run_id"),
+        "output_dir": output_dir,
+        "timestamp": _iso_utc_now(),
+        "vol_surface": vol_surface,
+        "dealer_positioning": dealer,
+        "gamma_records": artifacts.get("gamma_records", []),
+        "gamma_records_total": int(artifacts.get("gamma_records_total", 0) or 0),
+        "gamma_records_truncated": bool(artifacts.get("gamma_records_truncated", False)),
+        "gamma_records_csv": artifacts.get("gamma_records_csv"),
+        "sign_model": artifacts.get("sign_model"),
+        "produced_files": [os.path.basename(f) for f in (produced or [])],
+        "summary": summary,
+        "errors": artifacts.get("errors", []),
+    }
+    if status == "error":
+        steps = ", ".join(e.get("step", "?") for e in payload["errors"]) or "all pipeline steps"
+        payload["error"] = ("Vol_Suite produced no vol surface and no dealer positioning; "
+                            f"failed steps: {steps}")
+    return _json_safe(payload)
+
+
+def _error_vol_result(*, ticker: str, error: str,
+                      output_dir: Optional[str] = None,
+                      run_id: Optional[str] = None) -> Dict[str, Any]:
+    """A schema-valid vol_result for a run that never got as far as analysis.
+
+    The empty blocks are present, not omitted, precisely so the consumer's
+    validator passes and it can branch on `status` rather than on a
+    KeyError.
+    """
+    return {
+        "schema_version": VOL_RESULT_SCHEMA_VERSION,
+        "suite": "vol",
+        "status": "error",
+        "ticker": str(ticker or ""),
+        "run_id": run_id,
+        "output_dir": output_dir,
+        "timestamp": _iso_utc_now(),
+        "vol_surface": {},
+        "dealer_positioning": {"available": False, "sign_model": ""},
+        "gamma_records": [],
+        "gamma_records_total": 0,
+        "gamma_records_truncated": False,
+        "gamma_records_csv": None,
+        "produced_files": [],
+        "summary": "",
+        "errors": [],
+        "error": str(error),
+    }
+
+
+def _import_shared_schemas():
+    """shared/schemas.py lives at the repo root, one level above this suite.
+
+    Returned as None when unavailable rather than raised: schema validation is
+    a correctness check on our own output, and a missing sibling package must
+    not be the reason a completed analysis fails to publish. The orchestrator
+    validates independently on the consuming side.
+    """
+    try:
+        root = str(Path(__file__).resolve().parent.parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from shared import schemas  # noqa: E402  (path set immediately above)
+        return schemas
+    except Exception:
+        return None
+
+
+def _write_vol_result(path: str, payload: Dict[str, Any]) -> str:
+    """Validate then write. A payload that fails its own schema is REPLACED by
+    an error payload that says so, so the file on disk is always readable by a
+    consumer that trusts the contract -- rather than being a subtly malformed
+    'success' the orchestrator then has to reject."""
+    schemas = _import_shared_schemas()
+    if schemas is not None and hasattr(schemas, "validate_vol_result"):
+        try:
+            schemas.validate_vol_result(payload)
+        except ValueError as exc:
+            print(f"  [vol_result] self-validation failed: {exc}", file=sys.stderr)
+            payload = _error_vol_result(
+                ticker=str(payload.get("ticker") or ""),
+                error=f"vol_result failed shared.schemas.validate_vol_result: {exc}",
+                output_dir=payload.get("output_dir"),
+                run_id=payload.get("run_id"),
+            )
+
+    out_path = os.path.abspath(path)
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, allow_nan=False)
+        f.write("\n")
+    return out_path
+
+
+def _resolve_context_out_path(context_path: Optional[str],
+                              context: Optional[Dict[str, Any]],
+                              context_out: Optional[str]) -> str:
+    """Where vol_result.json goes: --context-out if given, else the context's
+    own output_dir, else next to the context file. Same precedence
+    Options_Suite/main.py::_resolve_context_out_path uses, so all three
+    children behave identically when the orchestrator omits the flag."""
+    if context_out:
+        return os.path.abspath(context_out)
+    output_dir = (context or {}).get("output_dir")
+    if isinstance(output_dir, str) and output_dir.strip():
+        return os.path.join(output_dir, "vol_result.json")
+    base = (os.path.dirname(os.path.abspath(context_path)) if context_path
+            else os.getcwd())
+    return os.path.join(base, "vol_result.json")
+
+
 def _run_core_analysis(
     *,
     ticker: str,
@@ -514,42 +850,96 @@ def _run_core_analysis(
     sign_model: str,
     run_options_chain: bool,
     out_root: str,
-) -> Tuple[List[str], List[dict]]:
+    run_group_screener: Optional[bool] = None,
+) -> Tuple[List[str], List[dict], Dict[str, Any]]:
     """Runs the full Vol_Suite analysis pipeline: group screener (if a pack
     basket is present), basket correlation/dispersion, variance-swap
     replication on the index + focus ticker, an opportunities read, GARCH,
     a screener recheck (skipped if redundant with the group screener),
     dealer positioning, and (optionally) the options chain scanner.
 
-    Shared by run_focus_workflow and run_unified_flow so "running the suite"
-    means exactly the same thing regardless of entry point -- the two modes
-    differ only in what happens BEFORE this (how ticker/basket/expiry get
-    chosen) and AFTER (whether a suite_context.json gets written and sibling
-    suites get launched), never in what analysis actually runs. This is what
-    used to be missing: mode 2 wrote a context and, unless a child suite was
-    explicitly requested, ran none of this at all. See FIX_PLAN_20260725.md.
+    Shared by run_focus_workflow, run_unified_flow and run_context_mode so
+    "running the suite" means exactly the same thing regardless of entry point
+    -- the modes differ only in what happens BEFORE this (how
+    ticker/basket/expiry get chosen: prompts, or a suite_context.json) and
+    AFTER (whether a context handoff gets written, whether sibling suites get
+    launched, whether a vol_result.json gets published), never in what analysis
+    actually runs. This is what used to be missing: mode 2 wrote a context and,
+    unless a child suite was explicitly requested, ran none of this at all. See
+    FIX_PLAN_20260725.md.
 
-    Returns (produced_files, pdf_sections).
+    `run_group_screener` decides the one prompt this function owns. None (the
+    default) keeps the historical behaviour -- ask, defaulting to yes -- and is
+    what both interactive modes pass. A bool answers it without touching stdin,
+    which is what makes this function safe to call from context mode: a single
+    stray input() there would block on a closed stdin and kill the run.
+
+    Returns (produced_files, pdf_sections, artifacts). `artifacts` is the
+    structured, JSON-serializable record of what the pipeline actually
+    computed -- the raw material for vol_result.json. It is built here rather
+    than reconstructed by the caller from filenames, so a step that fails
+    reports itself as failed instead of being invisible.
     """
     produced: List[str] = []
     sections: List[dict] = []
+
+    artifacts: Dict[str, Any] = {
+        "focus_ticker": ticker,
+        "index_ticker": chosen_index,
+        "expiration": expiration,
+        "target_years": float(target_years),
+        "sign_model": sign_model,
+        "basket": {
+            "tickers": list(tickers),
+            "weights": [float(w) for w in weights],
+            "source": "sentiment_pack" if use_pack_basket else "index_constituents",
+            "degenerate": len(tickers) < 2,
+            "dispersion_score": None,
+            "betas": {},
+        },
+        "variance_swap": {"index": None, "focus": None, "vol_spread_pts": None},
+        "opportunities": "",
+        "dealer_positioning": {"available": False, "sign_model": sign_model},
+        "gamma_records": [],
+        "gamma_records_total": 0,
+        "gamma_records_truncated": False,
+        "gamma_records_csv": None,
+        "group_screener_ran": False,
+        "garch_ran": False,
+        "chain_scan": None,
+        # Per-step failures. A failing module prints and continues (a broken
+        # GARCH fit must not cost you the dealer-positioning run), which used
+        # to mean the failure left no trace anywhere a machine could read.
+        "errors": [],
+    }
+
+    def _note_error(step: str, exc: Exception) -> None:
+        artifacts["errors"].append({"step": step, "error": f"{type(exc).__name__}: {exc}"})
+
     group_screener_ran = False
-    if pack_ctx:
-        run_pack_screen = (input("Run variance screener on full highlighted group first? (y/n, default y): ").strip().lower() or "y") == "y"
+    if pack_ctx or run_group_screener:
+        if run_group_screener is None:
+            run_pack_screen = (input("Run variance screener on full highlighted group first? (y/n, default y): ").strip().lower() or "y") == "y"
+        else:
+            run_pack_screen = bool(run_group_screener)
         if run_pack_screen and group_tickers:
             print(f"\n[0/5] Running group screener on {len(group_tickers)} highlighted tickers...")
             try:
                 import variance_swap_screener as vss
                 files, interp = vss.run_variance_screener(group_tickers, target_years, output_dir=out_root)
                 produced.extend(files)
+                group_label = ((pack_ctx or {}).get("pack", {}).get("group_id")
+                               or "highlighted-pack")
                 sections.append({
-                    "title": f"Group Screener: {pack_ctx['pack'].get('group_id', 'highlighted-pack')}",
+                    "title": f"Group Screener: {group_label}",
                     "text": interp or "",
                     "images": [f for f in files if f.lower().endswith('.png')]
                 })
                 group_screener_ran = True
+                artifacts["group_screener_ran"] = True
             except Exception as e:
                 print(f"  Group screener failed: {e}")
+                _note_error("group_screener", e)
 
     # ---- Step 1: basket stats (tickers/weights already resolved by caller) ----
     import correlation_engine as ce
@@ -572,8 +962,9 @@ def _run_core_analysis(
             tickers, weights=weights, market=chosen_index, period='2y', output_dir=out_root
         )
         produced.extend(basket_files)
+        pack_group_id = (pack_ctx or {}).get("pack", {}).get("group_id") or "highlighted-pack"
         basket_label = (
-            f"sentiment basket ({pack_ctx['pack'].get('group_id', 'highlighted-pack')})"
+            f"sentiment basket ({pack_group_id})"
             if use_pack_basket else f"{chosen_index} constituents"
         )
         sections.append({
@@ -581,8 +972,17 @@ def _run_core_analysis(
             "text": basket_interp or "",
             "images": [f for f in basket_files if f.lower().endswith('.png')]
         })
+        # dispersion_score is only information when there were pairs to
+        # correlate; a degenerate basket's 0.000 is an artifact (see above), so
+        # it is published as null rather than as a low-correlation reading.
+        if not basket_is_degenerate:
+            artifacts["basket"]["dispersion_score"] = _json_safe(
+                getattr(basket_stats, "dispersion_score", None))
+        artifacts["basket"]["betas"] = _json_safe(
+            dict(getattr(basket_stats, "individual_betas", {}) or {}))
     except Exception as e:
         print(f"  Basket/correlation engine failed: {e}")
+        _note_error("correlation_engine", e)
 
     # ---- Step 2: variance-swap replication on ONLY the index + focus ticker ----
     # Full-constituent replication is explicitly deferred -- this is a
@@ -599,8 +999,10 @@ def _run_core_analysis(
             "text": idx_interp or "",
             "images": [f for f in idx_files if f.lower().endswith('.png')]
         })
+        artifacts["variance_swap"]["index"] = _variance_leg_summary(chosen_index, index_result)
     except Exception as e:
         print(f"  Index replication failed: {e}")
+        _note_error("variance_swap_index", e)
 
     try:
         tk_files, tk_interp, ticker_result = vsl.run_variance_swap_live(ticker, target_years, output_dir=out_root, expiration=expiration)
@@ -610,8 +1012,10 @@ def _run_core_analysis(
             "text": tk_interp or "",
             "images": [f for f in tk_files if f.lower().endswith('.png')]
         })
+        artifacts["variance_swap"]["focus"] = _variance_leg_summary(ticker, ticker_result)
     except Exception as e:
         print(f"  Focus ticker replication failed: {e}")
+        _note_error("variance_swap_focus", e)
 
     # ---- Step 3: opportunities read ----
     print("\n[3/5] Dispersion / vol opportunity read...")
@@ -663,6 +1067,13 @@ def _run_core_analysis(
     opp_text = "\n".join(opp_lines)
     print(opp_text)
     sections.append({"title": "Opportunities", "text": opp_text, "images": []})
+    artifacts["opportunities"] = opp_text
+
+    idx_leg = artifacts["variance_swap"]["index"] or {}
+    focus_leg = artifacts["variance_swap"]["focus"] or {}
+    if idx_leg.get("fair_vol_pct") is not None and focus_leg.get("fair_vol_pct") is not None:
+        artifacts["variance_swap"]["vol_spread_pts"] = _json_safe(
+            float(focus_leg["fair_vol_pct"]) - float(idx_leg["fair_vol_pct"]))
 
     # ---- Step 4: rest of the suite, scoped to the focus ticker ----
     print(f"\n[4/5] Running remaining modules for {ticker}...")
@@ -676,8 +1087,10 @@ def _run_core_analysis(
             "title": f"GARCH Analysis: {ticker}", "text": interp or "",
             "images": [f for f in files if f.lower().endswith('.png')]
         })
+        artifacts["garch_ran"] = True
     except Exception as e:
         print(f"  GARCH failed: {e}")
+        _note_error("garch", e)
 
     # This is a SEPARATE, narrower step from the Group Screener above (Step
     # 0): it only ever screens the one focus ticker, so its table always has
@@ -710,19 +1123,33 @@ def _run_core_analysis(
                 print(f"  No screener result for {ticker}.")
         except Exception as e:
             print(f"  Screener failed: {e}")
+            _note_error("screener_recheck", e)
 
     print(f"\n[Running] Dealer Positioning (sign_model={sign_model})")
     try:
         import dealer_positioning as dp
-        files, interp, _ = dp.run_dealer_positioning(ticker, target_years, output_dir=out_root, save_csv=True,
+        files, interp, dp_result = dp.run_dealer_positioning(ticker, target_years, output_dir=out_root, save_csv=True,
                                                        expiration=expiration, sign_model=sign_model)
         produced.extend(files)
         sections.append({
             "title": f"Dealer Positioning: {ticker} (sign_model={sign_model})", "text": interp or "",
             "images": [f for f in files if f.lower().endswith('.png')]
         })
+        # The full record set stays on disk as CSV; vol_result.json carries a
+        # capped sample plus this pointer (see _gamma_records_payload).
+        gamma_csv = next((f for f in files
+                          if "_gamma_records_" in os.path.basename(f)
+                          and f.lower().endswith(".csv")), None)
+        artifacts["dealer_positioning"] = _dealer_positioning_summary(
+            dp_result, sign_model, csv_path=gamma_csv)
+        records, total, truncated = _gamma_records_payload(dp_result)
+        artifacts["gamma_records"] = records
+        artifacts["gamma_records_total"] = total
+        artifacts["gamma_records_truncated"] = truncated
+        artifacts["gamma_records_csv"] = gamma_csv
     except Exception as e:
         print(f"  Dealer positioning failed: {e}")
+        _note_error("dealer_positioning", e)
 
     # ---- Step 5: options chain scanner on the resolved expiry ----
     if run_options_chain:
@@ -736,12 +1163,18 @@ def _run_core_analysis(
                 "text": interp or "",
                 "images": [f for f in files if f.lower().endswith('.png')]
             })
+            artifacts["chain_scan"] = {
+                "verdict": _json_safe(getattr(scan_result, "verdict", None)),
+                "expiration": expiration,
+            }
         except Exception as e:
             print(f"  Chain scanner failed: {e}")
+            _note_error("options_chain_scanner", e)
     else:
         print("\n[5/5] Skipping Options Chain Scanner (disabled for this run).")
 
-    return produced, sections
+    artifacts["produced_files"] = list(produced)
+    return produced, sections, artifacts
 
 
 def run_unified_flow():
@@ -786,7 +1219,7 @@ def run_unified_flow():
     tickers, weights = _build_basket(ticker, use_pack_basket, group_tickers, chosen_index, top_n, known_weight)
 
     # ---- Run the SAME analysis pipeline mode 1 runs ----
-    produced, sections = _run_core_analysis(
+    produced, sections, artifacts = _run_core_analysis(
         ticker=ticker, pack_ctx=pack_ctx, group_tickers=group_tickers,
         use_pack_basket=use_pack_basket, tickers=tickers, weights=weights,
         chosen_index=chosen_index, target_years=target_years, expiration=expiration,
@@ -891,6 +1324,21 @@ def run_unified_flow():
     print(summary_text)
     print(f"Summary file: {summary_path}")
 
+    # Mode 2 publishes the same vol_result.json context mode does. The
+    # interactive unified flow and the headless orchestrator therefore leave
+    # behind an identical, validated artifact, so downstream tooling never has
+    # to care which one produced the run.
+    try:
+        vol_result_path = _write_vol_result(
+            os.path.join(out_root, "vol_result.json"),
+            _build_vol_result(artifacts=artifacts, context=context,
+                              output_dir=out_root, produced=produced,
+                              summary=summary_text),
+        )
+        print(f"Wrote vol result: {vol_result_path}")
+    except Exception as e:
+        print(f"Could not write vol_result.json: {e}", file=sys.stderr)
+
     if child_results:
         for result in child_results:
             if result["returncode"] != 0:
@@ -960,7 +1408,7 @@ def run_focus_workflow():
 
     tickers, weights = _build_basket(ticker, use_pack_basket, group_tickers, chosen_index, top_n, known_weight)
 
-    produced, sections = _run_core_analysis(
+    produced, sections, _artifacts = _run_core_analysis(
         ticker=ticker, pack_ctx=pack_ctx, group_tickers=group_tickers,
         use_pack_basket=use_pack_basket, tickers=tickers, weights=weights,
         chosen_index=chosen_index, target_years=target_years, expiration=expiration,
@@ -985,13 +1433,209 @@ def run_focus_workflow():
     print("\nDone.")
 
 
-def main():
-    mode = input("Run mode: (1) standard focus workflow, (2) unified cross-suite run [default 1]: ").strip()
-    if mode == "2":
-        run_unified_flow()
-        return
-    run_focus_workflow()
+# ---------------------------------------------------------------------------
+# Non-interactive context mode
+# ---------------------------------------------------------------------------
+
+_VALID_SIGN_MODELS = {"oi_heuristic", "replication", "vol_surface_replication"}
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _compact_expiry(iso_or_compact: str) -> str:
+    """suite_context stores expiration_date as ISO 'YYYY-MM-DD' (see
+    suite_context._normalize_expiration). Every analysis module in this suite
+    speaks ThetaData's compact 'YYYYMMDD'. Convert at exactly this boundary
+    rather than letting either format leak into the other side."""
+    raw = str(iso_or_compact).strip()
+    return raw.replace("-", "")
+
+
+def run_context_mode(context_path: str, context_out: Optional[str] = None) -> int:
+    """Run the full analysis pipeline with zero prompts, driven by a
+    suite_context.json, and publish vol_result.json.
+
+    Return codes match the other suites' context modes: 0 success, 2 the
+    context itself was unusable, 1 the run failed. In every case a schema-valid
+    vol_result is written first, because the caller's failure path reads that
+    file -- exiting non-zero with nothing on disk is what made the old
+    stdin-scripted integration so hard to diagnose.
+
+    Child suites are deliberately NOT launched here even when
+    `controls.run_options_suite` / `run_var_suite` are true. In context mode the
+    caller is an orchestrator that runs Options_Suite and VaR itself off the
+    same context; honouring those flags here would run each of them twice. The
+    interactive unified flow, where nothing else is going to launch them, still
+    does.
+    """
+    context: Optional[Dict[str, Any]] = None
+    try:
+        context = read_suite_context(context_path)
+    except Exception as exc:
+        out_path = _resolve_context_out_path(context_path, None, context_out)
+        _write_vol_result(out_path, _error_vol_result(
+            ticker="", error=f"Unusable context {context_path}: {exc}"))
+        print(f"Unusable context {context_path}: {exc}", file=sys.stderr)
+        return 2
+
+    focus = context["focus"]
+    basket = context["basket"]
+    ticker = str(focus["ticker"]).upper()
+    target_years = float(focus["target_years"])
+    expiration = _compact_expiry(focus["expiration_date"])
+
+    out_root = context.get("output_dir") or os.environ.get("VS_OUTPUT_DIR") or timestamped_output_dir()
+    os.makedirs(out_root, exist_ok=True)
+    os.environ["VS_OUTPUT_DIR"] = out_root
+
+    out_path = _resolve_context_out_path(context_path, context, context_out)
+
+    tickers = [str(t).upper() for t in basket["tickers"]]
+    weights = [float(w) for w in basket["weights"]]
+    chosen_index = str(basket["index_ticker"]).upper()
+    group_tickers = [str(t).upper() for t in (context.get("sentiment", {}).get("ranked_tickers") or [])]
+
+    # The prompts mode 1/2 ask become environment knobs here. Defaults are the
+    # ones the interactive flow defaults to, except the two that cost a lot of
+    # wall-clock time in a headless batch (the group screener re-runs
+    # replication for every ranked ticker; the chain scanner pulls another full
+    # chain), which are opt-in.
+    sign_model = os.environ.get("VS_SIGN_MODEL", "vol_surface_replication").strip()
+    if sign_model not in _VALID_SIGN_MODELS:
+        print(f"  [context] ignoring VS_SIGN_MODEL={sign_model!r}; "
+              f"expected one of {sorted(_VALID_SIGN_MODELS)}. Using vol_surface_replication.",
+              file=sys.stderr)
+        sign_model = "vol_surface_replication"
+    run_options_chain = _env_flag("VS_RUN_CHAIN_SCANNER", False)
+    run_group_screener = _env_flag("VS_RUN_GROUP_SCREENER", False)
+
+    print("=" * 60)
+    print("  VOLATILITY SUITE — context mode (non-interactive)")
+    print("=" * 60)
+    print(f"  context      : {context_path}")
+    print(f"  run_id       : {context['run_id']}")
+    print(f"  focus        : {ticker} @ {focus['expiration_date']} (T={target_years:.4f}yr)")
+    print(f"  index/basket : {chosen_index} / {len(tickers)} names")
+    print(f"  sign_model   : {sign_model}")
+    print(f"  output_dir   : {out_root}")
+    print(f"  context_out  : {out_path}")
+
+    try:
+        produced, sections, artifacts = _run_core_analysis(
+            ticker=ticker,
+            # pack_ctx=None keeps every pack-specific prompt out of the code
+            # path; the pack's ranked tickers still arrive via group_tickers.
+            pack_ctx=None,
+            group_tickers=group_tickers,
+            # The basket came from the context, already resolved by whoever
+            # built it -- do not re-derive it from index membership here.
+            use_pack_basket=False,
+            tickers=tickers,
+            weights=weights,
+            chosen_index=chosen_index,
+            target_years=target_years,
+            expiration=expiration,
+            sign_model=sign_model,
+            run_options_chain=run_options_chain,
+            out_root=out_root,
+            run_group_screener=run_group_screener,
+        )
+    except Exception as exc:
+        _write_vol_result(out_path, _error_vol_result(
+            ticker=ticker, error=f"{type(exc).__name__}: {exc}",
+            output_dir=out_root, run_id=context.get("run_id")))
+        print(f"Context-mode run failed: {exc}", file=sys.stderr)
+        return 1
+
+    if context.get("controls", {}).get("compile_pdf"):
+        try:
+            pdf_path = os.path.join(out_root, f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+            compose_pdf_report(pdf_path, sections)
+            produced.append(pdf_path)
+            print(f"Compiled PDF: {pdf_path}")
+        except Exception as e:
+            print(f"PDF compilation failed: {e}", file=sys.stderr)
+
+    summary = "\n".join([
+        f"run_id={context['run_id']}",
+        f"focus={ticker} {focus['expiration_date']} {focus['option_type']}",
+        f"analysis_output_files={len(produced)}",
+        f"failed_steps={len(artifacts.get('errors', []))}",
+    ])
+
+    payload = _build_vol_result(artifacts=artifacts, context=context,
+                                output_dir=out_root, produced=produced,
+                                summary=summary)
+    written = _write_vol_result(out_path, payload)
+    print(f"\nWrote vol result: {written}")
+    print(summary)
+    return 0 if payload.get("status") == "ok" else 1
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="volatility_suite.py",
+        description="Volatility suite: interactive focus/unified workflows, or a "
+                    "non-interactive context-mode run driven by suite_context.json.")
+    parser.add_argument(
+        "--context", default=None,
+        help="Path to a suite_context.json. Supplying it selects non-interactive "
+             "context mode: every prompt is answered from the context and nothing "
+             "is read from stdin.")
+    parser.add_argument(
+        "--context-out", default=None,
+        help="Where to write vol_result.json (default: <context output_dir>/vol_result.json).")
+    loop_group = parser.add_mutually_exclusive_group()
+    loop_group.add_argument(
+        "--no-loop", dest="loop", action="store_false", default=False,
+        help="Run one workflow and exit. This is the default and always has "
+             "been; the flag exists so every suite accepts the same headless "
+             "flag set, and so a caller can state the intent explicitly rather "
+             "than depending on the default. Context mode is unconditionally "
+             "single-pass, so it is a no-op there.")
+    loop_group.add_argument(
+        "--loop", dest="loop", action="store_true",
+        help="Return to the run-mode menu after each workflow instead of "
+             "exiting; 'q' quits.")
+    parser.add_argument(
+        "--mode", choices=["1", "2"], default=None,
+        help="Preselect the interactive run mode (1 = focus workflow, "
+             "2 = unified cross-suite run) instead of being prompted for it.")
+    args = parser.parse_args(argv)
+
+    # The orchestrator sets SUITE_CONTEXT_PATH/SUITE_CONTEXT_MODE in the child's
+    # environment as well as passing the flags. Honouring the environment means
+    # a caller that sets only the env vars still gets context mode rather than
+    # silently blocking on the run-mode prompt with a closed stdin.
+    context_path = args.context
+    if not context_path and os.environ.get("SUITE_CONTEXT_MODE") == "1":
+        context_path = os.environ.get("SUITE_CONTEXT_PATH") or None
+
+    if context_path:
+        return run_context_mode(context_path, args.context_out)
+
+    if args.context_out:
+        parser.error("--context-out requires --context (or SUITE_CONTEXT_MODE=1).")
+
+    prompt = ("Run mode: (1) standard focus workflow, (2) unified cross-suite run "
+              + ("[default 1, q to quit]: " if args.loop else "[default 1]: "))
+    while True:
+        mode = args.mode if args.mode is not None else input(prompt).strip()
+        if mode.lower() in {"q", "quit", "exit"}:
+            return 0
+        if mode == "2":
+            run_unified_flow()
+        else:
+            run_focus_workflow()
+        if not args.loop or args.mode is not None:
+            return 0
+        print()
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

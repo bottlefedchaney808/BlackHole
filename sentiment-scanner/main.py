@@ -13,6 +13,7 @@ import os
 import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from scanner.stocktwits import StockTwitsScraper
 from scanner.narrative import score_messages
 from scanner.swap_sdr import build_swap_snapshot
@@ -26,16 +27,32 @@ from scanner.youtube import format_scanner_line as yt_format
 import config
 
 
+def _find_vol_suite_python(vol_suite_dir: Path) -> str:
+    """Locate Vol_Suite's own venv interpreter, cross-platform.
+
+    Vol_Suite has its own venv (each suite's deps -- arch, statsmodels, etc.
+    -- aren't necessarily installed in sentiment-scanner's own venv), unlike
+    Ubuntu's single shared Financial_Dev_Env root venv. Windows venvs place
+    the interpreter at `.venv/Scripts/python.exe`; POSIX venvs (Linux/Mac)
+    place it at `.venv/bin/python`.
+    """
+    venv_dir = vol_suite_dir / ".venv"
+    candidates = [
+        venv_dir / "Scripts" / "python.exe",  # Windows
+        venv_dir / "bin" / "python3",         # Linux / Mac
+        venv_dir / "bin" / "python",          # Linux / Mac fallback
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    default = venv_dir / "Scripts" / "python.exe" if os.name == "nt" else venv_dir / "bin" / "python"
+    return str(default)
+
+
 def _launch_vol_suite(pack_path: str) -> None:
-    vol_suite_py = os.path.join(
-        os.path.dirname(__file__), "..", "Vol_Suite", "volatility_suite.py"
-    )
-    # Vol_Suite has its own venv on Windows (each suite's deps -- arch,
-    # statsmodels, etc. -- aren't necessarily installed in sentiment-scanner's
-    # own venv), unlike Ubuntu's single shared Financial_Dev_Env root venv.
-    venv_python = os.path.join(
-        os.path.dirname(__file__), "..", "Vol_Suite", ".venv", "Scripts", "python.exe"
-    )
+    vol_suite_dir = Path(__file__).resolve().parent / ".." / "Vol_Suite"
+    vol_suite_py = str(vol_suite_dir / "volatility_suite.py")
+    venv_python = _find_vol_suite_python(vol_suite_dir)
     cmd = [venv_python, vol_suite_py, "--pack", pack_path]
     print(f"\n{'='*60}")
     print(f"  Launching Volatility Suite on pack...")
