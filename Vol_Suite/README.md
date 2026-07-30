@@ -84,7 +84,46 @@ quadratic/SABR reference-smile fit and per-strike deviation),
 
 Full derivation and the staged validation plan: `DEALER_POSITIONING_V2_DESIGN.md`.
 
-### 5. Stage 3 Behavioral Backtest (`backtest_stage3.py`)
+### 5. Options Strategy Recommendations (`strategy_recommender.py`)
+
+Automatically recommends multi-leg options strategies based on detected volatility edges and Greeks positioning from the chain scanner.
+
+**How It Works:**
+1. **Edge Detection**: Smile-fit analysis identifies strikes where implied vol deviates from the fitted curve
+2. **Strategy Selection**: Based on vol regime (RICH/CHEAP/FAIR), appropriate strategies are recommended
+3. **Strike Sizing**: Strategies use identified edges as core positions with protection/offsets
+4. **Ranking**: Recommendations ranked by Greeks alignment (theta for RICH, gamma/vega for CHEAP)
+5. **Export**: Strategies exported as `chain_strategies.json` and included in `suite_context.json`
+
+**Recommended Strategies by Vol Regime:**
+
+**RICH Regime (High IV)** — Strategies to collect theta:
+- **Call spreads**: Sell high-IV calls, buy upside protection → collect theta
+- **Put spreads**: Sell high-IV puts, buy downside protection → collect theta
+- **Iron condor**: Sell premium on both sides → maximize theta collection
+- **Collars**: Sell calls, buy puts → protected upside with premium offset
+
+**CHEAP Regime (Low IV)** — Strategies for vol expansion:
+- **Straddles**: Long ATM call + put → long gamma and vega for IV expansion
+- **Strangles**: Long OTM call + put → cheaper exposure to wider moves
+- **Long call spreads**: Buy call, sell higher call → directional bet with defined risk
+- **Long put spreads**: Buy put, sell lower put → directional bet with defined risk
+
+**FAIR Regime (Balanced IV)** — Balanced exposure:
+- **Straddles**: ATM gamma play → benefit from realized volatility
+- **Strangles**: OTM gamma play → cheaper exposure with directional flavor
+- **Spreads**: Neutral positioning → hedge with theta collection
+
+**Output Format:**
+- **chain_strategies.json**: Structured recommendation artifact with strategy type, legs, Greeks summary, and rank score
+- **suite_context.json**: Includes strategies field for seamless Options_Suite integration
+
+**Integration with Options_Suite:**
+Strategies are automatically included in suite_context.json for import to Options_Suite for pricing, Greeks monitoring, and portfolio comparison.
+
+For detailed format specifications and data conventions, see: `docs/STRATEGY_RECOMMENDATIONS.md`
+
+### 6. Stage 3 Behavioral Backtest (`backtest_stage3.py`)
 The only module that tests whether the *economic claim* holds, rather than
 whether the machinery runs. For each historical day it classifies the book as
 long- or short-gamma under both v1 and v2, then measures forward realized vol,
@@ -135,7 +174,7 @@ sweep only if it turns out to matter for the gamma sign. Every run prints its
 own provenance (`N derived from price, N vendor, N unrecoverable`), and
 unrecoverable strikes are dropped rather than imputed.
 
-### 6. Data Sources
+### 7. Data Sources
 
 **ThetaData Controller** (via api.potatohedge.com):
 - Live option chain (all strikes, all greeks)
