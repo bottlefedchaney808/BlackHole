@@ -20,11 +20,12 @@ from typing import Dict, List, Optional, Tuple
 # Ensure yt-dlp can find Node.js for JavaScript extraction
 import shutil
 _NODE_BIN = shutil.which("node")
+_NODE_PATH = None
 if _NODE_BIN:
     _NODE_DIR = os.path.dirname(_NODE_BIN)
     if _NODE_DIR not in os.environ.get("PATH", ""):
         os.environ["PATH"] = f"{_NODE_DIR}{os.pathsep}{os.environ.get('PATH', '')}"
-    os.environ["YTDLP_JAVASCRIPT_RUNTIME"] = "node"
+    _NODE_PATH = _NODE_BIN  # Full path to node binary for yt-dlp config
 
 from scanner.options_scanner_base import get_td
 # Use the same narrative scoring engine as StockTwits
@@ -185,12 +186,15 @@ def _ytdl_search(query: str, max_results: int = YT_RESULTS_PER_QUERY) -> List[di
         print("  [youtube] yt-dlp not installed. Install with: pip install yt-dlp")
         return []
 
-    with yt_dlp.YoutubeDL({
+    ydl_config = {
         "quiet": True,
         "extract_flat": True,
         "skip_download": True,
-        "js_runtimes": ["node"],
-    }) as ydl:
+    }
+    if _NODE_PATH:
+        ydl_config["js_runtimes"] = [f"node:{_NODE_PATH}"]
+
+    with yt_dlp.YoutubeDL(ydl_config) as ydl:
         try:
             result = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
             entries = result.get("entries", []) if result else []
@@ -221,14 +225,17 @@ def _fetch_transcript(video_id: str) -> Optional[str]:
         return None
 
     try:
-        with yt_dlp.YoutubeDL({
+        ydl_config = {
             "quiet": True,
             "skip_download": True,
             "writesubtitles": False,
             "writeautomaticsub": True,
             "subtitleslangs": ["en"],
-            "js_runtimes": ["node"],
-        }) as ydl:
+        }
+        if _NODE_PATH:
+            ydl_config["js_runtimes"] = [f"node:{_NODE_PATH}"]
+
+        with yt_dlp.YoutubeDL(ydl_config) as ydl:
             info = ydl.extract_info(video_id, download=False)
     except Exception:
         return None
