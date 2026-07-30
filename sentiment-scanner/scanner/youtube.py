@@ -192,7 +192,7 @@ def _ytdl_search(query: str, max_results: int = YT_RESULTS_PER_QUERY) -> List[di
         "skip_download": True,
     }
     if _NODE_PATH:
-        ydl_config["js_runtimes"] = [f"node:{_NODE_PATH}"]
+        ydl_config["js_runtimes"] = {"node": {"path": _NODE_PATH}}
 
     with yt_dlp.YoutubeDL(ydl_config) as ydl:
         try:
@@ -233,7 +233,7 @@ def _fetch_transcript(video_id: str) -> Optional[str]:
             "subtitleslangs": ["en"],
         }
         if _NODE_PATH:
-            ydl_config["js_runtimes"] = [f"node:{_NODE_PATH}"]
+            ydl_config["js_runtimes"] = {"node": {"path": _NODE_PATH}}
 
         with yt_dlp.YoutubeDL(ydl_config) as ydl:
             info = ydl.extract_info(video_id, download=False)
