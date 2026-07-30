@@ -1116,6 +1116,33 @@ def run_unified_sources(tickers: List[str],
 # CLI
 # --------------------------------------------------------------------------
 
+def _stdin_is_available() -> bool:
+    """Check if stdin is available (interactive terminal vs redirected/piped).
+
+    Returns True if stdin is a terminal. Returns False if stdin is redirected,
+    piped, or unavailable (CI, task scheduler, etc.).
+    """
+    try:
+        if os.name == 'nt':
+            # Windows: use PowerShell to detect redirected stdin
+            result = subprocess.run(
+                ['powershell', '-NoProfile', '-Command', '[console]::isInputRedirected()'],
+                capture_output=True, text=True, timeout=1
+            )
+            if result.returncode == 0:
+                # PowerShell returns "True" or "False"; we want True (stdin available)
+                return result.stdout.strip().lower() != 'true'
+            else:
+                # PowerShell command failed; assume no stdin to avoid blocking
+                return False
+        else:
+            # POSIX: use isatty()
+            return sys.stdin.isatty()
+    except Exception:
+        # Any error -> assume no stdin
+        return False
+
+
 def _summarize(combined: Dict[str, Any]) -> str:
     lines = [
         f"run_id={combined['run_id']}",
@@ -1189,12 +1216,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog='orchestrator.py',
         description='Run the sibling suites over the shared suite_context handoff.')
-    mode = parser.add_mutually_exclusive_group(required=True)
+    # Make mode mutually exclusive, but --interactive optional (not required)
+    mode = parser.add_mutually_exclusive_group(required=False)
+    mode.add_argument('--interactive', action='store_true',
+                      help='Launch in interactive mode: guided prompts for all parameters.')
     mode.add_argument('--unified', action='store_true',
                       help='Run sentiment -> vol -> options + var in dependency order.')
     mode.add_argument('--suite', choices=sorted(SUITE_ROOTS),
                       help='Run a single suite in context mode.')
-    parser.add_argument('--ticker', required=True, help='Focus ticker, e.g. NVDA.')
+    # Make --ticker optional (only required in CLI mode if --unified/--suite chosen)
+    parser.add_argument('--ticker', required=False,
+                        help='Focus ticker, e.g. NVDA. Required if --unified or --suite is used.')
     parser.add_argument('--strike', type=float, default=None,
                         help='Optional strike; null means the child picks ATM.')
     parser.add_argument('--expiry', default=None,
@@ -1219,6 +1251,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     _warn_if_schema_outdated()
+
+    # Validate CLI args: if using --unified or --suite, --ticker must be provided
+    if (args.unified or args.suite) and not args.ticker:
+        parser.error('--ticker is required when using --unified or --suite')
 
     if args.no_validate and args.fail_on_suite_error:
         parser.error('--no-validate and --fail-on-suite-error are contradictory: '
