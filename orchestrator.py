@@ -1456,7 +1456,27 @@ def _focus_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog='orchestrator.py',
-        description='Run the sibling suites over the shared suite_context handoff.')
+        description='Run the sibling suites over the shared suite_context handoff.',
+        epilog="""
+INTERACTIVE MODE (Recommended):
+  orchestrator.py --interactive
+    Guided prompts for mode selection, ticker, expiration, and optional parameters.
+    Auto-validates input and re-prompts on errors. Requires interactive terminal.
+
+UNIFIED RUN (CLI flags):
+  orchestrator.py --unified --ticker NVDA --expiry 2026-10-16
+    Runs: sentiment -> vol -> options + var (all four suites in dependency order)
+
+SINGLE SUITE (CLI flags):
+  orchestrator.py --suite vol --ticker AAPL --target-years 0.25
+    Runs only Vol Suite (with sentiment context producer as dependency)
+
+ADVANCED OPTIONS:
+  orchestrator.py --unified --ticker SPY --expiry 2026-08-15 --fail-on-suite-error
+    Abort on first suite failure instead of continuing degraded.
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     # Make mode mutually exclusive, but --interactive optional (not required)
     mode = parser.add_mutually_exclusive_group(required=False)
     mode.add_argument('--interactive', action='store_true',
