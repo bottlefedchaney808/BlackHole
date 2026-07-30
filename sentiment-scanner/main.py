@@ -7,6 +7,14 @@ Skew, Max Pain, and Vol Dispersion — all piped into the correlation engine
 for composite signals.
 """
 
+import sys
+from pathlib import Path
+
+# Add root directory to path so `shared` module can be imported from anywhere
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 import argparse
 import json
 import os
