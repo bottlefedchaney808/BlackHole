@@ -13,9 +13,13 @@
 # imports from `Vol_Suite.thetadata_client` continue to work without
 # modification.
 
+import sys
+import os
 import time  # re-exported: tests monkeypatch tc.time.sleep to skip retry backoff.
              # `time` is a singleton module object, so this patches the same
              # object shared.thetadata's own `import time` uses internally.
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.thetadata import (
     ThetaDataController,

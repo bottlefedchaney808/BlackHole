@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Tuple
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ---------------------------------------------------------------------------
 # Dataclasses
