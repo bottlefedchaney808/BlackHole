@@ -194,8 +194,9 @@ _SUITE_SPECS: Dict[str, Dict[str, Any]] = {
     'sentiment': {
         # Producer, not consumer: it has no --context, only --export-context,
         # and it loops forever without --no-loop.
+        # Skip YouTube scanner for orchestrator speed (not critical for context).
         'entrypoint': 'main.py',
-        'flags': lambda ctx, out: ['--export-context', out, '--no-loop'],
+        'flags': lambda ctx, out: ['--export-context', out, '--no-loop', '--skip-youtube'],
         'writes_context_out': True,
         'note': 'context producer: --export-context (schema_version 2 sentiment block)',
     },
