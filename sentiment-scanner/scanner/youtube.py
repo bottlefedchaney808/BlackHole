@@ -17,10 +17,14 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-# Ensure yt-dlp can find the deno JS runtime (kills the warning)
-_DENO_DIR = os.path.expanduser("~/.nvm/versions/node/v20.20.2/bin")
-if _DENO_DIR not in os.environ.get("PATH", ""):
-    os.environ["PATH"] = f"{_DENO_DIR}:{os.environ.get('PATH', '')}"
+# Ensure yt-dlp can find Node.js for JavaScript extraction
+import shutil
+_NODE_BIN = shutil.which("node")
+if _NODE_BIN:
+    _NODE_DIR = os.path.dirname(_NODE_BIN)
+    if _NODE_DIR not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{_NODE_DIR}{os.pathsep}{os.environ.get('PATH', '')}"
+    os.environ["YTDLP_JAVASCRIPT_RUNTIME"] = "node"
 
 from scanner.options_scanner_base import get_td
 # Use the same narrative scoring engine as StockTwits
