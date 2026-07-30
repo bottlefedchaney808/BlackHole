@@ -590,6 +590,8 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
     command = [SHARED_PYTHON, entrypoint] + list(spec['flags'](ctx_path, out_path))
 
     env = os.environ.copy()
+    # Ensure shared module is in PYTHONPATH for all child suites
+    env['PYTHONPATH'] = f"{ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
     env['SUITE_CONTEXT_PATH'] = ctx_path
     env['SUITE_CONTEXT_MODE'] = '1'
     env['VS_OUTPUT_DIR'] = output_dir
