@@ -18,6 +18,18 @@ import sys
 import os
 from typing import Optional
 
+# ---- Project root path bootstrap (for shared/) ----
+_PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..")
+)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from shared.config import load_env_once
+
+# Ensure .env is loaded before any ThetaDataController construction
+load_env_once()
+
 # ---- Vol_Suite path bootstrap ----
 _VOL_SUITE_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "Vol_Suite")

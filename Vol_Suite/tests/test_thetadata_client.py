@@ -434,15 +434,86 @@ def test_coerce_number_rejects_junk_and_nan(value, expected):
 
 
 # ---------------------------------------------------------------------------
+# fetch_spot_price -- three-layer fallback (quote -> trade -> daily close)
+#
+# Regression coverage for a real bug that existed in one of the two pre-merge
+# client implementations and was fixed in the other: `if key in quote and
+# quote[key]` treats the STRING '0.0000' as truthy (non-empty string), so it
+# happily returned 0.0 as if it were a found price whenever bid/ask were both
+# the string '0.0000' -- confirmed live to be exactly what this vendor's
+# quote snapshot returns for every ticker outside regular trading hours. The
+# merge into shared/thetadata.py must not silently reintroduce this.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_fetch_spot_price_rejects_the_stringified_zero_quote_bug():
+    """The '0.0000' string must NOT be treated as a valid price."""
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.stock_snapshot_quote = lambda root: {"mid": "0.0000", "bid": "0.0000",
+                                             "ask": "0.0000", "last": "0.0000"}
+    td.stock_snapshot_trade = lambda root: {"price": "123.45"}
+    assert td.fetch_spot_price("SPY") == pytest.approx(123.45)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_uses_live_quote_when_usable():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.stock_snapshot_quote = lambda root: {"mid": "450.10"}
+    assert td.fetch_spot_price("SPY") == pytest.approx(450.10)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_falls_back_to_trade_when_quote_is_empty():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.stock_snapshot_quote = lambda root: {}
+    td.stock_snapshot_trade = lambda root: {"price": "99.99"}
+    assert td.fetch_spot_price("SPY") == pytest.approx(99.99)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_falls_back_to_daily_close_when_quote_and_trade_fail():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.stock_snapshot_quote = lambda root: (_ for _ in ()).throw(
+        httpx.HTTPStatusError("502", request=None, response=None))
+    td.stock_snapshot_trade = lambda root: {}
+    td.hist_stock_eod = lambda root, start, end: [
+        {"close": "10.0"}, {"close": "0"}, {"close": "11.5"}]
+    assert td.fetch_spot_price("SPY") == pytest.approx(11.5)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_returns_zero_when_every_layer_fails():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.stock_snapshot_quote = lambda root: {}
+    td.stock_snapshot_trade = lambda root: {}
+    td.hist_stock_eod = lambda root, start, end: []
+    assert td.fetch_spot_price("SPY") == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Credentials
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 def test_missing_credentials_fails_immediately_and_says_so(monkeypatch):
     """Fail at construction, not on the first request -- every call site is
-    written to catch this and fall back."""
-    monkeypatch.setattr(tc, "_load_dotenv_once", lambda: None)
+    written to catch this and fall back.
+
+    Directly deletes the env vars and patches both shared modules' load_env_once
+    to ensure env vars from .env don't interfere.
+    """
+    # Nuke the env vars
     monkeypatch.delenv("THETADATA_CF_ACCESS_CLIENT_ID", raising=False)
     monkeypatch.delenv("THETADATA_CF_ACCESS_CLIENT_SECRET", raising=False)
+
+    # Patch both places load_env_once could be called from
+    import shared.thetadata as _st
+    monkeypatch.setattr(_st, "load_env_once", lambda: None)
+
+    # Verify they're gone
+    import os
+    assert os.environ.get("THETADATA_CF_ACCESS_CLIENT_ID") is None
+    assert os.environ.get("THETADATA_CF_ACCESS_CLIENT_SECRET") is None
+
     with pytest.raises(RuntimeError, match="credentials"):
         ThetaDataController()

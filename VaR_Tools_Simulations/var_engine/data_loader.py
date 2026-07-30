@@ -7,63 +7,21 @@ No yfinance.  No fallbacks that cost money.
 """
 import os
 import json
-import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 
+from shared.cache import load as _cache_load, save as _cache_save
+
 import numpy as np
 
-# ── cache directory ─────────────────────────────────────────────────────────
-_CACHE_DIR = Path(__file__).parent.parent / ".cache"
-_CACHE_DIR.mkdir(exist_ok=True)
-
-# ── lazy ThetaData client (imported from local copy) ─────────────────────────
+# ── lazy ThetaData client ───────────────────────────────────────────────────
 def _theta_client():
-    """Return a ThetaDataController, loading .env from THIS project root."""
-    import sys, importlib
-    _root = Path(__file__).parent.parent
-    env_path = _root / ".env"
-    # load .env into os.environ if present
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            k = k.strip(); v = v.strip().strip('"').strip("'")
-            if k and k not in os.environ:
-                os.environ[k] = v
-    # import from sibling Variance_Swap_Module
-    vsm = str(Path(__file__).parent.parent.parent / "Variance_Swap_Module")
-    if vsm not in sys.path:
-        sys.path.insert(0, vsm)
-    from thetadata_client import ThetaDataController
+    """Return a ThetaDataController, reading .env from shared.config."""
+    from shared.config import load_env_once
+    load_env_once()
+    from shared.thetadata import ThetaDataController
     return ThetaDataController()
-
-
-def _cache_key(tag: str) -> Path:
-    h = hashlib.md5(tag.encode()).hexdigest()[:12]
-    return _CACHE_DIR / f"{h}.json"
-
-
-def _cache_load(tag: str):
-    p = _cache_key(tag)
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            pass
-    return None
-
-
-def _cache_save(tag: str, data):
-    if not data:          # never cache empty — force retry next call
-        return
-    try:
-        _cache_key(tag).write_text(json.dumps(data))
-    except Exception:
-        pass
 
 
 def _default_sentiment_manifest() -> Path:

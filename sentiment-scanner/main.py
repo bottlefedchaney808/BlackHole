@@ -10,6 +10,7 @@ for composite signals.
 import argparse
 import json
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
 from scanner.stocktwits import StockTwitsScraper
@@ -20,7 +21,35 @@ from scanner.theta_integration import build_oi_snapshot
 from scanner.ticker_pack import export_alert_group
 from scanner.options_scanner_base import close_td
 from correlation.engine import CorrelationEngine
+from scanner.youtube import scan_ticker as yt_scan_ticker
+from scanner.youtube import format_scanner_line as yt_format
 import config
+
+
+def _launch_vol_suite(pack_path: str) -> None:
+    vol_suite_py = os.path.join(
+        os.path.dirname(__file__), "..", "Vol_Suite", "volatility_suite.py"
+    )
+    # Vol_Suite has its own venv on Windows (each suite's deps -- arch,
+    # statsmodels, etc. -- aren't necessarily installed in sentiment-scanner's
+    # own venv), unlike Ubuntu's single shared Financial_Dev_Env root venv.
+    venv_python = os.path.join(
+        os.path.dirname(__file__), "..", "Vol_Suite", ".venv", "Scripts", "python.exe"
+    )
+    cmd = [venv_python, vol_suite_py, "--pack", pack_path]
+    print(f"\n{'='*60}")
+    print(f"  Launching Volatility Suite on pack...")
+    print(f"  {' '.join(cmd)}")
+    print(f"{'='*60}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        print(proc.stdout)
+        if proc.returncode != 0:
+            print(f"  Vol Suite stderr: {proc.stderr[-2000:]}")
+    except subprocess.TimeoutExpired:
+        print("  Vol Suite timed out after 30 min.")
+    except FileNotFoundError as e:
+        print(f"  Could not launch Vol Suite: {e}")
 
 
 def _make_run_id() -> str:
@@ -43,6 +72,8 @@ def _write_context_export(path: str, run_id: str, pack: dict) -> None:
     out_dir = os.path.dirname(output_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
+    from shared.schemas import validate_sentiment_context
+    validate_sentiment_context(payload)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=True, indent=2)
     print(f"  Context export: {output_path}")
@@ -71,6 +102,16 @@ def _parse_args() -> argparse.Namespace:
         "--skip-gex",
         action="store_true",
         help="Skip GEX scan (more expensive — pulls many expiries).",
+    )
+    parser.add_argument(
+        "--skip-youtube",
+        action="store_true",
+        help="Skip YouTube transcript sentiment scan.",
+    )
+    parser.add_argument(
+        "--launch-vol-suite",
+        action="store_true",
+        help="After scan, launch Volatility Suite on the highlight pack.",
     )
     return parser.parse_args()
 
@@ -165,7 +206,18 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     return results
 
 
-def scan_trending(st, engine, benchmark="SPY", skip_gex=False):
+def run_youtube_scanner(ticker, engine):
+    try:
+        yt = yt_scan_ticker(ticker)
+        if yt:
+            engine.record_narrative(ticker, yt)
+            return yt_format(yt)
+    except Exception:
+        pass
+    return None
+
+
+def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=False):
     trending = st.get_trending()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Trending: {len(trending)} symbols")
     alerts = []
@@ -178,6 +230,10 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False):
         scanner_lines = run_options_scanners(ticker, engine, benchmark, skip_gex)
         for line in scanner_lines:
             print(line)
+        if not skip_youtube:
+            yt_line = run_youtube_scanner(ticker, engine)
+            if yt_line:
+                print(yt_line)
         time.sleep(0.5)  # brief pause between tickers
     return alerts
 
@@ -240,7 +296,7 @@ def main():
     print("="*60)
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")
     print("="*60)
-    print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps)")
+    print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps) | YouTube")
     print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion")
     print("="*60)
 
@@ -248,7 +304,7 @@ def main():
     engine = CorrelationEngine()
     try:
         run_id = _make_run_id()
-        alerts = scan_trending(st, engine, args.benchmark, args.skip_gex)
+        alerts = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
         pack = {}
 
         if alerts:
@@ -274,6 +330,11 @@ def main():
         if args.export_context_path:
             _write_context_export(args.export_context_path, run_id, pack)
 
+        if args.launch_vol_suite and pack and pack.get("json_path"):
+            _launch_vol_suite(pack["json_path"])
+        elif args.launch_vol_suite:
+            print("  No highlight pack — skipping Vol Suite launch.")
+
         if args.no_loop:
             return
 
@@ -281,7 +342,7 @@ def main():
             print(f"\n--- Next scan in {config.SCAN_INTERVAL_MINUTES} min ---")
             time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
             run_id = _make_run_id()
-            alerts = scan_trending(st, engine, args.benchmark, args.skip_gex)
+            alerts = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
             pack = {}
             if alerts:
                 pack = export_alert_group(

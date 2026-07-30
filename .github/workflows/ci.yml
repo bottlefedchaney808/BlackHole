@@ -1,0 +1,25 @@
+name: CI
+"on": [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+      - run: pip install -r requirements.txt
+      - name: Options_Suite
+        run: python -m pytest Options_Suite/tests/ -v
+      - name: VaR_Tools_Simulations
+        run: python -m pytest VaR_Tools_Simulations/tests/ -v
+      - name: sentiment-scanner
+        run: python -m pytest sentiment-scanner/tests/ -v
+      - name: Vol_Suite
+        working-directory: ./Vol_Suite
+        run: python -m pytest tests/ -v

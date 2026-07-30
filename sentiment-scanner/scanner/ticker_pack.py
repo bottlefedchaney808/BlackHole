@@ -55,7 +55,13 @@ def _entry_is_fresh(entry: Dict, ttl_days: int) -> bool:
         updated = datetime.fromisoformat(ts)
         if updated.tzinfo is None:
             updated = updated.replace(tzinfo=timezone.utc)
-        return updated >= (_utc_now() - timedelta(days=ttl_days))
+        # Strict >, not >=: at ttl_days=0 the freshness window has zero width,
+        # so nothing should count as fresh -- including an entry timestamped
+        # this instant. `>=` let ttl=0 admit an equal timestamp, which is
+        # reachable in practice on platforms where two back-to-back
+        # _utc_now() calls can return the identical value (observed on
+        # Windows; masked on Linux by finer wall-clock resolution).
+        return updated > (_utc_now() - timedelta(days=ttl_days))
     except ValueError:
         return False
 
@@ -109,6 +115,7 @@ def export_alert_group(
 
     thesis_summary = f"{len(pack_tickers)} highlighted tickers crossing CNS threshold"
     pack = {
+        "schema_version": 1,
         "version": 1,
         "group_id": group_id,
         "group_name": group_name,
@@ -123,6 +130,9 @@ def export_alert_group(
             "options_suite": False,
         },
     }
+
+    from shared.schemas import validate_sentiment_pack
+    validate_sentiment_pack(pack)
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(pack, f, ensure_ascii=True, indent=2)
