@@ -35,7 +35,7 @@ if "%~1"=="" (
     )
 
     REM PowerShell is available — check if stdin is interactive
-    for /f "tokens=*" %%A in ('powershell -NoProfile -Command "[console]::isInputRedirected()" 2^>nul') do (
+    for /f "tokens=*" %%A in ('powershell -NoProfile -Command "[console]::isInputRedirected()"') do (
         set INPUT_REDIRECTED=%%A
     )
 
