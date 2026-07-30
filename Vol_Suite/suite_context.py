@@ -244,11 +244,65 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
     # Validate optional strategies field (populated from chain scan)
     if "strategies" in context:
         _require(isinstance(context["strategies"], list), "strategies must be a list if present")
-        for strategy in context["strategies"]:
-            _require(isinstance(strategy, dict), "each strategy must be an object")
+        for i, strategy in enumerate(context["strategies"]):
+            _require(isinstance(strategy, dict), f"strategies[{i}] must be an object")
+            # Required strategy fields
             for key in ("strategy_type", "legs", "vol_regime", "rationale"):
-                _require(key in strategy, f"Missing required field in strategy: {key}")
-            _require(isinstance(strategy["legs"], list), "strategy.legs must be a list")
+                _require(key in strategy, f"strategies[{i}] missing required field: {key}")
+
+            # strategy_type must be a string
+            _require(isinstance(strategy["strategy_type"], str) and strategy["strategy_type"].strip(),
+                     f"strategies[{i}].strategy_type must be a non-empty string")
+
+            # vol_regime must be one of RICH, CHEAP, FAIR
+            _require(strategy["vol_regime"] in ("RICH", "CHEAP", "FAIR"),
+                     f"strategies[{i}].vol_regime must be 'RICH', 'CHEAP', or 'FAIR', got {strategy['vol_regime']}")
+
+            # rationale must be a string
+            _require(isinstance(strategy["rationale"], str),
+                     f"strategies[{i}].rationale must be a string")
+
+            # legs must be a non-empty list
+            legs = strategy["legs"]
+            _require(isinstance(legs, list) and len(legs) > 0,
+                     f"strategies[{i}].legs must be a non-empty list")
+
+            for j, leg in enumerate(legs):
+                _require(isinstance(leg, dict), f"strategies[{i}].legs[{j}] must be an object")
+                # Required leg fields
+                for key in ("instrument_type", "strike", "quantity"):
+                    _require(key in leg, f"strategies[{i}].legs[{j}] missing required field: {key}")
+
+                # instrument_type must be 'call' or 'put'
+                _require(leg["instrument_type"] in ("call", "put"),
+                         f"strategies[{i}].legs[{j}].instrument_type must be 'call' or 'put', got {leg['instrument_type']}")
+
+                # strike must be numeric
+                _require(isinstance(leg["strike"], (int, float)) and not isinstance(leg["strike"], bool),
+                         f"strategies[{i}].legs[{j}].strike must be numeric")
+
+                # quantity must be an integer
+                _require(isinstance(leg["quantity"], int) and not isinstance(leg["quantity"], bool),
+                         f"strategies[{i}].legs[{j}].quantity must be an integer")
+
+            # Optional fields validation
+            if "edge_strikes_used" in strategy:
+                _require(isinstance(strategy["edge_strikes_used"], list),
+                         f"strategies[{i}].edge_strikes_used must be a list")
+                for k, strike in enumerate(strategy["edge_strikes_used"]):
+                    _require(isinstance(strike, (int, float)) and not isinstance(strike, bool),
+                             f"strategies[{i}].edge_strikes_used[{k}] must be numeric")
+
+            if "greeks_summary" in strategy:
+                _require(isinstance(strategy["greeks_summary"], dict),
+                         f"strategies[{i}].greeks_summary must be an object")
+                for greek_name, greek_value in strategy["greeks_summary"].items():
+                    _require(greek_value is None or (isinstance(greek_value, (int, float)) and not isinstance(greek_value, bool)),
+                             f"strategies[{i}].greeks_summary.{greek_name} must be numeric or null")
+
+            if "rank_score" in strategy:
+                _require(isinstance(strategy["rank_score"], (int, float)) and not isinstance(strategy["rank_score"], bool),
+                         f"strategies[{i}].rank_score must be numeric")
 
 
 def write_suite_context(context: Dict[str, Any], path: str) -> str:

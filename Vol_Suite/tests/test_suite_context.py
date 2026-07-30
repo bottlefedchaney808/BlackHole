@@ -176,3 +176,212 @@ def test_suite_roots_are_not_hardcoded_to_one_machine(tmp_path):
                  sc.DEFAULT_SENTIMENT_SUITE_ROOT):
         assert "bottl" not in root.lower() or "FinancialDevelopment" in root, root
     assert _ctx(tmp_path)["paths"]["options_suite_root"].endswith("Options_Suite")
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Strategies field validation (chain scan integration)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_suite_context_includes_strategies_with_empty_list(tmp_path):
+    """Test that suite context includes strategies field with empty list by default."""
+    context = _ctx(tmp_path)
+    assert "strategies" in context
+    assert isinstance(context["strategies"], list)
+    assert context["strategies"] == []
+
+
+@pytest.mark.unit
+def test_suite_context_validates_strategies_field(tmp_path):
+    """Test that suite context validates strategies field using actual build_suite_context."""
+    context = _ctx(tmp_path)
+    # Add a valid strategy
+    context["strategies"] = [
+        {
+            "strategy_type": "call_spread",
+            "legs": [
+                {"instrument_type": "call", "strike": 450.0, "quantity": -1},
+                {"instrument_type": "call", "strike": 455.0, "quantity": 1},
+            ],
+            "vol_regime": "RICH",
+            "rationale": "Sell rich 450.0 call, buy 455.0 call for protection",
+            "edge_strikes_used": [450.0],
+            "greeks_summary": {"delta": -0.3, "gamma": -0.01, "theta": 0.05, "vega": -0.2, "vanna": 0.01},
+            "rank_score": 0.85,
+        }
+    ]
+    # Should validate without error
+    validate_suite_context(context)
+    assert len(context["strategies"]) == 1
+    assert context["strategies"][0]["strategy_type"] == "call_spread"
+
+
+@pytest.mark.unit
+def test_suite_context_with_empty_strategies(tmp_path):
+    """Test that suite context handles empty strategies list (no edges detected)."""
+    context = _ctx(tmp_path)
+    context["strategies"] = []
+    # Should validate without error
+    validate_suite_context(context)
+    assert context["strategies"] == []
+
+
+@pytest.mark.unit
+def test_suite_context_strategies_rejects_invalid_vol_regime(tmp_path):
+    """Test that strategies validation rejects invalid vol_regime."""
+    context = _ctx(tmp_path)
+    context["strategies"] = [
+        {
+            "strategy_type": "call_spread",
+            "legs": [
+                {"instrument_type": "call", "strike": 450.0, "quantity": -1},
+            ],
+            "vol_regime": "INVALID",  # Should be RICH, CHEAP, or FAIR
+            "rationale": "Test strategy",
+        }
+    ]
+    with pytest.raises(ValueError, match=r"vol_regime"):
+        validate_suite_context(context)
+
+
+@pytest.mark.unit
+def test_suite_context_strategies_rejects_invalid_instrument_type(tmp_path):
+    """Test that leg validation rejects invalid instrument_type."""
+    context = _ctx(tmp_path)
+    context["strategies"] = [
+        {
+            "strategy_type": "call_spread",
+            "legs": [
+                {"instrument_type": "stock", "strike": 450.0, "quantity": -1},  # Should be call or put
+            ],
+            "vol_regime": "RICH",
+            "rationale": "Test strategy",
+        }
+    ]
+    with pytest.raises(ValueError, match=r"instrument_type"):
+        validate_suite_context(context)
+
+
+@pytest.mark.unit
+def test_suite_context_strategies_rejects_non_numeric_strike(tmp_path):
+    """Test that leg validation rejects non-numeric strike."""
+    context = _ctx(tmp_path)
+    context["strategies"] = [
+        {
+            "strategy_type": "call_spread",
+            "legs": [
+                {"instrument_type": "call", "strike": "invalid", "quantity": -1},  # Should be numeric
+            ],
+            "vol_regime": "RICH",
+            "rationale": "Test strategy",
+        }
+    ]
+    with pytest.raises(ValueError, match=r"strike"):
+        validate_suite_context(context)
+
+
+@pytest.mark.unit
+def test_suite_context_strategies_rejects_non_integer_quantity(tmp_path):
+    """Test that leg validation rejects non-integer quantity."""
+    context = _ctx(tmp_path)
+    context["strategies"] = [
+        {
+            "strategy_type": "call_spread",
+            "legs": [
+                {"instrument_type": "call", "strike": 450.0, "quantity": 1.5},  # Should be integer
+            ],
+            "vol_regime": "RICH",
+            "rationale": "Test strategy",
+        }
+    ]
+    with pytest.raises(ValueError, match=r"quantity"):
+        validate_suite_context(context)
+
+
+@pytest.mark.unit
+def test_suite_context_strategies_with_multiple_regimes(tmp_path):
+    """Test that suite context validates multiple strategies with different regimes."""
+    context = _ctx(tmp_path)
+    context["strategies"] = [
+        {
+            "strategy_type": "call_spread",
+            "legs": [
+                {"instrument_type": "call", "strike": 450.0, "quantity": -1},
+                {"instrument_type": "call", "strike": 455.0, "quantity": 1},
+            ],
+            "vol_regime": "RICH",
+            "rationale": "Sell rich call spread",
+        },
+        {
+            "strategy_type": "straddle",
+            "legs": [
+                {"instrument_type": "call", "strike": 450.0, "quantity": 1},
+                {"instrument_type": "put", "strike": 450.0, "quantity": 1},
+            ],
+            "vol_regime": "CHEAP",
+            "rationale": "Buy cheap straddle",
+        },
+        {
+            "strategy_type": "iron_condor",
+            "legs": [
+                {"instrument_type": "call", "strike": 460.0, "quantity": -1},
+                {"instrument_type": "call", "strike": 465.0, "quantity": 1},
+                {"instrument_type": "put", "strike": 440.0, "quantity": -1},
+                {"instrument_type": "put", "strike": 435.0, "quantity": 1},
+            ],
+            "vol_regime": "FAIR",
+            "rationale": "Fair vol iron condor",
+        },
+    ]
+    # Should validate without error
+    validate_suite_context(context)
+    assert len(context["strategies"]) == 3
+
+
+@pytest.mark.unit
+def test_suite_context_round_trip_with_strategies(tmp_path):
+    """Test that strategies survive a round-trip write/read cycle."""
+    output_dir = tmp_path / "outputs" / "20260724_170000"
+    output_dir.mkdir(parents=True)
+
+    context = build_suite_context(
+        output_dir=str(output_dir),
+        run_id="vsuite_20260724_170000",
+        ticker="SPY",
+        option_type="call",
+        strike=None,
+        target_years=0.25,
+        expiration_date="2026-10-16",
+        index_ticker="SPY",
+        basket_tickers=["SPY", "AAPL"],
+        basket_weights=[0.5, 0.5],
+        sentiment_manifest_path=str(tmp_path / "latest_manifest.json"),
+    )
+
+    # Add strategies to context
+    context["strategies"] = [
+        {
+            "strategy_type": "put_spread",
+            "legs": [
+                {"instrument_type": "put", "strike": 440.0, "quantity": -1},
+                {"instrument_type": "put", "strike": 435.0, "quantity": 1},
+            ],
+            "vol_regime": "RICH",
+            "rationale": "Sell rich put spread",
+            "edge_strikes_used": [440.0],
+            "greeks_summary": {"delta": -0.4, "gamma": 0.01, "theta": 0.08, "vega": -0.15, "vanna": -0.02},
+            "rank_score": 0.90,
+        }
+    ]
+
+    # Write and read
+    path = write_suite_context(context, str(output_dir / "suite_context.json"))
+    loaded = read_suite_context(path)
+
+    # Verify strategies survived
+    assert "strategies" in loaded
+    assert len(loaded["strategies"]) == 1
+    assert loaded["strategies"][0]["strategy_type"] == "put_spread"
+    assert loaded["strategies"][0]["vol_regime"] == "RICH"
+    assert loaded["strategies"][0]["rank_score"] == 0.90
+    assert len(loaded["strategies"][0]["legs"]) == 2

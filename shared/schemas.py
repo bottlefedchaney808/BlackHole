@@ -197,6 +197,78 @@ def validate_suite_context(data: Dict[str, Any]) -> None:
         _require(isinstance(paths[key], str) and paths[key].strip(),
                  f"paths.{key} must be a non-empty string")
 
+    # ── strategies (optional, from chain scanner) ────────────────────────
+    # Strategies recommended by chain scanner. Empty list when no edges detected.
+    if "strategies" in data:
+        _require(isinstance(data["strategies"], list),
+                 "strategies must be a list")
+        for i, strategy in enumerate(data["strategies"]):
+            _require(isinstance(strategy, dict),
+                     f"strategies[{i}] must be an object")
+            # Required strategy fields
+            for key in ("strategy_type", "legs", "vol_regime", "rationale"):
+                _require(key in strategy,
+                         f"strategies[{i}] missing required field: {key}")
+
+            # strategy_type must be a string
+            _require(isinstance(strategy["strategy_type"], str)
+                     and strategy["strategy_type"].strip(),
+                     f"strategies[{i}].strategy_type must be a non-empty string")
+
+            # vol_regime must be one of RICH, CHEAP, FAIR
+            _require(strategy["vol_regime"] in ("RICH", "CHEAP", "FAIR"),
+                     f"strategies[{i}].vol_regime must be 'RICH', 'CHEAP', or 'FAIR', "
+                     f"got {strategy['vol_regime']}")
+
+            # rationale must be a string
+            _require(isinstance(strategy["rationale"], str),
+                     f"strategies[{i}].rationale must be a string")
+
+            # legs must be a non-empty list of leg objects
+            legs = strategy["legs"]
+            _require(isinstance(legs, list) and len(legs) > 0,
+                     f"strategies[{i}].legs must be a non-empty list")
+            for j, leg in enumerate(legs):
+                _require(isinstance(leg, dict),
+                         f"strategies[{i}].legs[{j}] must be an object")
+                # Required leg fields
+                for key in ("instrument_type", "strike", "quantity"):
+                    _require(key in leg,
+                             f"strategies[{i}].legs[{j}] missing required field: {key}")
+
+                # instrument_type must be 'call' or 'put'
+                _require(leg["instrument_type"] in ("call", "put"),
+                         f"strategies[{i}].legs[{j}].instrument_type must be 'call' or 'put', "
+                         f"got {leg['instrument_type']}")
+
+                # strike must be numeric
+                _require(_is_number(leg["strike"]),
+                         f"strategies[{i}].legs[{j}].strike must be numeric")
+
+                # quantity must be an integer
+                _require(isinstance(leg["quantity"], int)
+                         and not _is_bool(leg["quantity"]),
+                         f"strategies[{i}].legs[{j}].quantity must be an integer")
+
+            # Optional fields validation
+            if "edge_strikes_used" in strategy:
+                _require(isinstance(strategy["edge_strikes_used"], list),
+                         f"strategies[{i}].edge_strikes_used must be a list")
+                for k, strike in enumerate(strategy["edge_strikes_used"]):
+                    _require(_is_number(strike),
+                             f"strategies[{i}].edge_strikes_used[{k}] must be numeric")
+
+            if "greeks_summary" in strategy:
+                _require(isinstance(strategy["greeks_summary"], dict),
+                         f"strategies[{i}].greeks_summary must be an object")
+                for greek_name, greek_value in strategy["greeks_summary"].items():
+                    _require(greek_value is None or _is_number(greek_value),
+                             f"strategies[{i}].greeks_summary.{greek_name} must be numeric or null")
+
+            if "rank_score" in strategy:
+                _require(_is_number(strategy["rank_score"]),
+                         f"strategies[{i}].rank_score must be numeric")
+
 
 # ── 2. options_result.json ──────────────────────────────────────────────
 
