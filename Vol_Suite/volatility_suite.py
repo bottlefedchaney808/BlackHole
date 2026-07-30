@@ -1166,6 +1166,7 @@ def _run_core_analysis(
             artifacts["chain_scan"] = {
                 "verdict": _json_safe(getattr(scan_result, "verdict", None)),
                 "expiration": expiration,
+                "strategies": getattr(scan_result, "strategies", []),  # Add strategies from scan
             }
         except Exception as e:
             print(f"  Chain scanner failed: {e}")
@@ -1258,6 +1259,11 @@ def run_unified_flow():
         var_suite_root=var_root,
         sentiment_suite_root=sentiment_root,
     )
+
+    # Populate strategies from chain scan into shared context (Task 3 integration)
+    if 'chain_scan' in artifacts and 'strategies' in artifacts['chain_scan']:
+        context['strategies'] = artifacts['chain_scan']['strategies']
+
     context_path = write_suite_context(context, os.path.join(out_root, "suite_context.json"))
     print(f"Wrote shared handoff context: {context_path}")
 

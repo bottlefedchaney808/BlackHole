@@ -36,10 +36,12 @@ cheap / fair vs. realized, skew direction) as the fallback "insight."
 """
 import math
 import os
+import json
 import warnings
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -57,6 +59,7 @@ from dealer_positioning import (
     ACCENT_GOLD, ACCENT_PURPLE, ACCENT_CYAN, ACCENT_ORANGE,
     CONTRACT_MULTIPLIER, VANNA_PP_SCALE,
 )
+from strategy_recommender import StrategyRecommender, format_strategies_artifact
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
@@ -115,6 +118,102 @@ def compute_forward_price(S0: float, r: float, q: float, T: float) -> float:
     return S0 * math.exp((r - q) * T)
 
 
+def _json_safe(obj):
+    """
+    JSON serializer for objects not serializable by default json code.
+    Handles NaN, Infinity, numpy types. Used for cross-process handoffs.
+    Addresses R7: Ensures NaN/Infinity are converted to None for JSON compatibility.
+    """
+    if isinstance(obj, (np.integer, np.floating)):
+        v = float(obj)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (float,)):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    elif hasattr(obj, '__dict__'):
+        return obj.__dict__
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _sanitize_for_json(obj):
+    """
+    Recursively convert NaN and Infinity to None in nested dicts/lists.
+    Used to pre-process data before json.dump to ensure valid JSON output.
+    """
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, (float, np.floating)):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    return obj
+
+
+def _extract_chain_data_from_df(scan_result_df: pd.DataFrame, option_type: str = 'call') -> Dict[str, List[float]]:
+    """
+    Extract chain_data dict from options_chain_scanner DataFrame.
+
+    Filters to one option type (call or put) and creates dict with parallel arrays.
+    Addresses R1: Complete DataFrame extraction logic for strategy recommender.
+
+    Args:
+        scan_result_df: DataFrame from scan_result.df with columns:
+                        strike, right, delta, gamma, theta, vega, vanna, bid_ask_spread, oi
+        option_type: 'call' or 'put'
+
+    Returns:
+        Dict with keys: strikes, delta, gamma, theta, vega, vanna, bid_ask_spread, open_interest
+    """
+    right_code = 'C' if option_type.lower() == 'call' else 'P'
+    filtered = scan_result_df[scan_result_df['right'] == right_code].sort_values('strike').reset_index(drop=True)
+
+    if len(filtered) == 0:
+        raise ValueError(f"No {option_type} options found in scan result")
+
+    return {
+        'strikes': filtered['strike'].tolist(),
+        'delta': filtered['delta'].tolist(),
+        'gamma': filtered['gamma'].tolist(),
+        'theta': filtered['theta'].tolist(),
+        'vega': filtered['vega'].tolist(),
+        'vanna': filtered['vanna'].tolist(),
+        'bid_ask_spread': filtered['bid_ask_spread'].tolist(),
+        'open_interest': filtered['oi'].tolist(),
+    }
+
+
+def _transform_edge_strikes(edge_candidates: List[dict]) -> List[dict]:
+    """
+    Transform edge_candidates from chain scanner to strategy recommender format.
+
+    Addresses R2: Maps edge_kind ('rich'/'cheap') → edge_type ('SELL'/'BUY').
+
+    Args:
+        edge_candidates: List of dicts from scan_result.edge_candidates with keys:
+                        strike, right, edge_kind ('rich'/'cheap'), iv_residual_pts, oi
+
+    Returns:
+        List of dicts with keys: strike, edge_type ('SELL'/'BUY'), iv_deviation, oi
+    """
+    transformed = []
+    for candidate in edge_candidates:
+        edge_type = 'SELL' if candidate['edge_kind'] == 'rich' else 'BUY'
+        transformed.append({
+            'strike': candidate['strike'],
+            'edge_type': edge_type,
+            'iv_deviation': candidate['iv_residual_pts'],  # in basis points
+            'oi': candidate['oi'],
+        })
+    return transformed
+
+
 @dataclass
 class ScanResult:
     ticker: str
@@ -140,6 +239,7 @@ class ScanResult:
     regime: str
     verdict: str
     insight: str
+    strategies: List[dict] = field(default_factory=list)  # Recommended strategies from chain scan
 
 
 # ---------- Data pull / merge ----------
@@ -602,6 +702,73 @@ def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optio
         files.append(plot_scanner_charts(result, out_dir))
     except Exception as e:
         print(f"  Chart export failed: {e}")
+
+    # Generate strategy recommendations based on detected edges and vol regime (Task 3 integration)
+    strategies_artifact = None
+    edge_candidates = result.edge_candidates or []
+
+    if len(edge_candidates) > 0:
+        try:
+            # Extract chain_data from DataFrame (call-only for now, can be parameterized later)
+            # Addresses R1: Complete DataFrame extraction logic
+            chain_data = _extract_chain_data_from_df(result.df, option_type='call')
+
+            # Transform edge_candidates to strategy recommender format
+            # Addresses R2: Maps edge_kind ('rich'/'cheap') → edge_type ('SELL'/'BUY')
+            edge_strikes = _transform_edge_strikes(edge_candidates)
+
+            # Initialize and run recommender
+            # Addresses R3: Complete integration code with all imports
+            recommender = StrategyRecommender(
+                chain_data=chain_data,
+                edge_strikes=edge_strikes,
+                vol_regime=result.regime,
+                current_price=result.spot,
+                expiry_days=(np.datetime64(result.expiry) - np.datetime64('today')).astype('timedelta64[D]').astype(float),
+            )
+
+            strategies = recommender.recommend()
+            strategies_artifact = format_strategies_artifact(
+                strategies=strategies,
+                chain_verdict=result.verdict,
+                vol_regime=result.regime,
+                current_price=result.spot,
+                expiration_date=result.expiry,
+            )
+
+            # Export strategies JSON to output directory
+            strategies_file = Path(out_dir) / 'chain_strategies.json'
+            with open(strategies_file, 'w') as f:
+                json.dump(_sanitize_for_json(strategies_artifact), f, default=_json_safe, indent=2)
+
+            # Store strategies in result for return to volatility_suite
+            result.strategies = strategies_artifact.get('strategies', [])
+
+        except Exception as e:
+            # Log error but don't fail entire scan if strategies fail
+            print(f"[Warning] Strategy recommendation failed: {e}")
+            strategies_artifact = {'strategies': [], 'error': str(e)}
+            result.strategies = []
+    else:
+        # No edges detected, write empty strategies artifact (Addresses R6: Always write)
+        strategies_artifact = {
+            'version': '1.0',
+            'timestamp': pd.Timestamp.utcnow().isoformat(),
+            'chain_verdict': result.verdict,
+            'vol_regime': result.regime,
+            'current_price': float(result.spot),
+            'expiration_date': result.expiry,
+            'strategies': [],
+            'summary': {'total_recommendations': 0, 'by_type': {}, 'by_regime': result.regime}
+        }
+
+        # Write empty artifact for consistency (R6 fix - always write)
+        strategies_file = Path(out_dir) / 'chain_strategies.json'
+        with open(strategies_file, 'w') as f:
+            json.dump(_sanitize_for_json(strategies_artifact), f, default=_json_safe, indent=2)
+
+        result.strategies = []
+
     interp = f"{result.verdict} -- {result.regime} vol regime.\n{result.insight}"
     return files, interp, result
 

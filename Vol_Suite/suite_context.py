@@ -154,6 +154,7 @@ def build_suite_context(
             "sentiment_suite_root": _to_abs_path_str(sentiment_suite_root),
         },
         "data_sources": sources,  # Multi-source support: list of enabled sources (DTCC, CME, OTC, etc.)
+        "strategies": [],  # Strategies recommended by chain scanner (populated from artifacts)
     }
     validate_suite_context(context)
     return context
@@ -239,6 +240,15 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
     for key in ("options_suite_root", "var_suite_root", "sentiment_suite_root"):
         _require(key in paths, f"Missing required field: paths.{key}")
         _require(isinstance(paths[key], str) and paths[key].strip(), f"paths.{key} must be a non-empty string")
+
+    # Validate optional strategies field (populated from chain scan)
+    if "strategies" in context:
+        _require(isinstance(context["strategies"], list), "strategies must be a list if present")
+        for strategy in context["strategies"]:
+            _require(isinstance(strategy, dict), "each strategy must be an object")
+            for key in ("strategy_type", "legs", "vol_regime", "rationale"):
+                _require(key in strategy, f"Missing required field in strategy: {key}")
+            _require(isinstance(strategy["legs"], list), "strategy.legs must be a list")
 
 
 def write_suite_context(context: Dict[str, Any], path: str) -> str:
