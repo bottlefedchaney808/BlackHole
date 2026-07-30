@@ -741,6 +741,13 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
 # unified flow
 # --------------------------------------------------------------------------
 
+def _print_phase_header(phase_num: int, phase_name: str, description: str) -> None:
+    """Print a formatted phase header for status display."""
+    print(f"\n[{phase_num}/3] {phase_name}")
+    print(f"       {description}")
+    print("-" * 60)
+
+
 def run_unified(focus: Dict[str, Any],
                 fail_on_suite_error: Optional[bool] = None,
                 validate: bool = True) -> Dict[str, Any]:
@@ -810,7 +817,8 @@ def run_unified(focus: Dict[str, Any],
         }
 
     # ---- 1. sentiment-scanner (producer) ----
-    print("\n[unified] Stage 1/3: sentiment-scanner (context producer)...")
+    _print_phase_header(1, "SENTIMENT SCANNER",
+                       "Context producer: highlighted ticker packs, ranked sentiment")
     sentiment_result = run_suite('sentiment', context, timeout=timeout,
                                  validate=validate)
     results['sentiment'] = sentiment_result
@@ -839,10 +847,11 @@ def run_unified(focus: Dict[str, Any],
 
     # ---- 2. Vol_Suite (consumes sentiment, produces vol surface / dealer positioning) ----
     if aborted_by:
-        print(f"\n[unified] Stage 2/3 SKIPPED (blocked by {aborted_by}).")
+        print(f"\n[2/3] VOL SUITE (SKIPPED — blocked by {aborted_by})")
         results['vol'] = _skip('vol')
     else:
-        print("\n[unified] Stage 2/3: Vol_Suite (dealer positioning / vol surface)...")
+        _print_phase_header(2, "VOL SUITE",
+                           "Dealer positioning / vol surface / gamma exposure")
         results['vol'] = run_suite('vol', context, timeout=timeout,
                                    validate=validate)
         if 'error' in results['vol'] and fail_on_suite_error:
@@ -850,11 +859,12 @@ def run_unified(focus: Dict[str, Any],
 
     # ---- 3. Options_Suite + VaR_Tools_Simulations (consume Vol_Suite's context) ----
     if aborted_by:
-        print(f"\n[unified] Stage 3/3 SKIPPED (blocked by {aborted_by}).")
+        print(f"\n[3/3] OPTIONS & VAR SUITES (SKIPPED — blocked by {aborted_by})")
         results['options'] = _skip('options')
         results['var'] = _skip('var')
     else:
-        print("\n[unified] Stage 3/3: Options_Suite and VaR_Tools_Simulations...")
+        _print_phase_header(3, "OPTIONS & VAR SUITES",
+                           "Option pricing + value-at-risk analysis (parallel)")
         results['options'] = run_suite('options', context, timeout=timeout,
                                        validate=validate)
         results['var'] = run_suite('var', context, timeout=timeout,
@@ -904,6 +914,17 @@ def run_unified(focus: Dict[str, Any],
     else:
         status = 'ok' if ok == len(results) else ('partial' if ok else 'error')
     combined['status'] = status
+
+    # ---- Completion summary ----
+    total = len(results)
+    print(f"\n{'=' * 60}")
+    print(f"  Suites completed: {ok}/{total}")
+    if context_audit.passed:
+        print(f"  Context audit: PASSED")
+    else:
+        print(f"  Context audit: FAILED (context rolled back)")
+    print(f"{'=' * 60}")
+
     log_run('unified', context['focus'], started_at, combined['completed_at'],
             status, combined)
     return combined
