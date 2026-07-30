@@ -75,7 +75,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from shared.logging import setup_logging, log_operation, get_metrics, LogContext
 
@@ -1168,6 +1168,226 @@ def _summarize(combined: Dict[str, Any]) -> str:
             for warning in validation.get('warnings') or []:
                 lines.append(f"  {name} validation WARN: {warning}")
     return "\n".join(lines)
+
+
+def _check_ticker_exists(ticker: str) -> bool:
+    """Validate that a ticker resolves via ThetaData.
+
+    Returns True on any inconclusive result (network error, connection timeout, etc.)
+    so validation failures never block a valid run.
+
+    Contract: Reuses Vol_Suite.thetadata_client.ThetaDataController.
+    Expected behavior: fetch_spot_price(ticker) returns float > 0 for valid tickers.
+    """
+    try:
+        from Vol_Suite.thetadata_client import ThetaDataController
+        td = ThetaDataController()
+        try:
+            spot = td.fetch_spot_price(ticker)
+            return isinstance(spot, (int, float)) and spot > 0
+        finally:
+            td.close()
+    except Exception:
+        # Any error (import, network, API): assume valid to avoid blocking
+        return True
+
+
+def _prompt_ticker_interactive() -> str:
+    """Prompt for focus ticker with validation, re-prompting on invalid symbol."""
+    while True:
+        t = input("Focus ticker (e.g. NVDA): ").strip().upper()
+        if not t:
+            t = "NVDA"
+            print(f"  Using default: {t}")
+            return t
+        if _check_ticker_exists(t):
+            return t
+        print(f"  '{t}' doesn't resolve to a tradable symbol -- check spelling.")
+        retry = input("  Try a different ticker, or press Enter to use it anyway: ").strip().upper()
+        if not retry:
+            return t
+        if _check_ticker_exists(retry):
+            return retry
+        print(f"  '{retry}' doesn't resolve either -- continuing with it.")
+        return retry
+
+
+def _prompt_run_mode() -> str:
+    """Prompt for run mode with accurate suite dependency labels."""
+    print("\n" + "=" * 60)
+    print("  ORCHESTRATOR — Run Mode")
+    print("=" * 60)
+    print("\n  (1) UNIFIED (recommended)")
+    print("      Runs: sentiment (context) → vol → options + var")
+    print("\n  (2) VOL SUITE")
+    print("      Runs: sentiment (context) → vol only (fastest)")
+    print("\n  (3) OPTIONS SUITE")
+    print("      Runs: sentiment (context) → vol → options")
+    print("\n  (4) VAR TOOLS")
+    print("      Runs: sentiment (context) → vol → var")
+    print("\n  (5) CUSTOM")
+    print("      Choose individual suites")
+
+    while True:
+        choice = input("\nSelect mode [default 1]: ").strip() or "1"
+        if choice in "12345":
+            return choice
+        print(f"  Invalid choice '{choice}'. Enter 1-5.")
+
+
+def _prompt_expiration_interactive() -> Tuple[Optional[str], Optional[float]]:
+    """Prompt for expiration date OR target years.
+
+    Returns tuple (expiration_date, target_years) where exactly one is not None:
+      - If user chooses ISO date: (YYYY-MM-DD, None)
+      - If user chooses target years: (None, 0.25)
+    """
+    while True:
+        choice = input("\nExpiration method: (1) ISO date YYYY-MM-DD, (2) target years [default 2]: ").strip() or "2"
+        if choice == "1":
+            while True:
+                exp = input("  Enter expiration (YYYY-MM-DD): ").strip()
+                if exp and len(exp) == 10 and exp.count('-') == 2:
+                    return exp, None
+                print("  Invalid format. Use YYYY-MM-DD (e.g., 2026-10-16).")
+        elif choice == "2":
+            while True:
+                years = input("  Target years (e.g., 0.25, 0.5, 1.0) [default 0.25]: ").strip() or "0.25"
+                try:
+                    y = float(years)
+                    if y > 0:
+                        return None, y
+                    print("  Years must be greater than 0.")
+                except ValueError:
+                    print(f"  Invalid: '{years}' is not a number.")
+        else:
+            print(f"  Invalid choice '{choice}'. Enter 1 or 2.")
+
+
+def run_interactive_orchestrator() -> int:
+    """Main entry point for interactive mode.
+
+    Guides user through mode selection, ticker, expiration, and optional parameters,
+    then executes run_unified(). Validates all inputs and re-prompts on errors.
+    """
+    print("\n" + "=" * 60)
+    print("  ORCHESTRATOR — Interactive Mode")
+    print("=" * 60)
+    print("\nThis mode guides you through a full run with sensible defaults.")
+    print("Press Enter to accept defaults (shown in brackets).\n")
+
+    # Step 1: Mode selection
+    mode_choice = _prompt_run_mode()
+
+    # Map mode to suite list (includes required dependencies)
+    suite_map: Dict[str, List[str]] = {
+        "1": ["sentiment", "vol", "options", "var"],  # Unified
+        "2": ["sentiment", "vol"],                    # Vol only
+        "3": ["sentiment", "vol", "options"],        # Options suite
+        "4": ["sentiment", "vol", "var"],            # VaR tools
+        "5": None,                                     # Custom (handled below)
+    }
+
+    requested_suites = suite_map.get(mode_choice)
+    if requested_suites is None:
+        print("\nCustom mode: select suites (space or comma separated)")
+        print("Available: options vol var sentiment")
+        while True:
+            suite_input = input("Suites [default: vol options var]: ").strip()
+            if not suite_input:
+                requested_suites = ["vol", "options", "var"]
+                break
+            # Parse comma or space separated
+            requested_suites = [s.strip().lower() for s in suite_input.replace(',', ' ').split() if s.strip()]
+            valid = all(s in ['options', 'vol', 'var', 'sentiment'] for s in requested_suites)
+            if valid and requested_suites:
+                break
+            print("  Invalid suite name(s). Use: options vol var sentiment")
+
+    # Step 2: Ticker
+    print("\n" + "-" * 60)
+    ticker = _prompt_ticker_interactive()
+
+    # Step 3: Expiration
+    print("\n" + "-" * 60)
+    print("Expiration / Time Horizon")
+    expiration, target_years = _prompt_expiration_interactive()
+
+    # Step 4: Optional parameters
+    print("\n" + "-" * 60)
+    print("Additional Options (press Enter for defaults)")
+
+    strike_input = input("  Strike (optional, ATM if blank): ").strip()
+    strike: Optional[float] = None
+    if strike_input:
+        try:
+            strike = float(strike_input)
+        except ValueError:
+            print(f"  Warning: '{strike_input}' is not valid; using ATM instead.")
+
+    option_type = input("  Option type (call/put) [default call]: ").strip().lower() or "call"
+    if option_type not in ["call", "put"]:
+        print(f"  Warning: '{option_type}' is invalid; using 'call' instead.")
+        option_type = "call"
+
+    index = input("  Benchmark index [default SPY]: ").strip().upper() or "SPY"
+
+    # Step 5: Build and validate focus dict
+    focus: Dict[str, Any] = {
+        'ticker': ticker,
+        'option_type': option_type,
+        'strike': strike,
+        'index_ticker': index,
+        'fail_on_suite_error': False,
+    }
+    if expiration:
+        focus['expiration_date'] = expiration
+    else:
+        focus['target_years'] = target_years
+
+    # Validate focus before proceeding
+    if not focus.get('ticker'):
+        print("\nERROR: Ticker is required.")
+        return 1
+    if focus.get('strike') is not None and not isinstance(focus['strike'], (int, float)):
+        print("\nERROR: Strike must be a number.")
+        return 1
+    if not (focus.get('expiration_date') or focus.get('target_years')):
+        print("\nERROR: Expiration or target_years is required.")
+        return 1
+
+    # Step 6: Confirmation summary
+    exp_display = expiration if expiration else f"{target_years:.4f}yr"
+    print("\n" + "=" * 60)
+    print("  ORCHESTRATOR — Run Summary")
+    print("=" * 60)
+    print(f"  Ticker       : {ticker}")
+    print(f"  Expiration   : {exp_display}")
+    print(f"  Strike       : {strike or 'ATM'}")
+    print(f"  Option Type  : {option_type}")
+    print(f"  Index        : {index}")
+    print(f"  Suites       : {', '.join(requested_suites)}")
+
+    while True:
+        confirm = input("\nProceed? (y/n) [default y]: ").strip().lower() or "y"
+        if confirm in ["y", "yes"]:
+            break
+        elif confirm in ["n", "no"]:
+            print("Cancelled.")
+            return 0
+        else:
+            print("  Enter 'y' or 'n'.")
+
+    # Step 7: Execute the run
+    print("\n" + "=" * 60)
+    print("  Starting run...")
+    print("=" * 60)
+
+    combined = run_unified(focus, fail_on_suite_error=False, validate=True)
+
+    print("\n" + ("=" * 60))
+    print(_summarize(combined))
+    return 0 if combined['status'] == 'ok' else 1
 
 
 def _focus_from_args(args: argparse.Namespace) -> Dict[str, Any]:
