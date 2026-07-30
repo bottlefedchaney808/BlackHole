@@ -1,0 +1,57 @@
+# FinancialDevelopment -- external access to the dashboard.
+#
+# Apply with:  kubectl apply -n financialdevelopment -f k8s/service.yaml
+#
+# fd-scheduler has no Service: it exposes no listening port, it only polls DTCC
+# outbound and writes to the shared PVC.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fd-dashboard
+  namespace: financialdevelopment
+  labels:
+    app.kubernetes.io/name: financialdevelopment
+    app.kubernetes.io/component: dashboard
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: financialdevelopment
+    app.kubernetes.io/component: dashboard
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80          # what clients hit on the load balancer
+      targetPort: http  # -> containerPort 8000 on the pod
+      # Only consulted when the cluster falls back to NodePort semantics
+      # (bare-metal without an LB controller). 30080 is inside the default
+      # 30000-32767 service-node-port-range.
+      nodePort: 30080
+
+  # POST /run/{suite} returns a run_id that the browser then polls via
+  # GET /runs/{run_id}. dashboard/app.py answers that poll from a
+  # process-local dict (_RUNS) first and only falls back to the
+  # orchestrator_runs table in SQLite. With replicas: 2 and no affinity, a poll
+  # landing on the other pod still resolves -- but via the slower DB path and
+  # without the in-flight progress detail. Pinning the client to one replica
+  # keeps the fast path intact for the whole life of a run.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      # Comfortably longer than a suite run (SUITE_CHILD_TIMEOUT_SEC defaults
+      # to 1800s in orchestrator.py).
+      timeoutSeconds: 3600
+
+  # Preserve the real client source IP. dashboard/auth.get_client_ip and the
+  # slowapi rate limiter key on it; with the default `Cluster` policy every
+  # request would appear to originate from a node IP and the limiter would
+  # throttle all users as if they were one.
+  # Trade-off: `Local` only routes to nodes that actually host a dashboard pod,
+  # which is why the Deployment sets a topologySpreadConstraint.
+  externalTrafficPolicy: Local
+
+  # Uncomment and set to the CIDRs allowed to reach the dashboard. The
+  # orchestrator endpoints are API-key protected, but the read-only swap views
+  # are not -- do not leave this open to 0.0.0.0/0 on a public LB.
+  # loadBalancerSourceRanges:
+  #   - 10.0.0.0/8

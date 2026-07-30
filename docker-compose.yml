@@ -1,0 +1,66 @@
+# --------------------------------------------------------------------------
+# docker-compose.yml -- local development stack for FinancialDevelopment
+#
+#   docker-compose up -d --build
+#   docker-compose logs -f
+#   docker-compose down            # keeps the swaps-data volume
+#   docker-compose down -v         # also deletes it (wipes swaps.db!)
+#
+# Dashboard: http://localhost:8787  (proxied to the container's :8000)
+# --------------------------------------------------------------------------
+
+services:
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    container_name: financialdevelopment-scheduler
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SWAPS_DB_PATH: /app/data/swaps.db
+      SCHEDULER_HEARTBEAT_FILE: /app/data/.scheduler_heartbeat
+      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES:-5}
+    volumes:
+      - swaps-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import os,sys,time; p=os.environ['SCHEDULER_HEARTBEAT_FILE']; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<150 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: financialdevelopment-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SWAPS_DB_PATH: /app/data/swaps.db
+    volumes:
+      - swaps-data:/app/data
+    ports:
+      # host:container -- dashboard reachable at http://localhost:8787
+      - "8787:8000"
+    depends_on:
+      # Start-order only (not health-gated): the dashboard reads whatever is
+      # already in swaps.db and degrades gracefully on an empty/missing DB,
+      # so it shouldn't block on the scheduler's first successful poll.
+      - scheduler
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  # Persists swaps.db (and its -wal/-shm siblings) across container
+  # rebuilds/recreations. Shared by both services so the dashboard reads
+  # what the scheduler ingests.
+  swaps-data:

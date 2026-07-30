@@ -1,0 +1,68 @@
+# --------------------------------------------------------------------------
+# .dockerignore -- keep the build context small and never ship secrets or
+# generated data into an image layer. swaps.db is mounted as a volume at
+# runtime (see docker-compose.yml), never baked into the image.
+# --------------------------------------------------------------------------
+
+# VCS / editor
+.git
+.github
+.vs
+.claude
+
+# Python
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+.fuse_hidden*
+
+# Secrets -- never bake credentials into an image; compose injects .env at
+# runtime via env_file instead.
+.env
+.env.*
+!.env.example
+
+# Database files -- shared via a named volume, not the image
+swaps.db
+swaps.db-shm
+swaps.db-wal
+swaps.db.orig-copy
+swaps.db.orig-copy-shm
+swaps.db.orig-copy-wal
+*.db
+*.db-shm
+*.db-wal
+recover.sql
+
+# Ingestion / run artifacts (regenerated at runtime)
+CFTC_SLICE_EQUITIES_*/
+dtcc_data/
+orchestrator_output/
+outputs/
+.scheduler.lock/
+
+# Logs
+*.log
+
+# Misc large/unrelated local tooling
+sqlite-tools/
+sqlite-tools-win-x64-*.zip
+
+# Docs / notes (not needed inside the image)
+docs/
+*.md
+!DOCKER_SETUP.md
+
+# Local dev scripts not used in containers
+*.bat

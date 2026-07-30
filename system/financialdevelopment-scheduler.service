@@ -1,0 +1,63 @@
+[Unit]
+Description=FinancialDevelopment DTCC swaps ingestion scheduler
+Documentation=file:/opt/financialdevelopment/DEPLOY.md
+# Needs DNS + routing up before it starts polling DTCC's slice feed.
+After=network-online.target
+Wants=network-online.target
+# The dashboard is a reader of the same swaps.db this unit writes. It is not a
+# hard dependency (the dashboard degrades to an empty state on a cold DB), so
+# this is ordering-only -- no Requires=.
+Before=financialdevelopment-dashboard.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/financialdevelopment
+
+# Secrets (DASHBOARD_API_KEY, THETADATA_*, POLL_INTERVAL_MINUTES, ...) live in
+# an operator-managed env file, NOT in this unit. Leading '-' so the unit still
+# starts with defaults if the file is absent.
+EnvironmentFile=-/etc/financialdevelopment/financialdevelopment.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# `--start-scheduler` is required. A bare `python scheduled_ingest.py` only
+# prints argparse help and exits 0, which under Restart=always becomes a
+# tight restart loop.
+ExecStart=/opt/financialdevelopment/.venv/bin/python /opt/financialdevelopment/scheduled_ingest.py --start-scheduler
+
+Restart=always
+RestartSec=10
+
+# scheduled_ingest installs a SIGTERM handler (shutdown_signal.py) that lets the
+# in-flight poll finish and closes the SQLite connection cleanly. Give it room
+# to drain before systemd escalates to SIGKILL -- a hard kill mid-write leaves a
+# stale swaps.db-wal behind.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=300
+
+# --- Hardening ---
+# swaps.db (+ -wal/-shm) is written in the repo root, so that path must stay
+# writable; everything else on the filesystem is read-only to this unit.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/financialdevelopment
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# --- Logging ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fd-scheduler
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,380 @@
+# FinancialDevelopment -- Kubernetes workloads.
+#
+# Contains, in order:
+#   1. PersistentVolumeClaim  swaps-db      -- the SQLite file, shared RWX
+#   2. Deployment             fd-dashboard  -- FastAPI/uvicorn, replicas: 2
+#   3. Deployment             fd-scheduler  -- DTCC ingestion loop, replicas: 1
+#
+# Images are the ones built from Dockerfile.dashboard / Dockerfile.scheduler at
+# the repo root (WORKDIR /app, data volume at /app/data).
+#
+# Apply with:  kubectl apply -n financialdevelopment -f k8s/deployment.yaml
+# The referenced Secret is created out-of-band -- see DEPLOY.md.
+#
+# ---------------------------------------------------------------------------
+# 1. WHY THE SYMLINK IN THE CONTAINER COMMAND
+# ---------------------------------------------------------------------------
+# Both Dockerfiles export SWAPS_DB_PATH=/app/data/swaps.db, but no module in
+# this repo reads that variable yet -- orchestrator.py, db_loader.py,
+# swaps_query.py and setup_db.py each compute DB_PATH from their own __file__,
+# which resolves to /app/swaps.db (the ephemeral container layer). Left alone,
+# every pod restart would silently start from an empty database.
+#
+# Until DB_PATH honours SWAPS_DB_PATH, each container symlinks
+# /app/swaps.db -> /app/data/swaps.db at start. SQLite resolves that symlink
+# before deriving the journal filenames, so swaps.db-wal and swaps.db-shm land
+# on the PVC alongside the database rather than being split across filesystems.
+#
+# Once SWAPS_DB_PATH is honoured in code: delete the `sh -euc` wrappers below,
+# restore the plain `command:` from the Dockerfile CMD, and re-enable the
+# non-root securityContext block noted at each container.
+#
+# ---------------------------------------------------------------------------
+# 2. READ THIS BEFORE SCALING
+# ---------------------------------------------------------------------------
+# The datastore is a single SQLite file in WAL mode. WAL needs a shared-memory
+# index (swaps.db-shm) mmap'd by every process touching the DB, plus working
+# POSIX advisory locks. NFSv3 provides neither -- SQLite in WAL mode is *unsafe*
+# there, not merely slow.
+#
+# `replicas: 2` below is therefore only correct when `storageClassName` resolves
+# to an RWX filesystem with coherent mmap and real locking (CephFS, Longhorn
+# RWX, Portworx shared volumes). If your only RWX option is NFS, drop the
+# dashboard to replicas: 1 and use a ReadWriteOnce volume.
+#
+# fd-scheduler stays at replicas: 1 with strategy Recreate: it is the sole
+# writer of ingested rows, and two schedulers would double-poll DTCC and race
+# on the same slice inserts.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: swaps-db
+  namespace: financialdevelopment
+  labels:
+    app.kubernetes.io/name: financialdevelopment
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  # Must be an RWX class -- see note 2 above. `kubectl get storageclass` lists
+  # what this cluster actually offers.
+  storageClassName: csi-cephfs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fd-dashboard
+  namespace: financialdevelopment
+  labels:
+    app.kubernetes.io/name: financialdevelopment
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: financialdevelopment
+      app.kubernetes.io/component: dashboard
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: financialdevelopment
+        app.kubernetes.io/component: dashboard
+    spec:
+      securityContext:
+        # Dockerfile.dashboard declares no USER, so /app is root-owned and the
+        # startup symlink (note 1) needs root. Once the symlink is gone, set:
+        #   runAsNonRoot: true / runAsUser: 1000 / runAsGroup: 1000 / fsGroup: 1000
+        # and flip readOnlyRootFilesystem to true on the container below.
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread the two replicas so a single node drain cannot take the
+      # dashboard fully offline. Also required by the Service's
+      # externalTrafficPolicy: Local.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: financialdevelopment
+              app.kubernetes.io/component: dashboard
+      containers:
+        - name: dashboard
+          image: ghcr.io/zinko83/financialdevelopment-dashboard:1.0.0
+          imagePullPolicy: IfNotPresent
+          # --workers 1 is deliberate. dashboard/app.py holds in-flight run
+          # state in a process-local dict (_RUNS) that GET /runs/{run_id} reads
+          # before falling back to the orchestrator_runs table; extra workers
+          # would answer polls from processes that never saw the run. Scale with
+          # replicas plus the Service's sessionAffinity, not uvicorn workers.
+          command: ["/bin/sh", "-euc"]
+          args:
+            - |
+              ln -sfn /app/data/swaps.db /app/swaps.db
+              exec python -m uvicorn dashboard.app:app \
+                --host 0.0.0.0 \
+                --port 8000 \
+                --workers 1 \
+                --proxy-headers \
+                --forwarded-allow-ips='*' \
+                --timeout-keep-alive 65 \
+                --log-level info
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            # matplotlib is imported transitively by the suite modules and
+            # builds a font cache at import time; point it somewhere writable.
+            - name: MPLCONFIGDIR
+              value: /tmp/matplotlib
+            - name: SWAPS_DB_PATH
+              value: /app/data/swaps.db
+            # dashboard/auth.py falls back to the literal
+            # "dev-key-change-in-production" when this is unset, which would
+            # leave POST /run/{suite} effectively unauthenticated. optional:
+            # false turns a missing key into a pod-start failure instead.
+            - name: DASHBOARD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: financialdevelopment-secrets
+                  key: DASHBOARD_API_KEY
+                  optional: false
+            - name: THETADATA_CF_ACCESS_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: financialdevelopment-secrets
+                  key: THETADATA_CF_ACCESS_CLIENT_ID
+                  optional: true
+            - name: THETADATA_CF_ACCESS_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: financialdevelopment-secrets
+                  key: THETADATA_CF_ACCESS_CLIENT_SECRET
+                  optional: true
+          volumeMounts:
+            - name: swaps-db
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+          # GET /health is a pure in-process status dict -- no DB query, no
+          # subprocess -- so it is cheap to poll and will not flap while the
+          # scheduler holds a write lock.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24   # up to 2 min for the cold suite imports
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              # numpy/pandas/matplotlib resident after import is ~350Mi; the
+              # rest is headroom for the swaps aggregation queries.
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            # false only because of the startup symlink into /app (note 1).
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      # uvicorn drains in-flight requests on SIGTERM.
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - name: swaps-db
+          persistentVolumeClaim:
+            claimName: swaps-db
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fd-scheduler
+  namespace: financialdevelopment
+  labels:
+    app.kubernetes.io/name: financialdevelopment
+    app.kubernetes.io/component: scheduler
+spec:
+  # Single writer. Do not scale this up.
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: financialdevelopment
+      app.kubernetes.io/component: scheduler
+  strategy:
+    # Recreate, not RollingUpdate: a surge pod would briefly run a second
+    # ingestion loop against the same swaps.db.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: financialdevelopment
+        app.kubernetes.io/component: scheduler
+    spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Migrations run here and only here. The dashboard pods must not
+        # migrate -- two of them would race on the same migrations table.
+        # setup_db.py takes --db-path explicitly, so this one needs no symlink.
+        - name: migrate
+          image: ghcr.io/zinko83/financialdevelopment-scheduler:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "setup_db.py", "--migrate", "--db-path", "/app/data/swaps.db"]
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MPLCONFIGDIR
+              value: /tmp/matplotlib
+          volumeMounts:
+            - name: swaps-db
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: scheduler
+          image: ghcr.io/zinko83/financialdevelopment-scheduler:1.0.0
+          imagePullPolicy: IfNotPresent
+          # --start-scheduler is mandatory. A bare `python scheduled_ingest.py`
+          # prints argparse help and exits 0, which the kubelet reads as a
+          # finished container and restarts forever under restartPolicy Always.
+          command: ["/bin/sh", "-euc"]
+          args:
+            - |
+              ln -sfn /app/data/swaps.db /app/swaps.db
+              exec python scheduled_ingest.py --start-scheduler
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: MPLCONFIGDIR
+              value: /tmp/matplotlib
+            - name: SWAPS_DB_PATH
+              value: /app/data/swaps.db
+            - name: POLL_INTERVAL_MINUTES
+              value: "5"
+            - name: SCHEDULER_HEARTBEAT_FILE
+              value: /app/data/.scheduler_heartbeat
+            - name: SCHEDULER_HEARTBEAT_INTERVAL_SECONDS
+              value: "60"
+            - name: THETADATA_CF_ACCESS_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: financialdevelopment-secrets
+                  key: THETADATA_CF_ACCESS_CLIENT_ID
+                  optional: true
+            - name: THETADATA_CF_ACCESS_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: financialdevelopment-secrets
+                  key: THETADATA_CF_ACCESS_CLIENT_SECRET
+                  optional: true
+          volumeMounts:
+            - name: swaps-db
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+          # No HTTP surface here. scheduled_ingest.py registers a dedicated
+          # 60s APScheduler job that touches SCHEDULER_HEARTBEAT_FILE (and
+          # writes it once immediately at startup), independent of
+          # POLL_INTERVAL_MINUTES. A stale heartbeat means the scheduler's
+          # thread pool has wedged even though the process is still alive --
+          # which a plain process-liveness check would never catch.
+          # 150s tolerance = two missed 60s ticks, matching Dockerfile.scheduler.
+          startupProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import os, sys, time
+                  p = os.environ['SCHEDULER_HEARTBEAT_FILE']
+                  sys.exit(0 if os.path.exists(p) and time.time() - os.path.getmtime(p) < 150 else 1)
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 18   # up to 3 min for cold imports + first tick
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import os, sys, time
+                  p = os.environ['SCHEDULER_HEARTBEAT_FILE']
+                  sys.exit(0 if os.path.exists(p) and time.time() - os.path.getmtime(p) < 150 else 1)
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      # shutdown_signal.py catches SIGTERM and lets the in-flight poll finish
+      # before closing SQLite. A SIGKILL mid-write strands a swaps.db-wal on the
+      # PVC that the next pod then has to recover.
+      terminationGracePeriodSeconds: 300
+      volumes:
+        - name: swaps-db
+          persistentVolumeClaim:
+            claimName: swaps-db
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi

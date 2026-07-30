@@ -1,0 +1,72 @@
+[Unit]
+Description=FinancialDevelopment dashboard (FastAPI/uvicorn on :8000)
+Documentation=file:/opt/financialdevelopment/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+# Ordering only. dashboard/app.py renders an empty state against a cold or
+# missing swaps.db, so a stopped scheduler must not block the dashboard.
+After=financialdevelopment-scheduler.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/financialdevelopment
+
+# DASHBOARD_API_KEY MUST be set here. dashboard/auth.py falls back to the
+# literal "dev-key-change-in-production" when the variable is unset, which would
+# leave POST /run/{suite} open to anyone who has read the source.
+EnvironmentFile=-/etc/financialdevelopment/financialdevelopment.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# --workers 1 is deliberate: dashboard/app.py keeps in-flight run state in a
+# process-local dict (_RUNS) that GET /runs/{run_id} reads before falling back
+# to SQLite. Multiple workers would round-robin those polls to processes that
+# have never seen the run. Scale with more hosts behind a load balancer, not
+# with more uvicorn workers.
+# --proxy-headers is what makes auth.get_client_ip and slowapi's rate limiter
+# see the real client IP rather than the reverse proxy's.
+ExecStart=/opt/financialdevelopment/.venv/bin/python -m uvicorn dashboard.app:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 1 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1 \
+    --timeout-keep-alive 65 \
+    --log-level info
+
+Restart=always
+RestartSec=10
+
+# uvicorn drains in-flight requests on SIGTERM.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+
+# --- Hardening ---
+# Still needs ReadWritePaths: the dashboard opens swaps.db, and SQLite creates
+# -wal/-shm alongside it even for read-only queries in WAL mode.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/financialdevelopment
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Binding 8000 needs no capabilities at all (>1024).
+CapabilityBoundingSet=
+
+# --- Logging ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fd-dashboard
+
+[Install]
+WantedBy=multi-user.target
