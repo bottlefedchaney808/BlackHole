@@ -189,6 +189,7 @@ def _ytdl_search(query: str, max_results: int = YT_RESULTS_PER_QUERY) -> List[di
         "quiet": True,
         "extract_flat": True,
         "skip_download": True,
+        "js_runtimes": ["node"],
     }) as ydl:
         try:
             result = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
@@ -226,6 +227,7 @@ def _fetch_transcript(video_id: str) -> Optional[str]:
             "writesubtitles": False,
             "writeautomaticsub": True,
             "subtitleslangs": ["en"],
+            "js_runtimes": ["node"],
         }) as ydl:
             info = ydl.extract_info(video_id, download=False)
     except Exception:
