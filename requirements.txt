@@ -41,6 +41,7 @@ xlrd==2.0.2
 matplotlib==3.11.1
 reportlab==5.0.0
 pillow==12.3.0
+PyPDF2>=3.0
 
 # --- Stats / vol modeling (Vol_Suite garch_analysis.py, backtest_stage3.py) ---
 arch==8.0.0
