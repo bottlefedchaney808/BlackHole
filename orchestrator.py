@@ -615,6 +615,8 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
             env=env,
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=timeout,
             # stdin closed for every child, with no exceptions. Vol_Suite used
             # to be fed a scripted prompt sequence here; now that it has a real
