@@ -1168,6 +1168,39 @@ def _run_core_analysis(
                 "expiration": expiration,
                 "strategies": getattr(scan_result, "strategies", []),  # Add strategies from scan
             }
+
+            # Add Strategy Recommendations section to PDF
+            strategies = getattr(scan_result, "strategies", [])
+            if strategies:
+                strat_text = f"Strategy Recommendations for {ticker} ({scan_result.verdict})\n"
+                strat_text += "=" * 60 + "\n\n"
+                for i, strat in enumerate(strategies, 1):
+                    strat_text += f"{i}. {strat.get('strategy_type', 'Unknown').upper()}\n"
+                    strat_text += f"   Vol Regime: {strat.get('vol_regime', 'N/A')}\n"
+                    strat_text += f"   Rank Score: {strat.get('rank_score', 0):.2f}\n"
+                    strat_text += f"   Rationale: {strat.get('rationale', 'N/A')}\n"
+
+                    # Add legs
+                    legs = strat.get('legs', [])
+                    if legs:
+                        strat_text += "   Legs:\n"
+                        for leg in legs:
+                            qty_str = f"+{leg.get('quantity')}" if leg.get('quantity', 0) > 0 else f"{leg.get('quantity')}"
+                            strat_text += f"     {qty_str} {leg.get('instrument_type', '?').upper()} @ ${leg.get('strike', 0):.2f}\n"
+
+                    # Add Greeks
+                    greeks = strat.get('greeks_summary', {})
+                    if greeks:
+                        strat_text += f"   Greeks: Δ={greeks.get('delta', 0):.3f}, Γ={greeks.get('gamma', 0):.4f}, "
+                        strat_text += f"Θ={greeks.get('theta', 0):.3f}, V={greeks.get('vega', 0):.3f}\n"
+                    strat_text += "\n"
+
+                sections.append({
+                    "title": "Strategy Recommendations",
+                    "text": strat_text,
+                    "images": []
+                })
+
         except Exception as e:
             print(f"  Chain scanner failed: {e}")
             _note_error("options_chain_scanner", e)
