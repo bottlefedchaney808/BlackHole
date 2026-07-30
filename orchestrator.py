@@ -1144,23 +1144,11 @@ def _stdin_is_available() -> bool:
     piped, or unavailable (CI, task scheduler, etc.).
     """
     try:
-        if os.name == 'nt':
-            # Windows: use PowerShell to detect redirected stdin
-            result = subprocess.run(
-                ['powershell', '-NoProfile', '-Command', '[console]::isInputRedirected()'],
-                capture_output=True, text=True, timeout=1
-            )
-            if result.returncode == 0:
-                # PowerShell returns "True" or "False"; we want True (stdin available)
-                return result.stdout.strip().lower() != 'true'
-            else:
-                # PowerShell command failed; assume no stdin to avoid blocking
-                return False
-        else:
-            # POSIX: use isatty()
-            return sys.stdin.isatty()
+        # Use isatty() on all platforms (Windows, POSIX, Mac).
+        # This is the standard Python check for TTY availability.
+        return sys.stdin.isatty()
     except Exception:
-        # Any error -> assume no stdin
+        # Any error -> assume no stdin (safe default for headless/CI)
         return False
 
 
