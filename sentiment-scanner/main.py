@@ -32,6 +32,7 @@ from scanner.options_scanner_base import close_td
 from correlation.engine import CorrelationEngine
 from scanner.youtube import scan_ticker as yt_scan_ticker
 from scanner.youtube import format_scanner_line as yt_format
+from scanner.youtube import scan_ticker as run_youtube_scanner
 import config
 
 
@@ -256,9 +257,11 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
         for line in scanner_lines:
             print(line)
         if not skip_youtube:
-            yt_line = run_youtube_scanner(ticker, engine)
-            if yt_line:
-                print(yt_line)
+            yt_result = run_youtube_scanner(ticker)
+            if yt_result:
+                yt_line = yt_format(yt_result)
+                if yt_line:
+                    print(yt_line)
         time.sleep(0.5)  # brief pause between tickers
     return alerts
 
