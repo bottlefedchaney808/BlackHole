@@ -1,0 +1,7 @@
+# Force LF line endings for POSIX shell scripts regardless of the checkout
+# platform's core.autocrlf setting -- a CRLF-terminated shebang line (e.g.
+# "#!/usr/bin/env bash\r") fails with "bad interpreter" on Linux/Mac.
+*.sh text eol=lf
+
+# Windows batch files are CRLF-native; keep them that way on any platform.
+*.bat text eol=crlf

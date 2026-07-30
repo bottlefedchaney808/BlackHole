@@ -158,11 +158,11 @@ class SwapsLoader:
             try:
                 if use_pool_context:
                     with pool.get_connection_context(timeout=5.0) as conn:
-                        self._execute_upsert(conn, query, records, source_name, start_time, op_context)
+                        return self._execute_upsert(conn, query, records, source_name, start_time, op_context)
                 else:
                     conn = self.get_connection()
                     try:
-                        self._execute_upsert(conn, query, records, source_name, start_time, op_context)
+                        return self._execute_upsert(conn, query, records, source_name, start_time, op_context)
                     finally:
                         conn.close()
 
