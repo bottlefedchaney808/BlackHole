@@ -1370,6 +1370,9 @@ def run_interactive_orchestrator() -> int:
 
     index = input("  Benchmark index [default SPY]: ").strip().upper() or "SPY"
 
+    compile_pdf_input = input("  Compile results to PDF? (y/n) [default n]: ").strip().lower() or "n"
+    compile_pdf = compile_pdf_input == "y"
+
     # Step 5: Build and validate focus dict
     focus: Dict[str, Any] = {
         'ticker': ticker,
@@ -1377,6 +1380,7 @@ def run_interactive_orchestrator() -> int:
         'strike': strike,
         'index_ticker': index,
         'fail_on_suite_error': False,
+        'compile_pdf': compile_pdf,
     }
     if expiration:
         focus['expiration_date'] = expiration
@@ -1405,6 +1409,7 @@ def run_interactive_orchestrator() -> int:
     print(f"  Option Type  : {option_type}")
     print(f"  Index        : {index}")
     print(f"  Suites       : {', '.join(requested_suites)}")
+    print(f"  Compile PDF  : {'Yes' if compile_pdf else 'No'}")
 
     while True:
         confirm = input("\nProceed? (y/n) [default y]: ").strip().lower() or "y"
