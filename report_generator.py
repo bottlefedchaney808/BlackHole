@@ -19,7 +19,6 @@ def generate_pdf_report(output_dir: str, run_id: str) -> str:
     vol_result = _load_json(output_path / "vol_result.json", required=False)
     options_result = _load_json(output_path / "options_result.json", required=False)
     var_result = _load_json(output_path / "var_result.json", required=False)
-    sentiment_result = _load_json(output_path / "sentiment_result.json", required=False)
 
     # Create PDF
     doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
