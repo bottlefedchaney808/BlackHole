@@ -10,6 +10,20 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
+REM Catch a stale/incomplete venv (packages missing vs. requirements.txt)
+REM *before* uvicorn starts, so the failure is one clear line instead of a
+REM Python traceback plus misleading "port already in use" advice.
+.venv\Scripts\python.exe -c "import fastapi, uvicorn, jinja2, slowapi" 2>nul
+if errorlevel 1 (
+    echo Your .venv is missing one or more required packages
+    echo ^(fastapi / uvicorn / jinja2 / slowapi^). This usually means
+    echo requirements.txt was updated after your venv was created.
+    echo.
+    echo Fix: .venv\Scripts\python.exe -m pip install -r requirements.txt
+    echo.
+    pause
+    exit /b 1
+)
 REM Refuse to start a second dashboard on the same port -- besides just
 REM failing to bind, a duplicate process also doubles up writes against
 REM swaps.db and can cause "database is locked" errors for the scheduler.
