@@ -275,3 +275,39 @@ class TestScanTrendingEarningsDigest:
         main_mod.scan_trending(st, engine)
 
         assert captured_kwargs["live"] is False
+
+    def test_live_is_driven_by_fetch_earnings_calendar_not_entries(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression test: `live` must come from `fetch_earnings_calendar()`
+        directly, not be inferred from whether `entries` is non-empty. Here
+        the live calendar has data (so live=True is correct) but nothing
+        falls inside the 7-day window (so entries=[]) — a buggy
+        `live = bool(entries)` implementation would report live=False and
+        pass the other tests in this class, which never separate the two
+        signals."""
+        captured_kwargs = {}
+
+        monkeypatch.setattr(
+            main_mod, "upcoming_earnings",
+            lambda days=7, static_fallback=None: [],
+        )
+        monkeypatch.setattr(
+            main_mod, "fetch_earnings_calendar",
+            lambda: {"AAPL": "2099-01-01"},  # live has data, just out of window
+        )
+
+        def _fake_format(entries, days=7, live=True):
+            captured_kwargs["entries"] = entries
+            captured_kwargs["live"] = live
+            return "  DIGEST"
+
+        monkeypatch.setattr(main_mod, "format_earnings_digest", _fake_format)
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        main_mod.scan_trending(st, engine)
+
+        assert captured_kwargs["entries"] == []
+        assert captured_kwargs["live"] is True
