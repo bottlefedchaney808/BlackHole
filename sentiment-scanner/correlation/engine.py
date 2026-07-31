@@ -38,6 +38,10 @@ def _disp_module():
     from scanner.vol_dispersion_scanner import VolDispersionScan
     return VolDispersionScan
 
+def _earnings_module():
+    from scanner.earnings_scanner import EarningsResult, HIGH_PREMIUM_THRESHOLD
+    return EarningsResult, HIGH_PREMIUM_THRESHOLD
+
 
 class CorrelationEngine:
     """Aggregates narrative + options scanner signals per ticker.
@@ -56,6 +60,7 @@ class CorrelationEngine:
         self._skew: Dict[str, object] = {}
         self._pain: Dict[str, object] = {}
         self._disp: Dict[str, object] = {}
+        self._earnings: Dict[str, object] = {}
 
     # ---- Narrative recording (existing) ----
     def record_narrative(self, ticker: str, scores: Dict):
@@ -108,6 +113,10 @@ class CorrelationEngine:
 
     def record_dispersion(self, ticker: str, scan: object) -> None:
         self._disp[ticker] = scan
+
+    def record_earnings(self, ticker: str, scan: object) -> None:
+        """Store the latest earnings-vol scan result for a ticker."""
+        self._earnings[ticker] = scan
 
     # ---- Composite signal generation ----
     def correlate_with_oi(self, ticker: str, oi_snapshot: Dict) -> Dict:
@@ -217,6 +226,18 @@ class CorrelationEngine:
                     signals.append("DISPERSION_SETUP")
                     severities.append("MEDIUM")
 
+        # --- NEW: Earnings-vol premium signal ---
+        earn = self._earnings.get(ticker)
+        if earn is not None and not getattr(earn, "error", None):
+            earn_type, high_threshold = _earnings_module()
+            if isinstance(earn, earn_type):
+                if earn.premium_pct >= high_threshold and cns > 50:
+                    signals.append("EARNINGS_VOL_PLUS_NARRATIVE")
+                    severities.append("HIGH")
+                elif earn.premium_pct >= high_threshold:
+                    signals.append("EARNINGS_VOL_PREMIUM")
+                    severities.append("MEDIUM")
+
         # --- Composite severity ---
         sev = "LOW"
         if "HIGH" in severities:
@@ -241,6 +262,7 @@ class CorrelationEngine:
         skew = self._skew.get(ticker)
         pain = self._pain.get(ticker)
         disp = self._disp.get(ticker)
+        earn = self._earnings.get(ticker)
 
         gex_err = getattr(gex, "error", None)
         oi_err = getattr(oi, "error", None)
@@ -248,6 +270,7 @@ class CorrelationEngine:
         skew_err = getattr(skew, "error", None)
         pain_err = getattr(pain, "error", None)
         disp_err = getattr(disp, "error", None)
+        earn_err = getattr(earn, "error", None)
 
         return {
             "gex": {
@@ -287,5 +310,11 @@ class CorrelationEngine:
                 "signal": getattr(disp, "dispersion_signal", "UNKNOWN") if disp else "UNKNOWN",
                 "stock_iv": getattr(disp, "stock_iv_pct", 0.0) if disp else 0.0,
                 "benchmark_iv": getattr(disp, "benchmark_iv_pct", 0.0) if disp else 0.0,
+            },
+            "earnings": {
+                "status": "ok" if earn and not earn_err else f"error: {earn_err}",
+                "premium_pct": getattr(earn, "premium_pct", 0.0) if earn else 0.0,
+                "signal": getattr(earn, "signal", "UNKNOWN") if earn else "UNKNOWN",
+                "earnings_date": getattr(earn, "earnings_date", "") if earn else "",
             },
         }
