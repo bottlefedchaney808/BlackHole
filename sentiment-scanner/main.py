@@ -89,6 +89,41 @@ def _make_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _prompt_yes_no(question: str, skip: bool = False) -> bool:
+    """Ask *question* as a y/N prompt.
+
+    Returns False without prompting if *skip* is set or stdin isn't a
+    TTY, so scheduled/cron/CI runs of main.py never hang on input().
+    """
+    if skip or not sys.stdin.isatty():
+        return False
+    answer = input(f"{question} [y/N]: ").strip().lower()
+    return answer in ("y", "yes")
+
+
+def _launch_sector_rotation() -> None:
+    """Launch sector_rotation_launcher.py as a foreground subprocess.
+
+    Mirrors _launch_vol_suite's timeout/capture pattern (main.py:62-79) --
+    a 15-ETF price-history fetch can be slow or hang if ThetaData is
+    unreachable, so this must not block main.py indefinitely.
+    """
+    launcher_path = Path(__file__).resolve().parent / "sector_rotation_launcher.py"
+    cmd = [sys.executable, str(launcher_path)]
+    print(f"\n{'='*60}")
+    print("  Launching Sector Rotation scanner...")
+    print(f"{'='*60}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        print(proc.stdout)
+        if proc.returncode != 0:
+            print(f"  Sector Rotation stderr: {proc.stderr[-2000:]}")
+    except subprocess.TimeoutExpired:
+        print("  Sector Rotation scanner timed out after 30 min.")
+    except FileNotFoundError as e:
+        print(f"  Could not launch Sector Rotation scanner: {e}")
+
+
 def _write_context_export(path: str, run_id: str, pack: dict) -> None:
     payload = {
         "schema_version": 2,
@@ -140,6 +175,11 @@ def _parse_args() -> argparse.Namespace:
         "--skip-youtube",
         action="store_true",
         help="Skip YouTube transcript sentiment scan.",
+    )
+    parser.add_argument(
+        "--skip-sector-prompt",
+        action="store_true",
+        help="Don't prompt to launch the Sector Rotation scanner at startup/shutdown.",
     )
     parser.add_argument(
         "--launch-vol-suite",
@@ -371,6 +411,11 @@ def main():
     print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion | Earnings")
     print("="*60)
 
+    if _prompt_yes_no(
+        "Launch Sector Rotation scanner now?", skip=args.skip_sector_prompt,
+    ):
+        _launch_sector_rotation()
+
     st = StockTwitsScraper()
     engine = CorrelationEngine()
     try:
@@ -407,6 +452,11 @@ def main():
             print("  No highlight pack — skipping Vol Suite launch.")
 
         if args.no_loop:
+            if _prompt_yes_no(
+                "Launch Sector Rotation scanner before exiting?",
+                skip=args.skip_sector_prompt,
+            ):
+                _launch_sector_rotation()
             return
 
         while True:
@@ -431,6 +481,11 @@ def main():
 
     except KeyboardInterrupt:
         print("\nShutting down...")
+        if _prompt_yes_no(
+            "Launch Sector Rotation scanner before exiting?",
+            skip=args.skip_sector_prompt,
+        ):
+            _launch_sector_rotation()
     finally:
         st.close()
         close_td()

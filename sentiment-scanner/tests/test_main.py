@@ -311,3 +311,82 @@ class TestScanTrendingEarningsDigest:
 
         assert captured_kwargs["entries"] == []
         assert captured_kwargs["live"] is True
+
+
+class TestPromptYesNo:
+    def test_skip_true_returns_false_without_prompting(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        called = []
+        monkeypatch.setattr("builtins.input", lambda *_: called.append(1) or "y")
+        assert main_mod._prompt_yes_no("Q?", skip=True) is False
+        assert called == []
+
+    def test_non_tty_returns_false_without_prompting(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: False)
+        called = []
+        monkeypatch.setattr("builtins.input", lambda *_: called.append(1) or "y")
+        assert main_mod._prompt_yes_no("Q?") is False
+        assert called == []
+
+    def test_tty_yes_answer_returns_true(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda *_: "y")
+        assert main_mod._prompt_yes_no("Q?") is True
+
+    def test_tty_no_answer_returns_false(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda *_: "n")
+        assert main_mod._prompt_yes_no("Q?") is False
+
+    def test_tty_empty_answer_returns_false(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda *_: "")
+        assert main_mod._prompt_yes_no("Q?") is False
+
+
+class TestLaunchSectorRotation:
+    def test_invokes_subprocess_with_launcher_path_and_timeout(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append((cmd, kw))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "ok"
+            return result
+
+        monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+        main_mod._launch_sector_rotation()
+
+        assert len(calls) == 1
+        cmd, kwargs = calls[0]
+        assert cmd[0] == main_mod.sys.executable
+        assert cmd[1].endswith("sector_rotation_launcher.py")
+        assert kwargs["timeout"] == 1800
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+
+    def test_timeout_is_caught_and_reported(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    ) -> None:
+        def _fake_run(cmd, **kw):
+            raise main_mod.subprocess.TimeoutExpired(cmd, kw.get("timeout", 1800))
+
+        monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+        main_mod._launch_sector_rotation()  # must not raise
+
+        captured = capsys.readouterr()
+        assert "timed out" in captured.out.lower()
