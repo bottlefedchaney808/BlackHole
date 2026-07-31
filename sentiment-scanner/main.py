@@ -3,8 +3,8 @@
 
 Extended from the original StockTwits + CNS + deep-dive loop to run a full
 suite of options scanners on every trending ticker: GEX, Unusual OI, IV Rank,
-Skew, Max Pain, and Vol Dispersion — all piped into the correlation engine
-for composite signals.
+Skew, Max Pain, Vol Dispersion, and Earnings-Vol Premium — all piped into the
+correlation engine for composite signals.
 """
 
 import sys
@@ -28,12 +28,14 @@ from scanner.swap_sdr import build_swap_snapshot
 from scanner.reddit import MCP_AVAILABLE
 from scanner.theta_integration import build_oi_snapshot
 from scanner.ticker_pack import export_alert_group
-from scanner.options_scanner_base import close_td
+from scanner.options_scanner_base import close_td, get_td
 from correlation.engine import CorrelationEngine
 from scanner.youtube import scan_ticker as yt_scan_ticker
 from scanner.youtube import format_scanner_line as yt_format
 import scanner.youtube
 _youtube_scan = scanner.youtube.scan_ticker
+from scanner.earnings_scanner import scan_ticker as _scan_earnings_ticker
+from scanner.earnings_scanner import format_earnings_one as format_earnings_line
 import config
 
 
@@ -173,19 +175,29 @@ def scan_ticker(st, ticker, engine):
 
 
 def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
-    """Run all 6 options scanners on a ticker and pipe results into the engine."""
+    """Run all 7 options scanners on a ticker and pipe results into the engine.
+
+    Returns (lines, raw) where lines are formatted console strings and
+    raw maps scanner name -> the scan result object (or None if that
+    scanner errored or was skipped), for downstream reporting.
+    """
     (scan_gex, fmt_gex, scan_oi, fmt_oi,
      scan_iv, fmt_iv, scan_skew, fmt_skew,
      scan_pain, fmt_pain,
      scan_disp, fmt_disp) = _import_scanners()
 
     results = []
+    raw = {
+        "gex": None, "unusual_oi": None, "iv_rank": None, "skew": None,
+        "max_pain": None, "dispersion": None, "earnings": None,
+    }
 
     # 1. GEX (most expensive — skip if flagged)
     if not skip_gex:
         try:
             gex = scan_gex(ticker)
             engine.record_gex(ticker, gex)
+            raw["gex"] = gex
             results.append(fmt_gex(gex))
         except Exception as e:
             results.append(f"  {ticker:6s} | GEX: ERROR — {e}")
@@ -194,6 +206,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         oi = scan_oi(ticker)
         engine.record_oi(ticker, oi)
+        raw["unusual_oi"] = oi
         results.append(fmt_oi(oi))
     except Exception as e:
         results.append(f"  {ticker:6s} | OI: ERROR — {e}")
@@ -202,6 +215,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         iv = scan_iv(ticker)
         engine.record_iv(ticker, iv)
+        raw["iv_rank"] = iv
         results.append(fmt_iv(iv))
     except Exception as e:
         results.append(f"  {ticker:6s} | IV: ERROR — {e}")
@@ -210,6 +224,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         skew = scan_skew(ticker)
         engine.record_skew(ticker, skew)
+        raw["skew"] = skew
         results.append(fmt_skew(skew))
     except Exception as e:
         results.append(f"  {ticker:6s} | SKEW: ERROR — {e}")
@@ -218,6 +233,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         pain = scan_pain(ticker)
         engine.record_pain(ticker, pain)
+        raw["max_pain"] = pain
         results.append(fmt_pain(pain))
     except Exception as e:
         results.append(f"  {ticker:6s} | PAIN: ERROR — {e}")
@@ -226,11 +242,22 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         disp = scan_disp(ticker, benchmark=benchmark)
         engine.record_dispersion(ticker, disp)
+        raw["dispersion"] = disp
         results.append(fmt_disp(disp))
     except Exception as e:
         results.append(f"  {ticker:6s} | DISP: ERROR — {e}")
 
-    return results
+    # 7. Earnings-vol premium
+    try:
+        earn = _scan_earnings_ticker(ticker, td=get_td())
+        if earn is not None:
+            engine.record_earnings(ticker, earn)
+            raw["earnings"] = earn
+            results.append(format_earnings_line(earn))
+    except Exception as e:
+        results.append(f"  {ticker:6s} | EARN: ERROR — {e}")
+
+    return results, raw
 
 
 def run_youtube_scanner(ticker, engine):
@@ -245,18 +272,26 @@ def run_youtube_scanner(ticker, engine):
 
 
 def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=False):
+    """Scan all trending tickers, running sentiment + options scanners on each.
+
+    Returns (alerts, cycle_raw) where alerts are CNS-threshold alert dicts
+    and cycle_raw maps ticker -> that ticker's raw scanner-result dict from
+    run_options_scanners, for downstream reporting.
+    """
     trending = st.get_trending()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Trending: {len(trending)} symbols")
     alerts = []
+    cycle_raw = {}
     for t in trending[:config.MAX_TICKERS_TO_SCAN]:
         ticker = t["symbol"]
         result = scan_ticker(st, ticker, engine)
         if result:
             alerts.append(result)
         # Run options scanners on EVERY trending ticker, not just above-threshold
-        scanner_lines = run_options_scanners(ticker, engine, benchmark, skip_gex)
+        scanner_lines, scanner_raw = run_options_scanners(ticker, engine, benchmark, skip_gex)
         for line in scanner_lines:
             print(line)
+        cycle_raw[ticker] = scanner_raw
         if not skip_youtube:
             yt_result = _youtube_scan(ticker)
             if yt_result:
@@ -264,7 +299,7 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
                 if yt_line:
                     print(yt_line)
         time.sleep(0.5)  # brief pause between tickers
-    return alerts
+    return alerts, cycle_raw
 
 
 def deep_dive(ticker):
@@ -326,14 +361,14 @@ def main():
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")
     print("="*60)
     print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps) | YouTube")
-    print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion")
+    print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion | Earnings")
     print("="*60)
 
     st = StockTwitsScraper()
     engine = CorrelationEngine()
     try:
         run_id = _make_run_id()
-        alerts = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
+        alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
         pack = {}
 
         if alerts:
@@ -371,7 +406,7 @@ def main():
             print(f"\n--- Next scan in {config.SCAN_INTERVAL_MINUTES} min ---")
             time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
             run_id = _make_run_id()
-            alerts = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
+            alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
             pack = {}
             if alerts:
                 pack = export_alert_group(
