@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from scanner.options_scanner_base import VolSuiteImporter, get_td
+from scanner.earnings_calendar import fetch_earnings_calendar
 
 vsi = VolSuiteImporter()
 
@@ -79,10 +80,16 @@ class EarningsScanner:
     def get_earnings_date(self, ticker: str) -> Optional[str]:
         """Return upcoming earnings date string (YYYY-MM-DD) for *ticker*.
 
-        Uses a hardcoded lookup dict for well-known tickers.  Returns
-        ``None`` for tickers not in the calendar.
+        Checks the live stockanalysis.com calendar first; falls back to
+        the static EARNINGS_CALENDAR dict if the ticker isn't in the
+        live data (or the live fetch failed). Returns ``None`` if the
+        ticker is in neither source.
         """
-        return EARNINGS_CALENDAR.get(ticker.upper())
+        ticker = ticker.upper()
+        live = fetch_earnings_calendar()
+        if ticker in live:
+            return live[ticker]
+        return EARNINGS_CALENDAR.get(ticker)
 
     # ------------------------------------------------------------------
     def scan_earnings(self, tickers: List[str]) -> List[EarningsResult]:
