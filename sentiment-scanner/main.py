@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sentiment Scanner --- Contested Narrative Detector + 6 Options Scanners + Vol/Correlation.
+"""Sentiment Scanner --- Contested Narrative Detector + 7 Options Scanners + Vol/Correlation.
 
 Extended from the original StockTwits + CNS + deep-dive loop to run a full
 suite of options scanners on every trending ticker: GEX, Unusual OI, IV Rank,
@@ -36,6 +36,10 @@ import scanner.youtube
 _youtube_scan = scanner.youtube.scan_ticker
 from scanner.earnings_scanner import scan_ticker as _scan_earnings_ticker
 from scanner.earnings_scanner import format_earnings_one as format_earnings_line
+from scanner.earnings_calendar import (
+    upcoming_earnings, format_earnings_digest, fetch_earnings_calendar,
+)
+from scanner.earnings_scanner import EARNINGS_CALENDAR
 import config
 
 
@@ -280,6 +284,9 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
     """
     trending = st.get_trending()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Trending: {len(trending)} symbols")
+    entries = upcoming_earnings(days=7, static_fallback=EARNINGS_CALENDAR)
+    live = bool(fetch_earnings_calendar())
+    print(format_earnings_digest(entries, days=7, live=live))
     alerts = []
     cycle_raw = {}
     for t in trending[:config.MAX_TICKERS_TO_SCAN]:

@@ -198,3 +198,80 @@ class TestScanTrendingReturnsRaw:
         assert alerts == []
         assert cycle_raw == {"AAPL": {"gex": cycle_raw["AAPL"]["gex"]}}
         assert cycle_raw["AAPL"]["gex"].tag == "gex"
+
+
+class TestScanTrendingEarningsDigest:
+    def test_prints_digest_once_per_cycle_before_ticker_loop(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(
+            main_mod, "upcoming_earnings",
+            lambda days=7, static_fallback=None: [("AAPL", "2026-08-05")],
+        )
+        monkeypatch.setattr(
+            main_mod, "fetch_earnings_calendar",
+            lambda: {"AAPL": "2026-08-05"},
+        )
+        monkeypatch.setattr(
+            main_mod, "format_earnings_digest",
+            lambda entries, days=7, live=True: f"  DIGEST:{len(entries)}:live={live}",
+        )
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        alerts, cycle_raw = main_mod.scan_trending(st, engine)
+
+        captured = capsys.readouterr()
+        assert "DIGEST:1:live=True" in captured.out
+        assert alerts == []
+        assert cycle_raw == {}
+
+    def test_passes_static_calendar_as_fallback(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured_kwargs = {}
+
+        def _fake_upcoming(days=7, static_fallback=None):
+            captured_kwargs["days"] = days
+            captured_kwargs["static_fallback"] = static_fallback
+            return []
+
+        monkeypatch.setattr(main_mod, "upcoming_earnings", _fake_upcoming)
+        monkeypatch.setattr(main_mod, "fetch_earnings_calendar", lambda: {})
+        monkeypatch.setattr(
+            main_mod, "format_earnings_digest",
+            lambda entries, days=7, live=True: "  DIGEST",
+        )
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        main_mod.scan_trending(st, engine)
+
+        assert captured_kwargs["days"] == 7
+        assert captured_kwargs["static_fallback"] is main_mod.EARNINGS_CALENDAR
+
+    def test_live_false_when_live_calendar_empty(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured_kwargs = {}
+
+        monkeypatch.setattr(
+            main_mod, "upcoming_earnings",
+            lambda days=7, static_fallback=None: [],
+        )
+        monkeypatch.setattr(main_mod, "fetch_earnings_calendar", lambda: {})
+
+        def _fake_format(entries, days=7, live=True):
+            captured_kwargs["live"] = live
+            return "  DIGEST"
+
+        monkeypatch.setattr(main_mod, "format_earnings_digest", _fake_format)
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        main_mod.scan_trending(st, engine)
+
+        assert captured_kwargs["live"] is False
