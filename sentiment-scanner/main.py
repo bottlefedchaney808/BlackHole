@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Sentiment Scanner --- Contested Narrative Detector + 6 Options Scanners + Vol/Correlation.
+"""Sentiment Scanner --- Contested Narrative Detector + 7 Options Scanners + Vol/Correlation.
 
 Extended from the original StockTwits + CNS + deep-dive loop to run a full
 suite of options scanners on every trending ticker: GEX, Unusual OI, IV Rank,
-Skew, Max Pain, and Vol Dispersion — all piped into the correlation engine
-for composite signals.
+Skew, Max Pain, Vol Dispersion, and Earnings-Vol Premium — all piped into the
+correlation engine for composite signals.
 """
 
 import sys
@@ -16,6 +16,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess
@@ -28,12 +29,19 @@ from scanner.swap_sdr import build_swap_snapshot
 from scanner.reddit import MCP_AVAILABLE
 from scanner.theta_integration import build_oi_snapshot
 from scanner.ticker_pack import export_alert_group
-from scanner.options_scanner_base import close_td
+from scanner.options_scanner_base import close_td, get_td
 from correlation.engine import CorrelationEngine
 from scanner.youtube import scan_ticker as yt_scan_ticker
 from scanner.youtube import format_scanner_line as yt_format
 import scanner.youtube
 _youtube_scan = scanner.youtube.scan_ticker
+from scanner.earnings_scanner import scan_ticker as _scan_earnings_ticker
+from scanner.earnings_scanner import format_earnings_one as format_earnings_line
+from scanner.earnings_calendar import (
+    upcoming_earnings, format_earnings_digest, fetch_earnings_calendar,
+)
+from scanner.earnings_scanner import EARNINGS_CALENDAR
+from scanner.report import ScannerReport
 import config
 
 
@@ -83,6 +91,83 @@ def _make_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _prompt_yes_no(question: str, skip: bool = False) -> bool:
+    """Ask *question* as a y/N prompt.
+
+    Returns False without prompting if *skip* is set or stdin isn't a
+    TTY, so scheduled/cron/CI runs of main.py never hang on input().
+    """
+    if skip or not sys.stdin.isatty():
+        return False
+    answer = input(f"{question} [y/N]: ").strip().lower()
+    return answer in ("y", "yes")
+
+
+def _launch_sector_rotation() -> None:
+    """Launch sector_rotation_launcher.py as a foreground subprocess.
+
+    Mirrors _launch_vol_suite's timeout/capture pattern (main.py:62-79) --
+    a 15-ETF price-history fetch can be slow or hang if ThetaData is
+    unreachable, so this must not block main.py indefinitely.
+    """
+    launcher_path = Path(__file__).resolve().parent / "sector_rotation_launcher.py"
+    cmd = [sys.executable, str(launcher_path)]
+    print(f"\n{'='*60}")
+    print("  Launching Sector Rotation scanner...")
+    print(f"{'='*60}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        print(proc.stdout)
+        if proc.returncode != 0:
+            print(f"  Sector Rotation stderr: {proc.stderr[-2000:]}")
+    except subprocess.TimeoutExpired:
+        print("  Sector Rotation scanner timed out after 30 min.")
+    except FileNotFoundError as e:
+        print(f"  Could not launch Sector Rotation scanner: {e}")
+
+
+def _raw_result_to_dict(name: str, result: object) -> dict:
+    """Convert a scanner result object (or None) into a plain dict for
+    ScannerReport.add_ticker_results(). Report cards read fields via
+    dict.get(), so dataclass instances are converted with dataclasses.asdict(),
+    which recurses through nested dataclasses and lists of them (e.g.
+    UnusualOiScan.top_strikes: List[OiStrike] — see CARL R1-F1). A plain
+    vars()/dict() shallow copy would leave nested dataclass fields as
+    objects instead of dicts, breaking report.py's .get(...) calls on them.
+    """
+    if result is None:
+        return {"error": "no_data"}
+    if dataclasses.is_dataclass(result) and not isinstance(result, type):
+        return dataclasses.asdict(result)
+    if hasattr(result, "__dict__"):
+        return dict(vars(result))
+    return dict(result)
+
+
+def _maybe_build_report(engine, cycle_raw: dict, skip: bool = False) -> None:
+    """Prompt to build a PDF report for the most recently completed cycle.
+
+    Called once at shutdown (CARL R1-F5 / user decision "option B"), not
+    after every cycle — matching _launch_sector_rotation's cadence so a
+    user who leaves an open terminal running never finds the loop
+    blocked on an unattended input() mid-session.
+    """
+    if not cycle_raw:
+        return
+    if not _prompt_yes_no("Generate PDF report for the last completed run?", skip=skip):
+        return
+
+    tickers = sorted(cycle_raw.keys())
+    report = ScannerReport(title="Sentiment Scanner Report", tickers=tickers)
+    for ticker, raw in cycle_raw.items():
+        for name, result in raw.items():
+            report.add_ticker_results(ticker, name, _raw_result_to_dict(name, result))
+        signals = engine.correlate_with_oi(ticker, {})
+        report.add_signals(ticker, signals.get("signals", []), signals.get("severity", "LOW"))
+
+    report.save(out_dir=config.OUTPUT_DIR)
+
+
 def _write_context_export(path: str, run_id: str, pack: dict) -> None:
     payload = {
         "schema_version": 2,
@@ -108,7 +193,7 @@ def _write_context_export(path: str, run_id: str, pack: dict) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sentiment scanner + 6 options scanners + correlation."
+        description="Sentiment scanner + 7 options scanners + correlation."
     )
     parser.add_argument(
         "--export-context",
@@ -134,6 +219,16 @@ def _parse_args() -> argparse.Namespace:
         "--skip-youtube",
         action="store_true",
         help="Skip YouTube transcript sentiment scan.",
+    )
+    parser.add_argument(
+        "--skip-sector-prompt",
+        action="store_true",
+        help="Don't prompt to launch the Sector Rotation scanner at startup/shutdown.",
+    )
+    parser.add_argument(
+        "--skip-report-prompt",
+        action="store_true",
+        help="Don't prompt to generate a PDF report at shutdown.",
     )
     parser.add_argument(
         "--launch-vol-suite",
@@ -173,19 +268,29 @@ def scan_ticker(st, ticker, engine):
 
 
 def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
-    """Run all 6 options scanners on a ticker and pipe results into the engine."""
+    """Run all 7 options scanners on a ticker and pipe results into the engine.
+
+    Returns (lines, raw) where lines are formatted console strings and
+    raw maps scanner name -> the scan result object (or None if that
+    scanner errored or was skipped), for downstream reporting.
+    """
     (scan_gex, fmt_gex, scan_oi, fmt_oi,
      scan_iv, fmt_iv, scan_skew, fmt_skew,
      scan_pain, fmt_pain,
      scan_disp, fmt_disp) = _import_scanners()
 
     results = []
+    raw = {
+        "gex": None, "unusual_oi": None, "iv_rank": None, "skew": None,
+        "max_pain": None, "dispersion": None, "earnings": None,
+    }
 
     # 1. GEX (most expensive — skip if flagged)
     if not skip_gex:
         try:
             gex = scan_gex(ticker)
             engine.record_gex(ticker, gex)
+            raw["gex"] = gex
             results.append(fmt_gex(gex))
         except Exception as e:
             results.append(f"  {ticker:6s} | GEX: ERROR — {e}")
@@ -194,6 +299,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         oi = scan_oi(ticker)
         engine.record_oi(ticker, oi)
+        raw["unusual_oi"] = oi
         results.append(fmt_oi(oi))
     except Exception as e:
         results.append(f"  {ticker:6s} | OI: ERROR — {e}")
@@ -202,6 +308,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         iv = scan_iv(ticker)
         engine.record_iv(ticker, iv)
+        raw["iv_rank"] = iv
         results.append(fmt_iv(iv))
     except Exception as e:
         results.append(f"  {ticker:6s} | IV: ERROR — {e}")
@@ -210,6 +317,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         skew = scan_skew(ticker)
         engine.record_skew(ticker, skew)
+        raw["skew"] = skew
         results.append(fmt_skew(skew))
     except Exception as e:
         results.append(f"  {ticker:6s} | SKEW: ERROR — {e}")
@@ -218,6 +326,7 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         pain = scan_pain(ticker)
         engine.record_pain(ticker, pain)
+        raw["max_pain"] = pain
         results.append(fmt_pain(pain))
     except Exception as e:
         results.append(f"  {ticker:6s} | PAIN: ERROR — {e}")
@@ -226,11 +335,22 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     try:
         disp = scan_disp(ticker, benchmark=benchmark)
         engine.record_dispersion(ticker, disp)
+        raw["dispersion"] = disp
         results.append(fmt_disp(disp))
     except Exception as e:
         results.append(f"  {ticker:6s} | DISP: ERROR — {e}")
 
-    return results
+    # 7. Earnings-vol premium
+    try:
+        earn = _scan_earnings_ticker(ticker, td=get_td())
+        if earn is not None:
+            engine.record_earnings(ticker, earn)
+            raw["earnings"] = earn
+            results.append(format_earnings_line(earn))
+    except Exception as e:
+        results.append(f"  {ticker:6s} | EARN: ERROR — {e}")
+
+    return results, raw
 
 
 def run_youtube_scanner(ticker, engine):
@@ -245,18 +365,29 @@ def run_youtube_scanner(ticker, engine):
 
 
 def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=False):
+    """Scan all trending tickers, running sentiment + options scanners on each.
+
+    Returns (alerts, cycle_raw) where alerts are CNS-threshold alert dicts
+    and cycle_raw maps ticker -> that ticker's raw scanner-result dict from
+    run_options_scanners, for downstream reporting.
+    """
     trending = st.get_trending()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Trending: {len(trending)} symbols")
+    entries = upcoming_earnings(days=7, static_fallback=EARNINGS_CALENDAR)
+    live = bool(fetch_earnings_calendar())
+    print(format_earnings_digest(entries, days=7, live=live))
     alerts = []
+    cycle_raw = {}
     for t in trending[:config.MAX_TICKERS_TO_SCAN]:
         ticker = t["symbol"]
         result = scan_ticker(st, ticker, engine)
         if result:
             alerts.append(result)
         # Run options scanners on EVERY trending ticker, not just above-threshold
-        scanner_lines = run_options_scanners(ticker, engine, benchmark, skip_gex)
+        scanner_lines, scanner_raw = run_options_scanners(ticker, engine, benchmark, skip_gex)
         for line in scanner_lines:
             print(line)
+        cycle_raw[ticker] = scanner_raw
         if not skip_youtube:
             yt_result = _youtube_scan(ticker)
             if yt_result:
@@ -264,7 +395,7 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
                 if yt_line:
                     print(yt_line)
         time.sleep(0.5)  # brief pause between tickers
-    return alerts
+    return alerts, cycle_raw
 
 
 def deep_dive(ticker):
@@ -326,14 +457,20 @@ def main():
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")
     print("="*60)
     print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps) | YouTube")
-    print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion")
+    print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion | Earnings")
     print("="*60)
+
+    if _prompt_yes_no(
+        "Launch Sector Rotation scanner now?", skip=args.skip_sector_prompt,
+    ):
+        _launch_sector_rotation()
 
     st = StockTwitsScraper()
     engine = CorrelationEngine()
+    cycle_raw = {}
     try:
         run_id = _make_run_id()
-        alerts = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
+        alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
         pack = {}
 
         if alerts:
@@ -365,13 +502,19 @@ def main():
             print("  No highlight pack — skipping Vol Suite launch.")
 
         if args.no_loop:
+            if _prompt_yes_no(
+                "Launch Sector Rotation scanner before exiting?",
+                skip=args.skip_sector_prompt,
+            ):
+                _launch_sector_rotation()
+            _maybe_build_report(engine, cycle_raw, skip=args.skip_report_prompt)
             return
 
         while True:
             print(f"\n--- Next scan in {config.SCAN_INTERVAL_MINUTES} min ---")
             time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
             run_id = _make_run_id()
-            alerts = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
+            alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
             pack = {}
             if alerts:
                 pack = export_alert_group(
@@ -389,6 +532,12 @@ def main():
 
     except KeyboardInterrupt:
         print("\nShutting down...")
+        if _prompt_yes_no(
+            "Launch Sector Rotation scanner before exiting?",
+            skip=args.skip_sector_prompt,
+        ):
+            _launch_sector_rotation()
+        _maybe_build_report(engine, cycle_raw, skip=args.skip_report_prompt)
     finally:
         st.close()
         close_td()

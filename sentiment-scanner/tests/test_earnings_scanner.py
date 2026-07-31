@@ -27,6 +27,16 @@ from scanner.earnings_scanner import (
 # Fixtures
 # ══════════════════════════════════════════════════════════════════════
 
+@pytest.fixture(autouse=True)
+def _no_live_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default: live calendar returns nothing, so tests hit the static
+    EARNINGS_CALENDAR fallback deterministically. Individual tests can
+    override this with their own monkeypatch.setattr call."""
+    monkeypatch.setattr(
+        "scanner.earnings_scanner.fetch_earnings_calendar", lambda: {}
+    )
+
+
 @pytest.fixture
 def mock_td() -> MagicMock:
     """A mock ThetaDataController with canned responses.
@@ -406,3 +416,45 @@ class TestEarningsVolSignal:
             timestamp="2026-07-29T12:00:00+00:00",
         )
         assert r.signal == "HIGH"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Live calendar precedence
+# ══════════════════════════════════════════════════════════════════════
+
+class TestLiveCalendarPrecedence:
+    """get_earnings_date() checks the live calendar before the static
+    EARNINGS_CALENDAR fallback."""
+
+    def test_live_date_wins_over_static(
+        self, scanner: EarningsScanner, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "scanner.earnings_scanner.fetch_earnings_calendar",
+            lambda: {"AAPL": "2099-01-01"},
+        )
+        assert scanner.get_earnings_date("AAPL") == "2099-01-01"
+
+    def test_falls_back_to_static_when_live_empty(
+        self, scanner: EarningsScanner,
+    ) -> None:
+        # _no_live_calendar autouse fixture already makes live return {}
+        assert scanner.get_earnings_date("AAPL") == EARNINGS_CALENDAR["AAPL"]
+
+    def test_falls_back_to_static_when_live_missing_ticker(
+        self, scanner: EarningsScanner, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "scanner.earnings_scanner.fetch_earnings_calendar",
+            lambda: {"MSFT": "2099-02-02"},
+        )
+        assert scanner.get_earnings_date("AAPL") == EARNINGS_CALENDAR["AAPL"]
+
+    def test_live_lookup_is_case_insensitive(
+        self, scanner: EarningsScanner, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "scanner.earnings_scanner.fetch_earnings_calendar",
+            lambda: {"AAPL": "2099-01-01"},
+        )
+        assert scanner.get_earnings_date("aapl") == "2099-01-01"

@@ -1,0 +1,547 @@
+"""Tests for main.py's scanner-loop wiring."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import main as main_mod
+
+
+class _FakeScan:
+    """Minimal stand-in for a scanner result dataclass."""
+
+    def __init__(self, tag: str, error=None) -> None:
+        self.tag = tag
+        self.error = error
+
+
+def _fake_scanners():
+    """Stand-in for main._import_scanners()'s 12-tuple return."""
+
+    def scan_gex(ticker):
+        return _FakeScan("gex")
+
+    def fmt_gex(s):
+        return f"  GEX:{s.tag}"
+
+    def scan_oi(ticker):
+        return _FakeScan("oi")
+
+    def fmt_oi(s):
+        return f"  OI:{s.tag}"
+
+    def scan_iv(ticker):
+        return _FakeScan("iv")
+
+    def fmt_iv(s):
+        return f"  IV:{s.tag}"
+
+    def scan_skew(ticker):
+        return _FakeScan("skew")
+
+    def fmt_skew(s):
+        return f"  SKEW:{s.tag}"
+
+    def scan_pain(ticker):
+        return _FakeScan("pain")
+
+    def fmt_pain(s):
+        return f"  PAIN:{s.tag}"
+
+    def scan_disp(ticker, benchmark="SPY"):
+        return _FakeScan("disp")
+
+    def fmt_disp(s):
+        return f"  DISP:{s.tag}"
+
+    return (
+        scan_gex, fmt_gex, scan_oi, fmt_oi, scan_iv, fmt_iv,
+        scan_skew, fmt_skew, scan_pain, fmt_pain, scan_disp, fmt_disp,
+    )
+
+
+class TestRunOptionsScanners:
+    def test_returns_lines_and_raw_for_all_seven_scanners(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
+        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+        monkeypatch.setattr(
+            main_mod, "_scan_earnings_ticker",
+            lambda ticker, td=None: _FakeScan("earn"),
+        )
+        monkeypatch.setattr(
+            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}",
+        )
+        engine = MagicMock()
+
+        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+
+        assert len(lines) == 7
+        assert raw["gex"].tag == "gex"
+        assert raw["unusual_oi"].tag == "oi"
+        assert raw["iv_rank"].tag == "iv"
+        assert raw["skew"].tag == "skew"
+        assert raw["max_pain"].tag == "pain"
+        assert raw["dispersion"].tag == "disp"
+        assert raw["earnings"].tag == "earn"
+        engine.record_gex.assert_called_once_with("AAPL", raw["gex"])
+        engine.record_earnings.assert_called_once_with("AAPL", raw["earnings"])
+
+    def test_skip_gex_leaves_gex_raw_none(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
+        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+        monkeypatch.setattr(
+            main_mod, "_scan_earnings_ticker",
+            lambda ticker, td=None: _FakeScan("earn"),
+        )
+        monkeypatch.setattr(
+            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}",
+        )
+        engine = MagicMock()
+
+        lines, raw = main_mod.run_options_scanners("AAPL", engine, skip_gex=True)
+
+        assert raw["gex"] is None
+        assert len(lines) == 6
+        engine.record_gex.assert_not_called()
+
+    def test_scanner_exception_produces_error_line_and_none_raw(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        scanners = list(_fake_scanners())
+
+        def _boom(ticker):
+            raise RuntimeError("boom")
+
+        scanners[0] = _boom  # scan_gex
+        monkeypatch.setattr(main_mod, "_import_scanners", lambda: tuple(scanners))
+        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+        monkeypatch.setattr(
+            main_mod, "_scan_earnings_ticker",
+            lambda ticker, td=None: _FakeScan("earn"),
+        )
+        monkeypatch.setattr(
+            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}",
+        )
+        engine = MagicMock()
+
+        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+
+        assert raw["gex"] is None
+        assert any("GEX: ERROR" in line for line in lines)
+
+    def test_earnings_scanner_exception_produces_error_line(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
+        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+
+        def _boom(ticker, td=None):
+            raise RuntimeError("earnings api down")
+
+        monkeypatch.setattr(main_mod, "_scan_earnings_ticker", _boom)
+        engine = MagicMock()
+
+        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+
+        assert raw["earnings"] is None
+        assert any("EARN: ERROR" in line for line in lines)
+        engine.record_earnings.assert_not_called()
+
+    def test_earnings_none_result_skips_record_and_line(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
+        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+        monkeypatch.setattr(
+            main_mod, "_scan_earnings_ticker",
+            lambda ticker, td=None: None,
+        )
+        engine = MagicMock()
+
+        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+
+        assert raw["earnings"] is None
+        assert len(lines) == 6
+        engine.record_earnings.assert_not_called()
+
+
+class TestScanTrendingReturnsRaw:
+    def test_returns_alerts_and_cycle_raw(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        st = MagicMock()
+        st.get_trending.return_value = [{"symbol": "AAPL"}]
+        engine = MagicMock()
+
+        monkeypatch.setattr(main_mod, "scan_ticker", lambda st, t, e: None)
+        monkeypatch.setattr(
+            main_mod, "run_options_scanners",
+            lambda ticker, engine, benchmark, skip_gex: (
+                [f"  {ticker}: line"], {"gex": _FakeScan("gex")},
+            ),
+        )
+        monkeypatch.setattr(main_mod, "_youtube_scan", lambda t: None)
+        monkeypatch.setattr(main_mod.time, "sleep", lambda s: None)
+
+        alerts, cycle_raw = main_mod.scan_trending(st, engine, skip_youtube=True)
+
+        assert alerts == []
+        assert cycle_raw == {"AAPL": {"gex": cycle_raw["AAPL"]["gex"]}}
+        assert cycle_raw["AAPL"]["gex"].tag == "gex"
+
+
+class TestScanTrendingEarningsDigest:
+    def test_prints_digest_once_per_cycle_before_ticker_loop(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(
+            main_mod, "upcoming_earnings",
+            lambda days=7, static_fallback=None: [("AAPL", "2026-08-05")],
+        )
+        monkeypatch.setattr(
+            main_mod, "fetch_earnings_calendar",
+            lambda: {"AAPL": "2026-08-05"},
+        )
+        monkeypatch.setattr(
+            main_mod, "format_earnings_digest",
+            lambda entries, days=7, live=True: f"  DIGEST:{len(entries)}:live={live}",
+        )
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        alerts, cycle_raw = main_mod.scan_trending(st, engine)
+
+        captured = capsys.readouterr()
+        assert "DIGEST:1:live=True" in captured.out
+        assert alerts == []
+        assert cycle_raw == {}
+
+    def test_passes_static_calendar_as_fallback(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured_kwargs = {}
+
+        def _fake_upcoming(days=7, static_fallback=None):
+            captured_kwargs["days"] = days
+            captured_kwargs["static_fallback"] = static_fallback
+            return []
+
+        monkeypatch.setattr(main_mod, "upcoming_earnings", _fake_upcoming)
+        monkeypatch.setattr(main_mod, "fetch_earnings_calendar", lambda: {})
+        monkeypatch.setattr(
+            main_mod, "format_earnings_digest",
+            lambda entries, days=7, live=True: "  DIGEST",
+        )
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        main_mod.scan_trending(st, engine)
+
+        assert captured_kwargs["days"] == 7
+        assert captured_kwargs["static_fallback"] is main_mod.EARNINGS_CALENDAR
+
+    def test_live_false_when_live_calendar_empty(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured_kwargs = {}
+
+        monkeypatch.setattr(
+            main_mod, "upcoming_earnings",
+            lambda days=7, static_fallback=None: [],
+        )
+        monkeypatch.setattr(main_mod, "fetch_earnings_calendar", lambda: {})
+
+        def _fake_format(entries, days=7, live=True):
+            captured_kwargs["live"] = live
+            return "  DIGEST"
+
+        monkeypatch.setattr(main_mod, "format_earnings_digest", _fake_format)
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        main_mod.scan_trending(st, engine)
+
+        assert captured_kwargs["live"] is False
+
+    def test_live_is_driven_by_fetch_earnings_calendar_not_entries(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression test: `live` must come from `fetch_earnings_calendar()`
+        directly, not be inferred from whether `entries` is non-empty. Here
+        the live calendar has data (so live=True is correct) but nothing
+        falls inside the 7-day window (so entries=[]) — a buggy
+        `live = bool(entries)` implementation would report live=False and
+        pass the other tests in this class, which never separate the two
+        signals."""
+        captured_kwargs = {}
+
+        monkeypatch.setattr(
+            main_mod, "upcoming_earnings",
+            lambda days=7, static_fallback=None: [],
+        )
+        monkeypatch.setattr(
+            main_mod, "fetch_earnings_calendar",
+            lambda: {"AAPL": "2099-01-01"},  # live has data, just out of window
+        )
+
+        def _fake_format(entries, days=7, live=True):
+            captured_kwargs["entries"] = entries
+            captured_kwargs["live"] = live
+            return "  DIGEST"
+
+        monkeypatch.setattr(main_mod, "format_earnings_digest", _fake_format)
+        st = MagicMock()
+        st.get_trending.return_value = []
+        engine = MagicMock()
+
+        main_mod.scan_trending(st, engine)
+
+        assert captured_kwargs["entries"] == []
+        assert captured_kwargs["live"] is True
+
+
+class TestPromptYesNo:
+    def test_skip_true_returns_false_without_prompting(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        called = []
+        monkeypatch.setattr("builtins.input", lambda *_: called.append(1) or "y")
+        assert main_mod._prompt_yes_no("Q?", skip=True) is False
+        assert called == []
+
+    def test_non_tty_returns_false_without_prompting(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: False)
+        called = []
+        monkeypatch.setattr("builtins.input", lambda *_: called.append(1) or "y")
+        assert main_mod._prompt_yes_no("Q?") is False
+        assert called == []
+
+    def test_tty_yes_answer_returns_true(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda *_: "y")
+        assert main_mod._prompt_yes_no("Q?") is True
+
+    def test_tty_no_answer_returns_false(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda *_: "n")
+        assert main_mod._prompt_yes_no("Q?") is False
+
+    def test_tty_empty_answer_returns_false(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda *_: "")
+        assert main_mod._prompt_yes_no("Q?") is False
+
+
+class TestLaunchSectorRotation:
+    def test_invokes_subprocess_with_launcher_path_and_timeout(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append((cmd, kw))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "ok"
+            return result
+
+        monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+        main_mod._launch_sector_rotation()
+
+        assert len(calls) == 1
+        cmd, kwargs = calls[0]
+        assert cmd[0] == main_mod.sys.executable
+        assert cmd[1].endswith("sector_rotation_launcher.py")
+        assert kwargs["timeout"] == 1800
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+
+    def test_timeout_is_caught_and_reported(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    ) -> None:
+        def _fake_run(cmd, **kw):
+            raise main_mod.subprocess.TimeoutExpired(cmd, kw.get("timeout", 1800))
+
+        monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+        main_mod._launch_sector_rotation()  # must not raise
+
+        captured = capsys.readouterr()
+        assert "timed out" in captured.out.lower()
+
+
+class TestRawResultToDict:
+    def test_none_result_returns_error_dict(self) -> None:
+        assert main_mod._raw_result_to_dict("gex", None) == {"error": "no_data"}
+
+    def test_plain_object_converted_via_vars(self) -> None:
+        obj = _FakeScan("gex", error=None)
+        result = main_mod._raw_result_to_dict("gex", obj)
+        assert result == {"tag": "gex", "error": None}
+
+    def test_dict_passed_through(self) -> None:
+        result = main_mod._raw_result_to_dict("gex", {"a": 1})
+        assert result == {"a": 1}
+
+    def test_nested_dataclass_field_is_recursively_converted(self) -> None:
+        """CARL R1-F1 regression test: UnusualOiScan.top_strikes is
+        List[OiStrike] (a nested dataclass) — the converted dict must
+        contain plain dicts, not OiStrike objects, or report.py's
+        `.get('strike', 0)` calls on each entry raise AttributeError."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class _FakeStrike:
+            strike: float
+            right: str
+            oi: int
+
+        @dataclass
+        class _FakeOiScan:
+            ticker: str
+            top_strikes: list
+            error: object = None
+
+        scan = _FakeOiScan(
+            ticker="AAPL",
+            top_strikes=[_FakeStrike(strike=200.0, right="C", oi=500)],
+        )
+
+        result = main_mod._raw_result_to_dict("unusual_oi", scan)
+
+        assert result["ticker"] == "AAPL"
+        assert isinstance(result["top_strikes"][0], dict)
+        assert result["top_strikes"][0] == {
+            "strike": 200.0, "right": "C", "oi": 500,
+        }
+        # Prove it actually round-trips through .get() the way report.py uses it:
+        assert result["top_strikes"][0].get("strike", 0) == 200.0
+
+
+class TestMaybeBuildReport:
+    def test_skips_when_no_cycle_data(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        prompts = []
+        monkeypatch.setattr(
+            main_mod, "_prompt_yes_no",
+            lambda *a, **kw: prompts.append(1) or True,
+        )
+        main_mod._maybe_build_report(MagicMock(), {})
+        assert prompts == []
+
+    def test_skips_when_user_declines(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda *a, **kw: False)
+        report_calls = []
+        monkeypatch.setattr(
+            main_mod, "ScannerReport",
+            lambda **kw: report_calls.append(1),
+        )
+        main_mod._maybe_build_report(MagicMock(), {"AAPL": {"gex": None}})
+        assert report_calls == []
+
+    def test_builds_and_saves_report_when_confirmed(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda *a, **kw: True)
+
+        fake_report = MagicMock()
+        monkeypatch.setattr(main_mod, "ScannerReport", lambda **kw: fake_report)
+
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {
+            "signals": ["OI_SURGE"], "severity": "MEDIUM",
+        }
+
+        cycle_raw = {
+            "AAPL": {"gex": _FakeScan("gex"), "unusual_oi": None},
+        }
+
+        main_mod._maybe_build_report(engine, cycle_raw)
+
+        fake_report.add_ticker_results.assert_any_call(
+            "AAPL", "gex", {"tag": "gex", "error": None},
+        )
+        fake_report.add_ticker_results.assert_any_call(
+            "AAPL", "unusual_oi", {"error": "no_data"},
+        )
+        fake_report.add_signals.assert_called_once_with(
+            "AAPL", ["OI_SURGE"], "MEDIUM",
+        )
+        fake_report.save.assert_called_once_with(out_dir=main_mod.config.OUTPUT_DIR)
+
+
+class TestMainKeyboardInterruptBeforeFirstCycle:
+    """Regression test for a whole-branch-review finding: `cycle_raw` was
+    only bound inside the try block (by the first `scan_trending(...)`
+    call), so a KeyboardInterrupt raised *during* that first call — the
+    single longest-running window in the program (7 scanners x N tickers)
+    — hit the `except KeyboardInterrupt:` handler's `_maybe_build_report(
+    engine, cycle_raw, ...)` call with `cycle_raw` never assigned,
+    raising UnboundLocalError instead of shutting down cleanly."""
+
+    def test_interrupt_during_initial_scan_does_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_args = MagicMock()
+        fake_args.skip_sector_prompt = True
+        fake_args.skip_report_prompt = True
+        fake_args.no_loop = False
+        fake_args.benchmark = "SPY"
+        fake_args.skip_gex = False
+        fake_args.skip_youtube = False
+        fake_args.export_context_path = None
+        fake_args.launch_vol_suite = False
+        monkeypatch.setattr(main_mod, "_parse_args", lambda: fake_args)
+
+        st = MagicMock()
+        monkeypatch.setattr(main_mod, "StockTwitsScraper", lambda: st)
+        monkeypatch.setattr(main_mod, "CorrelationEngine", lambda: MagicMock())
+        monkeypatch.setattr(main_mod, "close_td", lambda: None)
+        monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda *a, **kw: False)
+
+        launch_calls = []
+        monkeypatch.setattr(
+            main_mod, "_launch_sector_rotation", lambda: launch_calls.append(1),
+        )
+
+        report_calls = []
+        monkeypatch.setattr(
+            main_mod, "_maybe_build_report",
+            lambda engine, cycle_raw, skip=False: report_calls.append(cycle_raw),
+        )
+
+        def _raise_interrupt(*a, **kw):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(main_mod, "scan_trending", _raise_interrupt)
+
+        main_mod.main()  # must not raise
+
+        assert report_calls == [{}]
+        assert launch_calls == []
+        st.close.assert_called_once()
