@@ -16,6 +16,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess
@@ -40,6 +41,7 @@ from scanner.earnings_calendar import (
     upcoming_earnings, format_earnings_digest, fetch_earnings_calendar,
 )
 from scanner.earnings_scanner import EARNINGS_CALENDAR
+from scanner.report import ScannerReport
 import config
 
 
@@ -124,6 +126,48 @@ def _launch_sector_rotation() -> None:
         print(f"  Could not launch Sector Rotation scanner: {e}")
 
 
+def _raw_result_to_dict(name: str, result: object) -> dict:
+    """Convert a scanner result object (or None) into a plain dict for
+    ScannerReport.add_ticker_results(). Report cards read fields via
+    dict.get(), so dataclass instances are converted with dataclasses.asdict(),
+    which recurses through nested dataclasses and lists of them (e.g.
+    UnusualOiScan.top_strikes: List[OiStrike] — see CARL R1-F1). A plain
+    vars()/dict() shallow copy would leave nested dataclass fields as
+    objects instead of dicts, breaking report.py's .get(...) calls on them.
+    """
+    if result is None:
+        return {"error": "no_data"}
+    if dataclasses.is_dataclass(result) and not isinstance(result, type):
+        return dataclasses.asdict(result)
+    if hasattr(result, "__dict__"):
+        return dict(vars(result))
+    return dict(result)
+
+
+def _maybe_build_report(engine, cycle_raw: dict, skip: bool = False) -> None:
+    """Prompt to build a PDF report for the most recently completed cycle.
+
+    Called once at shutdown (CARL R1-F5 / user decision "option B"), not
+    after every cycle — matching _launch_sector_rotation's cadence so a
+    user who leaves an open terminal running never finds the loop
+    blocked on an unattended input() mid-session.
+    """
+    if not cycle_raw:
+        return
+    if not _prompt_yes_no("Generate PDF report for the last completed run?", skip=skip):
+        return
+
+    tickers = sorted(cycle_raw.keys())
+    report = ScannerReport(title="Sentiment Scanner Report", tickers=tickers)
+    for ticker, raw in cycle_raw.items():
+        for name, result in raw.items():
+            report.add_ticker_results(ticker, name, _raw_result_to_dict(name, result))
+        signals = engine.correlate_with_oi(ticker, {})
+        report.add_signals(ticker, signals.get("signals", []), signals.get("severity", "LOW"))
+
+    report.save(out_dir=config.OUTPUT_DIR)
+
+
 def _write_context_export(path: str, run_id: str, pack: dict) -> None:
     payload = {
         "schema_version": 2,
@@ -180,6 +224,11 @@ def _parse_args() -> argparse.Namespace:
         "--skip-sector-prompt",
         action="store_true",
         help="Don't prompt to launch the Sector Rotation scanner at startup/shutdown.",
+    )
+    parser.add_argument(
+        "--skip-report-prompt",
+        action="store_true",
+        help="Don't prompt to generate a PDF report at shutdown.",
     )
     parser.add_argument(
         "--launch-vol-suite",
@@ -457,6 +506,7 @@ def main():
                 skip=args.skip_sector_prompt,
             ):
                 _launch_sector_rotation()
+            _maybe_build_report(engine, cycle_raw, skip=args.skip_report_prompt)
             return
 
         while True:
@@ -486,6 +536,7 @@ def main():
             skip=args.skip_sector_prompt,
         ):
             _launch_sector_rotation()
+        _maybe_build_report(engine, cycle_raw, skip=args.skip_report_prompt)
     finally:
         st.close()
         close_td()

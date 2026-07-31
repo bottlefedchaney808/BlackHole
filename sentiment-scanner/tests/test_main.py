@@ -390,3 +390,106 @@ class TestLaunchSectorRotation:
 
         captured = capsys.readouterr()
         assert "timed out" in captured.out.lower()
+
+
+class TestRawResultToDict:
+    def test_none_result_returns_error_dict(self) -> None:
+        assert main_mod._raw_result_to_dict("gex", None) == {"error": "no_data"}
+
+    def test_plain_object_converted_via_vars(self) -> None:
+        obj = _FakeScan("gex", error=None)
+        result = main_mod._raw_result_to_dict("gex", obj)
+        assert result == {"tag": "gex", "error": None}
+
+    def test_dict_passed_through(self) -> None:
+        result = main_mod._raw_result_to_dict("gex", {"a": 1})
+        assert result == {"a": 1}
+
+    def test_nested_dataclass_field_is_recursively_converted(self) -> None:
+        """CARL R1-F1 regression test: UnusualOiScan.top_strikes is
+        List[OiStrike] (a nested dataclass) — the converted dict must
+        contain plain dicts, not OiStrike objects, or report.py's
+        `.get('strike', 0)` calls on each entry raise AttributeError."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class _FakeStrike:
+            strike: float
+            right: str
+            oi: int
+
+        @dataclass
+        class _FakeOiScan:
+            ticker: str
+            top_strikes: list
+            error: object = None
+
+        scan = _FakeOiScan(
+            ticker="AAPL",
+            top_strikes=[_FakeStrike(strike=200.0, right="C", oi=500)],
+        )
+
+        result = main_mod._raw_result_to_dict("unusual_oi", scan)
+
+        assert result["ticker"] == "AAPL"
+        assert isinstance(result["top_strikes"][0], dict)
+        assert result["top_strikes"][0] == {
+            "strike": 200.0, "right": "C", "oi": 500,
+        }
+        # Prove it actually round-trips through .get() the way report.py uses it:
+        assert result["top_strikes"][0].get("strike", 0) == 200.0
+
+
+class TestMaybeBuildReport:
+    def test_skips_when_no_cycle_data(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        prompts = []
+        monkeypatch.setattr(
+            main_mod, "_prompt_yes_no",
+            lambda *a, **kw: prompts.append(1) or True,
+        )
+        main_mod._maybe_build_report(MagicMock(), {})
+        assert prompts == []
+
+    def test_skips_when_user_declines(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda *a, **kw: False)
+        report_calls = []
+        monkeypatch.setattr(
+            main_mod, "ScannerReport",
+            lambda **kw: report_calls.append(1),
+        )
+        main_mod._maybe_build_report(MagicMock(), {"AAPL": {"gex": None}})
+        assert report_calls == []
+
+    def test_builds_and_saves_report_when_confirmed(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda *a, **kw: True)
+
+        fake_report = MagicMock()
+        monkeypatch.setattr(main_mod, "ScannerReport", lambda **kw: fake_report)
+
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {
+            "signals": ["OI_SURGE"], "severity": "MEDIUM",
+        }
+
+        cycle_raw = {
+            "AAPL": {"gex": _FakeScan("gex"), "unusual_oi": None},
+        }
+
+        main_mod._maybe_build_report(engine, cycle_raw)
+
+        fake_report.add_ticker_results.assert_any_call(
+            "AAPL", "gex", {"tag": "gex", "error": None},
+        )
+        fake_report.add_ticker_results.assert_any_call(
+            "AAPL", "unusual_oi", {"error": "no_data"},
+        )
+        fake_report.add_signals.assert_called_once_with(
+            "AAPL", ["OI_SURGE"], "MEDIUM",
+        )
+        fake_report.save.assert_called_once_with(out_dir=main_mod.config.OUTPUT_DIR)
