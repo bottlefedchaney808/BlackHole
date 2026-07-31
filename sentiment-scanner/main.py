@@ -193,7 +193,7 @@ def _write_context_export(path: str, run_id: str, pack: dict) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sentiment scanner + 6 options scanners + correlation."
+        description="Sentiment scanner + 7 options scanners + correlation."
     )
     parser.add_argument(
         "--export-context",
@@ -467,6 +467,7 @@ def main():
 
     st = StockTwitsScraper()
     engine = CorrelationEngine()
+    cycle_raw = {}
     try:
         run_id = _make_run_id()
         alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)

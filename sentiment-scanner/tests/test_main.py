@@ -493,3 +493,55 @@ class TestMaybeBuildReport:
             "AAPL", ["OI_SURGE"], "MEDIUM",
         )
         fake_report.save.assert_called_once_with(out_dir=main_mod.config.OUTPUT_DIR)
+
+
+class TestMainKeyboardInterruptBeforeFirstCycle:
+    """Regression test for a whole-branch-review finding: `cycle_raw` was
+    only bound inside the try block (by the first `scan_trending(...)`
+    call), so a KeyboardInterrupt raised *during* that first call — the
+    single longest-running window in the program (7 scanners x N tickers)
+    — hit the `except KeyboardInterrupt:` handler's `_maybe_build_report(
+    engine, cycle_raw, ...)` call with `cycle_raw` never assigned,
+    raising UnboundLocalError instead of shutting down cleanly."""
+
+    def test_interrupt_during_initial_scan_does_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_args = MagicMock()
+        fake_args.skip_sector_prompt = True
+        fake_args.skip_report_prompt = True
+        fake_args.no_loop = False
+        fake_args.benchmark = "SPY"
+        fake_args.skip_gex = False
+        fake_args.skip_youtube = False
+        fake_args.export_context_path = None
+        fake_args.launch_vol_suite = False
+        monkeypatch.setattr(main_mod, "_parse_args", lambda: fake_args)
+
+        st = MagicMock()
+        monkeypatch.setattr(main_mod, "StockTwitsScraper", lambda: st)
+        monkeypatch.setattr(main_mod, "CorrelationEngine", lambda: MagicMock())
+        monkeypatch.setattr(main_mod, "close_td", lambda: None)
+        monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda *a, **kw: False)
+
+        launch_calls = []
+        monkeypatch.setattr(
+            main_mod, "_launch_sector_rotation", lambda: launch_calls.append(1),
+        )
+
+        report_calls = []
+        monkeypatch.setattr(
+            main_mod, "_maybe_build_report",
+            lambda engine, cycle_raw, skip=False: report_calls.append(cycle_raw),
+        )
+
+        def _raise_interrupt(*a, **kw):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(main_mod, "scan_trending", _raise_interrupt)
+
+        main_mod.main()  # must not raise
+
+        assert report_calls == [{}]
+        assert launch_calls == []
+        st.close.assert_called_once()
