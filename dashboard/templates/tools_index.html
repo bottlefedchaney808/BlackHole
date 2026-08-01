@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Tools -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<h1>Tools</h1>
+<p class="sub">
+  Standalone quant-finance tools that run against a suite's saved context, rather than being locked into one suite.
+</p>
+
+<div class="panel">
+  <header><h2>How to use this</h2></header>
+  <div class="body">
+    <p class="small">
+      A <strong>context</strong> is a file called <code>suite_context.json</code>, written automatically every time
+      one of the suites (Vol_Suite, Options_Suite, VaR_Tools_Simulations, sentiment-scanner) or the root
+      <code>orchestrator.py</code> finishes a unified run. Think of it as a claim ticket: it records which ticker,
+      expiration, and analysis a run already did, so a Tool can pick up right where that run left off instead of
+      redoing the setup.
+    </p>
+    <p class="small">
+      To use a tool, first run a suite's unified flow for the ticker you care about (from the
+      <a href="/">Overview</a> page's "Trigger a run" panel, choosing a <code>unified</code> target), then come back
+      here once it finishes -- its context will show up in the list below and in each tool's context picker. Pick a
+      context, choose a mode, and run.
+    </p>
+  </div>
+</div>
+
+<div class="panel">
+  <header>
+    <h2>Installed tools</h2>
+    <span class="note">from Tools.registry.TOOLS</span>
+  </header>
+  {% if not tools %}
+  <div class="body"><div class="empty">No tools registered.</div></div>
+  {% else %}
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>name</th><th>slug</th><th>description</th><th></th></tr></thead>
+      <tbody>
+      {% for t in tools %}
+        <tr>
+          <td><strong>{{ t.name }}</strong></td>
+          <td class="mono small">{{ t.slug }}</td>
+          <td class="wrap small">{{ t.description }}</td>
+          <td>
+            {% if t.slug == 'options-strategy' %}
+              <a href="/tools/options-strategy">Open &rarr;</a>
+            {% elif t.slug == 'backtesting' %}
+              <a href="/tools/backtest">Open &rarr;</a>
+            {% else %}
+              <span class="muted">--</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <header>
+    <h2>Available contexts</h2>
+    <span class="note">Tools.context_loader.list_available_contexts() &middot; newest first</span>
+  </header>
+  {% if contexts_error %}
+    <div class="body"><div class="errbox">{{ contexts_error }}</div></div>
+  {% elif not contexts %}
+    <div class="body"><div class="empty">
+      No suite_context.json files found yet. Run a suite's unified flow from the <a href="/">Overview</a> page first.
+    </div></div>
+  {% else %}
+  <div class="tablewrap scrollbox">
+    <table>
+      <thead><tr>
+        <th>ticker</th><th>suite</th><th>run_id</th><th>created_at (UTC)</th><th>status</th><th class="wrap">path</th>
+      </tr></thead>
+      <tbody>
+      {% for c in contexts %}
+        <tr>
+          <td><strong>{{ c.ticker or '--' }}</strong></td>
+          <td>{{ c.suite }}</td>
+          <td class="mono small">{{ c.run_id or '--' }}</td>
+          <td class="mono small">{{ c.created_at_utc | ts }}</td>
+          <td>
+            {% if c.valid %}<span class="pill ok">valid</span>
+            {% else %}<span class="pill error">invalid</span>{% endif %}
+          </td>
+          <td class="wrap small mono muted">
+            {{ c.path }}
+            {% if not c.valid and c.error %}<div class="small" style="color:var(--err);">{{ c.error }}</div>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

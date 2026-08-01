@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from thetadata_client import ThetaDataController, strike_to_theta, strike_from_theta
 from correlation_engine import fetch_price_history
 import expiry_selector
+from vs_utils import timestamped_output_dir
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
@@ -389,7 +390,7 @@ def main():
         # Export option
         choice = input("\nExport screener results to CSV? (y/n): ").strip().lower()
         if choice == 'y':
-            out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+            out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             data = []
             for r in results:
@@ -419,7 +420,7 @@ if __name__ == "__main__":
 def run_variance_screener(tickers: List[str] = None, target_years: float = 0.25,
                           output_dir: str = None) -> list:
     """Programmatic runner for the variance screener. Returns list of generated files."""
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     if tickers is None:
         default_list = "GME,SPY,AAPL,TSLA,QQQ,AMZN,MSFT,NVDA,GOOGL,META"

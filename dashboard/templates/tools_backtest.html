@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Backtesting Tool -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<h1>Backtesting Tool</h1>
+<p class="sub">
+  Two backtests in one tool: a dealer-gamma-sign realized-vol study, or a multi-leg strategy P&amp;L simulation.
+  <a href="/tools">&larr; back to Tools</a>
+</p>
+
+<div class="panel">
+  <header><h2>How to use this</h2></header>
+  <div class="body">
+    <p class="small">
+      A <strong>context</strong> comes from running a suite's unified flow (see the <a href="/">Overview</a> page's
+      "Trigger a run" panel) -- it records a ticker, expiration, and (if the run included an options chain scan) a
+      list of recommended strategies. Pick the context for the run you care about below.
+    </p>
+    <p class="small">
+      <strong>dealer_gamma_study</strong> tests whether dealer gamma sign (long vs. short) predicted subsequent
+      realized volatility over that context's ticker/expiration/lookback window -- no strategy selection needed.
+      <strong>strategy_pnl</strong> simulates one specific multi-leg strategy's profit/loss from an entry date to an
+      exit (or expiration) date; pick the strategy from the context's own recommended list (populated by the
+      Options Strategy Tool during that run) and give it an entry date (YYYYMMDD).
+    </p>
+  </div>
+</div>
+
+{% if contexts_error %}<div class="errbox">{{ contexts_error }}</div>{% endif %}
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Run</h2></header>
+  <div class="body">
+    <form class="runform" method="post" action="/tools/backtest" id="backtestform">
+      <div class="field" style="min-width:340px;">
+        <label for="context_path">Context</label>
+        <select id="context_path" name="context_path" required onchange="onContextChange()">
+          <option value="" {{ 'selected' if not selected_path else '' }}>-- choose a context --</option>
+          {% for c in contexts if c.valid %}
+          <option value="{{ c.path }}" {{ 'selected' if c.path == selected_path else '' }}>
+            {{ c.ticker or '?' }} &middot; {{ c.suite }} &middot; {{ c.run_id }} &middot; {{ c.created_at_utc | ts }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode" onchange="onModeChange()">
+          <option value="dealer_gamma_study" {{ 'selected' if selected_mode == 'dealer_gamma_study' else '' }}>dealer_gamma_study</option>
+          <option value="strategy_pnl" {{ 'selected' if selected_mode == 'strategy_pnl' else '' }}>strategy_pnl</option>
+        </select>
+      </div>
+      <div class="field" id="strategy_field" style="display:none; min-width:320px;">
+        <label for="strategy_index">Strategy</label>
+        <select id="strategy_index" name="strategy_index"></select>
+      </div>
+      <div class="field" id="entry_date_field" style="display:none;">
+        <label for="entry_date">Entry date (YYYYMMDD)</label>
+        <input id="entry_date" name="entry_date" value="{{ entry_date }}" placeholder="20260801" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="exit_date_field" style="display:none;">
+        <label for="exit_date">Exit date (optional)</label>
+        <input id="exit_date" name="exit_date" value="{{ exit_date }}" placeholder="hold to expiry" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="contract_multiplier_field" style="display:none;">
+        <label for="contract_multiplier">Contract multiplier</label>
+        <input id="contract_multiplier" name="contract_multiplier" value="{{ contract_multiplier }}" size="8" autocomplete="off">
+      </div>
+      <button type="submit">Run tool</button>
+    </form>
+  </div>
+</div>
+
+{% if result %}
+<div class="panel">
+  <header>
+    <h2>Result</h2>
+    <span class="note">mode {{ result.mode }}</span>
+  </header>
+  {% if result.report %}
+  <div class="body">
+    <pre class="json">{{ result.report }}</pre>
+  </div>
+  {% endif %}
+  <div class="body">
+    <details>
+      <summary class="muted small" style="cursor:pointer;">raw JSON</summary>
+      <pre class="json" style="margin-top:8px;">{{ result_json }}</pre>
+    </details>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+var STRATEGY_MAP = {{ strategy_map_json | safe }};
+var INITIAL_STRATEGY_INDEX = {{ strategy_index }};
+
+function onModeChange() {
+  var mode = document.getElementById('mode').value;
+  var isStrategyPnl = mode === 'strategy_pnl';
+  document.getElementById('strategy_field').style.display = isStrategyPnl ? 'flex' : 'none';
+  document.getElementById('entry_date_field').style.display = isStrategyPnl ? 'flex' : 'none';
+  document.getElementById('exit_date_field').style.display = isStrategyPnl ? 'flex' : 'none';
+  document.getElementById('contract_multiplier_field').style.display = isStrategyPnl ? 'flex' : 'none';
+}
+
+function onContextChange() {
+  var path = document.getElementById('context_path').value;
+  var sel = document.getElementById('strategy_index');
+  sel.innerHTML = '';
+  var info = STRATEGY_MAP[path];
+  if (!info || !info.strategies || !info.strategies.length) {
+    var opt = document.createElement('option');
+    opt.value = '0';
+    opt.textContent = 'no strategies recorded for this context';
+    sel.appendChild(opt);
+    return;
+  }
+  info.strategies.forEach(function (s) {
+    var opt = document.createElement('option');
+    opt.value = String(s.index);
+    opt.textContent = '#' + s.index + ' ' + (s.strategy_type || '?') + ' (' + (s.vol_regime || '?') + ') -- ' + (s.rationale || '');
+    if (s.index === INITIAL_STRATEGY_INDEX) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+onModeChange();
+onContextChange();
+</script>
+{% endblock %}

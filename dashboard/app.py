@@ -61,6 +61,8 @@ from swaps_query import SwapsQuery  # noqa: E402
 from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary  # noqa: E402
 from dashboard.auth import verify_api_key, get_client_ip  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
+from Tools.registry import TOOLS, get_tool  # noqa: E402
+from Tools.context_loader import list_available_contexts, load_context  # noqa: E402
 
 # Setup structured JSON logging
 logger = setup_logging(
@@ -796,6 +798,235 @@ def suite_output(request: Request, suite: str):
         'view': view,
         'error': error,
         'suites': SUITE_OUTPUT_GLOBS,
+    })
+
+
+# --------------------------------------------------------------------------
+# Tools/ (options-strategy, backtesting) -- views over the standalone
+# Tools/ plugin framework, which itself only depends on a suite's
+# suite_context.json handoff (see Tools/README.md).
+# --------------------------------------------------------------------------
+
+def _tools_contexts() -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """list_available_contexts(), or an empty list plus the error text.
+
+    Degrades the same way the rest of this module does -- a broken suite
+    root or unreadable output directory should render an empty picker with
+    an error banner, not a 500.
+    """
+    try:
+        return list_available_contexts(), None
+    except Exception as e:
+        return [], f'{type(e).__name__}: {e}'
+
+
+def _load_selected_context(context_path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """load_context(path), plus an `_output_dir_override` pointed at the
+    directory the file actually lives in on THIS machine.
+
+    context["output_dir"] is whatever path the suite run recorded at build
+    time, which may belong to a different machine/OS than the one the
+    dashboard is running on right now (this is exactly the gap
+    context_loader's and options_strategy_tool's docstrings call out). The
+    context file's own on-disk location is always correct for this
+    machine, so tools are pointed at that instead of trusting the recorded
+    output_dir literally.
+    """
+    if not context_path:
+        return None, 'context is required'
+    try:
+        context = load_context(context_path)
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
+    context['_output_dir_override'] = os.path.dirname(context_path)
+    return context, None
+
+
+def _strategy_map(contexts: List[Dict[str, Any]]) -> str:
+    """path -> {ticker, expiration_date, strategies: [{index, strategy_type,
+    vol_regime, rationale}]}, JSON-encoded, for the backtest form's JS to
+    populate the strategy-picker dropdown once a context is chosen without
+    a round-trip to the server.
+
+    Loads each *valid* context in full (list_available_contexts only
+    returns a lightweight summary) -- there are at most a handful of
+    contexts in practice, so this is cheap; any context that fails to
+    (re)load here is simply left out of the map rather than failing the
+    whole page.
+    """
+    out: Dict[str, Any] = {}
+    for c in contexts:
+        if not c.get('valid') or not c.get('path'):
+            continue
+        try:
+            full = load_context(c['path'])
+        except Exception:
+            continue
+        strategies = full.get('strategies') or []
+        out[c['path']] = {
+            'ticker': (full.get('focus') or {}).get('ticker'),
+            'expiration_date': (full.get('focus') or {}).get('expiration_date'),
+            'strategies': [
+                {
+                    'index': i,
+                    'strategy_type': s.get('strategy_type'),
+                    'vol_regime': s.get('vol_regime'),
+                    'rationale': s.get('rationale'),
+                }
+                for i, s in enumerate(strategies)
+            ],
+        }
+    return json.dumps(out, default=str)
+
+
+def _run_tool_safe(slug: str, context: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    try:
+        tool = get_tool(slug)
+    except KeyError as e:
+        return None, str(e)
+    try:
+        return tool.run(context), None
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
+
+
+@app.get('/tools', response_class=HTMLResponse)
+def tools_index(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_index.html', {
+        'active': 'tools',
+        'tools': TOOLS,
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+    })
+
+
+@app.get('/tools/options-strategy', response_class=HTMLResponse)
+def tools_options_strategy_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_options_strategy.html', {
+        'active': 'tools',
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+        'selected_path': '',
+        'selected_mode': 'cached',
+        'result': None,
+        'result_json': None,
+        'error': None,
+    })
+
+
+@app.post('/tools/options-strategy', response_class=HTMLResponse)
+async def tools_options_strategy_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+
+    context_path = str(body.get('context_path') or '').strip()
+    mode = str(body.get('mode') or 'cached').strip().lower()
+
+    context, error = _load_selected_context(context_path)
+    result = None
+    if context is not None:
+        context['mode'] = mode
+        result, run_error = _run_tool_safe('options-strategy', context)
+        if run_error:
+            error = run_error
+
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_options_strategy.html', {
+        'active': 'tools',
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+        'selected_path': context_path,
+        'selected_mode': mode,
+        'result': result,
+        'result_json': result_json,
+        'error': error,
+    })
+
+
+@app.get('/tools/backtest', response_class=HTMLResponse)
+def tools_backtest_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_backtest.html', {
+        'active': 'tools',
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+        'strategy_map_json': _strategy_map(contexts),
+        'selected_path': '',
+        'selected_mode': 'dealer_gamma_study',
+        'entry_date': '',
+        'exit_date': '',
+        'expiry': '',
+        'strategy_index': 0,
+        'contract_multiplier': '100',
+        'result': None,
+        'result_json': None,
+        'error': None,
+    })
+
+
+@app.post('/tools/backtest', response_class=HTMLResponse)
+async def tools_backtest_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+
+    context_path = str(body.get('context_path') or '').strip()
+    mode = str(body.get('mode') or 'dealer_gamma_study').strip().lower()
+    entry_date = str(body.get('entry_date') or '').strip()
+    exit_date = str(body.get('exit_date') or '').strip()
+    expiry = str(body.get('expiry') or '').strip()
+    contract_multiplier = str(body.get('contract_multiplier') or '100').strip()
+    strategy_index_raw = str(body.get('strategy_index') or '0').strip()
+
+    context, error = _load_selected_context(context_path)
+    result = None
+    strategy_index = 0
+
+    if context is not None:
+        context['mode'] = mode
+        if expiry:
+            context['expiry'] = expiry
+        if contract_multiplier:
+            try:
+                context['contract_multiplier'] = float(contract_multiplier)
+            except ValueError:
+                error = f'contract_multiplier must be numeric, got {contract_multiplier!r}'
+
+        if mode == 'strategy_pnl' and error is None:
+            if not entry_date:
+                error = "entry_date is required for mode='strategy_pnl'"
+            else:
+                context['entry_date'] = entry_date
+                if exit_date:
+                    context['exit_date'] = exit_date
+                try:
+                    strategy_index = int(strategy_index_raw or 0)
+                except ValueError:
+                    strategy_index = 0
+                context['strategy_index'] = strategy_index
+
+        if error is None:
+            result, run_error = _run_tool_safe('backtesting', context)
+            if run_error:
+                error = run_error
+
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_backtest.html', {
+        'active': 'tools',
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+        'strategy_map_json': _strategy_map(contexts),
+        'selected_path': context_path,
+        'selected_mode': mode,
+        'entry_date': entry_date,
+        'exit_date': exit_date,
+        'expiry': expiry,
+        'strategy_index': strategy_index,
+        'contract_multiplier': contract_multiplier,
+        'result': result,
+        'result_json': result_json,
+        'error': error,
     })
 
 

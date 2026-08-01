@@ -59,7 +59,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats as _scipy_stats
 
-from thetadata_client import ThetaDataController, strike_from_theta
+from thetadata_client import ThetaDataController, strike_from_theta, strike_to_theta
 import expiry_selector
 import implied_vol as implied_vol_mod
 import replication_reference
@@ -471,6 +471,276 @@ def format_backtest_report(result: BacktestResult) -> str:
         "diff supports the model; a larger, more significant diff for v2 than "
         "v1 means the richer sign convention is reading something real, not "
         "just producing a more sophisticated-looking chart.",
+    ]
+    return "\n".join(lines)
+
+
+
+# ---------------------------------------------------------------------------
+# General strategy P&L backtester
+#
+# A second, independent capability bolted onto this module: given a
+# multi-leg options strategy recommendation (strategy_recommender.py's
+# StrategyRecommendation, or the equivalent JSON dict shape produced by its
+# _strategy_to_dict / carried in a suite_context.json "strategies" list --
+# see suite_context.validate_suite_context's strategies-schema section for
+# the canonical dict contract), simulate the strategy's P&L from an entry
+# date to an exit date (default: hold to expiration).
+#
+# Same network/pure-function split as the Stage 3 code above:
+# run_strategy_backtest is the orchestrator that resolves theta strikes and
+# pulls per-contract historical EOD prices (and, if the exit falls at/after
+# expiration, the underlying's spot history for an intrinsic-value payoff);
+# _run_strategy_backtest_from_history is the pure function tested directly
+# with synthetic entry/exit price maps in tests/test_strategy_backtest.py.
+#
+# This is intentionally independent of DayRecord/BacktestResult and every
+# function above it -- it does not modify, call, or depend on any of the
+# Stage 3 dealer-gamma-sign validation code, and nothing above this comment
+# has been touched.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StrategyBacktestResult:
+    strategy_type: str
+    legs: List[dict]
+    entry_date: str
+    exit_date: str
+    entry_cost: float   # net debit paid (positive) or credit received (negative) to open
+    exit_value: float   # net value received (positive) or owed (negative) to close/settle
+    pnl: float           # exit_value - entry_cost
+    pnl_pct: float        # pnl / abs(entry_cost) * 100; nan if entry_cost == 0
+    contract_multiplier: float = 100.0
+
+
+def _leg_key(leg: dict) -> Tuple[float, str]:
+    """(strike, instrument_type) identity for a leg -- matches both
+    StrategyLeg (via dataclasses.asdict/_strategy_to_dict) and a plain dict
+    read straight out of a suite_context.json "strategies" entry, since both
+    shapes carry 'strike' and 'instrument_type' fields.
+    """
+    return (float(leg['strike']), leg['instrument_type'])
+
+
+def _leg_intrinsic_value(strike: float, instrument_type: str, spot: float) -> float:
+    """Payoff at/after expiration: max(S-K, 0) for a call, max(K-S, 0) for a
+    put -- the option's only remaining value once there's no time left.
+    """
+    if instrument_type == 'call':
+        return max(spot - strike, 0.0)
+    return max(strike - spot, 0.0)
+
+
+def _run_strategy_backtest_from_history(
+    strategy: dict,
+    entry_date: str,
+    exit_date: str,
+    expiry: str,
+    entry_prices: Dict[Tuple[float, str], float],
+    exit_prices: Dict[Tuple[float, str], float],
+    exit_spot: Optional[float] = None,
+    contract_multiplier: float = 100.0,
+) -> StrategyBacktestResult:
+    """Pure function over already-resolved per-leg prices -- the part
+    tests/test_strategy_backtest.py exercises directly with synthetic data,
+    same split as _run_backtest_from_history above.
+
+    entry_prices / exit_prices: {(strike, instrument_type): premium} maps,
+    one quote per leg, in the SAME per-share units as `strike` (the caller
+    is responsible for handing over a market mid/close, not a raw bid or
+    ask). Entry always prices off entry_prices (a strategy is always opened
+    while the contract is still alive). Exit prices off exit_prices UNLESS
+    exit_date is at or after expiry (lexicographic YYYYMMDD comparison,
+    same convention _build_day_records uses), in which case the leg is
+    already expired and is priced at INTRINSIC value off exit_spot instead
+    -- there is no market quote for a dead contract.
+
+    Quantity sign (positive = long, negative = short, per StrategyLeg) is
+    respected on both sides: entry_cost = sum(qty * entry_price) is a net
+    debit (positive) for a net-long strategy or a net credit (negative,
+    i.e. money received) for a net-short one; exit_value is the same sum
+    computed against exit prices, so pnl = exit_value - entry_cost is
+    always "what you'd have in hand at the end" minus "what it cost to
+    get in", with the correct sign for both long and short legs.
+    """
+    legs = strategy['legs']
+    if not legs:
+        raise ValueError(f"strategy {strategy.get('strategy_type')!r} has no legs to backtest")
+
+    expired = exit_date >= expiry
+
+    entry_cost = 0.0
+    exit_value = 0.0
+    missing_entry: List[Tuple[float, str]] = []
+    missing_exit: List[Tuple[float, str]] = []
+
+    for leg in legs:
+        key = _leg_key(leg)
+        qty = int(leg['quantity'])
+
+        entry_px = entry_prices.get(key)
+        if entry_px is None:
+            missing_entry.append(key)
+            continue
+        entry_cost += qty * entry_px * contract_multiplier
+
+        if expired:
+            if exit_spot is None:
+                raise ValueError(
+                    f"exit_date {exit_date} is at/past expiry {expiry} for leg {key}, "
+                    f"but no exit_spot was supplied to price its intrinsic value."
+                )
+            exit_px = _leg_intrinsic_value(key[0], key[1], exit_spot)
+        else:
+            exit_px = exit_prices.get(key)
+            if exit_px is None:
+                missing_exit.append(key)
+                continue
+        exit_value += qty * exit_px * contract_multiplier
+
+    if missing_entry:
+        raise ValueError(
+            f"Missing entry price(s) for leg(s) {missing_entry} on {entry_date} -- "
+            f"cannot compute entry cost."
+        )
+    if missing_exit:
+        raise ValueError(
+            f"Missing exit price(s) for leg(s) {missing_exit} on {exit_date} -- "
+            f"cannot compute exit value."
+        )
+
+    pnl = exit_value - entry_cost
+    pnl_pct = (pnl / abs(entry_cost) * 100.0) if entry_cost != 0 else float('nan')
+
+    return StrategyBacktestResult(
+        strategy_type=strategy['strategy_type'],
+        legs=legs,
+        entry_date=entry_date,
+        exit_date=exit_date,
+        entry_cost=entry_cost,
+        exit_value=exit_value,
+        pnl=pnl,
+        pnl_pct=pnl_pct,
+        contract_multiplier=contract_multiplier,
+    )
+
+
+def run_strategy_backtest(
+    strategy: dict,
+    ticker: str,
+    expiry: str,
+    entry_date: str,
+    exit_date: Optional[str] = None,
+    contract_multiplier: float = 100.0,
+) -> StrategyBacktestResult:
+    """Network-touching orchestrator: pulls each leg's per-contract EOD
+    price history from ThetaData (option_hist_eod_single, same route
+    _build_day_records' price-reconstruction path relies on for mid
+    pricing), plus the underlying's spot history if the exit falls at/after
+    expiration, and hands everything to the pure function above.
+
+    `expiry`: the strategy's expiration date (YYYYMMDD) -- not carried on
+    the strategy dict itself (strategy_recommender._strategy_to_dict has no
+    expiry field; format_strategies_artifact carries it one level up, as
+    top-level 'expiration_date'), so the caller supplies it explicitly.
+
+    `exit_date`: configurable horizon parameter. Defaults to None, meaning
+    "hold to expiration" -- exit_date is then set to `expiry` and every leg
+    is settled at intrinsic value off the underlying's closing spot.
+    """
+    exit_date = exit_date or expiry
+    expired = exit_date >= expiry
+
+    fmt = "%Y%m%d"
+    # Same calendar-day slack idea as run_backtest's pad_days: entry_date or
+    # exit_date landing on a weekend/holiday shouldn't cause a miss, so pad
+    # a few days on each side of the requested window.
+    start_dt = datetime.strptime(entry_date, fmt) - timedelta(days=5)
+    end_anchor = min(datetime.strptime(exit_date, fmt), datetime.strptime(expiry, fmt))
+    end_dt = end_anchor + timedelta(days=5)
+    start_str, end_str = start_dt.strftime(fmt), end_dt.strftime(fmt)
+
+    right_map = {'call': 'C', 'put': 'P'}
+
+    td = ThetaDataController()
+    try:
+        entry_prices: Dict[Tuple[float, str], float] = {}
+        exit_prices: Dict[Tuple[float, str], float] = {}
+
+        for leg in strategy['legs']:
+            strike = float(leg['strike'])
+            instrument_type = leg['instrument_type']
+            right = right_map.get(instrument_type, str(instrument_type)[:1].upper())
+            k_theta = strike_to_theta(strike)
+
+            rows = td.option_hist_eod_single(ticker, expiry, k_theta, right, start_str, end_str)
+            by_date: Dict[str, float] = {}
+            for row in rows:
+                d = replication_reference._parse_hist_date(row)
+                if not d:
+                    continue
+                px = implied_vol_mod.mid_price(row.get('bid'), row.get('ask'), row.get('close'))
+                if px is not None:
+                    by_date[d] = px
+
+            key = (strike, instrument_type)
+            if entry_date in by_date:
+                entry_prices[key] = by_date[entry_date]
+            if not expired and exit_date in by_date:
+                exit_prices[key] = by_date[exit_date]
+
+        exit_spot = None
+        if expired:
+            spot_rows = td.hist_stock_eod(ticker, start_str, end_str)
+            spot_by_date: Dict[str, float] = {}
+            for row in spot_rows:
+                d = row.get('date') or replication_reference._parse_hist_date(row)
+                try:
+                    c = float(row.get('close', 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if d and c > 0:
+                    spot_by_date[d] = c
+            exit_spot = spot_by_date.get(exit_date)
+            if exit_spot is None and spot_by_date:
+                # Expiration day itself may not have printed an EOD close
+                # yet (or landed on a non-trading day) -- fall back to the
+                # last available close AT OR BEFORE exit_date rather than
+                # failing outright.
+                eligible = [d for d in spot_by_date if d <= exit_date]
+                if eligible:
+                    exit_spot = spot_by_date[max(eligible)]
+    finally:
+        td.close()
+
+    return _run_strategy_backtest_from_history(
+        strategy, entry_date, exit_date, expiry,
+        entry_prices, exit_prices, exit_spot=exit_spot,
+        contract_multiplier=contract_multiplier,
+    )
+
+
+def format_strategy_backtest_report(result: StrategyBacktestResult) -> str:
+    leg_lines = []
+    for leg in result.legs:
+        qty = int(leg['quantity'])
+        side = 'long' if qty > 0 else 'short'
+        leg_lines.append(
+            f"    {side:5s} {abs(qty)}x {leg['instrument_type']:4s} @ {float(leg['strike']):.2f}"
+        )
+
+    lines = [
+        f"Strategy backtest -- {result.strategy_type} "
+        f"({result.entry_date} -> {result.exit_date})",
+        "",
+        "  legs:",
+        *leg_lines,
+        "",
+        f"{'entry cost':20s}{result.entry_cost:>15.2f}",
+        f"{'exit value':20s}{result.exit_value:>15.2f}",
+        f"{'P&L':20s}{result.pnl:>15.2f}",
+        f"{'P&L %':20s}{result.pnl_pct:>14.2f}%",
     ]
     return "\n".join(lines)
 

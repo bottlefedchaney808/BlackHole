@@ -29,12 +29,35 @@ class GracefulShutdown:
         """
         self._shutdown_requested = False
         self._on_shutdown = on_shutdown
+        self._original_sigint = None
+        self._original_sigterm = None
+        self._registered = False
 
-        # Register signal handlers
-        signal.signal(signal.SIGINT, self._handle_signal)
-        signal.signal(signal.SIGTERM, self._handle_signal)
+        self.register()
 
+    def register(self):
+        """Register SIGINT/SIGTERM handlers, capturing the originals for restoration."""
+        if self._registered:
+            return
+        self._original_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+        self._original_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
+        self._registered = True
         logger.info("Graceful shutdown handler registered. Press Ctrl+C to exit cleanly.")
+
+    def unregister(self):
+        """Restore the original signal handlers captured at register() time."""
+        if not self._registered:
+            return
+        if self._original_sigint is not None:
+            signal.signal(signal.SIGINT, self._original_sigint)
+        if self._original_sigterm is not None:
+            signal.signal(signal.SIGTERM, self._original_sigterm)
+        self._registered = False
+
+    def cleanup(self):
+        """Restore original signal handlers and log completion."""
+        self.unregister()
+        logger.info("Graceful shutdown handler cleaned up.")
 
     def _handle_signal(self, signum, frame):
         """Handle SIGINT/SIGTERM signals."""
@@ -68,3 +91,15 @@ class GracefulShutdown:
     def reset(self):
         """Reset shutdown flag (for testing/restart scenarios)."""
         self._shutdown_requested = False
+
+
+def create_shutdown_manager(on_shutdown: Optional[Callable[[], None]] = None) -> GracefulShutdown:
+    """Create and register a GracefulShutdown manager.
+
+    Convenience factory used by backfill.py and scheduled_ingest.py:
+
+        shutdown = create_shutdown_manager()
+        ...
+        shutdown.cleanup()
+    """
+    return GracefulShutdown(on_shutdown=on_shutdown)

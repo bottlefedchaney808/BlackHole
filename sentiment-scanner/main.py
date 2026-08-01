@@ -116,7 +116,14 @@ def _launch_sector_rotation() -> None:
     print("  Launching Sector Rotation scanner...")
     print(f"{'='*60}")
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        # encoding/errors match sector_rotation_launcher.py's stdout.reconfigure
+        # to utf-8 (see sector_rotation_launcher.main) so captured output
+        # decodes cleanly instead of mojibake-ing through the default locale
+        # encoding (cp1252 on Windows).
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=1800,
+            encoding="utf-8", errors="replace",
+        )
         print(proc.stdout)
         if proc.returncode != 0:
             print(f"  Sector Rotation stderr: {proc.stderr[-2000:]}")
@@ -389,8 +396,13 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
             print(line)
         cycle_raw[ticker] = scanner_raw
         if not skip_youtube:
-            yt_result = _youtube_scan(ticker)
+            try:
+                yt_result = _youtube_scan(ticker)
+            except Exception as e:
+                print(f"  {ticker:6s} | YT: ERROR — {e}")
+                yt_result = None
             if yt_result:
+                scanner_raw["youtube"] = yt_result
                 yt_line = yt_format(yt_result)
                 if yt_line:
                     print(yt_line)
@@ -452,6 +464,17 @@ def print_correlation_summary(engine, tickers):
 
 
 def main():
+    # Windows consoles default to cp1252, which can't encode many characters
+    # this module and the scanner modules print (em-dashes, arrows, emoji,
+    # box-drawing separators) -- see sector_rotation_launcher.py's
+    # UnicodeEncodeError crash for the same root cause. Reconfigure stdout to
+    # UTF-8 up front rather than patching every individual string.
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     args = _parse_args()
     print("="*60)
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")

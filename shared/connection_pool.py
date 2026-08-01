@@ -35,6 +35,7 @@ class PooledConnection:
 
             # Configure for high-throughput writes + concurrent reads
             self.conn.execute("PRAGMA journal_mode=WAL;")
+            self.conn.execute("PRAGMA busy_timeout=30000;")  # wait on cross-process lock contention instead of failing immediately
             self.conn.execute("PRAGMA synchronous=NORMAL;")  # fsync only at commit
             self.conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
             self.conn.execute("PRAGMA temp_store=MEMORY;")

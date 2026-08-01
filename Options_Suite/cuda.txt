@@ -1,0 +1,47 @@
+(.venv) PS C:\Users\bottl\FinancialDevelopment\Options_Suite> python -c "import cupy; print(cupy.cuda.runtime.getDeviceCount()); print(cupy.array([1.0])+1)"
+C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cupy\_environment.py:284: UserWarning: CUDA path could not be detected. Set CUDA_PATH environment variable if CuPy fails to load.
+  warnings.warn(
+1
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "cupy/_core/core.pyx", line 1554, in cupy._core.core._ndarray_base.__add__
+  File "cupy/_core/core.pyx", line 1977, in cupy._core.core._ndarray_base.__array_ufunc__
+  File "cupy/_core/_kernel.pyx", line 1397, in cupy._core._kernel.ufunc.__call__
+  File "cupy/_core/_kernel.pyx", line 1426, in cupy._core._kernel.ufunc._get_ufunc_kernel
+  File "cupy/_core/_kernel.pyx", line 1098, in cupy._core._kernel._get_ufunc_kernel
+  File "cupy/_core/_kernel.pyx", line 124, in cupy._core._kernel._get_simple_elementwise_kernel
+  File "cupy/_core/_kernel.pyx", line 112, in cupy._core._kernel._get_simple_elementwise_kernel_from_code
+  File "cupy/_core/core.pyx", line 2590, in cupy._core.core.compile_with_cache
+  File "cupy/_core/core.pyx", line 2550, in cupy._core.core.assemble_cupy_compiler_options
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_headers\find_nvidia_headers.py", line 226, in find_nvidia_header_directory
+    found = locate_nvidia_header_directory(libname)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_headers\find_nvidia_headers.py", line 201, in locate_nvidia_header_directory
+    return run_find_steps(desc, FIND_STEPS)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_headers\find_nvidia_headers.py", line 163, in run_find_steps
+    result = step(desc)
+             ^^^^^^^^^^
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_headers\find_nvidia_headers.py", line 125, in find_via_ctk_root_canary
+    canary_abs_path = _resolve_system_loaded_abs_path_in_subprocess(CTK_ROOT_CANARY_ANCHOR_LIBNAMES[0])
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_dynamic_libs\load_nvidia_dynamic_lib.py", line 121, in _resolve_system_loaded_abs_path_in_subprocess
+    _raise_canary_probe_child_process_error(returncode=result.returncode, stderr=result.stderr)
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_dynamic_libs\load_nvidia_dynamic_lib.py", line 93, in _raise_canary_probe_child_process_error
+    raise ChildProcessError(
+ChildProcessError: Canary probe child process exited with code 1.
+--- stderr-from-child-process ---
+Traceback (most recent call last):
+  File "<frozen runpy>", line 189, in _run_module_as_main
+  File "<frozen runpy>", line 112, in _get_module_details
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\__init__.py", line 14, in <module>
+    from cuda.pathfinder._dynamic_libs.load_dl_common import (
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\cuda\pathfinder\_dynamic_libs\load_dl_common.py", line 8, in <module>
+    from typing import TYPE_CHECKING
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\typing.py", line 1359, in <module>
+    class Callable(extra=collections_abc.Callable, metaclass=CallableMeta):
+  File "C:\Users\bottl\FinancialDevelopment\Options_Suite\.venv\Lib\site-packages\typing.py", line 1007, in __new__
+    self._abc_registry = extra._abc_registry
+                         ^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'Callable' has no attribute '_abc_registry'
+<end-of-stderr-from-child-process>

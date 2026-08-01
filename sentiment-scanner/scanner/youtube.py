@@ -10,12 +10,15 @@ CorrelationEngine alongside StockTwits and Reddit.
 """
 
 import json
+import logging
 import os
 import re
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
+
+_log = logging.getLogger(__name__)
 
 # Ensure yt-dlp can find Node.js for JavaScript extraction
 import shutil
@@ -52,6 +55,176 @@ YT_CACHE_TTL_MINUTES = 60  # don't re-fetch same video within this window
 
 # Maximum transcript chars to score per video
 YT_MAX_TRANSCRIPT_CHARS = 3000
+
+# ── bgutil-ytdlp-pot-provider (PO token server) ────────────────────────
+# https://github.com/Brainicism/bgutil-ytdlp-pot-provider — the yt-dlp
+# maintainer-endorsed Proof-of-Origin token provider. The `bgutil-ytdlp-pot-provider`
+# pip package (importable as `yt_dlp_plugins`) is auto-discovered by yt-dlp's
+# plugin system once installed; it still needs a locally running HTTP token
+# server to talk to (Docker or Node.js — see sentiment-scanner/README.md).
+# The extractor-arg key/param names below ('youtubepot-bgutilhttp' /
+# 'base_url') come straight from the installed plugin's source
+# (yt_dlp_plugins/extractor/getpot_bgutil_http.py, BgUtilHTTPPTP._base_url),
+# which also defaults to the same URL when no base_url is configured.
+YTDLP_POT_SERVER_URL = os.environ.get("YTDLP_POT_SERVER_URL", "http://127.0.0.1:4416").rstrip("/")
+
+# Set YTDLP_POT_TRACE=1 to get full PO-token provider attempt/success/reject
+# diagnostics in verbose runs — see the note on pot_trace below. Off by
+# default because it's noisy and only matters for debugging this pipeline.
+_POT_TRACE = os.environ.get("YTDLP_POT_TRACE", "").strip() not in ("", "0", "false", "False")
+
+
+def _pot_extractor_args() -> dict:
+    """extractor_args telling yt-dlp's bgutil plugin where the PO token server is.
+
+    Pointing the bgutil plugin at the right base_url is necessary but NOT
+    sufficient. yt-dlp's youtube extractor only actually *asks* a PO-token
+    provider for a Subs-context token when it decides a token is "required"
+    for the client/video in question — see fetch_po_token()/_fetch_po_token()
+    in yt_dlp/extractor/youtube/_video.py (installed at
+    .venv/Lib/site-packages/yt_dlp/extractor/youtube/_video.py in this repo,
+    yt-dlp 2026.07.04):
+
+      fetch_pot_policy = self._configuration_arg('fetch_pot', [''], ie_key=YoutubeIE)[0]
+      if fetch_pot_policy not in ('never', 'auto', 'always'):
+          fetch_pot_policy = 'auto'
+      if (
+          fetch_pot_policy == 'never'
+          or (fetch_pot_policy == 'auto' and not kwargs.get('required', False))
+      ):
+          return None                                   # <-- no token even attempted
+
+    The default fetch_pot_policy is 'auto', and 'required' is only True when
+    the client's SUBS_PO_TOKEN_POLICY says so (yt_dlp/extractor/youtube/_base.py,
+    WEB_PO_TOKEN_POLICIES / INNERTUBE_CLIENTS) or a per-video YouTube
+    experiment flag ('xpe'/'xpv') is present on the caption baseUrl
+    (_video.py, _extract_formats_and_subtitles: `requires_pot = any(e in
+    qs.get('exp', []) for e in ('xpe', 'xpv')) or pot_policy.required`).
+    In practice NONE of the default clients (android_vr, web, web_safari)
+    set SUBS_PO_TOKEN_POLICY.required or .recommended to True by default
+    (_base.py's WEB_PO_TOKEN_POLICIES sets `SubsPoTokenPolicy(required=False)`
+    explicitly for web/web_safari, and android_vr inherits the library
+    default `SubsPoTokenPolicy()` — also required=False, recommended=False —
+    since it has no override in its INNERTUBE_CLIENTS entry). So on most
+    videos (no per-video experiment flag), fetch_pot=always is the ONLY
+    thing that makes yt-dlp attempt a Subs PO token fetch at all — 'auto'
+    would skip it outright regardless of which client(s) got queried.
+
+    Setting youtube:fetch_pot=always forces _fetch_po_token() past that
+    'auto'+'not required' short-circuit so it always calls out to the
+    configured provider (bgutil-http) for a Subs PO token at extract_info()
+    time, which is when the caption URLs (with their query strings) are
+    actually built (_video.py's process_language()/pot_params handling in
+    _extract_formats_and_subtitles, confirmed by direct source read: the
+    'pot' key lands in the `query` dict passed into process_language(), which
+    calls `update_url_query(base_url, query)` synchronously while building
+    `info['automatic_captions']` — there is no separate download-time step
+    that adds pot= later. Concretely this rules out the "only attaches pot
+    during yt-dlp's own subtitle-download step" theory: extract_info(...,
+    download=False) already returns the final URL, pot param included, if a
+    token was obtained. There is nothing to gain from switching to
+    ydl.download()/process_ie_result(download=True) — the same cached
+    caption-URL dict is reused either way.
+
+    IMPORTANT — why a verbose (-v) run can show ZERO PO-token debug lines
+    even when everything above is configured correctly: yt-dlp's PO-token
+    provider framework (yt_dlp/extractor/youtube/pot/_director.py,
+    initialize_pot_director()) only raises its internal logger to TRACE
+    level (where the interesting lines live — "Attempting to fetch a PO
+    Token from ... provider", "PO Token response from ... provider", "No PO
+    Token providers were able to provide a valid PO Token", per-provider
+    rejection reasons) if the extractor-arg `youtube:pot_trace=true` is ALSO
+    set. Plain `verbose=True` only raises it to DEBUG, which is one level
+    less verbose than TRACE (yt_dlp/extractor/youtube/pot/_provider.py:
+    `TRACE = 0, DEBUG = 10, ...`; the trace()-gated log lines require
+    `log_level <= LogLevel.TRACE`, i.e. exactly TRACE, not merely DEBUG).
+    So `verbose=True` alone can legitimately produce a debug log with the
+    provider *registration* banner ("PO Token Providers: bgutil:http-...")
+    — that one line is an unconditional `.debug()` call made once at
+    director init (_director.py ~line 408) — but nothing else, even though a
+    fetch is being attempted and may be failing/rejected/succeeding under
+    the hood. Set YTDLP_POT_TRACE=1 (see below) to add `pot_trace=true` and
+    get the real per-request trace lines.
+
+    UPDATE -- confirmed root cause via live reproduction (not just static
+    analysis): standing up our own bgutil-ytdlp-pot-provider server (v1.3.1)
+    and a fresh yt-dlp venv in a Linux sandbox (this required downgrading
+    curl_cffi to the 0.15.x line -- curl_cffi 0.16.0 is NOT supported by
+    this yt-dlp version and `--list-impersonate-targets` would not show real
+    targets until we downgraded), then running with
+    extractor_args={"youtube": {"fetch_pot": ["always"], "pot_trace": ["true"]}}
+    to get real per-request PO-token trace lines, we caught the actual
+    rejection live:
+
+      PO Token Provider "bgutil:http" rejected this request, trying next
+      available provider. Reason: Client "ANDROID_VR" is not supported by
+      bgutil:http. Supported clients: WEB, MWEB, TVHTML5,
+      WEB_EMBEDDED_PLAYER, WEB_CREATOR, WEB_REMIX, TVHTML5_SIMPLY,
+      TVHTML5_SIMPLY_EMBEDDED_PLAYER
+
+    So fetch_pot=always was correctly forcing the ATTEMPT (as the analysis
+    above concludes), but the attempt was always being made on behalf of
+    yt-dlp's default player_client -- ANDROID_VR -- which is simply not one
+    of the clients bgutil:http's PO-token provider supports (notably absent:
+    android_vr and web_safari, the two clients yt-dlp queries by default).
+    Every attempt was rejected before a token could ever be returned, which
+    is why no `pot=` param was ever observed on caption URLs regardless of
+    fetch_pot policy.
+
+    The fix, also confirmed live: add `"player_client": ["web", "android_vr"]`
+    to this extractor_args dict. This forces yt-dlp to also query the `web`
+    client, whose Subs PO-token request bgutil:http DOES accept, while
+    keeping `android_vr` in the client list so real video formats remain
+    available without needing a token (avoids changing existing format-
+    resolution behavior). With this combo in place in the sandbox, `pot=`
+    appeared in the caption URL and `info.get("formats")` returned 27 real
+    entries (not empty) -- i.e. both the caption-token path and the format
+    path worked simultaneously.
+    """
+    args = {
+        "youtubepot-bgutilhttp": {"base_url": [YTDLP_POT_SERVER_URL]},
+        "youtube": {"fetch_pot": ["always"], "player_client": ["web", "android_vr"]},
+    }
+    if _POT_TRACE:
+        args["youtube"]["pot_trace"] = ["true"]
+    return args
+
+
+_POT_SERVER_HEALTH_CHECKED = False
+_POT_SERVER_AVAILABLE = False
+
+
+def _check_pot_server_once() -> bool:
+    """Best-effort, short-timeout health check against the bgutil PO token server.
+
+    Logs exactly one warning (not per-request) if the server isn't reachable,
+    and never raises — an unreachable PO token server is a clean, expected-
+    possible state (same as "no API key configured" elsewhere in this
+    codebase), not a scanner failure. The bgutil HTTP provider itself exposes
+    GET /ping (see getpot_bgutil_http.py's _check_server_availability), so we
+    reuse that same endpoint here.
+    """
+    global _POT_SERVER_HEALTH_CHECKED, _POT_SERVER_AVAILABLE
+    if _POT_SERVER_HEALTH_CHECKED:
+        return _POT_SERVER_AVAILABLE
+    _POT_SERVER_HEALTH_CHECKED = True
+    try:
+        with urllib.request.urlopen(f"{YTDLP_POT_SERVER_URL}/ping", timeout=2) as resp:
+            resp.read()
+        _POT_SERVER_AVAILABLE = True
+    except Exception as e:
+        _POT_SERVER_AVAILABLE = False
+        _log.warning(
+            "bgutil PO-token server not reachable at %s/ping (%s). YouTube "
+            "transcript fetches that require a PO token will be skipped "
+            "until it's running. Start it with one of:\n"
+            "  Docker:  docker run --name bgutil-provider -d --init -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider\n"
+            "  Node.js: cd bgutil-ytdlp-pot-provider\\server && npm ci && npx tsc && node build\\main.js\n"
+            "See sentiment-scanner/README.md for full setup instructions. "
+            "Set YTDLP_POT_SERVER_URL if the server runs elsewhere.",
+            YTDLP_POT_SERVER_URL, e,
+        )
+    return _POT_SERVER_AVAILABLE
 
 # ── Cache (in-memory, per session) ────────────────────────────────────
 _cache: Dict[str, dict] = {}  # video_id -> {ts, title, transcript, channel, views}
@@ -190,6 +363,13 @@ def _ytdl_search(query: str, max_results: int = YT_RESULTS_PER_QUERY) -> List[di
         "quiet": True,
         "extract_flat": True,
         "skip_download": True,
+        "remote_components": ["ejs:github"],
+        "extractor_args": _pot_extractor_args(),
+        # Avoids a hard ExtractorError("Requested format is not available")
+        # if format/JS-signature resolution fails for one of the queried
+        # player_clients (e.g. no working JS runtime for 'web'). Harmless
+        # here since extract_flat=True never resolves real formats anyway.
+        "ignore_no_formats_error": True,
     }
     if _NODE_PATH:
         ydl_config["js_runtimes"] = {"node": {"path": _NODE_PATH}}
@@ -211,7 +391,168 @@ def _ytdl_search(query: str, max_results: int = YT_RESULTS_PER_QUERY) -> List[di
                 for e in entries if e and e.get("id")
             ]
         except Exception as e:
+            _log.warning("YouTube search failed for query %r: %s", query, e)
             return []
+
+
+_PO_TOKEN_NOTICE_LOGGED = False
+
+
+def _log_po_token_notice_once() -> None:
+    """One-time startup note explaining the PO-token limitation.
+
+    This is not a bug in this scanner — it's an accurate description of a
+    yt-dlp-documented YouTube requirement. As of yt-dlp's own PO Token Guide
+    (https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide), the 'web' client
+    (which is what produces most 'a.en'/json3 automatic-caption URLs) requires
+    a valid Proof-of-Origin (PO) token for Subs (subtitle/timedtext) requests,
+    separately from and in addition to TLS/browser impersonation. Without a
+    PO token, YouTube will keep returning HTTP 429/403 on caption fetches
+    regardless of how convincing the impersonated TLS fingerprint is.
+    Fixing this requires a PO token provider plugin — e.g.
+    bgutil-ytdlp-pot-provider (https://github.com/Brainicism/bgutil-ytdlp-pot-provider),
+    which is the yt-dlp-maintainer-endorsed option — configured via yt-dlp's
+    plugin mechanism. That's a real dependency decision (it runs a small local
+    token-generation service), not something this scanner should silently
+    install. Until one is configured, YouTube transcript-based sentiment will
+    keep failing on videos that require a PO token for subtitles.
+    """
+    global _PO_TOKEN_NOTICE_LOGGED
+    if _PO_TOKEN_NOTICE_LOGGED:
+        return
+    _PO_TOKEN_NOTICE_LOGGED = True
+    _log.warning(
+        "YouTube automatic-caption fetches may require a PO (Proof-of-Origin) "
+        "token in addition to browser impersonation — this is a documented "
+        "YouTube/yt-dlp requirement (see "
+        "https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide), not a bug. "
+        "If transcript fetches keep failing with HTTP 429/403 even though "
+        "`yt-dlp --list-impersonate-targets` shows working targets, the fix "
+        "is to configure a PO token provider plugin (e.g. "
+        "bgutil-ytdlp-pot-provider: "
+        "https://github.com/Brainicism/bgutil-ytdlp-pot-provider). Until "
+        "that's set up, YouTube transcript-based sentiment will keep failing "
+        "for videos/clients that require a PO token for subtitles."
+    )
+
+
+def _fetch_caption_payload(ydl, cap: dict) -> Optional[bytes]:
+    """Fetch a single caption/timedtext URL's raw bytes.
+
+    YouTube's timedtext endpoint now bot-detects plain HTTP clients and
+    returns HTTP 429 for most automatic-caption URLs unless the request is
+    made with browser impersonation (TLS/HTTP fingerprinting) — yt-dlp
+    surfaces this via the cap dict's 'impersonate' flag. Route the request
+    through yt-dlp's own networking stack (which supports impersonation via
+    curl_cffi) instead of raw urllib, which cannot impersonate and will
+    reliably get 429'd. Note: cap['__yt_dlp_client'] (e.g. "android_vr") is
+    the YouTube *API* client that produced this URL, not a browser
+    impersonation target name — don't pass it as the impersonate client, let
+    curl_cffi pick from whatever browser profiles it has compiled support
+    for on this platform. Falls back to plain urllib for caption formats
+    that don't require impersonation.
+
+    An empty ImpersonateTarget() is intentional and correct here, not a bug:
+    yt-dlp's own extractors (e.g. instagram.py, generic.py) use exactly this
+    "wildcard" pattern to mean "impersonate with whatever profile is
+    available." Internally, yt-dlp's curl_cffi request handler sorts its
+    supported-target map to prefer non-deprioritized, desktop, and newest-
+    version targets first (see yt_dlp/networking/_curlcffi.py,
+    _SUPPORTED_IMPERSONATE_TARGET_MAP's sort key), so an empty target
+    resolves to a modern, reliable Chrome/Firefox/Safari profile — not to an
+    ancient one. So a passing impersonated request that still gets HTTP 429
+    is NOT explained by a bad/missing impersonation target.
+
+    What *does* explain a 429 after a successful impersonated request: as of
+    yt-dlp's PO Token Guide
+    (https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide), YouTube's 'web'
+    client — which is what serves most automatic-caption ('a.en') json3
+    URLs — now requires a Proof-of-Origin (PO) token for Subs requests,
+    independent of TLS/browser fingerprinting. Impersonation alone cannot
+    satisfy that requirement; only a PO token (typically from a provider
+    plugin such as bgutil-ytdlp-pot-provider) can. See
+    _log_po_token_notice_once() below.
+    """
+    url = cap["url"]
+    needs_impersonate = bool(cap.get("impersonate"))
+
+    if needs_impersonate:
+        # Cheap, one-time, short-timeout heads-up if the bgutil PO token
+        # server isn't running -- doesn't block or fail the fetch itself
+        # (the yt-dlp plugin does its own availability check/caching and
+        # will just fail to supply a token, which surfaces below as the
+        # existing PO-token warning path).
+        _check_pot_server_once()
+
+        from yt_dlp.networking.exceptions import (
+            HTTPError,
+            NoSupportingHandlers,
+            UnsupportedRequest,
+        )
+
+        try:
+            from yt_dlp.networking.common import Request
+            from yt_dlp.networking.impersonate import ImpersonateTarget
+            req = Request(url, extensions={"impersonate": ImpersonateTarget()})
+            resp = ydl.urlopen(req)
+            return resp.read()
+        except (UnsupportedRequest, NoSupportingHandlers) as e:
+            # These are raised when NO handler can satisfy the 'impersonate'
+            # extension at all — i.e. curl_cffi/its impersonation backend
+            # genuinely isn't usable in this environment. This is the one
+            # case where the old generic message was actually correct.
+            _log.warning(
+                "YouTube transcript fetch requires browser impersonation, "
+                "but no impersonation-capable backend is available: %s. "
+                "Run `yt-dlp --list-impersonate-targets` to check what's "
+                "available in this environment (needs curl_cffi with a "
+                "working compiled extension for this platform/Python "
+                "version).",
+                e,
+            )
+            return None
+        except HTTPError as e:
+            # The request WAS made with browser impersonation and yt-dlp had
+            # no trouble selecting/using an impersonation backend — this is
+            # YouTube itself rejecting the (successfully impersonated)
+            # request, most likely because it also requires a PO token for
+            # this client/endpoint. Do not blame the impersonation backend.
+            status = getattr(getattr(e, "response", None), "status", None) or getattr(e, "code", None)
+            _log.warning(
+                "YouTube transcript fetch was made WITH browser impersonation "
+                "(impersonation backend is working) but YouTube still "
+                "rejected it: HTTP %s for %s. This is not an impersonation "
+                "problem — it is most likely YouTube requiring a PO "
+                "(Proof-of-Origin) token for automatic-caption/subtitle "
+                "requests, which impersonation cannot provide.",
+                status,
+                url,
+            )
+            _log_po_token_notice_once()
+            return None
+        except Exception as e:
+            _log.warning(
+                "YouTube transcript fetch failed during an impersonated "
+                "request (not clearly an impersonation-availability issue "
+                "nor a plain HTTP error): %s",
+                e,
+            )
+            return None
+
+    for attempt in range(3):
+        try:
+            resp = urllib.request.urlopen(url, timeout=15)
+            return resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            _log.warning("YouTube transcript fetch failed (HTTP %s) for %s", e.code, url)
+            return None
+        except Exception as e:
+            _log.warning("YouTube transcript fetch failed: %s", e)
+            return None
+    return None
 
 
 def _fetch_transcript(video_id: str) -> Optional[str]:
@@ -222,6 +563,7 @@ def _fetch_transcript(video_id: str) -> Optional[str]:
     try:
         import yt_dlp
     except ImportError:
+        _log.warning("YouTube scanner skipped: yt-dlp not installed.")
         return None
 
     try:
@@ -231,60 +573,69 @@ def _fetch_transcript(video_id: str) -> Optional[str]:
             "writesubtitles": False,
             "writeautomaticsub": True,
             "subtitleslangs": ["en"],
+            "remote_components": ["ejs:github"],
+            "extractor_args": _pot_extractor_args(),
+            # Avoids a hard ExtractorError("Requested format is not
+            # available") if format/JS-signature resolution fails for one of
+            # the queried player_clients (e.g. 'web' with no working JS
+            # runtime/EJS setup) -- we only need auto-captions here
+            # (skip_download=True), so a missing real format must not be
+            # fatal.
+            "ignore_no_formats_error": True,
         }
         if _NODE_PATH:
             ydl_config["js_runtimes"] = {"node": {"path": _NODE_PATH}}
 
         with yt_dlp.YoutubeDL(ydl_config) as ydl:
             info = ydl.extract_info(video_id, download=False)
-    except Exception:
-        return None
+            if not info:
+                return None
 
-    if not info:
-        return None
+            # Try automatic captions first
+            auto = info.get("automatic_captions", {}) or {}
+            for lang_key in ["en", "a.en", "en-US", "en-GB"]:
+                caps = auto.get(lang_key, [])
+                if not caps:
+                    continue
+                # Prefer json3 format
+                cap = None
+                for c in caps:
+                    if c.get("ext") == "json3":
+                        cap = c
+                        break
+                if not cap:
+                    for c in caps:
+                        if c.get("ext") in ("srv1", "srv2", "vtt"):
+                            cap = c
+                            break
+                if not cap:
+                    continue
 
-    # Try automatic captions first
-    auto = info.get("automatic_captions", {}) or {}
-    for lang_key in ["en", "a.en", "en-US", "en-GB"]:
-        caps = auto.get(lang_key, [])
-        if not caps:
-            continue
-        # Prefer json3 format
-        url = None
-        for cap in caps:
-            if cap.get("ext") == "json3":
-                url = cap["url"]
-                break
-        if not url:
-            for cap in caps:
-                if cap.get("ext") in ("srv1", "srv2", "vtt"):
-                    url = cap["url"]
-                    break
-        if url:
-            for attempt in range(3):
+                raw = _fetch_caption_payload(ydl, cap)
+                if not raw:
+                    continue
                 try:
-                    resp = urllib.request.urlopen(url, timeout=15)
-                    data = json.loads(resp.read().decode("utf-8"))
-                    events = data.get("events", [])
-                    parts = []
-                    for ev in events[:300]:
-                        segs = ev.get("segs", [])
-                        for s in segs:
-                            t = (s.get("utf8") or "").strip()
-                            if t:
-                                parts.append(t)
-                            if len(" ".join(parts)) > YT_MAX_TRANSCRIPT_CHARS:
-                                break
+                    data = json.loads(raw.decode("utf-8"))
+                except Exception as e:
+                    _log.warning("YouTube transcript payload wasn't valid json3: %s", e)
+                    continue
+                events = data.get("events", [])
+                parts = []
+                for ev in events[:300]:
+                    segs = ev.get("segs", [])
+                    for s in segs:
+                        t = (s.get("utf8") or "").strip()
+                        if t:
+                            parts.append(t)
                         if len(" ".join(parts)) > YT_MAX_TRANSCRIPT_CHARS:
                             break
-                    return " ".join(parts)
-                except urllib.error.HTTPError as e:
-                    if e.code == 429 and attempt < 2:
-                        time.sleep(5 * (attempt + 1))
-                        continue
-                    break
-                except Exception:
-                    break
+                    if len(" ".join(parts)) > YT_MAX_TRANSCRIPT_CHARS:
+                        break
+                return " ".join(parts)
+    except Exception as e:
+        _log.warning("YouTube transcript extraction failed for %s: %s", video_id, e)
+        return None
+
     return None
 
 

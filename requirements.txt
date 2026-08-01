@@ -51,6 +51,9 @@ statsmodels==0.14.6
 python-dotenv==1.2.2
 APScheduler==3.11.3
 
+# --- Cross-process locking (db_loader.py single-writer lock for swaps.db) ---
+filelock==3.32.2
+
 # --- Sentiment / social (sentiment-scanner/scanner/youtube.py) ---
 # Loose bound, not an exact pin like the rest of this file -- unverified on
 # this machine (not yet installed in any suite's venv here).

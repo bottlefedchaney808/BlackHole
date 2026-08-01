@@ -1,0 +1,40 @@
+---
+name: sentiment-scanner
+description: Use when launching, debugging, or scripting sentiment-scanner (StockTwits/Reddit/YouTube contested-narrative detection + 7 options scanners + correlation engine) — covers its own project-local .venv, real headless flags, and what actually happens when the bgutil PO-token server is unreachable.
+---
+
+## Overview
+
+`sentiment-scanner/main.py` scans trending tickers on StockTwits, scores contested-narrative sentiment, runs 7 options scanners (GEX, Unusual OI, IV Rank, Skew, Max Pain, Vol Dispersion, Earnings-Vol Premium) via ThetaData, cross-references CME SDR swap data, and optionally pulls YouTube caption sentiment. Results feed a `CorrelationEngine` for composite signals. It loops on a timer by default (`config.SCAN_INTERVAL_MINUTES`) — this is a long-running scanner, not a single-shot tool, unless you pass `--no-loop`.
+
+For venv/port/PATH conventions shared across all four suites, see `.claude/skills/quant-suite-launch-conventions.md` — don't repeat those checks here.
+
+## Launch
+
+Interactive: `sentiment-scanner\sentiment.bat` (from that directory) — handles the project-local `.venv`, dependency install, and PO-token server auto-start described in the shared reference.
+
+Headless flags (verified against `main.py`'s actual `argparse` setup — source-read, since `--help` couldn't run in this sandbox due to a missing `httpx` dependency unrelated to the flags themselves):
+
+`--no-loop` (single pass then exit), `--export-context <path>` (writes a `suite_context.json`-compatible sentiment block — schema_version 2, includes `ranked_tickers`/`pack_json_path`/`group_id`), `--benchmark <ticker>` (default SPY, for vol dispersion), `--skip-gex`, `--skip-youtube`, `--skip-sector-prompt`, `--skip-report-prompt`, `--launch-vol-suite` (subprocess-launches Vol_Suite on the alert highlight pack, if one exists).
+
+Confirmed: there is no `--context`/`--context-out` pair. sentiment-scanner is producer-only for `suite_context.json` — it never consumes one. `--export-context` writes on every loop cycle (not just at exit), so a long-running scheduled instance keeps the export file current.
+
+## Debug / Common Mistakes
+
+YouTube captions being silently thin or absent is not a bug — verified in `scanner/youtube.py`: `_check_pot_server_once()` does a cheap one-time `/ping` health check and just logs a warning if the bgutil server is unreachable; it does not raise or abort. The actual per-request PO-token failure is caught separately and also treated as non-fatal, falling back to no caption data for that fetch. So a missing PO-token server degrades gracefully all the way through — no launch error, no exception, just thinner sentiment data. If sentiment output looks unexpectedly sparse, check for the one-time "bgutil PO-token server not reachable" warning near the top of the log rather than assuming a code bug.
+
+Interactive prompts (`_prompt_yes_no` for Sector Rotation launch and PDF report generation) auto-skip when stdin isn't a TTY, so scheduled/cron runs never hang — but `--skip-sector-prompt`/`--skip-report-prompt` still make headless behavior explicit and are cheap to always pass in scripts.
+
+`requirements.txt` has no dev/test split (unlike Vol_Suite) — one file, no `requirements-dev.txt`. `tests/` exists (pytest-based, `test_main.py`, `test_correlation_engine.py`, etc.) with no `pytest.ini`/`pyproject.toml`, so run with plain `pytest tests/` from `sentiment-scanner/` using its own `.venv` interpreter — not the shared root `.venv`, which won't have this project's deps (yt-dlp, curl_cffi, bgutil-ytdlp-pot-provider).
+
+## Quick Reference
+
+| Item | Value |
+|---|---|
+| Entry point | `sentiment-scanner/main.py` |
+| Interactive launch | `sentiment-scanner\sentiment.bat` |
+| venv | project-local `sentiment-scanner\.venv` (auto pip-installs each launch) |
+| Producer/consumer | producer only — `--export-context <path>`, no `--context` |
+| Single-pass mode | `--no-loop` |
+| PO-token server | `http://127.0.0.1:4416/ping` — degrades gracefully, no launch failure |
+| Tests | `pytest tests/` from `sentiment-scanner/`, project venv, no config file |

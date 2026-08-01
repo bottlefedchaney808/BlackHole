@@ -54,3 +54,4 @@ swaps.db-shm
 swaps.db-wal
 orchestrator_output/
 dashboard/dashboard_*.log
+Options_Suite/.claude/worktrees/

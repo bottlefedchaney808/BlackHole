@@ -6,6 +6,8 @@ import logging
 from typing import List, Dict, Optional, Union
 import os
 
+from filelock import FileLock
+
 from shared.data_source import DataSourceAdapter
 from shared.logging import setup_logging, log_operation, get_metrics
 from shared.connection_pool import ConnectionPool, get_pool, init_pool
@@ -20,6 +22,37 @@ logger = setup_logging(
 # Database file path (SWAPS_DB_PATH env var overrides, e.g. for a mounted
 # Docker volume; see .env.example / docker-compose.yml)
 DB_PATH = os.environ.get('SWAPS_DB_PATH') or os.path.join(os.path.dirname(__file__), 'swaps.db')
+
+# Busy timeout (ms) applied to every connection this module opens, so that a
+# connection blocked behind another process's write lock waits and retries
+# instead of immediately raising "database is locked".
+_BUSY_TIMEOUT_MS = 30000
+
+# Single cross-process write lock, keyed off the db file path. scheduled_ingest.py
+# (poller) and backfill.py both run as separate OS processes and both write to
+# swaps.db through this module's write methods (upsert_trades/set_state/log_scrape).
+# Without this, concurrent writers from separate processes could each open the
+# db without WAL mode / with no shared coordination, race on BEGIN EXCLUSIVE, and
+# (especially on non-local/FUSE-mounted filesystems where byte-range locking is
+# unreliable) corrupt the file rather than just failing with "database is locked".
+# filelock's FileLock (via a sibling .lock file) gives us one process-wide AND
+# cross-process writer at a time, held for the full transaction, not just connect.
+_WRITE_LOCK_PATH = DB_PATH + '.lock'
+_write_lock = FileLock(_WRITE_LOCK_PATH, timeout=60)
+
+
+def _configure_connection(conn: sqlite3.Connection) -> None:
+    """Apply WAL mode + busy timeout to a freshly-opened connection.
+
+    Every sqlite3.connect() in this module must route through here so that
+    ad-hoc (non-pooled) connections opened by concurrent processes (the
+    poller in scheduled_ingest.py and backfill.py) negotiate locks the same
+    way as pooled connections instead of falling back to the default
+    rollback-journal mode with no busy handler.
+    """
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS};")
+    conn.execute("PRAGMA synchronous=NORMAL;")
 
 # All swap_trades columns except the primary key and ingested_at (auto-managed).
 # Now includes data_source to track which adapter produced each trade.
@@ -72,8 +105,9 @@ class SwapsLoader:
                 return pooled.conn
 
         # Fallback: create new connection (no pooling)
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=_BUSY_TIMEOUT_MS / 1000)
         conn.row_factory = sqlite3.Row  # Enable dict-like access
+        _configure_connection(conn)
         return conn
 
     def _return_connection(self, conn: Optional[sqlite3.Connection]):
@@ -156,15 +190,19 @@ class SwapsLoader:
             use_pool_context = pool and pool.db_path == self.db_path
 
             try:
-                if use_pool_context:
-                    with pool.get_connection_context(timeout=5.0) as conn:
-                        return self._execute_upsert(conn, query, records, source_name, start_time, op_context)
-                else:
-                    conn = self.get_connection()
-                    try:
-                        return self._execute_upsert(conn, query, records, source_name, start_time, op_context)
-                    finally:
-                        conn.close()
+                # Single cross-process writer: held for the whole connect+transaction
+                # so the poller (scheduled_ingest.py) and backfill.py never both hold
+                # a write transaction open against swaps.db at the same time.
+                with _write_lock:
+                    if use_pool_context:
+                        with pool.get_connection_context(timeout=5.0) as conn:
+                            return self._execute_upsert(conn, query, records, source_name, start_time, op_context)
+                    else:
+                        conn = self.get_connection()
+                        try:
+                            return self._execute_upsert(conn, query, records, source_name, start_time, op_context)
+                        finally:
+                            conn.close()
 
             except Exception as e:
                 logger.error(
@@ -258,15 +296,16 @@ class SwapsLoader:
         use_pool_context = pool and pool.db_path == self.db_path
 
         try:
-            if use_pool_context:
-                with pool.get_connection_context(timeout=5.0) as conn:
-                    self._execute_set_state(conn, regulator, asset_class, last_cumulative_date, last_live_slice_id)
-            else:
-                conn = self.get_connection()
-                try:
-                    self._execute_set_state(conn, regulator, asset_class, last_cumulative_date, last_live_slice_id)
-                finally:
-                    conn.close()
+            with _write_lock:
+                if use_pool_context:
+                    with pool.get_connection_context(timeout=5.0) as conn:
+                        self._execute_set_state(conn, regulator, asset_class, last_cumulative_date, last_live_slice_id)
+                else:
+                    conn = self.get_connection()
+                    try:
+                        self._execute_set_state(conn, regulator, asset_class, last_cumulative_date, last_live_slice_id)
+                    finally:
+                        conn.close()
         except Exception as e:
             logger.error(f"Failed to set state: {e}")
             raise
@@ -303,15 +342,16 @@ class SwapsLoader:
         use_pool_context = pool and pool.db_path == self.db_path
 
         try:
-            if use_pool_context:
-                with pool.get_connection_context(timeout=5.0) as conn:
-                    self._execute_log_scrape(conn, scrape_date, fetched, inserted, updated, errors, status, error_msg, duration)
-            else:
-                conn = self.get_connection()
-                try:
-                    self._execute_log_scrape(conn, scrape_date, fetched, inserted, updated, errors, status, error_msg, duration)
-                finally:
-                    conn.close()
+            with _write_lock:
+                if use_pool_context:
+                    with pool.get_connection_context(timeout=5.0) as conn:
+                        self._execute_log_scrape(conn, scrape_date, fetched, inserted, updated, errors, status, error_msg, duration)
+                else:
+                    conn = self.get_connection()
+                    try:
+                        self._execute_log_scrape(conn, scrape_date, fetched, inserted, updated, errors, status, error_msg, duration)
+                    finally:
+                        conn.close()
         except Exception as e:
             logger.error(f"Failed to log scrape: {e}")
 

@@ -1,0 +1,18 @@
+# Secrets -- never commit real credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Editor / IDE
+.vs/
+
+# Generated reports (regenerate on demand; keep the repo free of run artifacts)
+comparison_*.csv
+comparison_*.pdf

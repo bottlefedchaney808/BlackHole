@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 from thetadata_client import ThetaDataController
 from correlation_engine import fetch_price_history
 import expiry_selector
+from vs_utils import timestamped_output_dir
 
 # Reuse core functions from the existing live module -- these are the same
 # arithmetic (static replication, forward price, half-width weights) used by
@@ -325,7 +326,7 @@ def main() -> None:
         print(f"{p.expiry_label:<6} {p.expiry_date:<10} {ty:<8} {fv:<10} {av:<10} {vp:<10} {rv:<10}")
     print(f"\nTerm Structure Shape: {result.shape}")
 
-    out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     chart_path = os.path.join(out_dir, f"{ticker}_vrp_term_structure_{ts}.png")

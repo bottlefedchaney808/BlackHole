@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 
 from thetadata_client import ThetaDataController
 import index_membership as idxmem
+from vs_utils import timestamped_output_dir
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
@@ -476,7 +477,7 @@ def main():
     print_basket_report(stats)
     choice = input("\nExport basket report to CSV? (y/n): ").strip().lower()
     if choice == 'y':
-        out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+        out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         corr_df = pd.DataFrame(stats.correlation_matrix, index=stats.tickers, columns=stats.tickers)
         corr_file = os.path.join(out_dir, f"correlation_matrix_{timestamp}.csv")
@@ -510,7 +511,7 @@ def run_correlation_engine(tickers: List[str], weights: Optional[List[float]] = 
                            market: str = "SPY", period: str = "2y",
                            output_dir: Optional[str] = None, save_csv: bool = True) -> Tuple[List[str], str]:
     """Programmatic runner for the correlation engine. Returns (file_paths, interpretation_text)."""
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     stats = compute_basket_stats(tickers, weights=weights, market_ticker=market, period=period)
     print_basket_report(stats)

@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from correlation_engine import fetch_price_history
+from vs_utils import timestamped_output_dir
 
 import matplotlib
 matplotlib.use("Agg")
@@ -174,7 +175,12 @@ def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None)
     # --- 4. Standardized Residuals ---
     print(f"\n  Analyzing standardized residuals...")
     std_resid = res.std_resid.dropna()
-    out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    # Never write chart output into the bare module directory (Vol_Suite/ root).
+    # When invoked through volatility_suite.py, VS_OUTPUT_DIR is always set to a
+    # per-run outputs/<timestamp>/ folder. When run standalone (no VS_OUTPUT_DIR),
+    # fall back to that same outputs/ convention instead of cwd/module dir.
+    out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
+    os.makedirs(out_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if not std_resid.empty:
@@ -319,7 +325,7 @@ def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None)
 
 def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, output_dir: str = None) -> list:
     """Wrapper that sets VS_OUTPUT_DIR and runs run_garch_analysis, returning list of output files for the ticker."""
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     os.environ['VS_OUTPUT_DIR'] = out_dir
     res = run_garch_analysis(ticker, start=start, end=end)

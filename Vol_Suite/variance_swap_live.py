@@ -19,6 +19,7 @@ import textwrap
 from thetadata_client import ThetaDataController, strike_to_theta, strike_from_theta
 from correlation_engine import fetch_price_history
 import expiry_selector
+from vs_utils import timestamped_output_dir
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
@@ -259,7 +260,7 @@ def generate_plots(result, chain, S0, F, ticker, expiration, rv_30, rv_60, rv_90
         except Exception:
             pass
 
-    out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{ticker}_variance_swap_plots_{timestamp}.png")
     plt.savefig(filename, dpi=150, bbox_inches='tight')
@@ -274,7 +275,7 @@ def export_csv(result, ticker, expiration, out_dir: str = None):
         "Weight": t["weights"], "OTM_Price": t["otm_prices"],
         "Contribution": t["contributions"]
     })
-    out_dir = out_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = out_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{ticker}_{expiration}_variance_swap_strikes_{timestamp}.csv")
     df.to_csv(filename, index=False)
@@ -316,7 +317,7 @@ def export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match
         ]
     }
     df = pd.DataFrame(data)
-    out_dir = out_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = out_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{ticker}_{expiration}_variance_swap_summary_{timestamp}.csv")
     df.to_csv(filename, index=False)
@@ -420,7 +421,7 @@ def main():
 
     choice = input("\nExport CSV? (y/n): ").strip().lower()
     if choice == 'y':
-        out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+        out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
         print(f"  Strikes CSV: {export_csv(result, ticker, expiration, out_dir=out_dir)}")
         sum_file = export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback, out_dir=out_dir)
         print(f"  Summary CSV: {sum_file}")
@@ -443,7 +444,7 @@ def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: 
     volatility_suite.py resolve ONE expiry interactively and force every
     downstream leg (index + focus ticker here, screener, dealer positioning)
     onto that same date instead of each one independently re-picking."""
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     files = []
     td = ThetaDataController()

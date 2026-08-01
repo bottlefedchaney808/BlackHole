@@ -26,6 +26,7 @@ from thetadata_client import ThetaDataController, strike_from_theta
 import expiry_selector
 import replication_reference
 import vol_surface_reference
+from vs_utils import timestamped_output_dir
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
@@ -953,7 +954,7 @@ def plot_heatmap(result: DealerPositioningResult, interpretation: str = None) ->
                    transform=footer_ax.transAxes)
 
     # Save
-    out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{result.ticker}_hedging_heatmap_{timestamp}.png")
     # Add interpretation text overlay if provided (multi-line with background)
@@ -1064,7 +1065,7 @@ def plot_greek_exposure_comparison(result: DealerPositioningResult,
                  'Charm (shares/day)', spot, result.has_charm_data,
                  missing_note="Charm not found in ThetaData response")
 
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{result.ticker}_greek_exposure_comparison_{timestamp}.png")
@@ -1161,7 +1162,7 @@ def main():
         choice = input("\nExport gamma records to CSV? (y/n): ").strip().lower()
         if choice == 'y':
             import csv
-            out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+            out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = os.path.join(out_dir, f"{ticker}_gamma_records_{timestamp}.csv")
             with open(filename, 'w', newline='', encoding='utf-8') as f:
@@ -1208,7 +1209,7 @@ def run_dealer_positioning(ticker: str, target_years: float = 0.25,
     compute_dealer_positioning's docstring / DEALER_POSITIONING_V2_DESIGN.md
     §3/§5 for what 'replication' actually changes.
     """
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     files: List[str] = []
     result = compute_dealer_positioning(ticker, target_years, expiration=expiration, sign_model=sign_model)

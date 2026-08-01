@@ -31,7 +31,25 @@ reportlab>=4.0
 pillow>=10.0
 
 #data
-thetadata 
+thetadata
+
+# --- YouTube transcript scanner (scanner/youtube.py) ---
+# curl_cffi provides the browser-impersonation backend yt-dlp needs to fetch
+# YouTube's automatic-caption (timedtext) URLs -- plain HTTP requests get
+# blocked with 429 by YouTube's bot detection. Without curl_cffi's compiled
+# impersonation backend installed for the *current* platform, transcript
+# fetches will silently return no data (see scanner/youtube.py warnings).
+yt-dlp
+curl_cffi
+
+# bgutil-ytdlp-pot-provider is the yt-dlp-maintainer-endorsed Proof-of-Origin
+# (PO) token provider plugin (https://github.com/Brainicism/bgutil-ytdlp-pot-provider).
+# Installing this package makes yt-dlp auto-discover the 'bgutil:http' PO
+# token provider. It still needs a locally running bgutil HTTP server to talk
+# to (Docker or Node.js -- see sentiment-scanner/README.md for exact
+# Windows setup commands); without that server running, caption fetches fall
+# back to the pre-existing PO-token warning behavior in scanner/youtube.py.
+bgutil-ytdlp-pot-provider
 
 #date
 datetime

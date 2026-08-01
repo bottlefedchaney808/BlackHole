@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Options Strategy Tool -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<h1>Options Strategy Tool</h1>
+<p class="sub">
+  Recommends multi-leg option strategies from a suite run's vol-regime and edge-strike chain scan.
+  <a href="/tools">&larr; back to Tools</a>
+</p>
+
+<div class="panel">
+  <header><h2>How to use this</h2></header>
+  <div class="body">
+    <p class="small">
+      A <strong>context</strong> comes from running a suite's unified flow (see the <a href="/">Overview</a> page's
+      "Trigger a run" panel) -- it is a snapshot of one run's ticker, expiration, and (if the run included an
+      options chain scan) prior strategy output. Pick the context for the ticker/run you care about below.
+    </p>
+    <p class="small">
+      <strong>cached</strong> mode reads back the strategies that run already computed and saved --
+      instant, no data-vendor calls. <strong>live</strong> mode re-runs the chain scan fresh against that context's
+      ticker/expiration right now, which needs live data access and takes longer.
+    </p>
+  </div>
+</div>
+
+{% if contexts_error %}<div class="errbox">{{ contexts_error }}</div>{% endif %}
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Run</h2></header>
+  <div class="body">
+    <form class="runform" method="post" action="/tools/options-strategy">
+      <div class="field" style="min-width:340px;">
+        <label for="context_path">Context</label>
+        <select id="context_path" name="context_path" required>
+          <option value="" {{ 'selected' if not selected_path else '' }}>-- choose a context --</option>
+          {% for c in contexts if c.valid %}
+          <option value="{{ c.path }}" {{ 'selected' if c.path == selected_path else '' }}>
+            {{ c.ticker or '?' }} &middot; {{ c.suite }} &middot; {{ c.run_id }} &middot; {{ c.created_at_utc | ts }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode">
+          <option value="cached" {{ 'selected' if selected_mode == 'cached' else '' }}>cached (instant)</option>
+          <option value="live" {{ 'selected' if selected_mode == 'live' else '' }}>live (fresh chain scan)</option>
+        </select>
+      </div>
+      <button type="submit">Run tool</button>
+    </form>
+  </div>
+</div>
+
+{% if result %}
+<div class="panel">
+  <header>
+    <h2>Result</h2>
+    <span class="note">
+      {{ result.chain_verdict or '' }} &middot; vol_regime {{ result.vol_regime or '--' }}
+      &middot; spot {{ result.current_price | num }} &middot; expiration {{ result.expiration_date or '--' }}
+    </span>
+  </header>
+  {% if result.summary %}
+  <div class="body">
+    <p class="small muted">{{ result.summary }}</p>
+  </div>
+  {% endif %}
+  {% if result.strategies %}
+  <div class="tablewrap scrollbox">
+    <table>
+      <thead><tr>
+        <th>#</th><th>strategy_type</th><th>vol_regime</th><th>legs</th>
+        <th class="num">rank_score</th><th class="wrap">rationale</th>
+      </tr></thead>
+      <tbody>
+      {% for s in result.strategies %}
+        <tr>
+          <td class="num">{{ loop.index0 }}</td>
+          <td><strong>{{ s.strategy_type }}</strong></td>
+          <td><span class="pill plain">{{ s.vol_regime }}</span></td>
+          <td class="small">
+            {% for leg in s.legs %}
+              {{ leg.quantity }}&times;{{ leg.instrument_type }}@{{ leg.strike | num }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </td>
+          <td class="num">{{ s.rank_score | num }}</td>
+          <td class="wrap small muted">{{ s.rationale }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="body"><div class="empty">No strategies in this artifact.</div></div>
+  {% endif %}
+  <div class="body">
+    <details>
+      <summary class="muted small" style="cursor:pointer;">raw JSON</summary>
+      <pre class="json" style="margin-top:8px;">{{ result_json }}</pre>
+    </details>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

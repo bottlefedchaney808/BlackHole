@@ -17,6 +17,16 @@ from typing import Optional
 
 from upi_decoder import OpenFigiClient, decode_one
 
+# Reuse db_loader's connection settings and single-writer cross-process lock.
+# decode_upis.py writes to upi_decode_state/upi_reference in the same swaps.db
+# file that db_loader.py writes swap_trades/ingestion_state/scrape_log to, and
+# it runs right after both the poller (scheduled_ingest.run_ingestion_job) and
+# backfill (scheduled_ingest.py --backfill). Without sharing db_loader's lock
+# and pragmas, this path could race a concurrent db_loader write on the same
+# file even though the lock in db_loader.py alone would otherwise serialize
+# writers.
+from db_loader import _configure_connection, _write_lock
+
 logger = logging.getLogger(__name__)
 
 # SWAPS_DB_PATH env var overrides, e.g. for a mounted Docker volume; see
@@ -29,6 +39,7 @@ DEFAULT_MAX_BATCHES = 20
 def _connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
+    _configure_connection(conn)
     return conn
 
 
@@ -126,7 +137,11 @@ def run(
     totals = {"rows_scanned": 0, "new_upis": 0, "decoded": 0, "batches": 0}
     try:
         for _ in range(max_batches):
-            stats = run_batch(conn, batch_size, figi_client)
+            # Hold the same cross-process write lock db_loader.py uses for the
+            # full read+decode+write batch, not just the final commit, so this
+            # batch can't interleave with a concurrent db_loader write txn.
+            with _write_lock:
+                stats = run_batch(conn, batch_size, figi_client)
             totals["rows_scanned"] += stats["rows_scanned"]
             totals["new_upis"] += stats["new_upis"]
             totals["decoded"] += stats["decoded"]

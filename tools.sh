@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Launches the Tools module (Options Strategy Tool & Backtesting Tool),
+# served through the existing dashboard app, and opens it in your default
+# browser. Binds to localhost only. Linux/Mac equivalent of tools.bat.
+#
+# Note: this pins port 8787 to match dashboard.bat/.sh exactly (the
+# dashboard's own README documents the uvicorn default of 8000 for a bare
+# `uvicorn app:app` invocation -- these scripts override that to 8787 so the
+# "already running" check below has a fixed port to probe).
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+cd "$SCRIPT_DIR"
+unset PYTHONPATH
+unset PYTHONHOME
+
+echo "============================================================"
+echo " Tools Module - Options Strategy Tool & Backtesting Tool"
+echo "============================================================"
+echo
+
+VENV_PYTHON=""
+for candidate in "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/.venv/bin/python"; do
+    if [ -x "$candidate" ]; then
+        VENV_PYTHON="$candidate"
+        break
+    fi
+done
+
+if [ -z "$VENV_PYTHON" ]; then
+    echo "Shared .venv not found at $SCRIPT_DIR/.venv -- run: python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
+    echo
+    exit 1
+fi
+
+PORT=8787
+URL="http://127.0.0.1:${PORT}/tools"
+
+open_url() {
+    if command -v open >/dev/null 2>&1; then
+        open "$URL" >/dev/null 2>&1 &
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$URL" >/dev/null 2>&1 &
+    else
+        echo "Open $URL in your browser."
+    fi
+}
+
+# Refuse to start a second dashboard on the same port -- besides just
+# failing to bind, a duplicate process also doubles up writes against
+# swaps.db and can cause "database is locked" errors for the scheduler.
+# Bash's /dev/tcp pseudo-device lets us probe the port without depending on
+# netstat/lsof/nc being installed.
+if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+    exec 3<&- 2>/dev/null || true
+    exec 3>&- 2>/dev/null || true
+    echo "A dashboard already appears to be running on port ${PORT}."
+    echo "Only run ONE instance of dashboard.sh / tools.sh at a time."
+    echo "Opening the Tools module in the browser instead..."
+    open_url
+    exit 0
+fi
+
+# Give uvicorn a couple seconds to bind before opening the browser tab,
+# so it doesn't load before anything is listening.
+( sleep 2; open_url ) &
+
+echo "Starting dashboard app (Tools is served through it)..."
+echo "Tools module URL: ${URL}"
+echo
+
+cd dashboard
+"$VENV_PYTHON" -m uvicorn app:app --host 127.0.0.1 --port "$PORT"
+EXIT_CODE=$?
+if [ "$EXIT_CODE" -ne 0 ]; then
+    echo
+    echo "Dashboard exited with an error (see above). If it says the port is"
+    echo "already in use or \"access forbidden\", another process or an unrelated"
+    echo "service already owns port ${PORT} -- edit tools.sh and pick"
+    echo "a different --port number (and update the URL above it)."
+fi
+exit "$EXIT_CODE"

@@ -1009,6 +1009,69 @@ def run_price_dist():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# MODULE 10 — Hedge Optimizer (min-variance QP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_hedge_optimizer():
+    from var_engine.hedge_optimizer import (
+        HedgeInstrument, HedgeOptimizerInputs, min_var_hedge
+    )
+    header("10. Hedge Optimizer — Minimum-Variance QP")
+
+    section("Positions to Hedge")
+    n = inp("Number of positions", default=2, cast=int)
+    names, pos_list, vols_list = [], [], []
+    for i in range(n):
+        nm  = inp(f"  Position {i+1} name", default=f"Asset{i+1}")
+        pv  = inp(f"  Position ($)", default=1_000_000, cast=float)
+        vol = inp(f"  Annualised vol", default=0.25, cast=float)
+        names.append(nm); pos_list.append(pv); vols_list.append(vol)
+
+    corr = inp_corr_matrix(names)
+    vols_arr = np.array(vols_list)
+    cov_matrix = np.diag(vols_arr) @ corr @ np.diag(vols_arr)
+
+    section("Hedge Instruments")
+    n_hedge = inp("Number of hedge instruments", default=1, cast=int)
+    hedges = []
+    for i in range(n_hedge):
+        hn   = inp(f"  Hedge {i+1} name", default=f"HEDGE{i+1}")
+        hvol = inp(f"  Hedge {i+1} annualised vol", default=0.18, cast=float)
+        hbeta= inp(f"  Hedge {i+1} beta to positions", default=1.0, cast=float)
+        corr_to_pos = []
+        for nm in names:
+            c = inp(f"    corr({hn},{nm})", default=0.5, cast=float)
+            corr_to_pos.append(float(np.clip(c, -0.999, 0.999)))
+        hedges.append(HedgeInstrument(
+            name=hn, volatility=hvol,
+            correlation_to_positions=np.array(corr_to_pos), beta=hbeta,
+        ))
+
+    section("VaR Parameters")
+    var_days = inp("VaR horizon (trading days)", default=10, cast=int)
+    trd      = inp("Trading days per year", default=252, cast=int)
+    conf     = inp("Confidence level (e.g. 0.99)", default=0.99, cast=float)
+
+    r = min_var_hedge(HedgeOptimizerInputs(
+        positions=np.array(pos_list), cov_matrix=cov_matrix,
+        hedge_instruments=hedges, var_horizon=var_days,
+        trading_days=trd, confidence=conf,
+    ))
+
+    section("Results")
+    result("Base VaR",            r.base_var,          "$")
+    result("Hedged VaR",          r.hedged_var,        "$")
+    result("VaR reduction",       r.var_reduction_pct,  "%")
+    result("Base port vol",       r.base_port_vol,      "")
+    result("Hedged port vol",     r.hedged_port_vol,    "")
+    result_table(
+        ["Hedge Instrument", "Optimal Weight"],
+        [(hn, f"{w:,.4f}") for hn, w in zip(r.hedge_names, r.optimal_weights)],
+        "Optimal Hedge Weights"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Main menu
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1022,6 +1085,7 @@ MODULES = [
     ("Stress Testing",                       run_stress_test),
     ("VaR Aggregation (EWMA + PCA)",         run_var_agg),
     ("Price Distribution + Probability Calc",run_price_dist),
+    ("Hedge Optimizer (min-variance QP)",    run_hedge_optimizer),
 ]
 
 def menu():

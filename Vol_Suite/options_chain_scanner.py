@@ -54,6 +54,7 @@ from thetadata_client import ThetaDataController, strike_from_theta
 import expiry_selector
 from variance_swap_screener import compute_realized_vol
 from correlation_engine import fetch_price_history
+from vs_utils import timestamped_output_dir
 from dealer_positioning import (
     DARK_BG, GRID_COLOR, TEXT_COLOR, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED,
     ACCENT_GOLD, ACCENT_PURPLE, ACCENT_CYAN, ACCENT_ORANGE,
@@ -603,7 +604,7 @@ def print_report(result: ScanResult):
 
 
 def export_csv(result: ScanResult, output_dir: Optional[str] = None) -> str:
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{result.ticker}_{result.expiry}_chain_scan_{timestamp}.csv")
@@ -613,7 +614,7 @@ def export_csv(result: ScanResult, output_dir: Optional[str] = None) -> str:
 
 def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) -> str:
     df = result.df
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), facecolor=DARK_BG)
@@ -687,7 +688,7 @@ def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optio
     interactively for the rest of the run; otherwise falls back to a plain
     nearest-expiry lookup (no prompting -- this is meant to be called from
     inside an already-orchestrated run)."""
-    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     files = []
     td = ThetaDataController()
@@ -790,7 +791,7 @@ def main():
 
     print_report(result)
 
-    out_dir = os.getenv("VS_OUTPUT_DIR", os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     try:
         csv_path = export_csv(result, out_dir)
         print(f"\nSaved CSV: {csv_path}")

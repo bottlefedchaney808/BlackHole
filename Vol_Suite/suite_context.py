@@ -37,6 +37,38 @@ DEFAULT_SENTIMENT_SUITE_ROOT = os.environ.get(
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COMPACT_DATE = re.compile(r"^\d{8}$")
 
+# Matches a Windows drive-letter path ("C:/...", "C:\...") or a UNC path
+# ("\\server\share\..."). Used by _is_absolute_any_os below.
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+_WINDOWS_UNC_PATH = re.compile(r"^\\\\")
+
+
+def _is_absolute_any_os(path_value: str) -> bool:
+    """Platform-agnostic "is this an absolute path" check.
+
+    Path(...).is_absolute() answers relative to the OS actually running the
+    check: a Windows path like "C:/Users/..." is NOT absolute according to
+    Python's own PurePosixPath (used on Linux/Mac), and a POSIX path like
+    "/home/..." is NOT absolute according to PureWindowsPath. Since
+    suite_context.json can be written on one OS and validated (e.g. by
+    Tools/context_loader.list_available_contexts) on another, that check
+    must accept either style regardless of which OS is currently running --
+    only the validation check needs this leniency; _to_abs_path_str's own
+    path *resolution* still legitimately depends on the real OS underneath
+    it and is left untouched.
+    """
+    if not isinstance(path_value, str) or not path_value:
+        return False
+    if path_value.startswith("/"):
+        return True
+    if _WINDOWS_UNC_PATH.match(path_value):
+        return True
+    if _WINDOWS_DRIVE_PATH.match(path_value):
+        return True
+    # Fall back to the current OS's own notion of absolute, in case of some
+    # other platform-specific absolute form neither check above covers.
+    return Path(path_value).is_absolute()
+
 
 def _normalize_expiration(value: str) -> str:
     """Accept either ThetaData's compact "20261016" or ISO "2026-10-16", and
@@ -168,7 +200,7 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
     _require(context["schema_version"] == 1, "schema_version must be 1")
     _require(isinstance(context["run_id"], str) and context["run_id"].strip(), "run_id must be a non-empty string")
     _require(isinstance(context["created_at_utc"], str) and context["created_at_utc"].strip(), "created_at_utc must be a non-empty string")
-    _require(Path(context["output_dir"]).is_absolute(), "output_dir must be an absolute path")
+    _require(_is_absolute_any_os(context["output_dir"]), "output_dir must be an absolute path")
 
     focus = context["focus"]
     _require(isinstance(focus, dict), "focus must be an object")

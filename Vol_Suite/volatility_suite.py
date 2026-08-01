@@ -427,6 +427,23 @@ def _prompt_sign_model_and_options_chain(pack_ctx: Optional[dict]) -> Tuple[str,
     return sign_model, run_options_chain
 
 
+def _prompt_extra_analytics(pack_ctx: Optional[dict]) -> Tuple[bool, bool, bool]:
+    """Toggles for the three optional analytics modules that sit alongside the
+    core pipeline: the 2D (strike x tenor) vol surface, the VRP term
+    structure (1-12mo), and -- only offered when a sentiment-scanner pack was
+    actually loaded -- the CNS/war_score sentiment backtest. Asked identically
+    by both run_focus_workflow and run_unified_flow, same pattern as
+    _prompt_sign_model_and_options_chain."""
+    run_vs2d = _prompt_yes_no("Build 2D vol surface (strike x tenor) for the focus ticker?", default=False)
+    run_vrp = _prompt_yes_no("Run VRP term structure (1-12mo) for the focus ticker?", default=False)
+    run_sent_bt = False
+    if pack_ctx:
+        run_sent_bt = _prompt_yes_no(
+            "Run sentiment backtest (CNS/war_score vs forward returns) on the highlighted-pack history?",
+            default=False)
+    return run_vs2d, run_vrp, run_sent_bt
+
+
 def _child_entrypoint_for_suite(suite_root: str, suite_name: str) -> str:
     root = Path(suite_root)
     candidates = {
@@ -727,6 +744,9 @@ def _build_vol_result(*, artifacts: Dict[str, Any], context: Optional[Dict[str, 
         "timestamp": _iso_utc_now(),
         "vol_surface": vol_surface,
         "dealer_positioning": dealer,
+        "vol_surface_2d": artifacts.get("vol_surface_2d", {"available": False}),
+        "vrp_term_structure": artifacts.get("vrp_term_structure", {"available": False}),
+        "sentiment_backtest": artifacts.get("sentiment_backtest", {"available": False}),
         "gamma_records": artifacts.get("gamma_records", []),
         "gamma_records_total": int(artifacts.get("gamma_records_total", 0) or 0),
         "gamma_records_truncated": bool(artifacts.get("gamma_records_truncated", False)),
@@ -791,6 +811,34 @@ def _import_shared_schemas():
         return None
 
 
+def _apply_instrument_resolver(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Enrich a vol_result payload with cross-source instrument identifiers,
+    per instrument_resolver.py's own stated integration point (see that
+    module's docstring: "This module can be imported by volatility_suite.py
+    to add ... Automatic identifier normalization in analysis pipeline ...
+    Cross-source instrument tracking in vol_result.json").
+
+    Gated on VS_INSTRUMENT_RESOLVER (set from --instrument-resolver in
+    main()) so a run with no resolver requested pays zero cost and the
+    payload is unchanged. Failures here must not cost the run its
+    vol_result.json, so they are caught and reported rather than raised.
+    """
+    resolver_name = os.environ.get("VS_INSTRUMENT_RESOLVER")
+    if not resolver_name:
+        return payload
+    try:
+        import instrument_resolver as ir
+        resolver = ir.get_resolver_from_args(resolver_name)
+        normalizer = ir.Vol_SuiteInstrumentNormalizer(resolver)
+        payload = normalizer.add_instrument_identifiers_to_result(payload)
+        if isinstance(payload.get("vol_surface"), dict):
+            payload["vol_surface"] = normalizer.normalize_instrument_in_vol_surface(
+                payload["vol_surface"])
+    except Exception as e:
+        print(f"  [instrument_resolver] enrichment failed: {e}", file=sys.stderr)
+    return payload
+
+
 def _write_vol_result(path: str, payload: Dict[str, Any]) -> str:
     """Validate then write. A payload that fails its own schema is REPLACED by
     an error payload that says so, so the file on disk is always readable by a
@@ -851,6 +899,9 @@ def _run_core_analysis(
     run_options_chain: bool,
     out_root: str,
     run_group_screener: Optional[bool] = None,
+    run_vol_surface_2d: bool = False,
+    run_vrp_term_structure: bool = False,
+    run_sentiment_backtest: bool = False,
 ) -> Tuple[List[str], List[dict], Dict[str, Any]]:
     """Runs the full Vol_Suite analysis pipeline: group screener (if a pack
     basket is present), basket correlation/dispersion, variance-swap
@@ -907,6 +958,9 @@ def _run_core_analysis(
         "group_screener_ran": False,
         "garch_ran": False,
         "chain_scan": None,
+        "vol_surface_2d": {"available": False},
+        "vrp_term_structure": {"available": False},
+        "sentiment_backtest": {"available": False},
         # Per-step failures. A failing module prints and continues (a broken
         # GARCH fit must not cost you the dealer-positioning run), which used
         # to mean the failure left no trace anywhere a machine could read.
@@ -940,6 +994,52 @@ def _run_core_analysis(
             except Exception as e:
                 print(f"  Group screener failed: {e}")
                 _note_error("group_screener", e)
+
+    # ---- Optional: sentiment backtest (CNS/war_score vs forward returns) ----
+    # Only meaningful when a sentiment-scanner pack was actually loaded this
+    # run -- the backtest measures the pack signal's historical predictive
+    # power, not anything about the focus ticker itself.
+    if run_sentiment_backtest:
+        if pack_ctx:
+            print("\n[Running] Sentiment Backtest (CNS/war_score vs forward returns)")
+            try:
+                import sentiment_backtest as sbt
+                manifest_path = pack_ctx.get("manifest_path") or _default_pack_manifest_path()
+                # manifest_path = .../sentiment-scanner/data/exports/highlighted_ticker_packs/latest_manifest.json
+                # run_sentiment_backtest wants the "data" dir three levels up.
+                data_dir = os.path.dirname(os.path.dirname(os.path.dirname(manifest_path)))
+                bt_result = sbt.run_sentiment_backtest(data_dir, forward_days=5)
+                interp = (
+                    f"packs_analyzed={bt_result.total_packs_analyzed}  "
+                    f"signals={bt_result.total_signals}  "
+                    f"hit_rate(top-bottom)={bt_result.hit_rate_top_vs_bottom:+.4f}  "
+                    f"sharpe(long-only top quartile)={bt_result.sharpe_long_only}  "
+                    f"cns_return_corr={bt_result.cns_return_correlation}"
+                )
+                sections.append({
+                    "title": "Sentiment Backtest (CNS/war_score vs forward returns)",
+                    "text": interp,
+                    "images": [],
+                })
+                artifacts["sentiment_backtest"] = {
+                    "available": True,
+                    "start_date": bt_result.start_date,
+                    "end_date": bt_result.end_date,
+                    "total_packs_analyzed": bt_result.total_packs_analyzed,
+                    "total_signals": bt_result.total_signals,
+                    "top_quartile_cns_names": list(bt_result.top_quartile_cns_names),
+                    "bottom_quartile_cns_names": list(bt_result.bottom_quartile_cns_names),
+                    "hit_rate_top_vs_bottom": _json_safe(bt_result.hit_rate_top_vs_bottom),
+                    "sharpe_long_only": _json_safe(bt_result.sharpe_long_only),
+                    "cns_return_correlation": _json_safe(bt_result.cns_return_correlation),
+                    "forward_days": bt_result.forward_days,
+                }
+            except Exception as e:
+                print(f"  Sentiment backtest failed: {e}")
+                _note_error("sentiment_backtest", e)
+        else:
+            print("\n[Skipping] Sentiment Backtest -- no highlighted ticker pack was "
+                  "loaded this run (needs the ticker-pack input mode).")
 
     # ---- Step 1: basket stats (tickers/weights already resolved by caller) ----
     import correlation_engine as ce
@@ -1092,6 +1192,78 @@ def _run_core_analysis(
         print(f"  GARCH failed: {e}")
         _note_error("garch", e)
 
+    if run_vol_surface_2d:
+        print("\n[Running] 2D Vol Surface (strike x tenor)")
+        try:
+            import vol_surface_2d as vs2d
+            from thetadata_client import ThetaDataController
+            td_vs2d = ThetaDataController()
+            try:
+                surface = vs2d.build_surface(ticker, td_vs2d)
+            finally:
+                td_vs2d.close()
+            if surface is not None:
+                ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+                surf_path = os.path.join(out_root, f"{ticker}_vol_surface_2d_{ts_tag}.png")
+                vs2d.plot(surface, surf_path)
+                produced.append(surf_path)
+                tenors = surface.fitted_params.get("tenors", [])
+                spot = surface.fitted_params.get("spot")
+                sections.append({
+                    "title": f"2D Vol Surface: {ticker}",
+                    "text": (f"Fitted {len(tenors)} tenor(s) via quadratic-per-expiry smile "
+                             f"+ linear total-variance interpolation; spot={spot:.2f}."),
+                    "images": [surf_path],
+                })
+                artifacts["vol_surface_2d"] = {
+                    "available": True,
+                    "tenors": _json_safe(tenors),
+                    "spot": _json_safe(spot),
+                    "chart_path": surf_path,
+                }
+            else:
+                print(f"  Could not build a 2D vol surface for {ticker} "
+                      f"(insufficient expiries/data).")
+        except Exception as e:
+            print(f"  2D vol surface failed: {e}")
+            _note_error("vol_surface_2d", e)
+
+    if run_vrp_term_structure:
+        print("\n[Running] VRP Term Structure (1-12mo)")
+        try:
+            import vrp_term_structure as vts
+            from thetadata_client import ThetaDataController
+            td_vrp = ThetaDataController()
+            try:
+                vrp_spot = td_vrp.fetch_spot_price(ticker)
+                vrp_q = td_vrp.fetch_dividend_yield(ticker)
+                vrp_r = td_vrp.fetch_risk_free_rate(0.25) or 0.05
+                vrp_result = vts.compute_vrp_term_structure(ticker, td_vrp, vrp_spot, vrp_r, vrp_q)
+            finally:
+                td_vrp.close()
+            ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+            vrp_path = os.path.join(out_root, f"{ticker}_vrp_term_structure_{ts_tag}.png")
+            vts.plot_vrp_term_structure(vrp_result, vrp_path)
+            produced.append(vrp_path)
+            sections.append({
+                "title": f"VRP Term Structure: {ticker} (shape={vrp_result.shape})",
+                "text": "\n".join(
+                    f"{p.expiry_label}: fair={p.fair_vol_pct:.2f}% atm={p.atm_iv_pct:.2f}% "
+                    f"vrp={p.vrp_pct:+.2f}pp rv30={p.rv_30d_pct:.2f}%"
+                    for p in vrp_result.points
+                ),
+                "images": [vrp_path],
+            })
+            artifacts["vrp_term_structure"] = {
+                "available": True,
+                "shape": vrp_result.shape,
+                "points": [_json_safe(vars(p)) for p in vrp_result.points],
+                "chart_path": vrp_path,
+            }
+        except Exception as e:
+            print(f"  VRP term structure failed: {e}")
+            _note_error("vrp_term_structure", e)
+
     # This is a SEPARATE, narrower step from the Group Screener above (Step
     # 0): it only ever screens the one focus ticker, so its table always has
     # one row. That's by design, not a bug -- but rendered under the generic
@@ -1239,6 +1411,7 @@ def run_unified_flow():
     # silently default the dealer-positioning sign model to v1 and the
     # options chain scanner to off. See FIX_PLAN_20260725.md.
     sign_model, run_options_chain = _prompt_sign_model_and_options_chain(pack_ctx)
+    run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = _prompt_extra_analytics(pack_ctx)
 
     option_type = _choose_option_type()
     strike = _choose_optional_strike()
@@ -1258,6 +1431,9 @@ def run_unified_flow():
         use_pack_basket=use_pack_basket, tickers=tickers, weights=weights,
         chosen_index=chosen_index, target_years=target_years, expiration=expiration,
         sign_model=sign_model, run_options_chain=run_options_chain, out_root=out_root,
+        run_vol_surface_2d=run_vol_surface_2d,
+        run_vrp_term_structure=run_vrp_term_structure,
+        run_sentiment_backtest=run_sentiment_backtest,
     )
 
     sentiment_pack_json = None
@@ -1370,9 +1546,10 @@ def run_unified_flow():
     try:
         vol_result_path = _write_vol_result(
             os.path.join(out_root, "vol_result.json"),
-            _build_vol_result(artifacts=artifacts, context=context,
-                              output_dir=out_root, produced=produced,
-                              summary=summary_text),
+            _apply_instrument_resolver(
+                _build_vol_result(artifacts=artifacts, context=context,
+                                  output_dir=out_root, produced=produced,
+                                  summary=summary_text)),
         )
         print(f"Wrote vol result: {vol_result_path}")
     except Exception as e:
@@ -1438,6 +1615,7 @@ def run_focus_workflow():
     # _prompt_sign_model_and_options_chain), so the two entry points can't
     # drift on this again.
     sign_model, run_options_chain = _prompt_sign_model_and_options_chain(pack_ctx)
+    run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = _prompt_extra_analytics(pack_ctx)
 
     pdf_choice = input("Compile outputs into single PDF? (y/n, default n): ").strip().lower() or 'n'
 
@@ -1452,6 +1630,9 @@ def run_focus_workflow():
         use_pack_basket=use_pack_basket, tickers=tickers, weights=weights,
         chosen_index=chosen_index, target_years=target_years, expiration=expiration,
         sign_model=sign_model, run_options_chain=run_options_chain, out_root=out_root,
+        run_vol_surface_2d=run_vol_surface_2d,
+        run_vrp_term_structure=run_vrp_term_structure,
+        run_sentiment_backtest=run_sentiment_backtest,
     )
 
     # ---- Summary / optional PDF ----
@@ -1552,6 +1733,9 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
         sign_model = "vol_surface_replication"
     run_options_chain = _env_flag("VS_RUN_CHAIN_SCANNER", False)
     run_group_screener = _env_flag("VS_RUN_GROUP_SCREENER", False)
+    run_vol_surface_2d = _env_flag("VS_RUN_VOL_SURFACE_2D", False)
+    run_vrp_term_structure = _env_flag("VS_RUN_VRP_TERM_STRUCTURE", False)
+    run_sentiment_backtest = _env_flag("VS_RUN_SENTIMENT_BACKTEST", False)
 
     print("=" * 60)
     print("  VOLATILITY SUITE — context mode (non-interactive)")
@@ -1583,6 +1767,9 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
             run_options_chain=run_options_chain,
             out_root=out_root,
             run_group_screener=run_group_screener,
+            run_vol_surface_2d=run_vol_surface_2d,
+            run_vrp_term_structure=run_vrp_term_structure,
+            run_sentiment_backtest=run_sentiment_backtest,
         )
     except Exception as exc:
         _write_vol_result(out_path, _error_vol_result(
@@ -1607,9 +1794,10 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
         f"failed_steps={len(artifacts.get('errors', []))}",
     ])
 
-    payload = _build_vol_result(artifacts=artifacts, context=context,
-                                output_dir=out_root, produced=produced,
-                                summary=summary)
+    payload = _apply_instrument_resolver(
+        _build_vol_result(artifacts=artifacts, context=context,
+                          output_dir=out_root, produced=produced,
+                          summary=summary))
     written = _write_vol_result(out_path, payload)
     print(f"\nWrote vol result: {written}")
     print(summary)
@@ -1645,7 +1833,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--mode", choices=["1", "2"], default=None,
         help="Preselect the interactive run mode (1 = focus workflow, "
              "2 = unified cross-suite run) instead of being prompted for it.")
+    parser.add_argument(
+        "--instrument-resolver", default=None,
+        help="Name of an IdentifierResolver (see instrument_resolver.py) used to "
+             "enrich vol_result.json with cross-source normalized instrument "
+             "identifiers for the focus/index tickers. Unset (default) skips "
+             "enrichment entirely -- vol_result.json is unchanged.")
     args = parser.parse_args(argv)
+
+    if args.instrument_resolver:
+        os.environ["VS_INSTRUMENT_RESOLVER"] = args.instrument_resolver
 
     # The orchestrator sets SUITE_CONTEXT_PATH/SUITE_CONTEXT_MODE in the child's
     # environment as well as passing the flags. Honouring the environment means
