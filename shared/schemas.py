@@ -1,17 +1,19 @@
-"""Shared JSON schema validators for all 6 inter-suite artifacts.
+"""Shared JSON schema validators for all inter-suite artifacts.
 
 Each validator accepts dict data (as parsed from JSON) and raises ValueError
 on the first violation.  This module mirrors and supplements the inline
 validation in each suite with a central, importable copy suitable for testing
 and cross-suite tooling.
 
-The 6 artifacts:
+The artifacts:
   1. suite_context.json  — schema_version=1  (Vol_Suite → everyone via --context)
   2. options_result.json — no schema_version (Options_Suite → Vol_Suite)
   3. var_result.json     — no schema_version (VaR_Tools_Simulations → Vol_Suite)
   4. Sentiment pack JSON — no schema_version (sentiment-scanner ticker pack)
   5. Sentiment context   — schema_version=2  (sentiment-scanner context export)
   6. vol_result.json     — schema_version=1  (Vol_Suite → orchestrator)
+  7. quant_summary.json  — schema_version=1  (dashboard: per-run module summary,
+     built by shared/summary.py::build_run_summary() from artifacts 2/3/4/6)
 """
 
 from __future__ import annotations
@@ -578,3 +580,80 @@ def validate_vol_result(data: Dict[str, Any]) -> None:
     _require(bool(vol_surface["focus"]) or bool(vol_surface["index"]) or dealer["available"],
              "status='ok' but the payload is empty: no focus leg, no index leg, "
              "and dealer_positioning.available is false")
+
+
+# ── 7. quant_summary.json ───────────────────────────────────────────────
+
+QUANT_SUMMARY_SCHEMA_VERSION = 1
+
+#: The four module-status values the dashboard's `/quant` module cards render
+#: with distinct visual treatment. `degraded` (result file present but only
+#: partially extractable) is deliberately distinct from `error` (the suite run
+#: itself failed), and both are distinct from `unsupported` (the module's
+#: `runnable` flag is False, e.g. Options today per the `tool-launcher` skill
+#: — a known, pre-existing limitation, not a regression). See the design spec's
+#: Phase 1 table (`docs/superpowers/specs/2026-08-01-quant-console-design.md`).
+QUANT_SUMMARY_MODULE_STATUSES = ("ok", "error", "degraded", "unsupported")
+
+#: Fields every `quant_summary.json` top-level object carries.
+QUANT_SUMMARY_REQUIRED_KEYS = (
+    "schema_version", "run_id", "ticker", "created_at_utc", "modules",
+)
+
+#: Fields every `modules[]` entry carries, regardless of status.
+QUANT_SUMMARY_MODULE_REQUIRED_KEYS = (
+    "module", "status", "headline", "metrics", "warnings", "source_result",
+)
+
+
+def validate_quant_summary(data: Dict[str, Any]) -> None:
+    """Validate a quant_summary.json payload produced by
+    shared/summary.py::build_run_summary() and written by the dashboard's
+    _execute_run() at the end of a suite/orchestrator run.
+
+    One entry in ``modules`` per suite that ran (or was skipped as
+    ``unsupported``); an empty ``modules`` list is schema-valid on its own —
+    it just means no suite produced anything worth summarizing yet — but a
+    missing/malformed ``modules`` key is not.
+
+    Raises ValueError on the first violation.
+    """
+    _require(isinstance(data, dict), "quant_summary must be a JSON object")
+
+    _warn_missing_schema_version(data, "quant_summary")
+
+    for key in QUANT_SUMMARY_REQUIRED_KEYS:
+        _require(key in data, f"Missing required field: {key}")
+
+    _require(data["schema_version"] == QUANT_SUMMARY_SCHEMA_VERSION,
+             f"schema_version must be {QUANT_SUMMARY_SCHEMA_VERSION}")
+    _require(isinstance(data["run_id"], str) and data["run_id"].strip(),
+             "run_id must be a non-empty string")
+    _require(isinstance(data["ticker"], str) and data["ticker"].strip(),
+             "ticker must be a non-empty string")
+    _require(isinstance(data["created_at_utc"], str) and data["created_at_utc"].strip(),
+             "created_at_utc must be a non-empty string")
+
+    modules = data["modules"]
+    _require(isinstance(modules, list), "modules must be a list")
+
+    for i, mod in enumerate(modules):
+        _require(isinstance(mod, dict), f"modules[{i}] must be an object")
+
+        for key in QUANT_SUMMARY_MODULE_REQUIRED_KEYS:
+            _require(key in mod, f"modules[{i}] missing required field: {key}")
+
+        _require(isinstance(mod["module"], str) and mod["module"].strip(),
+                 f"modules[{i}].module must be a non-empty string")
+        _require(mod["status"] in QUANT_SUMMARY_MODULE_STATUSES,
+                 f"modules[{i}].status must be one of {QUANT_SUMMARY_MODULE_STATUSES}, "
+                 f"got {mod['status']!r}")
+        _require(isinstance(mod["headline"], str),
+                 f"modules[{i}].headline must be a string")
+        _require(isinstance(mod["metrics"], dict),
+                 f"modules[{i}].metrics must be an object")
+        _require(isinstance(mod["warnings"], list)
+                 and all(isinstance(w, str) for w in mod["warnings"]),
+                 f"modules[{i}].warnings must be a list of strings")
+        _require(isinstance(mod["source_result"], str),
+                 f"modules[{i}].source_result must be a string")
