@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+{% block title %}Quant Console -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<style>
+/* Ported from .claude/skills/vol-suite.py::generate_dashboard_html's
+   dead-end <style> block (metric-grid/metric-card/tabs) -- that script never
+   rendered anywhere, so this is the first place that CSS is actually used.
+   Re-mapped onto base.html's own design tokens (var(--panel-2)/(--border)/
+   etc.) instead of copied verbatim, since the original used a different
+   token set (var(--surface-1), var(--fill-accent), ...) that doesn't exist
+   here. */
+.quant-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 18px; margin-bottom: 20px;
+}
+.quant-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; display: flex; flex-direction: column; gap: 10px;
+}
+.quant-card > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.quant-card .focus { margin: -4px 0 0; }
+.quant-card .unsupported-note {
+  background: var(--panel-2); border: 1px dashed var(--border); border-radius: 8px;
+  padding: 8px 10px; color: var(--muted);
+}
+.quant-card .run-meta { margin-top: 8px; }
+
+/* Fourth status color, alongside the existing .pill.ok / .pill.error --
+   `degraded` (amber, source result present but only partially extractable)
+   and `unsupported` (neutral grey, module gated off by runnable=False) are
+   the two new visual treatments this task's schema addition (Task 2) exists
+   to make possible -- see the design spec's Phase 1 table. */
+.pill.degraded { background: var(--warn-soft); color: var(--warn); }
+.pill.unsupported { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tab {
+  padding: 6px 10px; cursor: pointer; background: transparent; border: none;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab:hover { color: var(--text); }
+.tab-content { display: none; padding-top: 10px; }
+.tab-content.active { display: block; }
+
+.metric-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px; margin: 8px 0;
+}
+.metric-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.metric-value { font-size: 14px; font-weight: 620; word-break: break-word; }
+
+.module-entry-head { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.warnings-list { margin: 6px 0 0; padding-left: 18px; color: var(--warn); }
+</style>
+
+<h1>Quant Console</h1>
+<p class="sub">
+  One card per module &middot; Run &rarr; polls the existing <code>/runs/{run_id}</code> &middot;
+  once done, fetches <code>/runs/{run_id}/summary</code> (<code>quant_summary.json</code>)
+</p>
+
+<div class="quant-grid">
+  {% for m in modules %}
+  <div class="quant-card" data-module-id="{{ m.id }}" data-suite="{{ m.suite }}"
+       data-runnable="{{ 'true' if m.runnable else 'false' }}">
+    <header>
+      <h2>{{ m.name }}</h2>
+      {% if m.runnable %}
+        <span class="pill plain" data-role="module-badge">not run yet</span>
+      {% else %}
+        <span class="pill unsupported" data-role="module-badge">unsupported</span>
+      {% endif %}
+    </header>
+    <p class="focus small muted">{{ m.focus }}</p>
+
+    {% if not m.runnable %}
+      <div class="unsupported-note small">
+        Known limitation, not a new failure: this module's context-mode output
+        does not currently pass validation (see the <code>tool-launcher</code>
+        skill). A run can still be triggered, but its summary will always show
+        <span class="pill unsupported">unsupported</span> rather than
+        attempting to extract a result.
+      </div>
+    {% endif %}
+
+    <form class="runform" onsubmit="return false;">
+      <div class="field">
+        <label>Ticker</label>
+        <input type="text" class="ticker-input" placeholder="NVDA" autocomplete="off">
+      </div>
+      <button type="button" class="run-btn" onclick="startModuleRun(this)">Run</button>
+    </form>
+
+    <div class="run-status" style="display:none;">
+      <div class="kv run-meta"></div>
+    </div>
+
+    <div class="summary-area" style="display:none;">
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="summary" onclick="switchQuantTab(event, this)">Summary</button>
+        <button type="button" class="tab" data-tab="raw" onclick="switchQuantTab(event, this)">Raw</button>
+      </div>
+      <div class="tab-content active" data-tab-content="summary"></div>
+      <div class="tab-content" data-tab-content="raw">
+        <pre class="json raw-json"></pre>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// No framework, no CDN -- matches index.html's runform script (offline-first).
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+  });
+}
+
+var RUN_PILL_CLASSES = ['ok', 'partial', 'running', 'queued', 'error', 'timeout', 'failed'];
+function runPillClass(status) {
+  var cls = (status || 'plain').toLowerCase();
+  return RUN_PILL_CLASSES.indexOf(cls) >= 0 ? cls : 'plain';
+}
+
+// Distinct visual treatment per quant_summary module status -- the whole
+// point of Task 2's schema addition (ok/error/degraded/unsupported), so this
+// must not collapse back to a generic 'plain'/'error' pair.
+var MODULE_PILL_CLASSES = {ok: 'ok', error: 'error', degraded: 'degraded', unsupported: 'unsupported'};
+function modulePillClass(status) {
+  return MODULE_PILL_CLASSES[status] || 'plain';
+}
+
+function fmtMetricValue(v) {
+  if (v === null || v === undefined || v === '') return '--';
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(4);
+  }
+  return String(v);
+}
+
+function renderModuleEntry(container, entry) {
+  var head = document.createElement('div');
+  head.className = 'module-entry-head';
+  head.innerHTML = '<span class="pill ' + modulePillClass(entry.status) + '">' +
+    esc(entry.status) + '</span> <strong>' + esc(entry.module) + '</strong>';
+  container.appendChild(head);
+
+  var headline = document.createElement('div');
+  headline.className = 'small';
+  headline.textContent = entry.headline || '';
+  container.appendChild(headline);
+
+  var metrics = entry.metrics || {};
+  var keys = Object.keys(metrics);
+  if (keys.length) {
+    var grid = document.createElement('div');
+    grid.className = 'metric-grid';
+    keys.forEach(function (k) {
+      var card = document.createElement('div');
+      card.className = 'metric-card';
+      card.innerHTML = '<div class="metric-label">' + esc(k) + '</div>' +
+        '<div class="metric-value">' + esc(fmtMetricValue(metrics[k])) + '</div>';
+      grid.appendChild(card);
+    });
+    container.appendChild(grid);
+  }
+
+  if (entry.warnings && entry.warnings.length) {
+    var ul = document.createElement('ul');
+    ul.className = 'warnings-list small';
+    entry.warnings.forEach(function (w) {
+      var li = document.createElement('li');
+      li.textContent = w;
+      ul.appendChild(li);
+    });
+    container.appendChild(ul);
+  }
+}
+
+function renderSummary(card, summary) {
+  var moduleId = card.getAttribute('data-module-id');
+  var summaryArea = card.querySelector('.summary-area');
+  var summaryTab = summaryArea.querySelector('[data-tab-content="summary"]');
+  var rawTab = summaryArea.querySelector('[data-tab-content="raw"] .raw-json');
+  summaryTab.innerHTML = '';
+
+  var entries = (summary.modules || []).filter(function (m) {
+    return moduleId === 'unified' ? true : m.module === moduleId;
+  });
+
+  if (!entries.length) {
+    var none = document.createElement('div');
+    none.className = 'empty';
+    none.textContent = 'quant_summary.json has no entry for this module yet.';
+    summaryTab.appendChild(none);
+  } else {
+    entries.forEach(function (entry) { renderModuleEntry(summaryTab, entry); });
+  }
+
+  rawTab.textContent = JSON.stringify(summary, null, 2);
+  summaryArea.style.display = 'block';
+
+  // Single-module cards (everything except 'unified') also reflect their
+  // module's status on the card-level badge next to the name.
+  if (entries.length === 1) {
+    var badge = card.querySelector('[data-role="module-badge"]');
+    badge.className = 'pill ' + modulePillClass(entries[0].status);
+    badge.textContent = entries[0].status;
+  }
+}
+
+function fetchSummary(card, runId) {
+  fetch('/runs/' + encodeURIComponent(runId) + '/summary')
+    .then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
+      }
+      return r.json();
+    })
+    .then(function (summary) { renderSummary(card, summary); })
+    .catch(function (e) {
+      var summaryArea = card.querySelector('.summary-area');
+      var summaryTab = summaryArea.querySelector('[data-tab-content="summary"]');
+      summaryArea.style.display = 'block';
+      summaryTab.innerHTML = '<div class="errbox">' + esc(e.message || String(e)) + '</div>';
+    });
+}
+
+function pollRun(card, runId) {
+  var metaEl = card.querySelector('.run-meta');
+
+  function tick() {
+    fetch('/runs/' + encodeURIComponent(runId))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        metaEl.innerHTML =
+          '<div>run_id</div><div class="val">' + esc(data.run_id) + '</div>' +
+          '<div>status</div><div class="val"><span class="pill ' + runPillClass(data.status) +
+            '">' + esc(data.status || '--') + '</span></div>' +
+          '<div>started</div><div class="val">' + esc(data.started_at || '--') + '</div>' +
+          '<div>completed</div><div class="val">' + esc(data.completed_at || '--') + '</div>';
+
+        if (data.done) {
+          clearInterval(timer);
+          var btn = card.querySelector('.run-btn');
+          btn.disabled = false;
+          btn.textContent = 'Run';
+          fetchSummary(card, runId);
+        }
+      })
+      .catch(function (e) { console.error('poll failed', e); });
+  }
+
+  var timer = setInterval(tick, 4000);
+  tick();
+}
+
+function startModuleRun(btn) {
+  var card = btn.closest('.quant-card');
+  var suite = card.getAttribute('data-suite');
+  var tickerInput = card.querySelector('.ticker-input');
+  var ticker = tickerInput.value.trim();
+  if (!ticker) { tickerInput.focus(); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+  var statusArea = card.querySelector('.run-status');
+  statusArea.style.display = 'block';
+  card.querySelector('.run-meta').innerHTML = '<div>status</div><div class="val">submitting...</div>';
+
+  fetch('/run/' + encodeURIComponent(suite), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ticker: ticker})
+  })
+    .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, body: j}; }); })
+    .then(function (res) {
+      if (!res.ok) {
+        card.querySelector('.run-meta').innerHTML =
+          '<div>error</div><div class="val">' + esc(res.body.error || 'request failed') + '</div>';
+        btn.disabled = false;
+        btn.textContent = 'Run';
+        return;
+      }
+      btn.textContent = 'Running...';
+      pollRun(card, res.body.run_id);
+    })
+    .catch(function (e) {
+      card.querySelector('.run-meta').innerHTML =
+        '<div>error</div><div class="val">' + esc(e) + '</div>';
+      btn.disabled = false;
+      btn.textContent = 'Run';
+    });
+}
+
+function switchQuantTab(evt, btn) {
+  var card = btn.closest('.quant-card');
+  card.querySelectorAll('.tab-content').forEach(function (el) { el.classList.remove('active'); });
+  card.querySelectorAll('.tab').forEach(function (el) { el.classList.remove('active'); });
+  var name = btn.getAttribute('data-tab');
+  card.querySelector('[data-tab-content="' + name + '"]').classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+{% endblock %}

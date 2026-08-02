@@ -70,6 +70,7 @@ from dashboard.auth import verify_api_key, get_client_ip  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
 from shared.schemas import validate_quant_summary  # noqa: E402
 from shared.summary import build_run_summary  # noqa: E402
+from dashboard.quant_modules import MODULE_REGISTRY  # noqa: E402
 from Tools.registry import TOOLS, get_tool  # noqa: E402
 from Tools.context_loader import list_available_contexts, load_context  # noqa: E402
 
@@ -910,6 +911,23 @@ def run_summary(run_id: str):
         })
 
     return JSONResponse(content=summary)
+
+
+@app.get('/quant', response_class=HTMLResponse)
+def quant_console(request: Request):
+    """Quant Console module-card view (Task 6 of the quant-console plan).
+
+    One card per `dashboard.quant_modules.MODULE_REGISTRY` entry -- this
+    route only serves that static list plus the shell markup; everything
+    dynamic (triggering a run, polling it, fetching its summary) happens
+    client-side against the *existing* `POST /run/{suite_or_unified}`,
+    `GET /runs/{run_id}`, and `GET /runs/{run_id}/summary` (Task 4) endpoints.
+    No new job-tracking backend, per the design spec's Phase 1 section.
+    """
+    return TEMPLATES.TemplateResponse(request, 'quant.html', {
+        'active': 'quant',
+        'modules': MODULE_REGISTRY,
+    })
 
 
 @app.get('/suites/{suite}', response_class=HTMLResponse)
