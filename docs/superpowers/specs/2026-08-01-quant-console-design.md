@@ -1,6 +1,6 @@
 # Quant Console — Design
 
-**Status:** CARL R1-reviewed, revised (see Revision Notes)
+**Status:** CARL-converged after R1+R2 (1 minor item accepted as open debt — see Self-Review)
 
 ## Context
 
@@ -86,6 +86,12 @@ Browser (dashboard UI)
    ├─ GET  /runs/{run_id}/dispatch/{job_id}   new — poll worker job
    └─ WS   /suites/{suite}/live        new — log-tail for loop-mode processes
 ```
+
+Pending Phase 3 watchlist alerts do not get their own endpoint — they ride
+inside `GET /quant`'s existing response as an additional top-level field
+(e.g. `alerts: [...]`), read from the `quant_alerts` table/flag file on
+every module-card-list request. Stated explicitly here so there's no gap
+between Phase 3's prose description and the endpoint contract.
 
 `quant_summary.json` is produced by a new `shared/summary.py::build_run_summary()`,
 called at the end of `_execute_run()` (dashboard/app.py) once the suite/
@@ -173,7 +179,14 @@ Request validates `run_id` exists and is `done`. Dispatch:
    necessarily built from the same untrusted evidence described above, its
    dispatch additionally enforces a hard cap on outbound requests per job
    (e.g. 10) so manipulated input can't be used for bulk exfiltration or
-   runaway cost — see Security.
+   runaway cost — see Security. **Enforcement mechanism is an implementation-
+   time decision, not asserted here**: this spec does not claim a specific
+   `claude -p` CLI flag for capping tool-call counts exists, since that
+   hasn't been verified. Candidate approaches to evaluate during Phase 2
+   implementation: a CLI flag if one is confirmed to exist, or routing
+   `explain`'s subprocess through a local HTTP proxy that enforces an
+   allowlist/request-count limit on egress. Whichever is chosen must get its
+   own Testing bullet — see Testing.
 3. `interpret` / `explain`: read-only w.r.t. the repo (network access differs
    per above). Spawns
    `claude -p "<prompt>" --output-format json` as a subprocess with `cwd` set
@@ -210,10 +223,17 @@ direct child, and this repo runs on Windows, where POSIX process-group kill
 (`os.killpg`) doesn't exist. `claude -p` is itself agentic and can spawn its
 own tool-call subprocesses, so a naive child-only kill would leave live
 descendants (and a locked `investigate` worktree) behind on timeout — exactly
-the failure this control exists to prevent. Concretely: launch with
-`subprocess.Popen(..., creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)`,
-and on timeout kill the whole tree via `taskkill /F /T /PID <pid>` (or a
-Windows Job Object for a stronger guarantee).
+the failure this control exists to prevent. Concretely: assign the worker
+subprocess to a **Windows Job Object** at launch (`CREATE_BREAKAWAY_FROM_JOB`
+disabled so descendants stay bound to the job) and terminate the job on
+timeout — this is the primary mechanism, chosen over `taskkill /F /T`'s
+PID/PPID tree-walk because that walk has a known gap (an intermediate
+process exiting before spawning its own child can orphan/reparent that child
+out of the tree taskkill would otherwise kill), which matters here precisely
+because `claude -p` is agentic and spawning its own subprocesses
+unpredictably. `taskkill /F /T /PID <pid>` remains a documented fallback only
+if Job Object plumbing proves impractical during implementation, not a
+co-equal alternative.
 
 ## Phase 3 — Live Panel + Proactive Layer
 
@@ -238,11 +258,12 @@ error surfaced anywhere. Detection and notification are split instead:
   Python script against `orchestrator_runs`/`quant_summary.json` history and,
   on a match, writes a local alert record (a new small `quant_alerts` table
   or a flag file) — no active session required, nothing expires.
-- **Notification is inherently best-effort, not real-time**: the dashboard
-  reads pending alerts on page load/poll and renders a banner/badge (works
-  with zero Claude Code involvement); a `PushNotification` additionally fires
-  the next time an interactive Claude Code session in this repo checks
-  pending alerts. Nothing in this spec should treat watchlist alerting as
+- **Notification is inherently best-effort, not real-time**: `GET /quant`
+  (Architecture Overview) includes pending alerts in its response, so the
+  dashboard renders a banner/badge on every module-card-list load with zero
+  Claude Code involvement; a `PushNotification` additionally fires the next
+  time an interactive Claude Code session in this repo checks pending
+  alerts. Nothing in this spec should treat watchlist alerting as
   time-sensitive — that constraint is stated here explicitly rather than left
   implicit.
 
@@ -270,9 +291,10 @@ User clicks a worker action on a completed card
   `status: degraded`, `headline` names the missing source; the card falls
   back to showing the raw result file link rather than crashing the whole
   summary render.
-- Worker dispatch timeout → full process tree killed via `taskkill /F /T`
-  (see Phase 2), job marked `timed_out`, partial stdout retained as
-  diagnostic evidence (not discarded).
+- Worker dispatch timeout → Job Object terminated (see Phase 2, primary
+  mechanism; `taskkill /F /T` only as documented fallback), job marked
+  `timed_out`, partial stdout retained as diagnostic evidence (not
+  discarded).
 - Worker dispatch failure (non-zero exit) → job marked `failed`; the run's
   `quant_summary.json` and existing suite results are untouched — a failed
   worker never invalidates the underlying analysis.
@@ -304,14 +326,33 @@ User clicks a worker action on a completed card
   origin adds protection.
 - All new *mutating* endpoints (`dispatch`) require the existing
   `DASHBOARD_API_KEY` via `verify_api_key`, same as run-triggering already
-  does — **with one tightening**: `dashboard/auth.py` today silently falls
-  back to a public, hardcoded default (`"dev-key-change-in-production"`) if
-  `DASHBOARD_API_KEY` is unset, which run-triggering tolerates. Dispatch's
-  blast radius is materially worse than triggering a billed data pull — it's
-  an LLM-driven subprocess with filesystem write access and, for `explain`,
-  network egress — so the dispatch router refuses to start at process
-  startup (not per-request) if the configured key is unset or still equals
-  that default string, rather than silently accepting it.
+  does — **with one tightening, precisely scoped**: `dashboard/auth.py` today
+  silently falls back to a public, hardcoded default
+  (`"dev-key-change-in-production"`) if `DASHBOARD_API_KEY` is unset, which
+  run-triggering tolerates. Dispatch's blast radius is materially worse — an
+  LLM-driven subprocess with filesystem write access and, for `explain`,
+  network egress — so a new `require_dispatch_configured` dependency (same
+  shape as `verify_api_key`, evaluated per-request, added *only* to the three
+  new dispatch/poll routes) returns 503 with a clear "dispatch disabled:
+  DASHBOARD_API_KEY not configured" message when the key is unset or equals
+  the known default. This must not crash or block startup of the FastAPI
+  process as a whole — `dashboard/app.py` has no router/sub-app split today
+  (every route is registered directly on `app`), so a process-wide startup
+  check would take down the already-working run-trigger/poll/swap-browser
+  endpoints over a misconfiguration that only matters for the new dispatch
+  surface. Scoping the check to a per-route dependency avoids that.
+- **This check only works if `DASHBOARD_API_KEY` actually reaches the
+  process's environment**, which it currently does not: `dashboard/app.py`'s
+  import chain never calls `shared/config.py::load_env_once()` (verified —
+  no `.env`-loading call exists anywhere in `dashboard/app.py` or
+  `orchestrator.py` today, unlike `shared/thetadata.py` and the VaR/sentiment
+  data loaders, which do call it), and `dashboard.bat` never sets it either.
+  Under this repo's own documented convention ("all in the single root
+  `.env`"), an operator who sets `DASHBOARD_API_KEY` in `.env` exactly as
+  `.env.example` instructs would still see the process read the hardcoded
+  default. This spec therefore includes adding `shared.config.load_env_once()`
+  near the top of `dashboard/app.py`'s import chain (before `dashboard.auth`
+  is imported) as an explicit, required change — not an assumption.
 - `investigate` dispatches never commit or push by default; applying its diff
   to the main working tree is a separate, manual, human action.
 - `explain`'s network access (see Phase 2) is a real prompt-injection-to-
@@ -320,11 +361,25 @@ User clicks a worker action on a completed card
   data). Mitigations: a hard structural boundary in the prompt template
   between ingested evidence text and instructions, and the per-job outbound-
   request cap already named in Phase 2.
-- Worker subprocess environment: same `child_env` scrubbing pattern
-  `_start_job`-equivalent code already needs (strip `PYTHONPATH`/`VIRTUAL_ENV`
-  contamination — this repo's `.bat` launchers already do this defensively
-  for the Hermes-venv case; the same discipline applies to worker subprocess
-  env construction).
+- Worker subprocess environment: **allowlist, not blocklist**, for all three
+  actions. `subprocess.Popen` inherits the full parent `os.environ` unless
+  `env=` is explicitly filtered — this repo's `.bat` launchers only strip
+  `PYTHONPATH`/`PYTHONHOME` (confirmed: `dashboard.bat` does nothing else to
+  the environment), which is not sufficient here. `DASHBOARD_API_KEY` is
+  structurally guaranteed to be in the dashboard process's environment
+  (`dashboard/auth.py` reads it for every auth check), so every worker
+  subprocess's `env=` is built explicitly from a small allowlist (`PATH`,
+  `HOME`/`USERPROFILE`, `TEMP`, `ANTHROPIC_API_KEY` if applicable) —
+  `DASHBOARD_API_KEY`, `THETADATA_*`, `SWAPS_DB_PATH`, and everything else
+  from root `.env` are omitted by construction, not filtered after the fact.
+- `explain` gets network tools (`WebSearch`/`WebFetch`) per Phase 2. Given
+  the env-inheritance risk above, `explain`'s dispatch additionally disables
+  Bash/shell tool access — it has no legitimate need to run shell commands,
+  and combined with network egress, shell access would reopen the exact
+  exfiltration path the env allowlist above exists to close (a
+  prompt-injected job reading residual environment state and shipping it out
+  over `WebFetch`). `interpret`/`investigate` have no network tools, so this
+  constraint is specific to `explain`.
 - Worker prompts must not have `.env` contents read into them; report files
   must not contain secrets. No new secret-scanning infrastructure is being
   built in this phase — this is a stated constraint on prompt construction,
@@ -338,11 +393,21 @@ User clicks a worker action on a completed card
 - `quant_summary` schema validator: unit tests mirroring the existing pattern
   for the other five schemas in `shared/schemas.py`.
 - Dispatch endpoint: unit tests with `subprocess.Popen` mocked — cover
-  authorized/unauthorized (missing/wrong API key), the fail-closed startup
-  check (default/unset key refuses to start), duplicate idempotency key, and
-  timeout-kills-full-process-tree (`CREATE_NEW_PROCESS_GROUP` + `taskkill`).
-  No network-origin test — per Security, origin is not a control this design
-  relies on, so there's nothing meaningful to assert there.
+  authorized/unauthorized (missing/wrong API key), `require_dispatch_configured`
+  returning 503 on default/unset key *without* affecting other routes (assert
+  `GET /runs/{id}` still serves 200 in the same test), the env allowlist
+  actually excluding `DASHBOARD_API_KEY`/`THETADATA_*` from a worker
+  subprocess's `env=`, duplicate idempotency key, and timeout-kills-full-
+  process-tree. No network-origin test — per Security, origin is not a
+  control this design relies on, so there's nothing meaningful to assert
+  there.
+- One test confirming `load_env_once()` is actually called before
+  `dashboard.auth` reads `DASHBOARD_API_KEY`, so the fail-closed check can't
+  silently regress to always-default the way it does today.
+- Once `explain`'s outbound-request-cap mechanism is chosen (Phase 2), it
+  needs its own test proving the cap is actually enforced (e.g. a mocked
+  worker making N+1 calls is cut off at N) — not committed to a specific
+  test shape yet since the mechanism itself isn't chosen yet.
 - One manual smoke test: a real `interpret` dispatch against a fixture run
   directory, confirming the round trip (prompt → subprocess → structured
   report → rendered card).
@@ -371,37 +436,61 @@ or source, not opinion:
    named in Security, since `explain`'s evidence can include public,
    attacker-influenceable text — see Phase 2 and Security.
 
-## Revision Notes (CARL R1)
+## Revision Notes (CARL R1 + R2)
 
-One round, single reviewer family (fresh subagent contexts only —
+Two rounds, single reviewer family both times (fresh subagent contexts only —
 `diversity: reduced`, no alternate model family available in this
-environment). All 7 findings were independently verified against source
-before being applied; none required relitigating a locked decision.
+environment). Every finding in both rounds was independently verified
+against source before being applied; none required relitigating a locked
+decision.
+
+**Round 1** (7 findings, all applied):
+
+| ID | Severity | Finding | R1 Resolution | Note |
+|---|---|---|---|---|
+| R1-F1 | critical | `CronCreate` doesn't support durable unattended watching | Split detection (OS scheduled task)/notification (best-effort) design in Phase 3 | Held through R2 |
+| R1-F2 | major | Non-loopback-origin test had nothing to test against; misleading given documented tunnel exposure | Removed from Testing; Security states API key is the only real control | Held through R2 |
+| R1-F3 | major | "Process-group kill on timeout" asserted as reuse; no precedent exists and this repo is Windows | Named as new infra; `CREATE_NEW_PROCESS_GROUP` + `taskkill /F /T` specified | **Superseded in R2** — mechanism itself was wrong, see R2-F5 |
+| R1-F4 | major | Dispatch reuses run-triggering's auth despite materially larger blast radius, under a key documented to default-fallback | Dispatch router "fails closed at startup" on unset/default key | **Refined in R2** — blast radius and env-loading gap, see R2-F2/R2-F3 |
+| R1-F5 | major | `explain`'s network access left unresolved despite being answerable from the spec's own stated purpose | Resolved to yes, scoped to `explain` only, with request cap + named injection surface | **Extended in R2** — env-inheritance angle, see R2-F1 |
+| R1-F6 | minor | No status value distinguishes a known limitation from a regression | Added `unsupported` status, driven by `runnable` flag | Held through R2 |
+| R1-F7 | minor | Context section overstated `vol-suite-viewer.py`'s role | Reworded to describe it accurately as a separate plain-text CLI | Held through R2 |
+
+**Round 2** (audited all 7 R1 fixes for correctness/completeness, found 6 new
+issues — 1 critical, 4 major, 1 minor — all applied):
 
 | ID | Severity | Finding | Resolution |
 |---|---|---|---|
-| R1-F1 | critical | `CronCreate` doesn't support durable unattended watching | Split detection (OS scheduled task)/notification (best-effort) design in Phase 3 |
-| R1-F2 | major | Non-loopback-origin test had nothing to test against; misleading given documented tunnel exposure | Removed from Testing; Security now states API key is the only real control |
-| R1-F3 | major | "Process-group kill on timeout" asserted as reuse; no such precedent exists and this repo is Windows | Named as new infrastructure; concrete Windows mechanism specified (`CREATE_NEW_PROCESS_GROUP` + `taskkill /F /T`) |
-| R1-F4 | major | Dispatch reuses run-triggering's auth despite materially larger blast radius, under a key documented to default-fallback | Dispatch router fails closed at startup on unset/default key |
-| R1-F5 | major | `explain`'s network access left unresolved despite being answerable from the spec's own stated purpose and untrusted-input posture | Resolved to yes, scoped to `explain` only, with request cap + named injection surface |
-| R1-F6 | minor | No status value distinguishes a known limitation from a regression | Added `unsupported` status, driven by `runnable` flag |
-| R1-F7 | minor | Context section overstated `vol-suite-viewer.py`'s role (attributed HTML generation it doesn't have) | Reworded to describe it accurately as a separate plain-text CLI |
+| R2-F1 | critical | `explain`'s network grant + default env inheritance = a path to exfiltrate `DASHBOARD_API_KEY` itself via prompt injection, which the R1 env-scrubbing bullet (PYTHONPATH/VIRTUAL_ENV only) didn't cover | Worker env rebuilt as an explicit allowlist for all three actions, not a blocklist; `explain` additionally loses Bash/shell tool access |
+| R2-F2 | major | The R1 fail-closed key check depends on `DASHBOARD_API_KEY` reaching `os.environ`, but `dashboard/app.py` never calls `load_env_once()` — an operator following this repo's own documented `.env` convention would still see the default | Adding `load_env_once()` to `dashboard/app.py`'s import chain is now an explicit required change, not assumed |
+| R2-F3 | major | "Refuses to start at process startup" was ambiguous — could crash the entire dashboard (including already-working endpoints) over a dispatch-only misconfiguration | Rewritten as a per-route `require_dispatch_configured` dependency scoped to the three new dispatch/poll routes only, returning 503 |
+| R2-F4 | major | Phase 3's alert banner mechanism was named in prose but had no entry in the Architecture Overview endpoint list, contradicting Self-Review's claim of field-by-field consistency | Explicitly folded into `GET /quant`'s existing response rather than a new endpoint; stated in Architecture Overview |
+| R2-F5 | minor | `CREATE_NEW_PROCESS_GROUP` doesn't affect `taskkill /T`'s tree-walk (it governs console signal routing, a different concern), and `taskkill /T` has a known orphan/reparent gap the doc didn't name | Windows Job Object specified as the primary termination mechanism; `taskkill /F /T` demoted to documented fallback only |
+| R2-F6 | major | `explain`'s outbound-request cap was asserted with no enforcement mechanism, and was the one named Security control missing from Testing | Enforcement explicitly marked as an implementation-time decision (candidate approaches named, no unverified CLI flag asserted); Testing bullet added once mechanism is chosen |
 
 ## Self-Review
 
 - No unresolved placeholder markers; all three original Open Questions carry
-  concrete resolutions, not restatements.
+  concrete resolutions, not restatements — and R2 checked those resolutions
+  for completeness rather than taking R1's fixes on faith.
 - Phase boundaries, endpoint list, and data-flow diagram agree with each
-  other (checked field-by-field against the schema table above, including
-  the new `unsupported` status and per-action network scoping).
-- Explicitly distinguishes what already exists in `dashboard/app.py` (run
-  trigger, polling, API-key auth, rate limiting) from what's net-new — and,
-  after R1, explicitly flags where a "reuse existing" claim understated the
-  actual lift (process-tree kill, auth strictness for dispatch specifically).
+  other — this claim was itself wrong after R1 (R2-F4 caught a real gap) and
+  is now actually true: the alert-banner mechanism has an explicit home in
+  `GET /quant`.
+- Explicitly distinguishes what already exists in `dashboard/app.py` from
+  what's net-new, and after two rounds is more conservative about it in the
+  right direction — R2 found that even the R1-tightened auth check silently
+  depended on `.env`-loading behavior that doesn't currently exist, and says
+  so rather than assuming it.
 - Non-Goals section directly addresses the two biggest risks raised during
   ideation: no unattended re-running of billed suites, no new auth model
-  where the existing one already covers the threat — R1 sharpened, but did
-  not overturn, that reasoning.
-- Security section now names loopback binding as a non-control explicitly,
-  rather than implying it contributes protection it doesn't.
+  where the existing one already covers the threat — both rounds sharpened,
+  neither overturned, that reasoning.
+- Security section now treats worker subprocess environment as an allowlist
+  problem, not a blocklist problem, and names the specific credential
+  (`DASHBOARD_API_KEY`) that a blocklist approach would have left exposed.
+- One item remains genuinely open rather than fully resolved:
+  `explain`'s outbound-request-cap enforcement mechanism (R2-F6) needs an
+  implementation-time decision this document deliberately doesn't guess at,
+  since no verified `claude -p` capability was confirmed to exist for it.
+  This is accepted minor debt, not a blocker — see Revision Notes.
