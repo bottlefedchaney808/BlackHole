@@ -1,0 +1,10 @@
+{
+  "suite": "options",
+  "status": "ok",
+  "ticker": "NVDA",
+  "method": "CRR",
+  "timestamp": "2026-08-01T12:00:00Z",
+  "sigma": 0.425,
+  "price": 12.34,
+  "greeks": {"delta": 0.55, "gamma": 0.012, "theta": -0.08, "vega": 0.21, "rho": 0.03}
+}

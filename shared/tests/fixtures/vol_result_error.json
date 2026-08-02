@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "suite": "vol",
+  "status": "error",
+  "ticker": "NVDA",
+  "timestamp": "2026-08-01T12:00:00Z",
+  "vol_surface": {},
+  "dealer_positioning": {},
+  "gamma_records": [],
+  "error": "ThetaData connection timed out"
+}

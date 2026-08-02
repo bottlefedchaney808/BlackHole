@@ -1,0 +1,10 @@
+{
+  "suite": "var",
+  "status": "ok",
+  "module": "corr_sim",
+  "timestamp": "2026-08-01T12:00:00Z",
+  "var": 152340.12,
+  "cvar": 210500.55,
+  "confidence": 0.99,
+  "horizon_days": 10
+}
