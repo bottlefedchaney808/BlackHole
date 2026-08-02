@@ -55,6 +55,13 @@ ROOT = os.path.dirname(DASHBOARD_DIR)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# Load the root .env (DASHBOARD_API_KEY, THETADATA_*, etc.) into os.environ
+# before anything below reads from it -- dashboard.auth.API_KEY in particular
+# reads DASHBOARD_API_KEY at import time, so this must run before that import.
+from shared.config import load_env_once  # noqa: E402
+
+load_env_once()
+
 import orchestrator  # noqa: E402  (path is set immediately above)
 from db_loader import SwapsLoader  # noqa: E402
 from swaps_query import SwapsQuery  # noqa: E402
