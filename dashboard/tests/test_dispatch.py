@@ -81,14 +81,26 @@ def _make_done_run(tmp_path, run_key='test-dispatch-1', with_results=True):
     return run_key, output_dir
 
 
-def _fake_proc(poll_returns=None):
-    """A MagicMock standing in for the subprocess.Popen-shaped object
-    `job_object.run_with_job_object` returns. `poll()` returns
-    `poll_returns` (None == still running, matching real Popen.poll()).
+def _fake_proc(poll_returns=None, wait_returns=0, returncode=0,
+               stdout_text='', timed_out=False):
+    """A MagicMock standing in for the `JobObjectProcess`-shaped object
+    `job_object.run_with_job_object` returns (Task 10). `poll()` returns
+    `poll_returns` (None == still running, matching real Popen.poll());
+    `communicate()` returns `(stdout_text, None)` immediately (Task 10's
+    background watcher -- see TestTimeoutWiring below -- calls
+    `proc.communicate()`, not `wait()` + a separate `stdout.read()`, to
+    block until the job finishes without risking a pipe-buffer deadlock).
+    `timed_out` mirrors `JobObjectProcess.timed_out` -- set by job_object's
+    own internal watchdog the moment it kills the job for exceeding its
+    timeout.
     """
     proc = MagicMock()
     proc.poll.return_value = poll_returns
+    proc.wait.return_value = wait_returns
+    proc.communicate.return_value = (stdout_text, None)
+    proc.returncode = returncode
     proc.pid = 4242
+    proc.timed_out = timed_out
     return proc
 
 
@@ -372,3 +384,77 @@ class TestPerActionScoping:
 
         _, kwargs = launch.call_args
         assert kwargs['cwd'] == dashboard_app.ROOT
+
+
+# --------------------------------------------------------------------------
+# Task 10: per-action timeout wiring -- on timeout, the dispatch job is
+# marked `timed_out` and its partial stdout is retained, not discarded.
+# The background watcher (_watch_dispatch_job) blocks on `proc.wait()`
+# (delegating to job_object.JobObjectProcess.wait(), which itself blocks
+# until either the process exits normally or job_object's own internal
+# watchdog kills the job for exceeding its timeout) and then records the
+# final status. FastAPI's TestClient runs BackgroundTasks synchronously as
+# part of the request/response cycle, so these assertions can run
+# immediately after the POST returns, no polling loop needed.
+# --------------------------------------------------------------------------
+
+class TestTimeoutWiring:
+    def test_timed_out_job_is_marked_timed_out_with_partial_stdout_retained(
+            self, tmp_path, monkeypatch):
+        run_key, _ = _make_done_run(tmp_path)
+        proc = _fake_proc(poll_returns=None, wait_returns=-1, returncode=-1,
+                          stdout_text='partial output before the kill',
+                          timed_out=True)
+        _patch_launch(monkeypatch, proc=proc)
+
+        resp = client.post(f'/runs/{run_key}/dispatch/interpret',
+                           headers=AUTH_HEADERS, json={})
+        job_id = resp.json()['job_id']
+
+        job = dashboard_app._DISPATCH_JOBS[job_id]
+        assert job['status'] == 'timed_out'
+        assert job['stdout'] == 'partial output before the kill'
+        assert job['completed_at'] is not None
+
+    def test_normally_completed_job_is_marked_completed(self, tmp_path, monkeypatch):
+        run_key, _ = _make_done_run(tmp_path)
+        proc = _fake_proc(poll_returns=0, wait_returns=0, returncode=0,
+                          stdout_text='{"result": "done"}', timed_out=False)
+        _patch_launch(monkeypatch, proc=proc)
+
+        resp = client.post(f'/runs/{run_key}/dispatch/interpret',
+                           headers=AUTH_HEADERS, json={})
+        job_id = resp.json()['job_id']
+
+        job = dashboard_app._DISPATCH_JOBS[job_id]
+        assert job['status'] == 'completed'
+        assert job['stdout'] == '{"result": "done"}'
+
+    def test_nonzero_exit_without_timeout_is_marked_failed(self, tmp_path, monkeypatch):
+        run_key, _ = _make_done_run(tmp_path)
+        proc = _fake_proc(poll_returns=1, wait_returns=1, returncode=1,
+                          stdout_text='some error output', timed_out=False)
+        _patch_launch(monkeypatch, proc=proc)
+
+        resp = client.post(f'/runs/{run_key}/dispatch/interpret',
+                           headers=AUTH_HEADERS, json={})
+        job_id = resp.json()['job_id']
+
+        job = dashboard_app._DISPATCH_JOBS[job_id]
+        assert job['status'] == 'failed'
+
+    def test_watcher_calls_communicate_not_a_busy_poll_loop(self, tmp_path, monkeypatch):
+        """The watcher must block via proc.communicate() (which itself
+        blocks on job_object's internal watchdog/normal exit, and is
+        deadlock-safe against large output, unlike wait() + a separate
+        stdout.read()) rather than spin-polling -- assert communicate()
+        was actually invoked, and plain wait() was not used to drain output.
+        """
+        run_key, _ = _make_done_run(tmp_path)
+        proc = _fake_proc()
+        _patch_launch(monkeypatch, proc=proc)
+
+        client.post(f'/runs/{run_key}/dispatch/interpret', headers=AUTH_HEADERS, json={})
+
+        proc.communicate.assert_called_once()
+        proc.wait.assert_not_called()

@@ -928,25 +928,26 @@ def run_summary(run_id: str):
 # require_dispatch_configured (Task 7); env built exclusively via
 # build_worker_env() (Task 8, allowlist not blocklist -- see that module's
 # docstring for why this is the single most load-bearing piece of this
-# plan). Launches through dashboard.job_object.run_with_job_object (Task 10)
-# and, for `investigate`, dashboard.worker_worktree.create_worker_worktree
-# (Task 11) -- both currently minimal stubs (see their own module
-# docstrings): Task 9 depends on their *interfaces*, not their real
-# Windows-Job-Object/git-worktree internals, which land in later tasks.
+# plan). Launches through dashboard.job_object.run_with_job_object (Task 10:
+# assigns the process to a Windows Job Object at launch and self-terminates
+# the whole job -- every descendant, not just the tracked PID -- if it
+# exceeds its per-action timeout; falls back to `taskkill /F /T` only if
+# Job Object creation/assignment itself fails) and, for `investigate`,
+# dashboard.worker_worktree.create_worker_worktree (Task 11, still a
+# minimal stub -- see its own module docstring): this route depends on its
+# *interface*, not its real git-worktree internals, which land in a later
+# task. `_watch_dispatch_job` (also Task 10) is scheduled as a background
+# task per dispatch to block on the launched process and record its final
+# status (`completed`/`failed`/`timed_out`) once it exits.
 # --------------------------------------------------------------------------
 
 DISPATCH_ACTIONS = ('interpret', 'investigate', 'explain')
 
 # Per-action timeout in seconds (spec Phase 2 / plan Task 10): interpret/
-# explain short, investigate longer. Threaded through to
-# job_object.run_with_job_object even though today's Task 10 stub ignores
-# it, so Task 10 doesn't have to touch this call site to wire real
-# enforcement -- it only has to stop ignoring the value it's already given.
-DISPATCH_TIMEOUT_SEC: Dict[str, int] = {
-    'interpret': 300,
-    'explain': 300,
-    'investigate': 1200,
-}
+# explain short, investigate longer. Sourced from job_object.DEFAULT_TIMEOUT_SEC
+# (the module that actually enforces it, via its internal watchdog Timer)
+# so this dict can't silently drift out of sync with the one that matters.
+DISPATCH_TIMEOUT_SEC: Dict[str, int] = dict(job_object.DEFAULT_TIMEOUT_SEC)
 
 # Per-action tool scoping (plan Global Constraints; spec Security):
 # interpret/investigate get no network-capable tools; explain gets
@@ -1047,6 +1048,60 @@ def _count_active_dispatch_jobs() -> int:
     return active
 
 
+def _watch_dispatch_job(job_id: str) -> None:
+    """Background worker (BackgroundTasks, same fire-and-forget pattern as
+    `_execute_run`): blocks on the dispatched worker's `proc.communicate()`
+    until it exits -- either normally, or because
+    `job_object.JobObjectProcess`'s own internal watchdog killed the whole
+    job for exceeding its per-action timeout (Task 10) -- then records the
+    job's final status in `_DISPATCH_JOBS`.
+
+    Reads back `proc.timed_out` (set by job_object's watchdog the moment it
+    fires, before it terminates the job) rather than re-deriving timeout
+    state here, so there is exactly one place that decides whether a job
+    timed out. Partial stdout captured up to that point is always recorded,
+    never discarded (plan Task 10 step 3 / spec Error Handling) -- this is
+    the only evidence available for a killed job.
+
+    Uses `proc.communicate()`, not `proc.wait()` followed by a separate
+    `stdout.read()` -- that combination can deadlock if the child writes
+    more than the OS pipe buffer before exiting, since nothing would be
+    draining the pipe while `wait()` blocks. `communicate()` (delegated by
+    `job_object.JobObjectProcess` to the wrapped `Popen`) drains
+    concurrently and is safe against that.
+    """
+    with _DISPATCH_LOCK:
+        job = _DISPATCH_JOBS.get(job_id)
+    if job is None:
+        return
+    proc = job.get('proc')
+    if proc is None:
+        return
+
+    stdout_text = ''
+    try:
+        stdout_text, _ = proc.communicate()
+        stdout_text = stdout_text or ''
+    except Exception as e:
+        print(f'  [dashboard] WARNING: dispatch job {job_id!r} '
+              f'proc.communicate() raised {type(e).__name__}: {e}',
+              file=sys.stderr)
+
+    if getattr(proc, 'timed_out', False):
+        status = 'timed_out'
+    elif (proc.returncode or 0) == 0:
+        status = 'completed'
+    else:
+        status = 'failed'
+
+    with _DISPATCH_LOCK:
+        current = _DISPATCH_JOBS.get(job_id)
+        if current is not None:
+            current['status'] = status
+            current['completed_at'] = _iso_utc_now()
+            current['stdout'] = stdout_text
+
+
 def _log_dispatch_job_row(action: str, run_id: Any, job_id: str, started_at: str) -> None:
     """Best-effort `orchestrator_runs` audit row tagged
     `dashboard:worker:{action}` (spec Phase 2 point 3) -- reuses the
@@ -1066,6 +1121,7 @@ def _log_dispatch_job_row(action: str, run_id: Any, job_id: str, started_at: str
 @app.post('/runs/{run_id}/dispatch/{action}')
 @limiter.limit("30/minute")  # separate bucket from run-triggering's 1/60s
 async def dispatch_worker(run_id: str, action: str, request: Request,
+                          background_tasks: BackgroundTasks,
                           _auth: str = Depends(verify_api_key),
                           _dispatch_ok: None = Depends(require_dispatch_configured)):
     """Spawn a headless `claude -p` worker against a completed run.
@@ -1075,6 +1131,14 @@ async def dispatch_worker(run_id: str, action: str, request: Request,
     otherwise 404/409. Idempotent replay via an optional `idempotency_key`
     in the JSON body returns the existing job rather than relaunching.
     A max-concurrent-workers cap is enforced before spawning (429 if over).
+
+    The worker is launched through `job_object.run_with_job_object` (Task
+    10), which assigns it to a Windows Job Object and self-terminates the
+    whole job (all descendants) if it exceeds its per-action timeout
+    (`DISPATCH_TIMEOUT_SEC`). `_watch_dispatch_job` (Task 10 step 3) is
+    scheduled as a background task to block on that process and record its
+    final status (`completed`/`failed`/`timed_out`) plus captured stdout
+    once it exits.
     """
     action = action.strip().lower()
     if action not in DISPATCH_ACTIONS:
@@ -1164,6 +1228,7 @@ async def dispatch_worker(run_id: str, action: str, request: Request,
         if idempotency_key:
             _DISPATCH_IDEMPOTENCY[(key, action, idempotency_key)] = job_id
 
+    background_tasks.add_task(_watch_dispatch_job, job_id)
     _log_dispatch_job_row(action, key, job_id, started_at)
 
     return JSONResponse(status_code=202, content={
