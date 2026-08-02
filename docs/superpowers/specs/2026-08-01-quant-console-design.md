@@ -1,6 +1,6 @@
 # Quant Console — Design
 
-**Status:** CARL-converged after R1+R2 (1 minor item accepted as open debt — see Self-Review)
+**Status:** CARL-converged after R1+R2+R3 (1 minor item accepted as open debt — see Self-Review)
 
 ## Context
 
@@ -156,9 +156,14 @@ read/render layer on top of infrastructure that already exists.
 ## Phase 2 — Worker Actions
 
 **`POST /runs/{run_id}/dispatch/{action}`**, `action ∈ {interpret, investigate, explain}`,
-gated by the existing `verify_api_key` dependency and a new
-`@limiter.limit` bucket (separate from the run-trigger limiter, since these
-are cheaper/faster operations that shouldn't share the 1/60s budget).
+gated by the existing `verify_api_key` dependency **and** the new
+`require_dispatch_configured` dependency (see Security). Both dependencies
+apply to this route and to `GET /runs/{run_id}/dispatch/{job_id}` below —
+these are the two routes "require_dispatch_configured" protects; earlier
+references to "three" routes in Security/Testing were miscounted and are
+corrected there to two. Plus a new `@limiter.limit` bucket (separate from
+the run-trigger limiter, since these are cheaper/faster operations that
+shouldn't share the 1/60s budget).
 
 Request validates `run_id` exists and is `done`. Dispatch:
 
@@ -210,7 +215,8 @@ Request validates `run_id` exists and is `done`. Dispatch:
    sibling spec (double-click safety), implemented as a small in-memory dict
    keyed on `(run_id, action, idempotency_key)`.
 
-**`GET /runs/{run_id}/dispatch/{job_id}`** polls status the same shape as
+**`GET /runs/{run_id}/dispatch/{job_id}`** (also gated by `verify_api_key` +
+`require_dispatch_configured`) polls status the same shape as
 `GET /runs/{run_id}` already does (`queued`/`running`/`completed`/`failed`,
 `done` boolean, stdout tail, result once written).
 
@@ -233,7 +239,13 @@ out of the tree taskkill would otherwise kill), which matters here precisely
 because `claude -p` is agentic and spawning its own subprocesses
 unpredictably. `taskkill /F /T /PID <pid>` remains a documented fallback only
 if Job Object plumbing proves impractical during implementation, not a
-co-equal alternative.
+co-equal alternative. **New dependency, named explicitly**: Job Object
+lifecycle management needs `pywin32`'s `win32job`/`win32process`/`win32api`
+bindings (or equivalent raw `ctypes` calls into `kernel32.dll`, which is more
+boilerplate for the same result). `pywin32` is not in root `requirements.txt`
+today — it's present in this repo's `.venv` only as an undeclared transitive
+dependency of an unrelated package (`mcp`), so this spec adds it as a real,
+pinned, direct dependency rather than relying on that incidental presence.
 
 ## Phase 3 — Live Panel + Proactive Layer
 
@@ -332,7 +344,7 @@ User clicks a worker action on a completed card
   run-triggering tolerates. Dispatch's blast radius is materially worse — an
   LLM-driven subprocess with filesystem write access and, for `explain`,
   network egress — so a new `require_dispatch_configured` dependency (same
-  shape as `verify_api_key`, evaluated per-request, added *only* to the three
+  shape as `verify_api_key`, evaluated per-request, added *only* to the two
   new dispatch/poll routes) returns 503 with a clear "dispatch disabled:
   DASHBOARD_API_KEY not configured" message when the key is unset or equals
   the known default. This must not crash or block startup of the FastAPI
@@ -369,9 +381,15 @@ User clicks a worker action on a completed card
   structurally guaranteed to be in the dashboard process's environment
   (`dashboard/auth.py` reads it for every auth check), so every worker
   subprocess's `env=` is built explicitly from a small allowlist (`PATH`,
-  `HOME`/`USERPROFILE`, `TEMP`, `ANTHROPIC_API_KEY` if applicable) —
-  `DASHBOARD_API_KEY`, `THETADATA_*`, `SWAPS_DB_PATH`, and everything else
-  from root `.env` are omitted by construction, not filtered after the fact.
+  `HOME`/`USERPROFILE`, `TEMP`) — `DASHBOARD_API_KEY`, `THETADATA_*`,
+  `SWAPS_DB_PATH`, and everything else from root `.env` are omitted by
+  construction, not filtered after the fact. `claude -p` is expected to
+  authenticate via the operator's own existing Claude Code
+  session/credentials (however that's already configured on this machine
+  outside this repo), not via a variable this repo's `.env` defines — no
+  Anthropic credential is added to the allowlist, since none of this spec's
+  three worker actions has a stated need for one and this repo's own
+  documented env vars (`CLAUDE.md`) don't include one to begin with.
 - `explain` gets network tools (`WebSearch`/`WebFetch`) per Phase 2. Given
   the env-inheritance risk above, `explain`'s dispatch additionally disables
   Bash/shell tool access — it has no legitimate need to run shell commands,
@@ -436,13 +454,15 @@ or source, not opinion:
    named in Security, since `explain`'s evidence can include public,
    attacker-influenceable text — see Phase 2 and Security.
 
-## Revision Notes (CARL R1 + R2)
+## Revision Notes (CARL R1 + R2 + R3)
 
-Two rounds, single reviewer family both times (fresh subagent contexts only —
-`diversity: reduced`, no alternate model family available in this
-environment). Every finding in both rounds was independently verified
-against source before being applied; none required relitigating a locked
-decision.
+Three rounds, single reviewer family throughout (fresh subagent contexts only
+— `diversity: reduced`, no alternate model family available in this
+environment). Every finding across all three rounds was independently
+verified against source before being applied; none required relitigating a
+locked decision. R3 was scoped narrowly to auditing R2's fixes rather than
+re-reviewing the document from scratch, per CARL's "audit the fix, don't
+restart" discipline for later rounds.
 
 **Round 1** (7 findings, all applied):
 
@@ -463,10 +483,18 @@ issues — 1 critical, 4 major, 1 minor — all applied):
 |---|---|---|---|
 | R2-F1 | critical | `explain`'s network grant + default env inheritance = a path to exfiltrate `DASHBOARD_API_KEY` itself via prompt injection, which the R1 env-scrubbing bullet (PYTHONPATH/VIRTUAL_ENV only) didn't cover | Worker env rebuilt as an explicit allowlist for all three actions, not a blocklist; `explain` additionally loses Bash/shell tool access |
 | R2-F2 | major | The R1 fail-closed key check depends on `DASHBOARD_API_KEY` reaching `os.environ`, but `dashboard/app.py` never calls `load_env_once()` — an operator following this repo's own documented `.env` convention would still see the default | Adding `load_env_once()` to `dashboard/app.py`'s import chain is now an explicit required change, not assumed |
-| R2-F3 | major | "Refuses to start at process startup" was ambiguous — could crash the entire dashboard (including already-working endpoints) over a dispatch-only misconfiguration | Rewritten as a per-route `require_dispatch_configured` dependency scoped to the three new dispatch/poll routes only, returning 503 |
+| R2-F3 | major | "Refuses to start at process startup" was ambiguous — could crash the entire dashboard (including already-working endpoints) over a dispatch-only misconfiguration | Rewritten as a per-route `require_dispatch_configured` dependency scoped to the two dispatch/poll routes only, returning 503 |
 | R2-F4 | major | Phase 3's alert banner mechanism was named in prose but had no entry in the Architecture Overview endpoint list, contradicting Self-Review's claim of field-by-field consistency | Explicitly folded into `GET /quant`'s existing response rather than a new endpoint; stated in Architecture Overview |
 | R2-F5 | minor | `CREATE_NEW_PROCESS_GROUP` doesn't affect `taskkill /T`'s tree-walk (it governs console signal routing, a different concern), and `taskkill /T` has a known orphan/reparent gap the doc didn't name | Windows Job Object specified as the primary termination mechanism; `taskkill /F /T` demoted to documented fallback only |
 | R2-F6 | major | `explain`'s outbound-request cap was asserted with no enforcement mechanism, and was the one named Security control missing from Testing | Enforcement explicitly marked as an implementation-time decision (candidate approaches named, no unverified CLI flag asserted); Testing bullet added once mechanism is chosen |
+
+**Round 3** (narrow audit of R2's fixes only, found 3 new issues — all major, all applied — verdict `NEEDS_REVISION` → resolved):
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| R3-F1 | major | `require_dispatch_configured` (R2-F3's fix) was fully specified in Security/Testing but never actually attached to the dispatch/poll endpoints it's supposed to protect in Phase 2 — an implementer reading only Phase 2 would ship the exact gap it was created to close. Also caught a real miscount: Security/Testing said "three" dispatch/poll routes when there are only two. | Phase 2's two route descriptions now explicitly name both `verify_api_key` and `require_dispatch_configured`; "three" corrected to "two" everywhere it appeared |
+| R3-F2 | major | The R2-F1 env allowlist included `ANTHROPIC_API_KEY` with no stated justification — undermining the "allowlist, every entry justified" principle that fix existed to establish, and introducing an undocumented credential this repo's own `.env` conventions don't define | Removed; documented that `claude -p` authenticates via the operator's own existing Claude Code credentials outside this repo, not via a repo-defined env var |
+| R3-F3 | major | The R2-F5 Job Object mechanism requires `pywin32` (or raw `ctypes`/`kernel32.dll` calls), which isn't declared in `requirements.txt` and is only present today as an incidental transitive dependency of an unrelated package (`mcp`) | Named explicitly as a new, real, pinned dependency this spec adds — not assumed already available |
 
 ## Self-Review
 
@@ -494,3 +522,13 @@ issues — 1 critical, 4 major, 1 minor — all applied):
   implementation-time decision this document deliberately doesn't guess at,
   since no verified `claude -p` capability was confirmed to exist for it.
   This is accepted minor debt, not a blocker — see Revision Notes.
+- R3 specifically checked whether R2's fixes were *wired into* the sections
+  an implementer would actually build from, not just declared in Security —
+  and found one real case (R3-F1) where they weren't. That class of gap
+  (a fix declared in one section but not propagated to the section that
+  matters) is exactly what a narrow audit round exists to catch; the fact
+  that R3 found three real, verified, non-cosmetic issues after two prior
+  rounds is itself the argument for stopping at three rounds rather than
+  fewer — and for not assuming R3's own fixes are exempt from the same
+  failure mode without a human or CI check confirming Phase 2's route
+  descriptions and the implementation code actually agree once built.
