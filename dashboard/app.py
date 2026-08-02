@@ -68,6 +68,8 @@ from swaps_query import SwapsQuery  # noqa: E402
 from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary  # noqa: E402
 from dashboard.auth import verify_api_key, get_client_ip  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
+from shared.schemas import validate_quant_summary  # noqa: E402
+from shared.summary import build_run_summary  # noqa: E402
 from Tools.registry import TOOLS, get_tool  # noqa: E402
 from Tools.context_loader import list_available_contexts, load_context  # noqa: E402
 
@@ -326,19 +328,66 @@ def _set_run(key: Any, **fields: Any) -> None:
         entry.update(fields)
 
 
+def _write_quant_summary(output_dir: Optional[str], run_id: Any, ticker: Any) -> None:
+    """Build and atomically write `quant_summary.json` into *output_dir*.
+
+    Called at the very end of `_execute_run()`, after the run's own
+    status/result have already been recorded (`_set_run` + `_finish_run_row`
+    above) -- a failure in here must never mask or overwrite those, so every
+    failure mode below is caught and logged, never raised or re-raised. This
+    establishes the temp-file + `os.replace` atomic-write pattern Phase 2's
+    worker reports (plan Task 12) are meant to reuse.
+
+    A falsy/missing *output_dir* (e.g. `orchestrator.build_context()` itself
+    raised before any directory existed) is a silent no-op: there is nothing
+    on disk to summarize, which is different from "the suite ran and failed"
+    (that case still has an output_dir with zero-or-more marker files in it,
+    and still gets a schema-valid, empty-`modules`-if-nothing-else summary).
+    """
+    if not output_dir or not os.path.isdir(output_dir):
+        return
+
+    try:
+        summary = build_run_summary(output_dir, run_id=str(run_id), ticker=str(ticker or ''))
+        validate_quant_summary(summary)
+    except Exception as e:
+        print(f'  [dashboard] WARNING: could not build quant_summary for run '
+              f'{run_id!r}: {type(e).__name__}: {e}', file=sys.stderr)
+        return
+
+    summary_path = os.path.join(output_dir, 'quant_summary.json')
+    tmp_path = f'{summary_path}.tmp-{os.getpid()}-{threading.get_ident()}'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, default=str)
+            f.write('\n')
+        os.replace(tmp_path, summary_path)
+    except Exception as e:
+        print(f'  [dashboard] WARNING: could not write quant_summary.json for '
+              f'run {run_id!r}: {type(e).__name__}: {e}', file=sys.stderr)
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def _execute_run(run_id: Any, kind: str, focus: Dict[str, Any]) -> None:
     """Background worker. Sync on purpose: BackgroundTasks hands a `def` to the
     threadpool, and run_suite/run_unified are blocking subprocess drivers that
     would stall the event loop for up to the 1800s child timeout."""
     _set_run(run_id, status='running', started_at=_iso_utc_now())
+    output_dir: Optional[str] = None
     try:
         if kind == 'unified':
             # run_unified builds (and re-validates) the context itself.
             result = orchestrator.run_unified(focus)
             status = result.get('status', 'ok')
+            output_dir = result.get('output_dir')
         else:
             context = orchestrator.build_context(focus)
-            _set_run(run_id, output_dir=context.get('output_dir'),
+            output_dir = context.get('output_dir')
+            _set_run(run_id, output_dir=output_dir,
                      orchestrator_run_id=context.get('run_id'))
             timeout = int(focus.get('timeout') or orchestrator.DEFAULT_TIMEOUT_SEC)
             result = orchestrator.run_suite(kind, context, timeout=timeout)
@@ -353,6 +402,11 @@ def _execute_run(run_id: Any, kind: str, focus: Dict[str, Any]) -> None:
     completed_at = _iso_utc_now()
     _set_run(run_id, status=status, result=result, completed_at=completed_at)
     _finish_run_row(run_id, status, result, completed_at)
+
+    # quant_summary.json is best-effort scaffolding on top of a run that has
+    # already fully recorded its own status/result above -- a summary-build
+    # failure must never retroactively change what the run itself reported.
+    _write_quant_summary(output_dir, run_id, focus.get('ticker'))
 
 
 def _focus_from_body(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -766,6 +820,96 @@ def run_status(run_id: str):
 
     payload['done'] = payload.get('status') not in ('queued', 'running')
     return JSONResponse(content=json.loads(json.dumps(payload, default=str)))
+
+
+def _summary_output_dir(live: Optional[Dict[str, Any]],
+                        row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Best-effort output_dir for a run, same live-then-db precedence as
+    run_status() above.
+
+    `live['output_dir']` is set directly for suite-kind runs (`_execute_run`);
+    a unified run's own result dict carries `output_dir` instead, so that's
+    checked next. Falls back to `results_json.output_dir` from the durable
+    orchestrator_runs row for a unified run the in-memory registry no longer
+    knows about (e.g. after a dashboard restart) -- there is currently no
+    equivalent fallback for a restarted suite-kind run, since its DB row's
+    results_json is the raw suite result, which does not carry output_dir.
+    """
+    if live and live.get('output_dir'):
+        return live['output_dir']
+    if live and isinstance(live.get('result'), dict) and live['result'].get('output_dir'):
+        return live['result']['output_dir']
+    if row:
+        try:
+            results = json.loads(row.get('results_json') or 'null')
+        except Exception:
+            results = None
+        if isinstance(results, dict) and results.get('output_dir'):
+            return results['output_dir']
+    return None
+
+
+@app.get('/runs/{run_id}/summary')
+def run_summary(run_id: str):
+    """`quant_summary.json` for a completed run (Task 4 of the quant-console
+    plan) -- reads and schema-validates the file `_execute_run()` wrote via
+    `_write_quant_summary()`.
+
+    404 covers three distinct "not ready" cases, distinguished only by
+    message (the status code stays 404 for all three, matching run_status()'s
+    own not-done semantics rather than inventing a new code): unknown run_id,
+    a run that exists but is still queued/running, and a done run with no
+    output_dir/summary file on disk yet (or ever, e.g. a run that crashed
+    before build_context() produced one). A summary file that exists but
+    fails validate_quant_summary is a 500, not a 404 -- that is a writer bug,
+    not a "come back later" state, and must not be served to the module-card
+    UI as if it were trustworthy.
+    """
+    key: Any = int(run_id) if run_id.lstrip('-').isdigit() else run_id
+    with _RUNS_LOCK:
+        live = dict(_RUNS.get(key, {})) if key in _RUNS else None
+
+    row: Optional[Dict[str, Any]] = None
+    if isinstance(key, int):
+        conn = _db()
+        if conn is not None:
+            try:
+                found = conn.execute(
+                    'SELECT status, results_json FROM orchestrator_runs '
+                    'WHERE id = ?;', (key,)).fetchone()
+                row = dict(found) if found else None
+            except Exception:
+                row = None
+            finally:
+                conn.close()
+
+    if live is None and row is None:
+        return JSONResponse(status_code=404, content={'error': f'no run {run_id!r}'})
+
+    run_status_value = (live or {}).get('status') or (row or {}).get('status')
+    if run_status_value in ('queued', 'running'):
+        return JSONResponse(status_code=404, content={
+            'error': f'run {run_id!r} is not done yet (status={run_status_value!r})',
+        })
+
+    output_dir = _summary_output_dir(live, row)
+    summary_path = os.path.join(output_dir, 'quant_summary.json') if output_dir else None
+    if not summary_path or not os.path.isfile(summary_path):
+        return JSONResponse(status_code=404, content={
+            'error': f'no quant_summary.json for run {run_id!r}',
+        })
+
+    try:
+        with open(summary_path, 'r', encoding='utf-8-sig') as f:
+            summary = json.load(f)
+        validate_quant_summary(summary)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            'error': f'quant_summary.json for run {run_id!r} failed validation: '
+                     f'{type(e).__name__}: {e}',
+        })
+
+    return JSONResponse(content=summary)
 
 
 @app.get('/suites/{suite}', response_class=HTMLResponse)
