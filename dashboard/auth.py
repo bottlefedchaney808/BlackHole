@@ -52,6 +52,38 @@ async def verify_api_key(request: Request) -> str:
     return key
 
 
+async def require_dispatch_configured(request: Request) -> None:
+    """Fail closed for the two worker-dispatch routes (Quant Console Phase 2:
+    POST /runs/{run_id}/dispatch/{action}, GET /runs/{run_id}/dispatch/{job_id})
+    when DASHBOARD_API_KEY is unset or left at its public, hardcoded default.
+
+    Dispatch's blast radius (an LLM-driven subprocess with filesystem write
+    access and, for `explain`, live network egress) is materially worse than
+    run-triggering's, which already tolerates the default key via
+    verify_api_key. This is a *separate*, additional dependency layered on
+    top of verify_api_key for those two routes only -- it is not a
+    replacement for it and is not applied to any pre-existing route
+    (`/run/{suite_or_unified}`, `/runs/{run_id}`, `/quant`, etc.).
+
+    Evaluated per-request, as a normal FastAPI dependency (re-reading the
+    module-level API_KEY on every call) -- deliberately NOT a check that runs
+    once at import/process-startup time. dashboard/app.py has no
+    router/sub-app split (every route is registered directly on `app`), so a
+    startup-time check that raises/exits would take down the entire,
+    already-working dashboard process (swap browser, run-trigger, poll, etc.)
+    over a misconfiguration that only matters for these two dispatch routes.
+    """
+    if not API_KEY or API_KEY == DEFAULT_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "dispatch disabled: DASHBOARD_API_KEY not configured. "
+                "Set DASHBOARD_API_KEY in the root .env to a non-default "
+                "value to enable worker dispatch."
+            ),
+        )
+
+
 def get_client_ip(request: Request) -> str:
     """Extract client IP from request.
 
