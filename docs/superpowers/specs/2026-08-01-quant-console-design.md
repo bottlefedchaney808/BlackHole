@@ -53,8 +53,13 @@ resurrecting the browser-popup pattern.
    worker, when) in the same card.
 4. Continuous processes (sentiment-scanner's loop mode) get a live-updating
    log panel in the dashboard.
-5. A scoped `PushNotification` fires only for orchestrator `--unified` runs
-   and worker-dispatch completions — not per-suite, not per-click.
+5. Completion of orchestrator `--unified` runs and worker dispatches is
+   surfaced two ways, neither of which is "automatic" in the sense of firing
+   with zero Claude Code or browser involvement — see the self-caught
+   correction below: an in-page browser notification (works with the tab
+   open, zero Claude Code involvement) and, best-effort, a `PushNotification`
+   from an active Claude Code session that happens to be watching (same
+   pattern as Phase 3's watchlist alerts, not a separate mechanism).
 
 ## Non-Goals
 
@@ -288,14 +293,31 @@ User clicks Run on a module card
   → _execute_run() calls build_run_summary() → quant_summary.json  [new]
   → card polls GET /runs/{run_id}, then GET /runs/{run_id}/summary  [new]
   → card renders headline/metrics/warnings inline
-  → (long/unified runs only) PushNotification fires once done
+  → (long/unified runs only) browser Notification API fires if tab is open;
+    separately, best-effort, if a Claude Code session is actively watching
+    (see self-caught correction below Goals) it may PushNotification
 User clicks a worker action on a completed card
   → POST /runs/{run_id}/dispatch/{action}  [new]
   → claude -p subprocess (worktree-isolated if investigate)  [new]
   → writes quant_worker_<action>_<job_id>.json  [new]
   → card polls GET /runs/{run_id}/dispatch/{job_id}, renders with provenance
-  → PushNotification fires once done
+  → same completion-surfacing as above (browser notification + best-effort
+    PushNotification, not a guaranteed push)
 ```
+
+**Self-caught correction (during plan formation, not from a CARL round):**
+`PushNotification` is a tool only a live Claude Code agent session can
+invoke — `dashboard/app.py`'s backend is a plain uvicorn process with no LLM
+in the loop, so it cannot call it directly, no matter how the completion
+handler is wired. Every "PushNotification fires" reference in this document
+means *best-effort, if an active Claude Code session happens to be watching*
+(the same posture Phase 3 already correctly used for watchlist alerts) —
+never a guaranteed push from the backend itself. The one channel the backend
+*can* drive directly is an in-page browser notification (the standard
+`Notification` Web API, or simpler, an audible/visual cue) fired from
+frontend JS once a polled job transitions to `done` — that only reaches the
+user if the dashboard tab is open, which is an accepted limitation, not a
+bug to solve here.
 
 ## Error Handling
 
@@ -495,6 +517,19 @@ issues — 1 critical, 4 major, 1 minor — all applied):
 | R3-F1 | major | `require_dispatch_configured` (R2-F3's fix) was fully specified in Security/Testing but never actually attached to the dispatch/poll endpoints it's supposed to protect in Phase 2 — an implementer reading only Phase 2 would ship the exact gap it was created to close. Also caught a real miscount: Security/Testing said "three" dispatch/poll routes when there are only two. | Phase 2's two route descriptions now explicitly name both `verify_api_key` and `require_dispatch_configured`; "three" corrected to "two" everywhere it appeared |
 | R3-F2 | major | The R2-F1 env allowlist included `ANTHROPIC_API_KEY` with no stated justification — undermining the "allowlist, every entry justified" principle that fix existed to establish, and introducing an undocumented credential this repo's own `.env` conventions don't define | Removed; documented that `claude -p` authenticates via the operator's own existing Claude Code credentials outside this repo, not via a repo-defined env var |
 | R3-F3 | major | The R2-F5 Job Object mechanism requires `pywin32` (or raw `ctypes`/`kernel32.dll` calls), which isn't declared in `requirements.txt` and is only present today as an incidental transitive dependency of an unrelated package (`mcp`) | Named explicitly as a new, real, pinned dependency this spec adds — not assumed already available |
+
+**Self-caught during plan formation** (not from any CARL round — found while
+converting this spec into an implementation task list, the same way the
+sibling `wire-unused-scanners` plan in this repo caught its own gap at that
+stage): Goal 5 and the Data Flow section described `PushNotification` as
+firing automatically on run/dispatch completion. `PushNotification` is only
+callable from a live Claude Code agent session — `dashboard/app.py`'s
+backend has no LLM in the loop and cannot invoke it. Corrected throughout to:
+an in-page browser notification the backend *can* drive directly (only
+reaches the user if the tab is open), plus a best-effort `PushNotification`
+if a Claude Code session happens to be actively watching — the same posture
+Phase 3 already used correctly for watchlist alerts, now applied
+consistently everywhere the document mentions notification.
 
 ## Self-Review
 
