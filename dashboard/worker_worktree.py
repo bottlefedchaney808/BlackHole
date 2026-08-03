@@ -1,37 +1,39 @@
 """dashboard/worker_worktree.py
 
-STUB -- Task 11 of docs/superpowers/plans/2026-08-01-quant-console.md
-("Git worktree isolation for `investigate`") has not landed yet. Task 9's
-dispatch route (`POST /runs/{run_id}/dispatch/{action}` in dashboard/app.py)
-needs an `investigate` job's `cwd` to be an isolated worktree *today* so its
-own control flow -- and its tests -- are stable ahead of Task 11, so this
-module exists purely to satisfy that call signature now.
+Task 11 of docs/superpowers/plans/2026-08-01-quant-console.md ("Git
+worktree isolation for `investigate`"). Task 9's dispatch route
+(`POST /runs/{run_id}/dispatch/{action}` in dashboard/app.py) uses
+`create_worker_worktree` to give every dispatched `investigate` job an
+isolated `cwd`: a fresh `git worktree` under `.worker_worktrees/`, checked
+out on its own branch, so a headless worker can leave an uncommitted diff
+behind without touching the operator's actual working tree or branch.
 
-The REAL Task 11 implementation must:
-  - create the worktree via `git worktree add` at a fresh path such as
-    `.worker_worktrees/quant-worker-{job_id}` -- prefixed `quant-worker-`
-    on the branch/dir name, which is this repo's orphan-identification
-    convention (spec Error Handling: orphaned worktrees left behind after
-    a crash must be identifiable by that prefix).
-  - have NO automatic cleanup function -- explicit non-goal per the design
-    spec (a worktree can hold an uncommitted diff the user still needs).
-    Document the manual `git worktree remove <path>` command in this
-    module's docstring instead of automating deletion (done below).
-  - Task 9's dispatch route is responsible for the `investigate` prompt's
-    explicit "do not commit or push" instruction; Task 11's own tests
-    verify that instruction is actually present in the constructed prompt
-    string, not merely assumed by convention.
+Design points (spec Error Handling / Phase 2, plan Global Constraints):
+  - The worktree is created via `git worktree add -b quant-worker-{job_id}
+    .worker_worktrees/quant-worker-{job_id} HEAD`. Both the branch name and
+    the directory name carry the `quant-worker-` prefix -- this repo's
+    orphan-identification convention: a worktree left behind by a crashed
+    dispatch job is identifiable by that prefix in `git worktree list`.
+  - No automatic cleanup function exists here, deliberately: a worktree can
+    hold an uncommitted diff the user still needs to review, so deleting it
+    automatically would be a data-loss risk. See "Manual cleanup" below.
+  - This module only creates the worktree; it is not responsible for the
+    "do not commit or push" instruction in the `investigate` prompt --
+    that's Task 9's `dashboard.app._build_dispatch_prompt`. Both
+    dashboard/tests/test_dispatch.py (dispatch-route level) and
+    dashboard/tests/test_worker_worktree.py (direct against
+    `_build_dispatch_prompt`) verify that instruction is actually present
+    in the constructed prompt string, not merely assumed by convention.
 
-THIS STUB shells out to a real `git worktree add` -- unlike job_object.py's
-stub, there is no meaningfully simpler placeholder behavior here, since
-Task 9's dispatch route needs a real, usable directory to set `cwd` to for
-`investigate`. Task 9's own tests monkeypatch this function rather than
-exercising real git during automated test runs (see dashboard/tests/
-test_dispatch.py) specifically so `pytest -m unit` never creates or leaves
-behind real worktrees. Task 11 must replace/extend this module's internals
-(branch naming, any additional bookkeeping) if it needs to differ from
-this minimal version -- the call signature below must stay stable, since
-dashboard/app.py's dispatch route already depends on exactly this shape.
+`create_worker_worktree` shells out to a real `git worktree add` -- there's
+no meaningfully simpler behavior to fake here, since the dispatch route
+needs a real, usable directory to set `cwd` to. dashboard/tests/
+test_dispatch.py monkeypatches this function entirely so its dispatch-
+route-level tests never shell out to real git or leave real worktrees
+behind; dashboard/tests/test_worker_worktree.py is the one place that
+exercises the real `git worktree add` call, against a disposable git repo
+under `tmp_path` (never this repo's own `.git`), so `pytest -m unit` still
+never creates or leaves behind a real `.worker_worktrees/` directory here.
 
 Manual cleanup (not automated by this module or any other part of this
 plan): once the operator is done reviewing an `investigate` diff,
@@ -49,16 +51,16 @@ WORKTREE_ROOT = REPO_ROOT / '.worker_worktrees'
 
 
 def create_worker_worktree(run_id: str, job_id: str) -> Path:
-    """STUB -- see module docstring. Task 11 replaces this.
+    """Create an isolated git worktree for a dispatched `investigate` job.
 
     Runs ``git worktree add -b quant-worker-<job_id> <path> HEAD`` under
     ``.worker_worktrees/quant-worker-<job_id>`` and returns that path for
     use as the dispatched `investigate` subprocess's ``cwd``.
 
-    *run_id* is accepted (matching Task 11's documented interface, and
+    *run_id* is accepted (matching this module's documented interface, and
     useful for a future branch-naming scheme that includes it) but is not
     currently used in the branch/dir name -- only *job_id* is, since job
-    ids are already unique per dispatch and this stub keeps naming simple.
+    ids are already unique per dispatch and this keeps naming simple.
 
     Raises ``subprocess.CalledProcessError`` if `git worktree add` fails --
     callers (Task 9's dispatch route) must not swallow this: a failed

@@ -10,9 +10,11 @@ Everything that would actually shell out is mocked:
     mocking it here is equivalent to mocking `subprocess.Popen` directly per
     the plan's Testing convention, one layer up at the boundary Task 9
     actually calls through.
-  - `dashboard.worker_worktree.create_worker_worktree` (Task 11 stub today)
-    is mocked so `investigate` tests never shell out to real `git worktree
-    add` / leave real worktrees behind.
+  - `dashboard.worker_worktree.create_worker_worktree` (Task 11) is mocked
+    here so `investigate` tests never shell out to real `git worktree add`
+    / leave real worktrees behind; dashboard/tests/test_worker_worktree.py
+    is the one place that exercises the real call, against a disposable
+    repo under `tmp_path`.
 
 Depends on Task 7 (`require_dispatch_configured`) and Task 8
 (`build_worker_env`), both already landed and imported directly here.

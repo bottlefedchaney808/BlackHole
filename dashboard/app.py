@@ -933,12 +933,12 @@ def run_summary(run_id: str):
 # the whole job -- every descendant, not just the tracked PID -- if it
 # exceeds its per-action timeout; falls back to `taskkill /F /T` only if
 # Job Object creation/assignment itself fails) and, for `investigate`,
-# dashboard.worker_worktree.create_worker_worktree (Task 11, still a
-# minimal stub -- see its own module docstring): this route depends on its
-# *interface*, not its real git-worktree internals, which land in a later
-# task. `_watch_dispatch_job` (also Task 10) is scheduled as a background
-# task per dispatch to block on the launched process and record its final
-# status (`completed`/`failed`/`timed_out`) once it exits.
+# dashboard.worker_worktree.create_worker_worktree (Task 11: a real
+# `git worktree add` into `.worker_worktrees/quant-worker-{job_id}`, no
+# auto-cleanup -- see its own module docstring). `_watch_dispatch_job`
+# (also Task 10) is scheduled as a background task per dispatch to block
+# on the launched process and record its final status
+# (`completed`/`failed`/`timed_out`) once it exits.
 # --------------------------------------------------------------------------
 
 DISPATCH_ACTIONS = ('interpret', 'investigate', 'explain')
