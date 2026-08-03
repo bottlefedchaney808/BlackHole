@@ -1100,6 +1100,97 @@ def _watch_dispatch_job(job_id: str) -> None:
             current['status'] = status
             current['completed_at'] = _iso_utc_now()
             current['stdout'] = stdout_text
+            job_snapshot = dict(current)
+        else:
+            job_snapshot = None
+
+    # Best-effort worker-report write (Task 12) -- happens after the
+    # in-memory job record above is already fully updated, same ordering
+    # posture `_write_quant_summary` uses relative to a run's own status/
+    # result (a report-write failure must never mask or overwrite job status).
+    if job_snapshot is not None:
+        _write_worker_report(job_snapshot)
+
+
+#: Max chars of stdout returned by the poll route below -- mirrors the
+#: `traceback.format_exc()[-4000:]` truncation `_execute_run` already uses,
+#: same rationale: a "tail" for a status display, not the full transcript.
+DISPATCH_STDOUT_TAIL_CHARS = 4000
+
+
+def _parse_worker_stdout(stdout_text: Optional[str]) -> str:
+    """Best-effort extraction of a worker's report text from its raw stdout.
+
+    `claude -p ... --output-format json` is expected to emit a JSON envelope,
+    but its exact shape was never independently verified against a live CLI
+    (see DISPATCH_DISALLOWED_TOOLS's docstring above) -- so this never
+    raises. Valid JSON with a string `result` field yields that string;
+    anything else (empty stdout, non-JSON text, a JSON value with no
+    `result` key) falls back to the raw stdout text. Never blocks the
+    report write that calls this.
+    """
+    stdout_text = stdout_text or ''
+    try:
+        parsed = json.loads(stdout_text)
+    except (ValueError, TypeError):
+        return stdout_text.strip()
+    if isinstance(parsed, dict) and isinstance(parsed.get('result'), str):
+        return parsed['result']
+    return stdout_text.strip()
+
+
+def _write_worker_report(job: Dict[str, Any]) -> None:
+    """Atomically write a finished dispatch job's structured report,
+    `orchestrator_output/<run_id>/quant_worker_<action>_<job_id>.json`
+    (design spec Phase 2 point 5), reusing the exact temp-file + `os.replace`
+    pattern `_write_quant_summary` established (Task 4) -- avoids a
+    half-written file being read mid-poll.
+
+    Called from `_watch_dispatch_job` immediately after it records the job's
+    final status, with a snapshot of that job dict. Best-effort and never
+    raises: a report-write failure must not affect the in-memory job record
+    `_watch_dispatch_job` already finished writing, and the poll route below
+    degrades gracefully (`result: None`) when no report file is on disk.
+    """
+    output_dir = job.get('output_dir')
+    if not output_dir or not os.path.isdir(output_dir):
+        return
+
+    job_id = job.get('job_id')
+    action = job.get('action')
+    status = job.get('status')
+    detail = _parse_worker_stdout(job.get('stdout'))
+    headline = detail.splitlines()[0][:200] if detail else f'{action} worker {status}'
+
+    report: Dict[str, Any] = {
+        'schema_version': 1,
+        'worker': 'claude',
+        'action': action,
+        'job_id': job_id,
+        'run_id': job.get('run_id'),
+        'status': status,
+        'headline': headline,
+        'detail': detail,
+        'created_at_utc': job.get('completed_at') or _iso_utc_now(),
+    }
+    if action == 'investigate' and job.get('cwd'):
+        report['worktree_path'] = str(job['cwd'])
+
+    report_path = os.path.join(output_dir, f'quant_worker_{action}_{job_id}.json')
+    tmp_path = f'{report_path}.tmp-{os.getpid()}-{threading.get_ident()}'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, default=str)
+            f.write('\n')
+        os.replace(tmp_path, report_path)
+    except Exception as e:
+        print(f'  [dashboard] WARNING: could not write worker report for '
+              f'dispatch job {job_id!r}: {type(e).__name__}: {e}', file=sys.stderr)
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def _log_dispatch_job_row(action: str, run_id: Any, job_id: str, started_at: str) -> None:
@@ -1239,6 +1330,83 @@ async def dispatch_worker(run_id: str, action: str, request: Request,
         'poll': f'/runs/{run_id}/dispatch/{job_id}',
         'idempotent_replay': False,
     })
+
+
+@app.get('/runs/{run_id}/dispatch/{job_id}')
+async def dispatch_poll(run_id: str, job_id: str,
+                        _auth: str = Depends(verify_api_key),
+                        _dispatch_ok: None = Depends(require_dispatch_configured)):
+    """Poll a dispatch job launched by `POST /runs/{run_id}/dispatch/{action}`
+    (Task 9 of the quant-console plan).
+
+    Task 12 of the plan; response shape deliberately mirrors `GET
+    /runs/{run_id}` above (`status`/`done`/stdout tail/`result`), per the
+    design spec's own wording for this route. Gated by the same two
+    dependencies as the launch route -- `verify_api_key` and
+    `require_dispatch_configured` are, per the design spec, "the two routes"
+    the latter protects.
+
+    `_DISPATCH_JOBS` is looked up directly (not via `_lookup_run`, which
+    resolves analysis runs, a different namespace -- job_id is the dispatch
+    job's own uuid4 key). The job's stored `run_id` must match the path's
+    `run_id` too, so a valid job_id can't be polled through the wrong run's
+    URL. Once the job is done, the worker report `_watch_dispatch_job` wrote
+    via `_write_worker_report` (Task 12) is read back as `result`; a
+    malformed or entirely missing report file degrades gracefully (Task 3's
+    "degraded" pattern) rather than 500ing the poll -- the job's own
+    status/stdout, already recorded, is not held hostage by a report-file
+    problem.
+    """
+    key: Any = int(run_id) if run_id.lstrip('-').isdigit() else run_id
+
+    with _DISPATCH_LOCK:
+        job = dict(_DISPATCH_JOBS[job_id]) if job_id in _DISPATCH_JOBS else None
+
+    if job is None or job.get('run_id') != key:
+        return JSONResponse(status_code=404, content={
+            'error': f'no dispatch job {job_id!r} for run {run_id!r}',
+        })
+
+    status_value = job.get('status', 'running')
+    done = status_value not in ('queued', 'running')
+    stdout_text = job.get('stdout') or ''
+
+    payload: Dict[str, Any] = {
+        'job_id': job_id,
+        'run_id': job.get('run_id'),
+        'action': job.get('action'),
+        'status': status_value,
+        'done': done,
+        'queued_at': job.get('queued_at'),
+        'started_at': job.get('started_at'),
+        'completed_at': job.get('completed_at'),
+        'stdout': stdout_text[-DISPATCH_STDOUT_TAIL_CHARS:],
+        'result': None,
+    }
+
+    if done:
+        output_dir = job.get('output_dir')
+        action = job.get('action')
+        report_path = (os.path.join(output_dir, f'quant_worker_{action}_{job_id}.json')
+                       if output_dir else None)
+        if report_path and os.path.isfile(report_path):
+            try:
+                with open(report_path, 'r', encoding='utf-8-sig') as f:
+                    payload['result'] = json.load(f)
+            except Exception as e:
+                # Malformed report file -- degrade rather than 500 the poll
+                # (Task 3's "degraded" pattern: never let a bad marker file
+                # abort the caller trying to read it).
+                payload['result'] = {
+                    'schema_version': 1, 'worker': 'claude', 'action': action,
+                    'job_id': job_id, 'status': 'degraded',
+                    'headline': f'worker report unreadable: {type(e).__name__}: {e}',
+                    'detail': '', 'created_at_utc': _iso_utc_now(),
+                }
+        # No report file on disk at all (write failed, or hasn't landed
+        # yet) -- result stays None; this is not an error state for the poll.
+
+    return JSONResponse(content=json.loads(json.dumps(payload, default=str)))
 
 
 @app.get('/quant', response_class=HTMLResponse)

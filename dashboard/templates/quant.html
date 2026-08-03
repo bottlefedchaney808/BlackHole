@@ -55,6 +55,30 @@
 
 .module-entry-head { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .warnings-list { margin: 6px 0 0; padding-left: 18px; color: var(--warn); }
+
+/* Worker dispatch (Quant Console Task 12) -- a completed dispatch job's
+   report is a Claude worker's *interpretation* of a module's already-run
+   quant_summary.json/*_result.json, not the automated suite's own output,
+   so it gets a visually distinct treatment (accent-tinted box, not the
+   plain metric-grid the summary tab above uses) with explicit provenance
+   (worker name / action / timestamp) so it's never mistaken for the run's
+   own result. */
+.dispatch-area { margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 10px; }
+.dispatch-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.dispatch-jobs { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.worker-report {
+  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 10px 12px;
+}
+.worker-report.status-failed, .worker-report.status-timed_out, .worker-report.status-degraded {
+  background: var(--warn-soft); border-color: var(--warn);
+}
+.worker-report .provenance {
+  font-size: 11px; color: var(--muted); margin-bottom: 6px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.worker-report .headline { font-weight: 620; margin-bottom: 4px; }
+.worker-report .detail { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 </style>
 
 <h1>Quant Console</h1>
@@ -108,6 +132,18 @@
       <div class="tab-content" data-tab-content="raw">
         <pre class="json raw-json"></pre>
       </div>
+    </div>
+
+    <div class="dispatch-area" style="display:none;">
+      <div class="dispatch-actions">
+        <button type="button" class="ghost dispatch-btn" data-action="interpret"
+                onclick="dispatchWorker(this)">Ask Quant to interpret</button>
+        <button type="button" class="ghost dispatch-btn" data-action="investigate"
+                onclick="dispatchWorker(this)">Ask coder to investigate</button>
+        <button type="button" class="ghost dispatch-btn" data-action="explain"
+                onclick="dispatchWorker(this)">Ask research to explain</button>
+      </div>
+      <div class="dispatch-jobs"></div>
     </div>
   </div>
   {% endfor %}
@@ -254,6 +290,12 @@ function pollRun(card, runId) {
           btn.disabled = false;
           btn.textContent = 'Run';
           fetchSummary(card, runId);
+
+          // Worker dispatch (Task 12) needs a done run_id to dispatch
+          // against -- record it on the card and reveal the action buttons
+          // now that one exists.
+          card.setAttribute('data-run-id', String(data.run_id));
+          card.querySelector('.dispatch-area').style.display = 'block';
         }
       })
       .catch(function (e) { console.error('poll failed', e); });
@@ -261,6 +303,96 @@ function pollRun(card, runId) {
 
   var timer = setInterval(tick, 4000);
   tick();
+}
+
+// --------------------------------------------------------------------------
+// Worker dispatch (Quant Console Task 12) -- POST /runs/{run_id}/dispatch/
+// {action}, then poll GET /runs/{run_id}/dispatch/{job_id} (same 'done'/
+// status-pill polling convention pollRun already uses above) until the job
+// finishes, then render its report inline, visually distinct from the
+// quant_summary.json content in the Summary/Raw tabs above it.
+// --------------------------------------------------------------------------
+
+function workerReportProvenance(job, report) {
+  var worker = (report && report.worker) || 'claude';
+  var when = job.completed_at || job.started_at || '';
+  return 'worker: ' + worker + ' · action: ' + job.action + (when ? ' · ' + when : '');
+}
+
+function renderWorkerReport(entryEl, job) {
+  var report = job.result;
+  var status = job.status || 'running';
+  var headline = report ? (report.headline || '(no headline)') : ('dispatch ' + status + ', no report file found');
+  var detail = report ? (report.detail || '') : '';
+
+  entryEl.className = 'worker-report status-' + status;
+  entryEl.innerHTML =
+    '<div class="provenance">' + esc(workerReportProvenance(job, report)) +
+      ' <span class="pill ' + runPillClass(status) + '">' + esc(status) + '</span></div>' +
+    '<div class="headline">' + esc(headline) + '</div>' +
+    (detail ? '<div class="detail">' + esc(detail) + '</div>' : '');
+}
+
+function pollDispatchJob(runId, jobId, entryEl) {
+  function tick() {
+    fetch('/runs/' + encodeURIComponent(runId) + '/dispatch/' + encodeURIComponent(jobId))
+      .then(function (r) {
+        return r.json().then(function (j) { return {ok: r.ok, body: j}; });
+      })
+      .then(function (res) {
+        if (!res.ok) {
+          clearInterval(timer);
+          entryEl.className = 'errbox';
+          entryEl.textContent = res.body.error || ('HTTP error polling dispatch job');
+          return;
+        }
+        var job = res.body;
+        if (!job.done) {
+          entryEl.innerHTML = '<div class="small muted">' + esc(job.action) + ' ' +
+            esc(job.status) + '...</div>';
+          return;
+        }
+        clearInterval(timer);
+        renderWorkerReport(entryEl, job);
+      })
+      .catch(function (e) { console.error('dispatch poll failed', e); });
+  }
+
+  var timer = setInterval(tick, 3000);
+  tick();
+}
+
+function dispatchWorker(btn) {
+  var card = btn.closest('.quant-card');
+  var runId = card.getAttribute('data-run-id');
+  if (!runId) return;
+  var action = btn.getAttribute('data-action');
+
+  var entryEl = document.createElement('div');
+  entryEl.className = 'small muted';
+  entryEl.textContent = 'dispatching ' + action + '...';
+  card.querySelector('.dispatch-jobs').appendChild(entryEl);
+
+  fetch('/runs/' + encodeURIComponent(runId) + '/dispatch/' + encodeURIComponent(action), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  })
+    .then(function (r) {
+      return r.json().then(function (j) { return {ok: r.ok, body: j}; });
+    })
+    .then(function (res) {
+      if (!res.ok) {
+        entryEl.className = 'errbox';
+        entryEl.textContent = res.body.error || 'dispatch failed';
+        return;
+      }
+      pollDispatchJob(runId, res.body.job_id, entryEl);
+    })
+    .catch(function (e) {
+      entryEl.className = 'errbox';
+      entryEl.textContent = String(e);
+    });
 }
 
 function startModuleRun(btn) {
