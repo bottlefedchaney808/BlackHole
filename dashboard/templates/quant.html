@@ -160,10 +160,22 @@ function esc(s) {
   });
 }
 
-var RUN_PILL_CLASSES = ['ok', 'partial', 'running', 'queued', 'error', 'timeout', 'failed'];
+// Orchestrator run-status vocabulary (ok/partial/running/queued/error/
+// timeout/failed) mapped onto their own identically-named pill classes.
+// Task 9/12 added a *second*, differently-spelled vocabulary -- dispatch
+// jobs use queued/running/completed/failed/timed_out -- so 'completed' and
+// 'timed_out' are aliased onto the existing ok/failed treatments here
+// rather than growing new CSS for them, and 'degraded' (Task 3's pattern,
+// surfaced by a malformed worker report -- see renderWorkerReport below) is
+// aliased onto modulePillClass's existing amber `.pill.degraded` rule.
+var RUN_PILL_CLASSES = {
+  ok: 'ok', partial: 'partial', running: 'running', queued: 'queued',
+  error: 'error', timeout: 'timeout', failed: 'failed',
+  completed: 'ok', timed_out: 'failed', degraded: 'degraded'
+};
 function runPillClass(status) {
-  var cls = (status || 'plain').toLowerCase();
-  return RUN_PILL_CLASSES.indexOf(cls) >= 0 ? cls : 'plain';
+  var cls = (status || '').toLowerCase();
+  return RUN_PILL_CLASSES[cls] || 'plain';
 }
 
 // Distinct visual treatment per quant_summary module status -- the whole
@@ -321,7 +333,14 @@ function workerReportProvenance(job, report) {
 
 function renderWorkerReport(entryEl, job) {
   var report = job.result;
-  var status = job.status || 'running';
+  // The backend can synthesize a report.status of "degraded" (Task 3's
+  // pattern) when the worker's report file is malformed, while job.status
+  // itself stays "completed" (the *process* exited fine -- it's the report
+  // file that's bad). report.status must win when present so a degraded
+  // report is never visually indistinguishable from a clean one; job.status
+  // is only the fallback for the done-but-no-report-file case where there
+  // is no report.status to read.
+  var status = (report && report.status) || job.status || 'running';
   var headline = report ? (report.headline || '(no headline)') : ('dispatch ' + status + ', no report file found');
   var detail = report ? (report.detail || '') : '';
 

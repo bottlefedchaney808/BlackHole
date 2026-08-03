@@ -388,3 +388,36 @@ class TestQuantViewDispatchWiring:
         assert '/dispatch/' in html
         assert 'dispatchWorker' in html
         assert 'pollDispatchJob' in html
+
+    def test_render_worker_report_prefers_report_status_over_job_status(self):
+        """Fix for a review finding on this task: a malformed worker report
+        file makes the backend return `result.status == "degraded"` while
+        `job.status` itself stays "completed" (the *process* exited fine --
+        it's the report file that's bad). `renderWorkerReport` must read
+        `report.status` first, falling back to `job.status` only when there
+        is no report (done-but-no-report-file case) -- otherwise a degraded
+        report silently renders with "completed" styling/text, defeating the
+        whole point of the `status-degraded` CSS treatment already defined
+        in this file. String/structure assertion, same "mechanically
+        checkable without a browser" posture as this class's other tests.
+        """
+        resp = client.get('/quant')
+        html = resp.text
+        assert "var status = (report && report.status) || job.status || 'running';" in html
+
+    def test_run_pill_classes_cover_dispatch_job_vocabulary(self):
+        """Second half of the same finding: RUN_PILL_CLASSES was built for
+        the orchestrator run-status vocabulary (ok/partial/running/queued/
+        error/timeout/failed) and didn't recognize 'completed' or
+        'timed_out' -- the dispatch job vocabulary this task introduces --
+        so both fell back to the neutral `.pill.plain` treatment. They must
+        now map onto a non-plain pill class (and 'degraded' must map onto
+        the existing amber `.pill.degraded` rule modulePillClass already
+        uses), so a completed/timed-out/degraded dispatch job's status pill
+        is visually distinct from the "not run yet" default.
+        """
+        resp = client.get('/quant')
+        html = resp.text
+        assert "completed: 'ok'" in html
+        assert "timed_out: 'failed'" in html
+        assert "degraded: 'degraded'" in html
