@@ -25,6 +25,8 @@ empty orchestrator_runs, or a suite that has never produced output all render.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import csv
 import glob
 import json
@@ -40,12 +42,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
-from fastapi import BackgroundTasks, FastAPI, Request, Depends
+from fastapi import BackgroundTasks, FastAPI, Request, Depends, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 # --------------------------------------------------------------------------
 # paths / repo imports
@@ -489,6 +492,54 @@ async def _parse_body(request: Request) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 ORCH_OUTPUT = os.path.join(ROOT, 'orchestrator_output')
+
+# --------------------------------------------------------------------------
+# WS /suites/{suite}/live -- log-tail for continuous (loop-mode) processes
+# (Task 13 of the quant-console plan). Concretely: sentiment-scanner run
+# without --no-loop, per CLAUDE.md/the design spec's Phase 3 section.
+#
+# The brief for this task says to reuse "the same way job logs already are
+# redirected to a file elsewhere in this codebase" -- verified before writing
+# this route that no such file-based convention actually exists today:
+# orchestrator.run_suite/run_unified (orchestrator.py) and dispatch workers
+# (job_object.run_with_job_object, Task 10) both capture subprocess stdout
+# in-memory via subprocess.PIPE + .communicate(), never to a file. This is
+# therefore the smallest new convention, not a reused one: one rolling log
+# file per suite name under LIVE_LOG_DIR, written by whatever eventually
+# launches that suite's continuous process with
+# `stdout=open(_live_log_path(suite), 'a')` (that launch wiring is out of
+# this task's scope -- Task 13 only tails).
+LIVE_LOG_DIR = os.path.join(ORCH_OUTPUT, 'live')
+
+# suite -> Popen-shaped object (anything exposing .poll(), matching
+# subprocess.Popen/job_object.JobObjectProcess) believed to currently be
+# writing that suite's live log file. Nothing in this repo populates this
+# yet (no continuous-process launcher is wired up -- out of this task's
+# scope); it exists so this route has a way to tell "writer exited, stop
+# tailing" apart from "still running" once that launcher is added, and so
+# tests can exercise that disconnect path without a real subprocess. A
+# missing entry means "no tracked writer" -- the route keeps tailing rather
+# than assuming the process is dead.
+_LIVE_WRITERS: Dict[str, Any] = {}
+
+_LIVE_POLL_INTERVAL_SEC = 0.1
+
+
+def _live_log_path(suite: str) -> str:
+    return os.path.join(LIVE_LOG_DIR, f'{suite}.log')
+
+
+def _live_writer_exited(suite: str) -> bool:
+    """True only if a writer is actually tracked for *suite* and it has
+    exited. No tracked writer -> False (keep tailing; see _LIVE_WRITERS)."""
+    proc = _LIVE_WRITERS.get(suite)
+    if proc is None:
+        return False
+    try:
+        return proc.poll() is not None
+    except Exception:
+        return False
+
 
 # Newest-file globs per suite, most specific first. Everything under a
 # virtualenv or site-packages is filtered out afterwards -- Options_Suite and
@@ -1464,6 +1515,93 @@ def suite_output(request: Request, suite: str):
         'error': error,
         'suites': SUITE_OUTPUT_GLOBS,
     })
+
+
+@app.websocket('/suites/{suite}/live')
+async def suite_live_log(websocket: WebSocket, suite: str) -> None:
+    """Tails `_live_log_path(suite)` (see LIVE_LOG_DIR above) and streams
+    new lines to the client as they're written. No auth dependency --
+    matches this codebase's existing convention for read-only status
+    routes (GET /runs/{run_id}, GET /runs/{run_id}/summary are also
+    unauthenticated; only *mutating* endpoints require verify_api_key per
+    the design spec's Security section).
+
+    Two ways this closes cleanly, both exercised by
+    dashboard/tests/test_live_ws.py:
+      - the client disconnects (detected via a background `receive_text()`
+        task -- Starlette raises WebSocketDisconnect on that call once the
+        client's close frame is delivered; the tail loop itself only ever
+        *sends*, so it wouldn't otherwise notice a disconnect promptly);
+      - the tracked writer process (`_LIVE_WRITERS`) has exited -- the
+        route drains whatever's left in the file, then returns.
+
+    Polling-based, not inotify/watchdog -- matches this codebase's existing
+    preference for simple stdlib mechanisms over new dependencies, and the
+    per-suite log volume here (occasional scanner output lines) doesn't
+    warrant more.
+    """
+    await websocket.accept()
+
+    key = suite.strip().lower()
+    if key not in SUITE_OUTPUT_GLOBS:
+        await websocket.close(code=1008, reason=f'unknown suite {suite!r}')
+        return
+
+    path = _live_log_path(key)
+    disconnected = asyncio.Event()
+
+    async def _watch_for_disconnect() -> None:
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            disconnected.set()
+        except Exception:
+            disconnected.set()
+
+    watcher = asyncio.create_task(_watch_for_disconnect())
+    pre_existing = os.path.exists(path)
+    try:
+        while not disconnected.is_set() and not os.path.exists(path):
+            if _live_writer_exited(key):
+                return
+            await asyncio.sleep(_LIVE_POLL_INTERVAL_SEC)
+
+        if disconnected.is_set():
+            return
+
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            # Only skip existing content when the file predates this
+            # connection (resuming an already-running writer's log). If the
+            # file appeared while we were waiting for it, nothing has been
+            # shown to this client yet -- read from the start, or the first
+            # line written before our next poll tick would be silently lost.
+            if pre_existing:
+                f.seek(0, os.SEEK_END)
+            while not disconnected.is_set():
+                line = f.readline()
+                if line:
+                    try:
+                        await websocket.send_text(line.rstrip('\n'))
+                    except Exception:
+                        return
+                    continue
+                if _live_writer_exited(key):
+                    remainder = f.read()
+                    for rem_line in remainder.splitlines():
+                        try:
+                            await websocket.send_text(rem_line)
+                        except Exception:
+                            return
+                    return
+                await asyncio.sleep(_LIVE_POLL_INTERVAL_SEC)
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(Exception):
+            await watcher
+        with contextlib.suppress(Exception):
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.close(code=1000)
 
 
 # --------------------------------------------------------------------------
