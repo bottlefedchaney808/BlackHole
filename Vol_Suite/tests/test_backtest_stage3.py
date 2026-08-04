@@ -56,7 +56,12 @@ def _make_day_rows(date: str, spot: float, call_oi: int, put_oi: int, gamma: flo
     chain_iv = _flat_smile_chain(spot)
     greek_rows, oi_rows = [], []
     for (k, right), iv in chain_iv.items():
-        greek_rows.append({"date": date, "strike": _theta(k), "right": right,
+        # hist/option/eod (what hist_greek_rows is shaped after) echoes
+        # strike in plain dollar form, NOT theta-scaled -- only the OI route
+        # below returns theta-scaled integers. See _build_day_records's own
+        # comment (backtest_stage3.py) for the live-verified bug this
+        # fixture used to silently share with the buggy production code.
+        greek_rows.append({"date": date, "strike": k, "right": right,
                            "implied_vol": iv, "delta": 0.0, "gamma": gamma})
         oi = call_oi if right == 'C' else put_oi
         oi_rows.append({"date": date, "strike": _theta(k), "right": right, "open_interest": oi})
@@ -318,7 +323,10 @@ def test_run_backtest_from_history_raises_on_no_overlapping_data():
 
 def _price_only_rows(date: str, spot: float, expiry: str, sigma: float = 0.22):
     """Rows shaped like hist/option/eod: bid/ask/close and identity, NO
-    implied_vol and NO gamma."""
+    implied_vol and NO gamma. Strike is plain dollar form here (matching
+    the real endpoint), and right is the full word ("CALL"/"PUT", also
+    matching what hist/option/eod actually returns live) to exercise
+    _build_day_records's normalization of both, not just the strike fix."""
     import implied_vol as iv_mod
     expiry_dt = bt3.datetime.strptime(expiry, "%Y%m%d")
     T = max((expiry_dt - bt3.datetime.strptime(date, "%Y%m%d")).days, 1) / 365.0
@@ -327,7 +335,8 @@ def _price_only_rows(date: str, spot: float, expiry: str, sigma: float = 0.22):
         right = 'C' if k >= spot else 'P'
         px = iv_mod.bs_price(spot, float(k), T, bt3._BACKTEST_R, bt3._BACKTEST_Q,
                              sigma, right)
-        rows.append({"date": date, "strike": _theta(k), "right": right,
+        rows.append({"date": date, "strike": float(k),
+                     "right": "CALL" if right == "C" else "PUT",
                      "bid": px * 0.99, "ask": px * 1.01, "close": px})
     return rows
 
@@ -367,7 +376,7 @@ def test_recovered_iv_is_close_to_the_vol_the_chain_was_priced_at():
              - bt3.datetime.strptime(date, "%Y%m%d")).days, 1) / 365.0
 
     for row in _price_only_rows(date, spot, expiry, sigma):
-        k = bt3.strike_from_theta(int(row["strike"]))
+        k = float(row["strike"])
         mark = iv_mod.mid_price(row["bid"], row["ask"], row["close"])
         solved = iv_mod.implied_vol(mark, spot, k, T, bt3._BACKTEST_R,
                                     bt3._BACKTEST_Q, row["right"])
@@ -387,7 +396,11 @@ def test_vendor_greeks_are_still_used_when_present():
     for row in rows:
         row["implied_vol"] = 0.99          # implausible on purpose
         row["gamma"] = 0.0123
-    oi_rows = [{"date": date, "strike": r["strike"], "right": r["right"],
+    # OI rows need their own theta-scaled strike / single-char right --
+    # real hist_greek_rows and hist_oi_rows use different conventions for
+    # both fields (see _build_day_records's comment); echoing rows' own
+    # dollar-strike/full-word-right verbatim would test the wrong shape.
+    oi_rows = [{"date": date, "strike": _theta(r["strike"]), "right": r["right"][0],
                 "open_interest": 100} for r in rows]
 
     records = bt3._build_day_records("SYN", expiry, rows, oi_rows,
@@ -405,7 +418,7 @@ def test_a_day_with_no_underlying_close_yields_no_derived_greeks():
     back to a guessed spot."""
     expiry, date = "20261231", "20260901"
     rows = _price_only_rows(date, 100.0, expiry)
-    oi_rows = [{"date": date, "strike": r["strike"], "right": r["right"],
+    oi_rows = [{"date": date, "strike": _theta(r["strike"]), "right": r["right"][0],
                 "open_interest": 100} for r in rows]
     records = bt3._build_day_records("SYN", expiry, rows, oi_rows, [])
     assert records == []

@@ -212,8 +212,24 @@ def _build_day_records(ticker: str, expiry: str,
         if not d:
             continue
         try:
-            k = strike_from_theta(int(float(row['strike'])))
-            right = row['right']
+            # hist/option/eod (the route hist_greek_rows comes from) echoes
+            # strike in plain dollar form ("650.000"), NOT theta-scaled --
+            # unlike option_bulk_hist_oi_by_day below, which does return
+            # theta-scaled integers. Running this through strike_from_theta()
+            # silently divided every strike by another 1000 (e.g. 650 ->
+            # 0.65), which pushed every real market price wildly outside
+            # implied_vol()'s no-arbitrage bounds and made every single row
+            # "unrecoverable" -- confirmed live, 2026-08-04 (see
+            # docs/PROJECT_AUDIT_AND_SPEC.md Part 5). Also normalize `right`
+            # to a single uppercase char here: this route returns the full
+            # word ("CALL"/"PUT"), while oi_by_date below is keyed on
+            # ThetaData's normal single-char "C"/"P" -- left unnormalized,
+            # every (k, right) lookup into oi_map in _net_gamma_v1/_v2 would
+            # silently miss and read OI as 0 for every strike, making net
+            # gamma always exactly 0.0 and every day classify as "short"
+            # regardless of the real chain.
+            k = float(row['strike'])
+            right = str(row['right']).upper()[:1]
         except (KeyError, TypeError, ValueError):
             continue
 
