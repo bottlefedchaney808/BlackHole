@@ -300,6 +300,31 @@ function renderSummary(card, summary) {
   }
 }
 
+// --------------------------------------------------------------------------
+// Browser notification on completion (Quant Console Task 16) -- fires when
+// a polled run or dispatch job transitions to `done` while its card is on
+// screen. Frontend-only, no backend involvement (dashboard/app.py's Task
+// 14/15 alert banner is the separate, durable, tab-closed-safe channel for
+// that job -- this one is real-time but only reaches the user while this
+// tab is open, an accepted limitation per the design spec, not a bug to
+// fix here). Permission is requested at most once: the first call this
+// page makes while `Notification.permission` is still the browser's
+// unasked default ('default') triggers the one prompt; a user who denies
+// it is never re-prompted (calling requestPermission() again after
+// 'denied' wouldn't show UI anyway, but checking first keeps that explicit
+// rather than relying on browser behavior).
+function notifyCompletion(title, body) {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    new Notification(title, {body: body});
+  } else if (Notification.permission === 'default') {
+    Notification.requestPermission().then(function (permission) {
+      if (permission === 'granted') { new Notification(title, {body: body}); }
+    });
+  }
+  // 'denied' -- stay silent, no reprompt.
+}
+
 function fetchSummary(card, runId) {
   fetch('/runs/' + encodeURIComponent(runId) + '/summary')
     .then(function (r) {
@@ -343,6 +368,10 @@ function pollRun(card, runId) {
           // now that one exists.
           card.setAttribute('data-run-id', String(data.run_id));
           card.querySelector('.dispatch-area').style.display = 'block';
+
+          var moduleName = card.querySelector('h2').textContent;
+          notifyCompletion('Quant Console: ' + moduleName + ' run ' + (data.status || 'done'),
+                           'run ' + data.run_id);
         }
       })
       .catch(function (e) { console.error('poll failed', e); });
@@ -408,6 +437,10 @@ function pollDispatchJob(runId, jobId, entryEl) {
         }
         clearInterval(timer);
         renderWorkerReport(entryEl, job);
+
+        var report = job.result;
+        var headline = report ? (report.headline || '(no headline)') : ('dispatch ' + job.status);
+        notifyCompletion('Quant Console: ' + job.action + ' ' + job.status, headline);
       })
       .catch(function (e) { console.error('dispatch poll failed', e); });
   }
