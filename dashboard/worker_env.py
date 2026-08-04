@@ -32,7 +32,16 @@ import os
 # in particular, no Anthropic/Claude credential: `claude -p` is expected to
 # authenticate via the operator's own existing Claude Code session/
 # credentials, configured outside this repo, not via a repo-defined env var.
-_ALLOWED_KEYS = ("PATH", "HOME", "USERPROFILE", "TEMP")
+#
+# SystemRoot added after the Task 12 manual smoke test found every dispatch
+# launch aborting instantly (STATUS_STACK_BUFFER_OVERRUN / 0xC0000409, zero
+# output) against the live claude.exe binary -- confirmed by bisection that
+# SystemRoot alone fixes it. This is the Windows CRT/loader's own baseline
+# requirement to initialize a child process at all, unrelated to what the
+# launched program does; it is always `C:\Windows`, never secret, so
+# including it does not weaken this allowlist's actual security property
+# (keeping DASHBOARD_API_KEY/THETADATA_*/etc out).
+_ALLOWED_KEYS = ("PATH", "HOME", "USERPROFILE", "TEMP", "SystemRoot")
 
 
 def build_worker_env() -> dict:

@@ -46,6 +46,7 @@ def _fake_environ():
         "PATH": r"C:\Windows\System32;C:\Windows",
         "TEMP": r"C:\Users\bottl\AppData\Local\Temp",
         "USERPROFILE": r"C:\Users\bottl",
+        "SystemRoot": r"C:\Windows",
         "DASHBOARD_API_KEY": "super-secret-dashboard-key",
         "THETADATA_CF_ACCESS_CLIENT_ID": "theta-client-id-12345",
         "THETADATA_CF_ACCESS_CLIENT_SECRET": "theta-client-secret-67890",
@@ -57,7 +58,21 @@ class TestBuildWorkerEnvAllowlist:
     def test_returns_only_the_allowlisted_keys(self, monkeypatch):
         monkeypatch.setattr(worker_env.os, "environ", _fake_environ())
         result = worker_env.build_worker_env()
-        assert set(result.keys()) == {"PATH", "TEMP", "USERPROFILE"}
+        assert set(result.keys()) == {"PATH", "TEMP", "USERPROFILE", "SystemRoot"}
+
+    def test_includes_systemroot_windows_child_process_needs_it_to_start(self, monkeypatch):
+        """Regression test: a Windows child process (verified live against
+        the actual claude.exe binary during the Task 12 manual smoke test)
+        aborts on launch with STATUS_STACK_BUFFER_OVERRUN (0xC0000409) and
+        zero output when SystemRoot is absent from its environment -- the
+        Windows CRT/loader needs it to initialize, independent of anything
+        the launched program itself does. This is not a credential (it's
+        always `C:\\Windows`, never secret) so including it does not weaken
+        the allowlist's actual security property.
+        """
+        monkeypatch.setattr(worker_env.os, "environ", _fake_environ())
+        result = worker_env.build_worker_env()
+        assert result["SystemRoot"] == r"C:\Windows"
 
     def test_excludes_credentials_explicitly(self, monkeypatch):
         """The single highest-value test in the plan (spec R2-F1, critical):
@@ -94,7 +109,7 @@ class TestBuildWorkerEnvAllowlist:
         post_load_env_once["LOG_LEVEL"] = "DEBUG"
         monkeypatch.setattr(worker_env.os, "environ", post_load_env_once)
         result = worker_env.build_worker_env()
-        assert set(result.keys()) == {"PATH", "TEMP", "USERPROFILE"}
+        assert set(result.keys()) == {"PATH", "TEMP", "USERPROFILE", "SystemRoot"}
         assert "POTATOHEDGE_BASE_URL" not in result
         assert "LOG_LEVEL" not in result
 
