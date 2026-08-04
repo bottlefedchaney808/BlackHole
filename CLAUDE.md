@@ -200,12 +200,16 @@ lighter-weight plugin surface for one-off tools (distinct from adding a whole ne
 `Tools/registry.py::TOOLS`. `Tools/context_loader.py` discovers/loads/re-validates
 `suite_context.json` files from any suite's output directory.
 
-There is no auth on the dashboard by default (`dashboard/auth.py` exists but no password is enforced) —
-sharing it publicly (e.g. via `cloudflared tunnel`) exposes all swap data and lets anyone trigger
-billed ThetaData-backed orchestrator runs. Don't expose it without being deliberate about that.
+There is no auth on the dashboard — it's a deliberate, permanent decision (`dashboard/auth.py` only has
+a `get_client_ip` helper left; the API-key gate on `POST /run/*` and the worker-dispatch routes was
+removed since this is a single-user, localhost-only tool that already keeps its real secrets
+(ThetaData credentials) in plaintext in `.env`). Sharing it publicly (e.g. via `cloudflared tunnel`)
+exposes all swap data and lets anyone trigger billed ThetaData-backed orchestrator runs, including
+worker-dispatch (an LLM-driven subprocess with filesystem write access). Don't expose it beyond
+localhost without adding real auth back first.
 
 ## Notable env vars
 
 All in the single root `.env` (see `.env.example`): `THETADATA_CF_ACCESS_CLIENT_ID`/`_SECRET`
-(required — ThetaData/PotatoHedge proxy credentials), `DASHBOARD_API_KEY` (dashboard POST endpoints),
-`SWAPS_DB_PATH` (defaults to `./swaps.db`), `LOG_LEVEL`, `DATA_SOURCES` (which `adapters/` are active).
+(required — ThetaData/PotatoHedge proxy credentials), `SWAPS_DB_PATH` (defaults to `./swaps.db`),
+`LOG_LEVEL`, `DATA_SOURCES` (which `adapters/` are active).

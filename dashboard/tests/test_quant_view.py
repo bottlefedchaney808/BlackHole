@@ -15,8 +15,7 @@ browser rendering / click-through of Run -> poll -> summary is NOT covered
 here; see the task report for what was and wasn't manually verified.
 
 `dashboard.app` is imported in-process, same convention as
-test_quant_summary_route.py -- no DASHBOARD_API_KEY/.env behavior is under
-test here.
+test_quant_summary_route.py -- no .env-loading behavior is under test here.
 """
 import sys
 from pathlib import Path

@@ -8,9 +8,7 @@ worker-report write path (`orchestrator_output/<run_id>/quant_worker_<action>_
 from Task 4) that `_watch_dispatch_job` (Task 10) is responsible for once a
 dispatch job finishes.
 
-Same auth posture as Task 9's launch route: `verify_api_key` AND
-`require_dispatch_configured` gate this route too (design spec Phase 2 names
-these as "the two routes require_dispatch_configured protects").
+No auth (this dashboard is localhost-only, single-user -- dashboard/auth.py).
 
 Everything that would actually shell out is mocked, same boundary
 test_dispatch.py already established: `dashboard.job_object.run_with_job_object`
@@ -29,21 +27,23 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import dashboard.app as dashboard_app  # noqa: E402
-import dashboard.auth as auth  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
 client = TestClient(dashboard_app.app)
 
-AUTH_HEADERS = {'Authorization': 'Bearer a-real-operator-configured-key'}
+# No auth required (dashboard/auth.py) -- kept as a no-op dict so call
+# sites below don't need touching if that ever changes.
+AUTH_HEADERS = {}
 
 
 @pytest.fixture(autouse=True)
 def _isolate_dispatch_state(monkeypatch):
-    """Same isolation as test_dispatch.py's fixture -- clean `_RUNS` /
-    `_DISPATCH_JOBS` / `_DISPATCH_IDEMPOTENCY` slate, and a real (non-default)
-    configured API key so `require_dispatch_configured` doesn't 503 tests
-    that aren't specifically exercising that path.
+    """Clean `_RUNS` / `_DISPATCH_JOBS` / `_DISPATCH_IDEMPOTENCY` slate.
+
+    Also stubs `_insert_run_row` -- see test_dispatch.py's fixture docstring
+    for why (this file's dispatch-launch helper calls the same route and
+    was contributing to the same real-DB pollution).
     """
     saved_runs = dict(dashboard_app._RUNS)
     saved_jobs = dict(dashboard_app._DISPATCH_JOBS)
@@ -51,7 +51,7 @@ def _isolate_dispatch_state(monkeypatch):
     dashboard_app._RUNS.clear()
     dashboard_app._DISPATCH_JOBS.clear()
     dashboard_app._DISPATCH_IDEMPOTENCY.clear()
-    monkeypatch.setattr(auth, 'API_KEY', 'a-real-operator-configured-key')
+    monkeypatch.setattr(dashboard_app, '_insert_run_row', MagicMock(return_value=None))
 
     yield
 
@@ -113,28 +113,17 @@ def _write_report(output_dir, action, job_id, payload):
 
 
 # --------------------------------------------------------------------------
-# auth (same posture as Task 9's launch route)
+# no auth (this dashboard is localhost-only, single-user -- dashboard/auth.py)
 # --------------------------------------------------------------------------
 
-class TestAuth:
-    def test_missing_api_key_returns_401(self, tmp_path):
+class TestNoAuth:
+    def test_poll_succeeds_with_no_authorization_header_at_all(self, tmp_path):
         run_key, output_dir = _make_done_run(tmp_path)
         job_id = _insert_job(run_key, output_dir)
 
         resp = client.get(f'/runs/{run_key}/dispatch/{job_id}')
 
-        assert resp.status_code == 401
-
-    def test_default_key_returns_503(self, tmp_path, monkeypatch):
-        run_key, output_dir = _make_done_run(tmp_path)
-        job_id = _insert_job(run_key, output_dir)
-        monkeypatch.setattr(auth, 'API_KEY', auth.DEFAULT_API_KEY)
-
-        resp = client.get(f'/runs/{run_key}/dispatch/{job_id}',
-                          headers={'Authorization': f'Bearer {auth.DEFAULT_API_KEY}'})
-
-        assert resp.status_code == 503
-        assert 'dispatch disabled' in resp.json()['detail'].lower()
+        assert resp.status_code == 200
 
 
 # --------------------------------------------------------------------------

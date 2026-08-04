@@ -79,6 +79,19 @@
 }
 .worker-report .headline { font-weight: 620; margin-bottom: 4px; }
 .worker-report .detail { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+
+/* Alerts banner (Task 15) -- durable, no-LLM detection (Task 14) surfaced
+   here read-only; amber/warn treatment matches the existing .pill.partial
+   tone rather than inventing a new color for "needs attention". */
+.alert-banner {
+  background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 18px;
+}
+.alert-banner-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.alert-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.alert-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.alert-item .alert-detail { flex: 1; min-width: 200px; font-size: 13px; }
+.alert-status-line { margin: 0 0 12px; }
 </style>
 
 <h1>Quant Console</h1>
@@ -86,6 +99,28 @@
   One card per module &middot; Run &rarr; polls the existing <code>/runs/{run_id}</code> &middot;
   once done, fetches <code>/runs/{run_id}/summary</code> (<code>quant_summary.json</code>)
 </p>
+
+{% if alerts %}
+<div class="alert-banner" data-role="alert-banner">
+  <div class="alert-banner-head">
+    <strong>{{ alerts|length }} alert{{ 's' if alerts|length != 1 else '' }} need{{ '' if alerts|length != 1 else 's' }} attention</strong>
+    {% if alert_status %}
+      <span class="small muted">alerts last checked {{ alert_status.last_checked_utc }}</span>
+    {% endif %}
+  </div>
+  <ul class="alert-list">
+    {% for a in alerts %}
+    <li class="alert-item" data-alert-id="{{ a.id }}">
+      <span class="pill partial">{{ a.ticker }}</span>
+      <span class="alert-detail">{{ a.detail }}</span>
+      <button type="button" class="ghost dismiss-alert-btn" onclick="ackAlert(this, {{ a.id }})">Dismiss</button>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% elif alert_status %}
+<p class="small muted alert-status-line">alerts last checked {{ alert_status.last_checked_utc }} &middot; 0 pending</p>
+{% endif %}
 
 <div class="quant-grid">
   {% for m in modules %}
@@ -449,6 +484,31 @@ function startModuleRun(btn) {
         '<div>error</div><div class="val">' + esc(e) + '</div>';
       btn.disabled = false;
       btn.textContent = 'Run';
+    });
+}
+
+// --------------------------------------------------------------------------
+// Alerts banner (Task 15) -- dismiss (ack) removes the row from the DOM
+// immediately on success; the row itself stays in quant_alerts (Task 15's
+// own contract -- acknowledge, not delete) so no re-fetch is needed to
+// reflect that.
+// --------------------------------------------------------------------------
+
+function ackAlert(btn, alertId) {
+  btn.disabled = true;
+  fetch('/alerts/' + encodeURIComponent(alertId) + '/ack', {method: 'POST'})
+    .then(function (r) {
+      if (!r.ok) { throw new Error('HTTP ' + r.status); }
+      var item = btn.closest('.alert-item');
+      var list = item.parentElement;
+      item.remove();
+      if (!list.children.length) {
+        list.closest('.alert-banner').remove();
+      }
+    })
+    .catch(function (e) {
+      console.error('ack failed', e);
+      btn.disabled = false;
     });
 }
 

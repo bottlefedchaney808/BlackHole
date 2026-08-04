@@ -8,9 +8,8 @@ Covers Task 4 of docs/superpowers/plans/2026-08-01-quant-console.md:
   * The new `GET /runs/{run_id}/summary` route reading and schema-validating
     that file.
 
-`dashboard.app` is imported in-process (unlike test_env_loading.py's
-subprocess isolation -- these tests don't touch DASHBOARD_API_KEY/.env
-loading, so there's no reason to pay the subprocess cost). Every
+`dashboard.app` is imported in-process -- these tests don't touch .env
+loading, so there's no reason to pay a subprocess's cost. Every
 `orchestrator.build_context`/`run_suite`/`run_unified` call is monkeypatched
 per test, so no suite subprocess or ThetaData/network call ever actually
 runs. Run ids used here are non-numeric strings on purpose: `run_id.lstrip

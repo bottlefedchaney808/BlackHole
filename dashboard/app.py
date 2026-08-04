@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
-from fastapi import BackgroundTasks, FastAPI, Request, Depends, WebSocket
+from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -59,9 +59,8 @@ ROOT = os.path.dirname(DASHBOARD_DIR)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-# Load the root .env (DASHBOARD_API_KEY, THETADATA_*, etc.) into os.environ
-# before anything below reads from it -- dashboard.auth.API_KEY in particular
-# reads DASHBOARD_API_KEY at import time, so this must run before that import.
+# Load the root .env (THETADATA_*, etc.) into os.environ before anything
+# below reads from it.
 from shared.config import load_env_once  # noqa: E402
 
 load_env_once()
@@ -70,7 +69,7 @@ import orchestrator  # noqa: E402  (path is set immediately above)
 from db_loader import SwapsLoader  # noqa: E402
 from swaps_query import SwapsQuery  # noqa: E402
 from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary  # noqa: E402
-from dashboard.auth import verify_api_key, get_client_ip, require_dispatch_configured  # noqa: E402
+from dashboard.auth import get_client_ip  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
 from shared.schemas import validate_quant_summary  # noqa: E402
 from shared.summary import build_run_summary  # noqa: E402
@@ -770,12 +769,11 @@ def swaps(request: Request,
 @app.post('/run/{suite_or_unified}')
 @limiter.limit("1/60s")  # Max 1 run per 60 seconds per IP
 async def trigger_run(suite_or_unified: str, request: Request,
-                      background_tasks: BackgroundTasks,
-                      _: str = Depends(verify_api_key)):
+                      background_tasks: BackgroundTasks):
     """Kick off run_suite(<name>, ...) or run_unified(...) in the background.
 
-    Requires API key in Authorization header.
-    Returns immediately with a run_id -- these take up to
+    No auth -- this dashboard is localhost-only, single-user (see
+    dashboard/auth.py). Returns immediately with a run_id -- these take up to
     orchestrator.DEFAULT_TIMEOUT_SEC (1800s) per child, so the response cannot
     wait on the result. Poll GET /runs/{run_id}.
     """
@@ -975,9 +973,9 @@ def run_summary(run_id: str):
 #
 # POST /runs/{run_id}/dispatch/{action} spawns a headless `claude -p` worker
 # (interpret/investigate/explain) against a completed run's
-# quant_summary.json + *_result.json files. Gated by verify_api_key AND
-# require_dispatch_configured (Task 7); env built exclusively via
-# build_worker_env() (Task 8, allowlist not blocklist -- see that module's
+# quant_summary.json + *_result.json files. No auth (this dashboard is
+# localhost-only, single-user -- see dashboard/auth.py); env built
+# exclusively via build_worker_env() (Task 8, allowlist not blocklist -- see that module's
 # docstring for why this is the single most load-bearing piece of this
 # plan). Launches through dashboard.job_object.run_with_job_object (Task 10:
 # assigns the process to a Windows Job Object at launch and self-terminates
@@ -1263,9 +1261,7 @@ def _log_dispatch_job_row(action: str, run_id: Any, job_id: str, started_at: str
 @app.post('/runs/{run_id}/dispatch/{action}')
 @limiter.limit("30/minute")  # separate bucket from run-triggering's 1/60s
 async def dispatch_worker(run_id: str, action: str, request: Request,
-                          background_tasks: BackgroundTasks,
-                          _auth: str = Depends(verify_api_key),
-                          _dispatch_ok: None = Depends(require_dispatch_configured)):
+                          background_tasks: BackgroundTasks):
     """Spawn a headless `claude -p` worker against a completed run.
 
     `action` must be one of DISPATCH_ACTIONS; anything else is a 400.
@@ -1384,18 +1380,15 @@ async def dispatch_worker(run_id: str, action: str, request: Request,
 
 
 @app.get('/runs/{run_id}/dispatch/{job_id}')
-async def dispatch_poll(run_id: str, job_id: str,
-                        _auth: str = Depends(verify_api_key),
-                        _dispatch_ok: None = Depends(require_dispatch_configured)):
+async def dispatch_poll(run_id: str, job_id: str):
     """Poll a dispatch job launched by `POST /runs/{run_id}/dispatch/{action}`
     (Task 9 of the quant-console plan).
 
     Task 12 of the plan; response shape deliberately mirrors `GET
     /runs/{run_id}` above (`status`/`done`/stdout tail/`result`), per the
-    design spec's own wording for this route. Gated by the same two
-    dependencies as the launch route -- `verify_api_key` and
-    `require_dispatch_configured` are, per the design spec, "the two routes"
-    the latter protects.
+    design spec's own wording for this route. No auth (this dashboard is
+    localhost-only, single-user -- see dashboard/auth.py); same posture as
+    the launch route above.
 
     `_DISPATCH_JOBS` is looked up directly (not via `_lookup_run`, which
     resolves analysis runs, a different namespace -- job_id is the dispatch
@@ -1460,6 +1453,77 @@ async def dispatch_poll(run_id: str, job_id: str,
     return JSONResponse(content=json.loads(json.dumps(payload, default=str)))
 
 
+# --------------------------------------------------------------------------
+# Alerts banner (Task 15 of the quant-console plan) -- reads what
+# dashboard.quant_alerts.check_for_alerts (Task 14) already wrote to the
+# quant_alerts table (see migrations/004_add_quant_alerts.sql) and what
+# scripts/quant_alert_check.py already writes as a last-checked heartbeat
+# file. No detection logic lives here -- this is read-only display plus the
+# one mutating action (acknowledge) the plan calls for.
+# --------------------------------------------------------------------------
+
+ALERT_STATUS_FILENAME = '.quant_alert_status.json'  # written by scripts/quant_alert_check.py
+
+
+def _fetch_pending_alerts(db_path: str) -> List[Dict[str, Any]]:
+    """Unacknowledged `quant_alerts` rows, most recent first.
+
+    Degrades to an empty list on any error -- most commonly the table not
+    existing yet (migration 004 not applied) -- rather than 500ing the
+    whole module-card view over an optional, best-effort feature (same
+    "degraded, never raises" posture as Task 3's extractors).
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            cur = conn.execute(
+                'SELECT id, run_id, ticker, condition, detail, created_at_utc '
+                'FROM quant_alerts WHERE acknowledged = 0 '
+                'ORDER BY created_at_utc DESC, id DESC'
+            )
+            columns = [d[0] for d in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+def _read_alert_status() -> Optional[Dict[str, Any]]:
+    """Best-effort read of `.quant_alert_status.json` so a stalled watcher
+    is discoverable in the UI (spec Phase 3 Error Handling) -- None if the
+    file doesn't exist yet (scheduled task never installed/run) or is
+    malformed.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)),
+                        'orchestrator_output', ALERT_STATUS_FILENAME)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+@app.post('/alerts/{alert_id}/ack')
+async def ack_alert(alert_id: int):
+    """Acknowledge a `quant_alerts` row -- sets `acknowledged=1` so
+    `GET /quant`'s banner stops showing it, but keeps the row (not deleted)
+    for later history/inspection. No auth (dashboard/auth.py -- this
+    dashboard is localhost-only, single-user).
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        cur = conn.execute('UPDATE quant_alerts SET acknowledged = 1 WHERE id = ?', (alert_id,))
+        conn.commit()
+        updated = cur.rowcount
+    finally:
+        conn.close()
+
+    if updated == 0:
+        return JSONResponse(status_code=404, content={'error': f'no alert {alert_id}'})
+    return JSONResponse(content={'id': alert_id, 'acknowledged': True})
+
+
 @app.get('/quant', response_class=HTMLResponse)
 def quant_console(request: Request):
     """Quant Console module-card view (Task 6 of the quant-console plan).
@@ -1470,10 +1534,15 @@ def quant_console(request: Request):
     client-side against the *existing* `POST /run/{suite_or_unified}`,
     `GET /runs/{run_id}`, and `GET /runs/{run_id}/summary` (Task 4) endpoints.
     No new job-tracking backend, per the design spec's Phase 1 section.
+
+    Also carries `alerts` (Task 15's pending `quant_alerts` rows) and
+    `alert_status` (the last-checked heartbeat) into the template.
     """
     return TEMPLATES.TemplateResponse(request, 'quant.html', {
         'active': 'quant',
         'modules': MODULE_REGISTRY,
+        'alerts': _fetch_pending_alerts(DB_PATH),
+        'alert_status': _read_alert_status(),
     })
 
 
@@ -1520,11 +1589,9 @@ def suite_output(request: Request, suite: str):
 @app.websocket('/suites/{suite}/live')
 async def suite_live_log(websocket: WebSocket, suite: str) -> None:
     """Tails `_live_log_path(suite)` (see LIVE_LOG_DIR above) and streams
-    new lines to the client as they're written. No auth dependency --
-    matches this codebase's existing convention for read-only status
-    routes (GET /runs/{run_id}, GET /runs/{run_id}/summary are also
-    unauthenticated; only *mutating* endpoints require verify_api_key per
-    the design spec's Security section).
+    new lines to the client as they're written. No auth -- this dashboard
+    is localhost-only, single-user (see dashboard/auth.py); nothing on it
+    requires an API key.
 
     Two ways this closes cleanly, both exercised by
     dashboard/tests/test_live_ws.py:

@@ -16,8 +16,8 @@ Everything that would actually shell out is mocked:
     is the one place that exercises the real call, against a disposable
     repo under `tmp_path`.
 
-Depends on Task 7 (`require_dispatch_configured`) and Task 8
-(`build_worker_env`), both already landed and imported directly here.
+Depends on Task 8 (`build_worker_env`), already landed and imported
+directly here.
 """
 import sys
 import threading
@@ -32,22 +32,30 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import dashboard.app as dashboard_app  # noqa: E402
-import dashboard.auth as auth  # noqa: E402
 from dashboard.worker_env import build_worker_env  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
 client = TestClient(dashboard_app.app)
 
-AUTH_HEADERS = {'Authorization': 'Bearer a-real-operator-configured-key'}
+# No auth required (dashboard/auth.py) -- kept as a no-op dict so call
+# sites below don't need touching if that ever changes.
+AUTH_HEADERS = {}
 
 
 @pytest.fixture(autouse=True)
 def _isolate_dispatch_state(monkeypatch):
     """Give each test a clean `_RUNS` / `_DISPATCH_JOBS` /
-    `_DISPATCH_IDEMPOTENCY` slate, and a real (non-default) configured API
-    key so `require_dispatch_configured` doesn't 503 tests that aren't
-    specifically exercising that path.
+    `_DISPATCH_IDEMPOTENCY` slate.
+
+    Also stubs out `_insert_run_row` -- `dispatch_worker`'s best-effort
+    `_log_dispatch_job_row` call writes real rows into the live production
+    `swaps.db` (`DB_PATH` is a module-level constant, not test-overridable
+    per-request) otherwise; every test in this file that POSTs to the
+    dispatch route was doing exactly that, which is how ~360 stray
+    `dashboard:worker:*` rows (run_id `test-dispatch-1`/`test-poll-1`)
+    ended up in the real DB and how 2 of them were collaterally deleted by
+    an unrelated cleanup query in an earlier session.
     """
     saved_runs = dict(dashboard_app._RUNS)
     saved_jobs = dict(dashboard_app._DISPATCH_JOBS)
@@ -55,7 +63,7 @@ def _isolate_dispatch_state(monkeypatch):
     dashboard_app._RUNS.clear()
     dashboard_app._DISPATCH_JOBS.clear()
     dashboard_app._DISPATCH_IDEMPOTENCY.clear()
-    monkeypatch.setattr(auth, 'API_KEY', 'a-real-operator-configured-key')
+    monkeypatch.setattr(dashboard_app, '_insert_run_row', MagicMock(return_value=None))
 
     yield
 
@@ -197,31 +205,18 @@ class TestValidation:
 
 
 # --------------------------------------------------------------------------
-# auth (Task 7's require_dispatch_configured layered on verify_api_key)
+# no auth (this dashboard is localhost-only, single-user -- dashboard/auth.py)
 # --------------------------------------------------------------------------
 
-class TestAuth:
-    def test_missing_api_key_returns_401(self, tmp_path, monkeypatch):
+class TestNoAuth:
+    def test_dispatch_succeeds_with_no_authorization_header_at_all(self, tmp_path, monkeypatch):
         run_key, _ = _make_done_run(tmp_path)
         launch = _patch_launch(monkeypatch)
 
         resp = client.post(f'/runs/{run_key}/dispatch/interpret', json={})
 
-        assert resp.status_code == 401
-        launch.assert_not_called()
-
-    def test_default_key_returns_503(self, tmp_path, monkeypatch):
-        run_key, _ = _make_done_run(tmp_path)
-        launch = _patch_launch(monkeypatch)
-        monkeypatch.setattr(auth, 'API_KEY', auth.DEFAULT_API_KEY)
-
-        resp = client.post(f'/runs/{run_key}/dispatch/interpret',
-                           headers={'Authorization': f'Bearer {auth.DEFAULT_API_KEY}'},
-                           json={})
-
-        assert resp.status_code == 503
-        assert 'dispatch disabled' in resp.json()['detail'].lower()
-        launch.assert_not_called()
+        assert resp.status_code == 202
+        launch.assert_called_once()
 
 
 # --------------------------------------------------------------------------
