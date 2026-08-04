@@ -65,7 +65,13 @@ def _component_var(positions, cov, confidence, var_days, trading_days):
     if sig == 0:
         return np.zeros(len(positions))
     sigma_w = cov_h @ positions
-    return z * sigma_w / sig   # (n,) signed component VaR
+    # Euler/component VaR: C_i = position_i * z * (cov_h @ positions)_i / sig,
+    # so that Sum_i C_i == z*sig == total VaR (Euler's theorem for a
+    # linear-homogeneous risk measure). The `positions *` term was missing
+    # here previously -- the returned array was z*sigma_w/sig alone, a
+    # marginal-return sensitivity (not a dollar figure), which does not sum
+    # to total VaR. See docs/PROJECT_AUDIT_AND_SPEC.md Part 5 finding #1.
+    return positions * z * sigma_w / sig   # (n,) dollar-denominated component VaR
 
 
 def _standalone_var(positions, cov, confidence, var_days, trading_days):

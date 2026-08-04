@@ -75,8 +75,11 @@ class TestComponentVaR:
     """Test component VaR computation (Euler decomposition)."""
 
     def test_euler_allocation_sums_to_total_var(self):
-        """The Euler allocation Σ pos_i * component_var_i should equal
-        the total portfolio VaR (Euler decomposition property)."""
+        """The Euler allocation Σ component_var_i should equal the total
+        portfolio VaR (Euler decomposition property). _component_var
+        already returns dollar-denominated (position-weighted) values --
+        summing them directly, with no further multiplication by
+        `positions`, is the actual production code path in var_agg.run()."""
         n = 6
         rng = np.random.default_rng(42)
         R = rng.normal(0, 0.015, (300, n))
@@ -87,8 +90,8 @@ class TestComponentVaR:
         comp_var = _component_var(pos, cov, confidence=0.95, var_days=5, trading_days=252)
         total_var, _ = _var_cvar_analytical(pos, cov, confidence=0.95, var_days=5, trading_days=252)
 
-        # Euler: Σ position_i × component_var_i = total VaR
-        assert np.sum(pos * comp_var) == pytest.approx(total_var, rel=1e-10)
+        # Euler: Σ component_var_i = total VaR
+        assert np.sum(comp_var) == pytest.approx(total_var, rel=1e-10)
 
     def test_component_var_length_matches_positions(self):
         """Component VaR should have same length as positions array."""
@@ -141,10 +144,13 @@ class TestFullPortfolioRun:
         assert res.total_cvar >= res.total_var
 
     def test_euler_allocation_sums_to_total(self):
-        """Euler decomposition: Σ position_i × component_var_i == total_var."""
+        """Euler decomposition: Σ component_var_i == total_var. This is the
+        production-facing check -- res.component_var is already
+        dollar-denominated (see _component_var), so no further
+        multiplication by positions is needed or correct here."""
         inp = make_var_agg_inputs(seed=99)
         res = var_agg_run(inp)
-        assert np.sum(inp.positions * res.component_var) == pytest.approx(res.total_var, rel=1e-10)
+        assert np.sum(res.component_var) == pytest.approx(res.total_var, rel=1e-10)
 
     def test_sub_portfolio_var_populated(self):
         """Sub-portfolio VaR should be populated for each group."""
