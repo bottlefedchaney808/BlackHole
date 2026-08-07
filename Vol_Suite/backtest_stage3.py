@@ -65,6 +65,7 @@ import implied_vol as implied_vol_mod
 import replication_reference
 import vol_surface_reference
 import dealer_positioning
+import whale_scanner
 
 TRADING_DAYS_PER_YEAR = 252  # trading days/year, for realized-vol annualization from
                               # trading-day closes. NOT expiry_selector.DEFAULT_A (365,
@@ -98,8 +99,12 @@ class DayRecord:
     spot: float
     net_gamma_v1: float
     net_gamma_v2: float
+    net_gamma_v3: float
+    net_gamma_whale: float
     regime_v1: str              # 'long' or 'short'
     regime_v2: str
+    regime_v3: str
+    regime_whale: Optional[str]  # 'long'/'short', or None on a neutral/no-signal whale day
     fwd_realized_vol: Optional[float]  # annualized, None if too close to the end of the sample
 
 
@@ -125,6 +130,22 @@ class BacktestResult:
     v2_diff: float = float('nan')
     v2_tstat: float = float('nan')
     v2_pvalue: float = float('nan')
+    # v3 (vol_surface_replication_weighted -- backtest-only experiment)
+    v3_n_long: int = 0
+    v3_n_short: int = 0
+    v3_long_mean_vol: float = float('nan')
+    v3_short_mean_vol: float = float('nan')
+    v3_diff: float = float('nan')
+    v3_tstat: float = float('nan')
+    v3_pvalue: float = float('nan')
+    # whale (whale-flow, backtest-only experiment -- see whale_scanner.py)
+    whale_n_long: int = 0
+    whale_n_short: int = 0
+    whale_long_mean_vol: float = float('nan')
+    whale_short_mean_vol: float = float('nan')
+    whale_diff: float = float('nan')
+    whale_tstat: float = float('nan')
+    whale_pvalue: float = float('nan')
 
 
 def _net_gamma_v1(gamma_map: Dict[Tuple[float, str], float],
@@ -161,6 +182,126 @@ def _net_gamma_v2(gamma_map: Dict[Tuple[float, str], float],
             continue
         sign = dealer_positioning._resolve_sign(
             right, k, 'vol_surface_replication', otm_strikes, vol_surface_ref)
+        total += sign * gamma * oi
+    return total
+
+
+# ---------------------------------------------------------------------------
+# v3 (vol_surface_replication_weighted) -- BACKTEST-ONLY experiment, not
+# wired into dealer_positioning.py's live/validated sign models
+# (VALID_SIGN_MODELS is untouched). Motivated by the cross-ticker batch run
+# 2026-08-04 (docs/PROJECT_AUDIT_AND_SPEC.md Part 4): v2 trended
+# CORRECTLY-signed on several tickers (GME +0.029, V +0.026, SMCI +0.213)
+# without reaching significance, while being significantly WRONG-signed on
+# others (NVDA, AMD) -- a pattern consistent with a real but noisy signal
+# being diluted, not a signal that's simply absent.
+#
+# vol_surface_reference.resolve_vol_surface_sign flips the FULL +/-1 sign on
+# ANY nonzero deviation from the SABR reference curve, with no regard for
+# the fit's own uncertainty -- a deviation of 0.0003 vol points (pure fit
+# noise / bid-ask wiggle) counts exactly as much as 0.05 (a real overwriting
+# program). The SABR fit already computes an RMSE (sabr_params['rmse']) but
+# nothing downstream ever uses it. v3 uses it two ways:
+#   1. Materiality gate: a deviation smaller than _V3_NOISE_FLOOR_MULT times
+#      the fit's own RMSE is treated as unreadable (falls through to Layer
+#      1b's flat -1 default) instead of flipping the sign on noise.
+#   2. Magnitude weighting: a deviation that DOES clear the floor is scaled
+#      by how many multiples of the floor it clears (capped at
+#      _V3_MAX_WEIGHT), so a strongly-evidenced strike outweighs one that
+#      barely qualifies, instead of every included strike voting +/-1 flat.
+# Falls back to plain 'replication' behavior (flat -1) when there's no SABR
+# fit to compute a noise floor from (quadratic-only ref, or no ref at all)
+# -- same fallback dealer_positioning._resolve_sign uses for missing data.
+# ---------------------------------------------------------------------------
+
+_V3_NOISE_FLOOR_MULT = 0.5   # multiples of SABR fit RMSE below which a deviation is ignored
+_V3_MAX_WEIGHT = 3.0         # cap on how many multiples of the floor one strike's weight can carry
+
+
+def _resolve_sign_weighted(right: str, strike: float,
+                            otm_strikes: Optional[set],
+                            vol_surface_ref) -> float:
+    """Materiality-gated, magnitude-weighted variant of
+    dealer_positioning._resolve_sign's 'vol_surface_replication' branch --
+    see module-level comment above for the rationale. Still gated by Layer
+    1b's OTM classification (`otm_strikes`) exactly like v2; only the
+    MAGNITUDE/threshold of the Layer 1a flip changes.
+    """
+    if otm_strikes is None or (strike, right) not in otm_strikes:
+        return 0.0
+    if vol_surface_ref is None or vol_surface_ref.fitter != 'sabr' or not vol_surface_ref.sabr_params:
+        return -1.0  # no SABR fit -> no noise floor to gate on; plain replication default
+    dev = vol_surface_ref.deviation_by_strike.get((strike, right))
+    if dev is None:
+        return -1.0
+    rmse = vol_surface_ref.sabr_params.get('rmse') or 0.0
+    if rmse <= 0:
+        return -1.0 if dev >= 0 else 1.0
+    z = abs(dev) / rmse
+    if z < _V3_NOISE_FLOOR_MULT:
+        return -1.0  # not material enough to override Layer 1b's default
+    weight = min(z / _V3_NOISE_FLOOR_MULT, _V3_MAX_WEIGHT)
+    return -weight if dev > 0 else weight
+
+
+def _net_gamma_v3(gamma_map: Dict[Tuple[float, str], float],
+                   oi_map: Dict[Tuple[float, str], int],
+                   chain_iv: Dict[Tuple[float, str], float],
+                   spot: float, forward: float, T: float) -> float:
+    """v3 (vol_surface_replication_weighted): same OTM gating as v2, but the
+    Layer 1a sign uses _resolve_sign_weighted instead of the flat +/-1 flip.
+    """
+    otm_strikes = set(replication_reference._otm_leg_weights(chain_iv, spot, T).keys())
+    vol_surface_ref = vol_surface_reference.compute_vol_surface_reference(
+        "BACKTEST", chain_iv, spot, forward=forward, T=T)
+
+    total = 0.0
+    for (k, right), gamma in gamma_map.items():
+        oi = oi_map.get((k, right), 0)
+        if oi <= 0 or gamma == 0:
+            continue
+        weight = _resolve_sign_weighted(right, k, otm_strikes, vol_surface_ref)
+        total += weight * gamma * oi
+    return total
+
+
+# ---------------------------------------------------------------------------
+# whale (whale-flow) -- BACKTEST-ONLY experiment, ported from the whale-flow
+# leg of an external devnotes research package (see
+# docs/superpowers/specs/2026-08-06-whale-sign-model-backtest-design.md for
+# the port rationale and what was deliberately left out: the other 4
+# "Direction" signals, the NO_CALL live-report gate, and the AMD/SPY
+# sign-caveat registry calibrated on a different environment's data).
+# Not wired into dealer_positioning.py's live/validated sign models
+# (VALID_SIGN_MODELS is untouched).
+# ---------------------------------------------------------------------------
+
+def _net_gamma_whale(gamma_map: Dict[Tuple[float, str], float],
+                      oi_map: Dict[Tuple[float, str], int],
+                      chain_iv: Dict[Tuple[float, str], float],
+                      spot: float, T: float, whale_bias: str) -> float:
+    """whale (whale-flow): same OTM gating as v2, but applies ONE uniform
+    sign for the whole day (from that day's whale-flow bias) instead of a
+    per-strike sign. 'bullish' -> customers bought call convexity / sold
+    puts -> dealer short calls (-1), long puts (+1); 'bearish' is the
+    mirror; 'neutral' -> 0 contribution everywhere (no signal, no trade --
+    the caller leaves regime_whale as None for these days rather than
+    folding them into a default sign).
+    """
+    if whale_bias == 'neutral':
+        return 0.0
+    otm_strikes = set(replication_reference._otm_leg_weights(chain_iv, spot, T).keys())
+    direction_bias = 1.0 if whale_bias == 'bullish' else -1.0
+
+    total = 0.0
+    for (k, right), gamma in gamma_map.items():
+        if (k, right) not in otm_strikes:
+            continue
+        oi = oi_map.get((k, right), 0)
+        if oi <= 0 or gamma == 0:
+            continue
+        leg_direction = 1.0 if right == 'C' else -1.0
+        sign = -direction_bias * leg_direction
         total += sign * gamma * oi
     return total
 
@@ -205,6 +346,11 @@ def _build_day_records(ticker: str, expiry: str,
 
     gamma_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
     iv_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
+    # whale_rows_by_date feeds whale_scanner.classify_whale_bias directly --
+    # {'strike', 'right', 'volume', 'close'} per row, same route
+    # (option_bulk_hist_eod) already being iterated below for gamma/IV, so
+    # this costs zero extra network calls.
+    whale_rows_by_date: Dict[str, List[dict]] = defaultdict(list)
     n_derived = n_vendor = n_unrecoverable = 0
 
     for row in hist_greek_rows:
@@ -232,6 +378,20 @@ def _build_day_records(ticker: str, expiry: str,
             right = str(row['right']).upper()[:1]
         except (KeyError, TypeError, ValueError):
             continue
+
+        # Whale-flow capture: independent of whether IV/gamma are vendor or
+        # price-derived below -- 'volume'/'close' come straight off the same
+        # row. A row missing either (0 or non-numeric) simply isn't added,
+        # which is exactly right: classify_whale_bias treats an empty day
+        # as neutral, not a crash.
+        try:
+            whale_vol = float(row.get('volume', 0) or 0)
+            whale_close = float(row.get('close', 0) or 0)
+        except (TypeError, ValueError):
+            whale_vol = whale_close = 0.0
+        if whale_vol > 0 and whale_close > 0:
+            whale_rows_by_date[d].append(
+                {'strike': k, 'right': right, 'volume': whale_vol, 'close': whale_close})
 
         iv = float(row.get('implied_vol', 0) or 0)
         gamma = float(row.get('gamma', 0) or 0)
@@ -334,6 +494,10 @@ def _build_day_records(ticker: str, expiry: str,
 
         net_v1 = _net_gamma_v1(gamma_map, oi_map)
         net_v2 = _net_gamma_v2(gamma_map, oi_map, chain_iv, spot, forward, T)
+        net_v3 = _net_gamma_v3(gamma_map, oi_map, chain_iv, spot, forward, T)
+        whale_bias, _whale_stats = whale_scanner.classify_whale_bias(
+            whale_rows_by_date.get(d, []), price=spot)
+        net_whale = _net_gamma_whale(gamma_map, oi_map, chain_iv, spot, T, whale_bias)
 
         # Forward realized vol uses ANY available future close (not just the
         # dates that happen to have a full option chain snapshot), since
@@ -347,9 +511,13 @@ def _build_day_records(ticker: str, expiry: str,
         fwd_vol = _forward_realized_vol(future_closes, forward_window_days)
 
         records.append(DayRecord(
-            date=d, spot=spot, net_gamma_v1=net_v1, net_gamma_v2=net_v2,
+            date=d, spot=spot, net_gamma_v1=net_v1, net_gamma_v2=net_v2, net_gamma_v3=net_v3,
+            net_gamma_whale=net_whale,
             regime_v1='long' if net_v1 > 0 else 'short',
             regime_v2='long' if net_v2 > 0 else 'short',
+            regime_v3='long' if net_v3 > 0 else 'short',
+            regime_whale=(None if whale_bias == 'neutral'
+                          else ('long' if net_whale > 0 else 'short')),
             fwd_realized_vol=fwd_vol,
         ))
 
@@ -398,6 +566,8 @@ def _run_backtest_from_history(ticker: str, expiry: str,
 
     v1 = _summarize(records, 'regime_v1')
     v2 = _summarize(records, 'regime_v2')
+    v3 = _summarize(records, 'regime_v3')
+    whale = _summarize(records, 'regime_whale')
 
     return BacktestResult(
         ticker=ticker, expiry=expiry, forward_window_days=forward_window_days,
@@ -408,6 +578,12 @@ def _run_backtest_from_history(ticker: str, expiry: str,
         v2_n_long=v2['n_long'], v2_n_short=v2['n_short'],
         v2_long_mean_vol=v2['long_mean_vol'], v2_short_mean_vol=v2['short_mean_vol'],
         v2_diff=v2['diff'], v2_tstat=v2['tstat'], v2_pvalue=v2['pvalue'],
+        v3_n_long=v3['n_long'], v3_n_short=v3['n_short'],
+        v3_long_mean_vol=v3['long_mean_vol'], v3_short_mean_vol=v3['short_mean_vol'],
+        v3_diff=v3['diff'], v3_tstat=v3['tstat'], v3_pvalue=v3['pvalue'],
+        whale_n_long=whale['n_long'], whale_n_short=whale['n_short'],
+        whale_long_mean_vol=whale['long_mean_vol'], whale_short_mean_vol=whale['short_mean_vol'],
+        whale_diff=whale['diff'], whale_tstat=whale['tstat'], whale_pvalue=whale['pvalue'],
     )
 
 
@@ -473,20 +649,32 @@ def format_backtest_report(result: BacktestResult) -> str:
         f"Stage 3 backtest -- {result.ticker} {result.expiry} "
         f"({len(result.day_records)} days, {result.forward_window_days}d forward window)",
         "",
-        f"{'':20s}{'v1 (oi_heuristic)':>22s}{'v2 (vol_surface_replication)':>32s}",
-        f"{'long-gamma days':20s}{result.v1_n_long:>22d}{result.v2_n_long:>32d}",
-        f"{'short-gamma days':20s}{result.v1_n_short:>22d}{result.v2_n_short:>32d}",
-        f"{'mean vol | long':20s}{result.v1_long_mean_vol:>22.4f}{result.v2_long_mean_vol:>32.4f}",
-        f"{'mean vol | short':20s}{result.v1_short_mean_vol:>22.4f}{result.v2_short_mean_vol:>32.4f}",
-        f"{'short - long':20s}{result.v1_diff:>22.4f}{result.v2_diff:>32.4f}",
-        f"{'t-stat':20s}{result.v1_tstat:>22.3f}{result.v2_tstat:>32.3f}",
-        f"{'p-value':20s}{result.v1_pvalue:>22.4f}{result.v2_pvalue:>32.4f}",
+        f"{'':20s}{'v1 (oi_heuristic)':>22s}{'v2 (vol_surface_replication)':>32s}{'v3 (weighted, experimental)':>32s}{'whale (backtest-only)':>28s}",
+        f"{'long-gamma days':20s}{result.v1_n_long:>22d}{result.v2_n_long:>32d}{result.v3_n_long:>32d}{result.whale_n_long:>28d}",
+        f"{'short-gamma days':20s}{result.v1_n_short:>22d}{result.v2_n_short:>32d}{result.v3_n_short:>32d}{result.whale_n_short:>28d}",
+        f"{'mean vol | long':20s}{result.v1_long_mean_vol:>22.4f}{result.v2_long_mean_vol:>32.4f}{result.v3_long_mean_vol:>32.4f}{result.whale_long_mean_vol:>28.4f}",
+        f"{'mean vol | short':20s}{result.v1_short_mean_vol:>22.4f}{result.v2_short_mean_vol:>32.4f}{result.v3_short_mean_vol:>32.4f}{result.whale_short_mean_vol:>28.4f}",
+        f"{'short - long':20s}{result.v1_diff:>22.4f}{result.v2_diff:>32.4f}{result.v3_diff:>32.4f}{result.whale_diff:>28.4f}",
+        f"{'t-stat':20s}{result.v1_tstat:>22.3f}{result.v2_tstat:>32.3f}{result.v3_tstat:>32.3f}{result.whale_tstat:>28.3f}",
+        f"{'p-value':20s}{result.v1_pvalue:>22.4f}{result.v2_pvalue:>32.4f}{result.v3_pvalue:>32.4f}{result.whale_pvalue:>28.4f}",
         "",
         "Hypothesis: short-gamma days should show HIGHER forward realized vol "
         "(dealers trade with the tape) -- a positive, statistically significant "
-        "diff supports the model; a larger, more significant diff for v2 than "
-        "v1 means the richer sign convention is reading something real, not "
-        "just producing a more sophisticated-looking chart.",
+        "diff supports the model; a larger, more significant diff for v2/v3/whale "
+        "than v1 means the richer sign convention is reading something real, not "
+        "just producing a more sophisticated-looking chart. v3 (vol_surface_"
+        "replication_weighted) is a backtest-only experiment: same OTM gating "
+        "as v2, but the Layer 1a flip is gated on materiality vs. the SABR "
+        "fit's own RMSE and weighted by deviation magnitude instead of a flat "
+        "+/-1 -- see _resolve_sign_weighted's docstring. whale (whale-flow) is a "
+        "second backtest-only experiment: ONE uniform daily sign from large-"
+        "premium call-vs-put option flow (bullish/bearish/neutral), ported from "
+        "an external devnotes research package -- see whale_scanner.py and "
+        "docs/superpowers/specs/2026-08-06-whale-sign-model-backtest-design.md. "
+        "Neutral/no-signal whale days are EXCLUDED from n_long/n_short (not "
+        "folded into 'short'), so its n may be smaller than the other columns'. "
+        "Neither v3 nor whale is wired into the live dealer_positioning.py sign "
+        "models.",
     ]
     return "\n".join(lines)
 
