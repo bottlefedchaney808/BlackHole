@@ -50,6 +50,19 @@ def test_max_pain_favors_side_with_more_oi_away_from_naive_center():
 
 
 @pytest.mark.unit
+def test_max_pain_correctly_weights_calls_by_itm_above_strike_not_below():
+    # Deliberately OI-unbalanced (370 total call OI vs 30 total put OI) --
+    # a call/put payout-formula swap bug is invisible on balanced-OI chains
+    # (the error term is linear in total_call_oi - total_put_oi, which
+    # vanishes when they're equal) but this chain exposes it directly.
+    chain = [_row(90, "C", 20), _row(100, "C", 50), _row(110, "C", 300),
+             _row(90, "P", 10), _row(100, "P", 15), _row(110, "P", 5)]
+    result = lm._max_pain(chain, default=999.0)
+    assert result in (90.0, 100.0)  # true payout-minimizing strikes are tied at 90 and 100
+    assert result != 110.0  # the swapped-formula bug picks 110 -- must not reproduce
+
+
+@pytest.mark.unit
 def test_max_pain_returns_default_on_empty_chain():
     assert lm._max_pain([], default=123.0) == pytest.approx(123.0)
 

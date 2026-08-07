@@ -15,12 +15,17 @@ Max-pain fix vs. a naive port: an external research package's original
 implementation picked "the strike nearest to spot" (self-labeled "original
 argmin approximation") -- that is a spot-proximity heuristic, not max pain.
 True max pain is the strike that MINIMIZES the aggregate dollar payout to
-ITM option holders at expiry across the WHOLE chain (sum over every strike
-of call_oi * max(0, strike - K) + put_oi * max(0, K - strike), argmin over
-candidate K). ``_max_pain`` below implements that properly -- the same
-payout formula sentiment-scanner/scanner/max_pain_scanner.py already uses
-correctly, but selected via argmin (not that module's own documented
-argmax bug, which picks the wrong side of the curve).
+ITM option holders at expiry across the WHOLE chain. A call at strike ``s``
+is in the money when settlement ``K`` is ABOVE the strike, paying
+``max(0, K - s)``; a put at strike ``s`` is in the money when settlement
+``K`` is BELOW the strike, paying ``max(0, s - K)``. So the aggregate payout
+is the sum over every strike of call_oi * max(0, K - s) + put_oi *
+max(0, s - K), argmin over candidate K. ``_max_pain`` below implements that
+directly. (sentiment-scanner/scanner/max_pain_scanner.py's own
+``_compute_pain_for_strike`` has this same calls/puts payout term swapped,
+so it is not a correct reference for the formula either -- separately, that
+module also selects via argmax instead of argmin, picking the wrong side of
+the curve.)
 """
 
 from __future__ import annotations
@@ -73,7 +78,7 @@ def _max_pain(chain, default: float) -> float:
 
     def _payout(K: float) -> float:
         return sum(
-            call_oi[s] * max(0.0, s - K) + put_oi[s] * max(0.0, K - s)
+            call_oi[s] * max(0.0, K - s) + put_oi[s] * max(0.0, s - K)
             for s in strikes
         )
 
