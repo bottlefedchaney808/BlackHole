@@ -2,6 +2,8 @@
 """Tests for Direction/trend_engine.py -- network-free except
 analyze_trend(), which monkeypatches Direction.data.get_ohlcv/resample_ohlcv.
 """
+from datetime import datetime, timedelta
+
 import numpy as np
 import pytest
 
@@ -93,6 +95,40 @@ def test_timeframe_weekly_downtrend_with_realistic_bar_count_is_not_falsely_bull
     # "mixed", never fabricate "bullish" out of a downtrend.
     assert result["ma"] == "mixed"
     assert result["ma"] != "bullish"
+
+
+@pytest.mark.unit
+def test_analyze_trend_weekly_and_monthly_are_not_stuck_mixed_with_real_resampling(monkeypatch):
+    """Integration regression for the lookback_days=180 bug: resampling 180
+    calendar days of daily bars to weekly (~26 bars) / monthly (~6 bars) left
+    both legs permanently short of the 50-bar MA50 window, so ma_alignment
+    could never report anything but "mixed" and `aligned`/`signal` were
+    structurally always False. With a genuinely long (~4.5yr) daily pull and
+    REAL resample_ohlcv (not monkeypatched away, unlike
+    test_analyze_trend_aligned_true_when_daily_and_weekly_agree_and_adx_high),
+    both legs must have enough real bars for MA50 and report a real
+    bullish/bearish reading -- and aligned/signal must be able to go True.
+    """
+    n = 1650  # matches _LOOKBACK_DAYS=1600 with margin; >=50 real monthly bars
+    start = datetime(2020, 1, 1)
+    dates = np.array([(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)])
+    closes = np.linspace(100, 500, n)  # clear, unambiguous multi-year uptrend
+    daily = {
+        "date": dates,
+        "high": closes + 1, "low": closes - 1, "close": closes,
+        "volume": np.ones(n) * 1000,
+    }
+    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=180: daily)
+    # resample_ohlcv is intentionally left un-mocked so real date-bucketing
+    # runs -- that's the exact mechanism the original bug hid.
+    result = te.analyze_trend("SPY")
+
+    assert result["weekly"]["ma"] == "bullish"
+    assert result["monthly"]["ma"] == "bullish"
+    assert result["daily"]["ma"] == "bullish"
+    assert result["adx_ok"] is True
+    assert result["aligned"] is True
+    assert result["signal"] is True
 
 
 @pytest.mark.unit

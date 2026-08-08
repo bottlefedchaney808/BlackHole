@@ -9,6 +9,14 @@ import numpy as np
 
 from . import data
 
+# Weekly/monthly legs are built by resampling this daily pull, and _timeframe
+# needs >=50 bars on each leg for a real MA50 (see _timeframe below). 50
+# monthly bars needs >=~1520 calendar days (50 * ~30.4); 50 weekly bars needs
+# >=~350 calendar days -- the monthly leg is the binding constraint. 1600
+# gives ~80 days of margin over the monthly minimum to absorb calendar edge
+# effects (e.g. a partial first/last month with no trading days).
+_LOOKBACK_DAYS = 1600  # >=50 monthly bars for a real MA50 on the monthly leg (also covers weekly's 50-bar need)
+
 
 def adx(high, low, close, period: int = 14) -> float:
     """ADX-style directional strength in [0, 100].
@@ -79,7 +87,7 @@ def analyze_trend(ticker: str) -> dict:
     {"daily": {...}, "weekly": {...}, "monthly": {...}, "adx_ok": bool,
      "aligned": bool, "signal": bool} where aligned = adx_ok AND daily/weekly
      agree."""
-    daily_data = data.get_ohlcv(ticker, lookback_days=180)
+    daily_data = data.get_ohlcv(ticker, lookback_days=_LOOKBACK_DAYS)
     if daily_data is None or daily_data["close"] is None or len(daily_data["close"]) == 0:
         return _neutral_trend()
 
