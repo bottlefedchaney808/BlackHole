@@ -68,3 +68,9 @@ def test_elliott_wave_tool_is_registered():
     tool = get_tool("elliott-wave")
     assert tool.slug == "elliott-wave"
     assert tool.name == "Elliott Wave Tool"
+
+
+def test_bollinger_tool_is_registered():
+    tool = get_tool("bollinger")
+    assert tool.slug == "bollinger"
+    assert tool.name == "Bollinger Bands Tool"
