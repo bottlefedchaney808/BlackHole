@@ -74,3 +74,9 @@ def test_bollinger_tool_is_registered():
     tool = get_tool("bollinger")
     assert tool.slug == "bollinger"
     assert tool.name == "Bollinger Bands Tool"
+
+
+def test_trend_engine_tool_is_registered():
+    tool = get_tool("trend-engine")
+    assert tool.slug == "trend-engine"
+    assert tool.name == "Trend Engine Tool"
