@@ -86,3 +86,19 @@ def test_liquidity_map_tool_is_registered():
     tool = get_tool("liquidity-map")
     assert tool.slug == "liquidity-map"
     assert tool.name == "Liquidity Map Tool"
+
+
+def test_direction_signal_tool_is_registered():
+    tool = get_tool("direction-signal")
+    assert tool.slug == "direction-signal"
+    assert tool.name == "Direction Signal Tool"
+
+
+def test_all_six_direction_tools_and_original_two_are_registered():
+    slugs = {tool.slug for tool in TOOLS}
+    expected = {
+        "options-strategy", "backtesting", "whale-flow", "elliott-wave",
+        "bollinger", "trend-engine", "liquidity-map", "direction-signal",
+    }
+    assert expected.issubset(slugs)
+    assert len(TOOLS) >= 8
