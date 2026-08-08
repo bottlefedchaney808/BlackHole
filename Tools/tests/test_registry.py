@@ -62,3 +62,9 @@ def test_whale_flow_tool_is_registered():
     tool = get_tool("whale-flow")
     assert tool.slug == "whale-flow"
     assert tool.name == "Whale Flow Tool"
+
+
+def test_elliott_wave_tool_is_registered():
+    tool = get_tool("elliott-wave")
+    assert tool.slug == "elliott-wave"
+    assert tool.name == "Elliott Wave Tool"
