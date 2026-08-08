@@ -80,3 +80,9 @@ def test_trend_engine_tool_is_registered():
     tool = get_tool("trend-engine")
     assert tool.slug == "trend-engine"
     assert tool.name == "Trend Engine Tool"
+
+
+def test_liquidity_map_tool_is_registered():
+    tool = get_tool("liquidity-map")
+    assert tool.slug == "liquidity-map"
+    assert tool.name == "Liquidity Map Tool"

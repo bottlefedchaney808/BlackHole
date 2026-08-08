@@ -64,6 +64,7 @@ def _load_tools() -> List[ToolSpec]:
     from Tools.tools import elliott_wave_tool
     from Tools.tools import bollinger_tool
     from Tools.tools import trend_engine_tool
+    from Tools.tools import liquidity_map_tool
 
     return [
         options_strategy_tool.TOOL_SPEC,
@@ -72,6 +73,7 @@ def _load_tools() -> List[ToolSpec]:
         elliott_wave_tool.TOOL_SPEC,
         bollinger_tool.TOOL_SPEC,
         trend_engine_tool.TOOL_SPEC,
+        liquidity_map_tool.TOOL_SPEC,
         # Add new tools' TOOL_SPEC here -- see module docstring above.
     ]
 
