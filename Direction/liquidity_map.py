@@ -112,19 +112,7 @@ def get_liquidity(ticker: str) -> dict:
     except Exception:
         dealer = None
 
-    if price is None or price <= 0:
-        return {
-            "price": price,
-            "expiry": exp,
-            "max_pain": price,
-            "call_wall": price,
-            "put_wall": price,
-            "pcr": 0.0,
-            "signal": False,
-            "dealer": dealer,
-        }
-
-    if not chain:
+    if price is None or price <= 0 or not chain:
         return {
             "price": price,
             "expiry": exp,
