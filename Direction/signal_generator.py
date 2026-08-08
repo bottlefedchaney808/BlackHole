@@ -34,11 +34,26 @@ def generate(ticker: str) -> dict:
     "trend","liquidity": bool}, "score": int (0-5), "conviction":
     "HIGH"|"MEDIUM"|"NONE", "details": {module-name: module-output-dict}}.
     """
-    whale = whale_scanner.scan(ticker)
-    elliott = elliott_wave.analyze(ticker)
-    bollinger = bollinger_analyzer.analyze(ticker)
-    trend = trend_engine.analyze_trend(ticker)
-    liquidity = liquidity_map.get_liquidity(ticker)
+    try:
+        whale = whale_scanner.scan(ticker)
+    except Exception:
+        whale = {}
+    try:
+        elliott = elliott_wave.analyze(ticker)
+    except Exception:
+        elliott = {}
+    try:
+        bollinger = bollinger_analyzer.analyze(ticker)
+    except Exception:
+        bollinger = {}
+    try:
+        trend = trend_engine.analyze_trend(ticker)
+    except Exception:
+        trend = {}
+    try:
+        liquidity = liquidity_map.get_liquidity(ticker)
+    except Exception:
+        liquidity = {}
 
     signals = {
         "whale": _sig(whale),

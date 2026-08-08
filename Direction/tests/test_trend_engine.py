@@ -72,3 +72,40 @@ def test_analyze_trend_aligned_true_when_daily_and_weekly_agree_and_adx_high(mon
     result = te.analyze_trend("SPY")
     assert result["daily"]["ma"] == "bullish"
     assert result["signal"] == result["aligned"]
+
+
+@pytest.mark.unit
+def test_timeframe_weekly_downtrend_with_realistic_bar_count_is_not_falsely_bullish():
+    """Regression for the MA20/MA50 convolve-kernel-longer-than-input bug:
+    with ~30 realistic weekly bars (< the MA50 window), ma50 must come back
+    empty (degrading ma_alignment to "mixed") rather than a garbage constant
+    that lets ma20 > ma50 look bullish in a clear downtrend.
+    """
+    n = 30  # realistic weekly bar count from a 180-day daily lookback
+    closes = np.linspace(160, 82, n)  # clear -50% downtrend
+    weekly = {
+        "date": np.array([f"2026-{(i % 12) + 1:02d}-01" for i in range(n)]),
+        "high": closes + 1, "low": closes - 1, "close": closes,
+        "volume": np.ones(n) * 1000,
+    }
+    result = te._timeframe(weekly)
+    # MA50 has insufficient history (30 < 50) -> ma_alignment must degrade to
+    # "mixed", never fabricate "bullish" out of a downtrend.
+    assert result["ma"] == "mixed"
+    assert result["ma"] != "bullish"
+
+
+@pytest.mark.unit
+def test_timeframe_monthly_with_realistic_bar_count_degrades_to_mixed():
+    """~6 monthly bars is far short of both the MA20 and MA50 windows --
+    both MAs must come back empty, degrading to "mixed" rather than
+    producing a garbage constant MA."""
+    n = 6
+    closes = np.linspace(160, 82, n)
+    monthly = {
+        "date": np.array([f"2026-{i + 1:02d}-01" for i in range(n)]),
+        "high": closes + 1, "low": closes - 1, "close": closes,
+        "volume": np.ones(n) * 1000,
+    }
+    result = te._timeframe(monthly)
+    assert result["ma"] == "mixed"

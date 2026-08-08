@@ -156,6 +156,9 @@ if __name__ == "__main__":
     p.add_argument("ticker", nargs="?", default="SPY")
     args = p.parse_args()
     z = get_liquidity(args.ticker)
-    pct = (z["max_pain"] - z["price"]) / z["price"] * 100
-    print(f"{args.ticker}: Price={z['price']:.2f} | MaxPain={z['max_pain']:.2f} "
-          f"({pct:+.2f}%) | PCR={z['pcr']:.2f} | Expires: {z['expiry']}")
+    if z["price"] is not None and z["max_pain"] is not None:
+        pct = (z["max_pain"] - z["price"]) / z["price"] * 100
+        print(f"{args.ticker}: Price={z['price']:.2f} | MaxPain={z['max_pain']:.2f} "
+              f"({pct:+.2f}%) | PCR={z['pcr']:.2f} | Expires: {z['expiry']}")
+    else:
+        print(f"{args.ticker}: no data available (price/max pain unavailable)")

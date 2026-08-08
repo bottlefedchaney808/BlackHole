@@ -10,7 +10,7 @@ import pytest
 
 _VOL_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent / "Vol_Suite"
 if str(_VOL_SUITE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_VOL_SUITE_ROOT))
+    sys.path.append(str(_VOL_SUITE_ROOT))
 
 from Direction import data, whale_scanner as dws
 import whale_scanner as vs_whale_scanner  # Vol_Suite's pure classifier

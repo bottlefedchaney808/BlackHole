@@ -111,6 +111,7 @@ def fixture_roots(tmp_path, monkeypatch):
     return {"run_a": run_a, "run_b": run_b, "run_bad": run_bad}
 
 
+@pytest.mark.unit
 def test_list_available_contexts_sorted_newest_first(fixture_roots):
     summaries = context_loader.list_available_contexts()
     valid = [s for s in summaries if s["valid"]]
@@ -124,6 +125,7 @@ def test_list_available_contexts_sorted_newest_first(fixture_roots):
     assert valid[0]["path"].endswith("suite_context.json")
 
 
+@pytest.mark.unit
 def test_list_available_contexts_reports_invalid_without_dropping(fixture_roots):
     summaries = context_loader.list_available_contexts()
     invalid = [s for s in summaries if not s["valid"]]
@@ -134,6 +136,7 @@ def test_list_available_contexts_reports_invalid_without_dropping(fixture_roots)
     assert invalid[0]["run_id"] is None
 
 
+@pytest.mark.unit
 def test_load_context_returns_full_validated_dict(fixture_roots):
     summaries = context_loader.list_available_contexts()
     run_b_summary = next(s for s in summaries if s.get("run_id") == "run_b")
@@ -145,11 +148,13 @@ def test_load_context_returns_full_validated_dict(fixture_roots):
     assert full["schema_version"] == 1
 
 
+@pytest.mark.unit
 def test_load_context_raises_on_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         context_loader.load_context(str(tmp_path / "nope" / "suite_context.json"))
 
 
+@pytest.mark.unit
 def test_no_output_roots_present_yields_empty_list(tmp_path, monkeypatch):
     monkeypatch.setattr(context_loader, "SUITE_OUTPUT_ROOTS", {
         "Vol_Suite": [tmp_path / "nowhere"],

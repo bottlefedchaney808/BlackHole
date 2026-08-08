@@ -23,7 +23,7 @@ from . import data
 
 _VOL_SUITE_ROOT = Path(__file__).resolve().parent.parent / "Vol_Suite"
 if str(_VOL_SUITE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_VOL_SUITE_ROOT))
+    sys.path.append(str(_VOL_SUITE_ROOT))
 
 import whale_scanner as _vs_whale_scanner  # noqa: E402 -- Vol_Suite's already-tested classifier
 

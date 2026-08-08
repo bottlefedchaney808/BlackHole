@@ -55,8 +55,10 @@ def _timeframe(d) -> dict:
         return {"adx": 0.0, "ma": "mixed"}
     closes = np.asarray(d["close"], dtype=float)
     a = adx(d["high"], d["low"], d["close"])
-    ma20 = np.convolve(closes, np.ones(20) / 20, mode="valid")
-    ma50 = np.convolve(closes, np.ones(50) / 50, mode="valid")
+    ma20 = (np.convolve(closes, np.ones(20) / 20, mode="valid")
+            if len(closes) >= 20 else np.array([]))
+    ma50 = (np.convolve(closes, np.ones(50) / 50, mode="valid")
+            if len(closes) >= 50 else np.array([]))
     return {"adx": float(a), "ma": ma_alignment(closes, ma20, ma50)}
 
 
