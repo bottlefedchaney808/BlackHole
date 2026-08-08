@@ -109,7 +109,11 @@ def test_analyze_trend_weekly_and_monthly_are_not_stuck_mixed_with_real_resampli
     both legs must have enough real bars for MA50 and report a real
     bullish/bearish reading -- and aligned/signal must be able to go True.
     """
-    n = 1650  # matches _LOOKBACK_DAYS=1600 with margin; >=50 real monthly bars
+    # Pinned to the production constant (not a hardcoded literal) so this
+    # test actually regresses if _LOOKBACK_DAYS is ever lowered again --
+    # otherwise a future drop back toward 180 would silently reintroduce
+    # the "monthly/weekly stuck at mixed" bug while this test kept passing.
+    n = te._LOOKBACK_DAYS + 50  # margin above the bare minimum
     start = datetime(2020, 1, 1)
     dates = np.array([(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)])
     closes = np.linspace(100, 500, n)  # clear, unambiguous multi-year uptrend
@@ -118,10 +122,18 @@ def test_analyze_trend_weekly_and_monthly_are_not_stuck_mixed_with_real_resampli
         "high": closes + 1, "low": closes - 1, "close": closes,
         "volume": np.ones(n) * 1000,
     }
-    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=180: daily)
+    received_lookback = {}
+
+    def _fake_get_ohlcv(ticker, lookback_days=180):
+        received_lookback["value"] = lookback_days
+        return daily
+
+    monkeypatch.setattr(data, "get_ohlcv", _fake_get_ohlcv)
     # resample_ohlcv is intentionally left un-mocked so real date-bucketing
     # runs -- that's the exact mechanism the original bug hid.
     result = te.analyze_trend("SPY")
+
+    assert received_lookback["value"] == te._LOOKBACK_DAYS
 
     assert result["weekly"]["ma"] == "bullish"
     assert result["monthly"]["ma"] == "bullish"
