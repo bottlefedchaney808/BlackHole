@@ -60,10 +60,12 @@ def _load_tools() -> List[ToolSpec]:
     # and shrinking the registry with no error at all.
     from Tools.tools import options_strategy_tool
     from Tools.tools import backtesting_tool
+    from Tools.tools import whale_flow_tool
 
     return [
         options_strategy_tool.TOOL_SPEC,
         backtesting_tool.TOOL_SPEC,
+        whale_flow_tool.TOOL_SPEC,
         # Add new tools' TOOL_SPEC here -- see module docstring above.
     ]
 

@@ -56,3 +56,9 @@ def test_get_tool_raises_keyerror_for_unknown_slug_and_lists_valid_ones():
     message = str(exc_info.value)
     assert "not-a-real-tool" in message
     assert "options-strategy" in message
+
+
+def test_whale_flow_tool_is_registered():
+    tool = get_tool("whale-flow")
+    assert tool.slug == "whale-flow"
+    assert tool.name == "Whale Flow Tool"
