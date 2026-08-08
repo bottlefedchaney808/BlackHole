@@ -90,6 +90,44 @@ every time a suite's unified/orchestrated flow finishes.
     `context["strategies"]` (the list a suite context already carries, if
     the run included a chain scan) via `context["strategy_index"]`.
 
+### The Direction tools (6 more, shipped 2026-08-06)
+
+Five live ThetaData signals ported from `Direction/` (see `Direction/README.md`
+for the full catalog and conviction rules), each callable individually or as
+a group:
+
+- **Whale Flow Tool** (`slug="whale-flow"`) -- large-premium option-flow bias
+  (bullish/bearish/neutral), live. Delegates classification to
+  `Vol_Suite.whale_scanner.classify_whale_bias`, the same function
+  `backtest_stage3.py`'s backtest-only whale-flow column already uses.
+- **Elliott Wave Tool** (`slug="elliott-wave"`) -- wave-3 momentum vs.
+  wave-1/5 exhaustion, off 3 months of daily closes.
+- **Bollinger Bands Tool** (`slug="bollinger"`) -- squeeze (imminent
+  expansion) and upper/lower band thrust (momentum continuation).
+- **Trend Engine Tool** (`slug="trend-engine"`) -- ADX + MA20/MA50
+  alignment across daily/weekly/monthly timeframes.
+- **Liquidity Map Tool** (`slug="liquidity-map"`) -- max pain (real
+  payout-minimization, not a spot-proximity shortcut), OI call/put strike
+  walls, put/call ratio, GEX proximity.
+- **Direction Signal Tool** (`slug="direction-signal"`) -- the **group**
+  entry point: runs all five above in one call against a shared 300s data
+  cache and combines them into one conviction call (HIGH/MEDIUM/NONE).
+
+```python
+from Tools.registry import get_tool
+
+# Individually:
+whale = get_tool("whale-flow").run({"focus": {"ticker": "NVDA"}})
+wave = get_tool("elliott-wave").run({"focus": {"ticker": "NVDA"}})
+
+# As a group:
+combined = get_tool("direction-signal").run({"focus": {"ticker": "NVDA"}})
+print(combined["conviction"], combined["score"])
+```
+
+None of these six tools is wired into `Vol_Suite/dealer_positioning.py`'s
+live sign models -- they're standalone, same as every other `Tools/` plugin.
+
 ## Adding a new tool (the plugin pattern)
 
 1. Create a new module under `Tools/tools/`, e.g.
