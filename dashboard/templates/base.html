@@ -7,38 +7,50 @@
 <style>
 /* Everything inline -- this runs offline on localhost, no CDN anything. */
 :root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --panel-2: #fbfbfd;
-  --border: #dfe3e8;
-  --text: #1a1d21;
-  --muted: #6b7280;
-  --accent: #2563eb;
-  --accent-soft: #e8effd;
-  --ok: #15803d;
-  --ok-soft: #e3f5e9;
-  --warn: #b45309;
-  --warn-soft: #fdf0dc;
-  --err: #b91c1c;
-  --err-soft: #fbe6e6;
+  --bg: #0b0f1a;
+  --panel: #111827;
+  --panel-2: #151b2b;
+  --border: #1e293b;
+  --text: #f8fafc;
+  --muted: #8291a8;
+  --accent: #a855f7;
+  --accent-2: #f472b6;
+  --accent-soft: #a855f722;
+  --ok: #34d399;
+  --ok-soft: #34d39922;
+  --warn: #fbbf24;
+  --warn-soft: #fbbf2422;
+  --err: #f87171;
+  --err-soft: #f8717122;
+  --file-json: #a855f7;
+  --file-csv: #a3e635;
+  --file-png: #22d3ee;
+  --file-pdf: #f472b6;
+  --file-other: #94a3b8;
   --mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
 }
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --bg: #0e1116;
-    --panel: #161b22;
-    --panel-2: #1b2129;
-    --border: #2a323d;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --accent-soft: #17273f;
-    --ok: #56d364;
-    --ok-soft: #12261a;
-    --warn: #e3b341;
-    --warn-soft: #2b2213;
-    --err: #f85149;
-    --err-soft: #2d1618;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #fbfbfd;
+    --border: #dfe3e8;
+    --text: #1a1d21;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-2: #7c3aed;
+    --accent-soft: #e8effd;
+    --ok: #15803d;
+    --ok-soft: #e3f5e9;
+    --warn: #b45309;
+    --warn-soft: #fdf0dc;
+    --err: #b91c1c;
+    --err-soft: #fbe6e6;
+    --file-json: #7c3aed;
+    --file-csv: #15803d;
+    --file-png: #0891b2;
+    --file-pdf: #be185d;
+    --file-other: #6b7280;
   }
 }
 * { box-sizing: border-box; }
@@ -78,9 +90,11 @@ h2 { font-size: 15px; margin: 0; letter-spacing: -0.01em; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   margin-bottom: 18px;
   overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,.16), 0 12px 28px -16px rgba(0,0,0,.4);
+  transition: box-shadow .15s ease;
 }
 .panel > header {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
@@ -144,12 +158,15 @@ input, select, button {
 }
 input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 button {
-  background: var(--accent); border-color: var(--accent); color: #fff;
-  font-weight: 600; cursor: pointer;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  border-color: transparent; color: #fff;
+  font-weight: 700; cursor: pointer;
+  box-shadow: 0 2px 12px -4px var(--accent);
+  transition: filter .15s ease, transform .1s ease;
 }
-button.ghost { background: var(--panel-2); color: var(--text); border-color: var(--border); }
-button:hover { filter: brightness(1.08); }
-button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+button.ghost { background: var(--panel-2); color: var(--text); border-color: var(--border); box-shadow: none; }
+button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+button:disabled { opacity: .55; cursor: not-allowed; filter: none; transform: none; }
 
 pre.json {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
@@ -162,6 +179,29 @@ pre.json {
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .pager { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; }
+
+/* Suite tabs on the Output page (dashboard/templates/suite.html) -- gradient
+   pill for the active suite, muted flat pill for the rest. */
+.pill.suitepill {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  padding: 5px 14px; font-weight: 700; margin-right: 8px;
+}
+.pill.suitepill.on {
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  color: #fff; border-color: transparent;
+  box-shadow: 0 2px 12px -2px var(--accent);
+}
+
+/* One card per output file, accented by file kind (dashboard/templates/suite.html) */
+.filecard.json > header { border-left: 3px solid var(--file-json); }
+.filecard.csv > header { border-left: 3px solid var(--file-csv); }
+.filecard.png > header { border-left: 3px solid var(--file-png); }
+.filecard.pdf > header { border-left: 3px solid var(--file-pdf); }
+.filecard.other > header { border-left: 3px solid var(--file-other); }
+
+/* Live-run banner (dashboard/templates/suite.html) */
+.banner-live { border-color: var(--accent); }
+.banner-live .body { display: flex; align-items: center; gap: 10px; }
 </style>
 </head>
 <body>
