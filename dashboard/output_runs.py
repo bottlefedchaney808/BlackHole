@@ -290,3 +290,51 @@ def discover_loose_bucket(directory: str, suite: str, run_id: str, label: str) -
         timestamp=max(f.modified for f in files),
         files=files,
     )
+
+
+def discover_clustered_runs(paths: List[str], suite: str, run_id_prefix: str,
+                             window_seconds: int = 10) -> List[RunInfo]:
+    """Groups flat, ungrouped files (Options_Suite's comparison_*.csv/.pdf,
+    written directly into the suite root with no directory or JSON marker to
+    group by) into runs via cluster_by_timestamp. Each cluster's run_id and
+    label come from the earliest timestamp in that cluster."""
+    clusters = cluster_by_timestamp(paths, window_seconds=window_seconds)
+
+    runs: List[RunInfo] = []
+    for cluster_paths in clusters:
+        files: List[RunFile] = []
+        for p in cluster_paths:
+            try:
+                stat = os.stat(p)
+            except OSError:
+                continue
+            files.append(RunFile(
+                abs_path=p,
+                rel_path=os.path.relpath(p, ROOT),
+                kind=classify_file(p),
+                size_bytes=stat.st_size,
+                modified=stat.st_mtime,
+            ))
+        if not files:
+            continue
+
+        timestamps = [extract_timestamp(os.path.basename(f.abs_path)) for f in files]
+        timestamps = [t for t in timestamps if t is not None]
+        if timestamps:
+            earliest = min(timestamps)
+            run_id_suffix = earliest.strftime('%Y%m%d_%H%M%S')
+            label = earliest.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            run_id_suffix = os.path.basename(files[0].abs_path)
+            label = run_id_suffix
+
+        runs.append(RunInfo(
+            suite=suite,
+            run_id=f"{run_id_prefix}:{run_id_suffix}",
+            label=label,
+            timestamp=max(f.modified for f in files),
+            files=files,
+        ))
+
+    runs.sort(key=lambda r: r.timestamp, reverse=True)
+    return runs

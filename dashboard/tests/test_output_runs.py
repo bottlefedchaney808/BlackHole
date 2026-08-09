@@ -305,3 +305,50 @@ def test_discover_loose_bucket_ignores_subdirectories(tmp_path):
 
     run = discover_loose_bucket(str(tmp_path), "vol", "loose:vs_output", "x")
     assert len(run.files) == 1
+
+
+from dashboard.output_runs import discover_clustered_runs
+
+
+def test_discover_clustered_runs_groups_csv_and_pdf_pair(tmp_path):
+    csv_path = tmp_path / "comparison_20260728_093751.csv"
+    pdf_path = tmp_path / "comparison_20260728_093753.pdf"  # 2s later
+    csv_path.write_text("a,b\n1,2\n")
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    runs = discover_clustered_runs([str(csv_path), str(pdf_path)], "options", "cmp")
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.run_id == "cmp:20260728_093751"
+    assert len(run.files) == 2
+    assert run.label == "2026-07-28 09:37:51"
+
+
+def test_discover_clustered_runs_separates_files_outside_the_window(tmp_path):
+    a = tmp_path / "comparison_20260728_093751.csv"
+    b = tmp_path / "comparison_20260728_120000.csv"
+    a.write_text("x")
+    b.write_text("x")
+
+    runs = discover_clustered_runs([str(a), str(b)], "options", "cmp")
+    assert len(runs) == 2
+
+
+def test_discover_clustered_runs_sorts_newest_first(tmp_path):
+    a = tmp_path / "comparison_20260101_000000.csv"
+    b = tmp_path / "comparison_20260201_000000.csv"
+    a.write_text("x")
+    b.write_text("x")
+
+    runs = discover_clustered_runs([str(a), str(b)], "options", "cmp")
+    assert [r.run_id for r in runs] == ["cmp:20260201_000000", "cmp:20260101_000000"]
+
+
+def test_discover_clustered_runs_skips_missing_files(tmp_path):
+    a = tmp_path / "comparison_20260728_093751.csv"
+    a.write_text("x")
+    missing = str(tmp_path / "comparison_20260728_093755.pdf")  # never created
+
+    runs = discover_clustered_runs([str(a), missing], "options", "cmp")
+    assert len(runs) == 1
+    assert len(runs[0].files) == 1
