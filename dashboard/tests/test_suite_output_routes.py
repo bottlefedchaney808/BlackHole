@@ -137,3 +137,70 @@ def test_unified_suite_groups_files_by_owning_suite(fake_unified_run):
     # Both suites' files must be present -- not just one flat undifferentiated list
     assert b'AAPL' in r.content
     assert b'options_result.json' in r.content or b'Options' in r.content
+
+
+def test_active_run_banner_none_when_nothing_running():
+    assert dashboard_app._active_run_banner('options') is None
+
+
+def test_active_run_banner_shows_a_matching_suite_kind_run():
+    with dashboard_app._RUNS_LOCK:
+        dashboard_app._RUNS['test-run-1'] = {
+            'run_id': 'test-run-1', 'kind': 'options', 'status': 'running',
+            'started_at': '2026-08-09T00:00:00Z',
+        }
+    try:
+        banner = dashboard_app._active_run_banner('options')
+        assert banner is not None
+        assert banner['run_id'] == 'test-run-1'
+        assert banner['status'] == 'running'
+    finally:
+        with dashboard_app._RUNS_LOCK:
+            dashboard_app._RUNS.pop('test-run-1', None)
+
+
+def test_active_run_banner_shows_a_unified_run_on_every_suite():
+    with dashboard_app._RUNS_LOCK:
+        dashboard_app._RUNS['test-run-2'] = {
+            'run_id': 'test-run-2', 'kind': 'unified', 'status': 'queued',
+            'started_at': None,
+        }
+    try:
+        for suite in ('options', 'vol', 'var', 'sentiment'):
+            banner = dashboard_app._active_run_banner(suite)
+            assert banner is not None and banner['run_id'] == 'test-run-2'
+    finally:
+        with dashboard_app._RUNS_LOCK:
+            dashboard_app._RUNS.pop('test-run-2', None)
+
+
+def test_active_run_banner_ignores_completed_runs():
+    with dashboard_app._RUNS_LOCK:
+        dashboard_app._RUNS['test-run-3'] = {
+            'run_id': 'test-run-3', 'kind': 'options', 'status': 'ok',
+            'started_at': '2026-08-09T00:00:00Z',
+        }
+    try:
+        assert dashboard_app._active_run_banner('options') is None
+    finally:
+        with dashboard_app._RUNS_LOCK:
+            dashboard_app._RUNS.pop('test-run-3', None)
+
+
+def test_active_run_banner_prefers_most_recently_started_when_multiple():
+    with dashboard_app._RUNS_LOCK:
+        dashboard_app._RUNS['older'] = {
+            'run_id': 'older', 'kind': 'options', 'status': 'running',
+            'started_at': '2026-08-09T00:00:00Z',
+        }
+        dashboard_app._RUNS['newer'] = {
+            'run_id': 'newer', 'kind': 'options', 'status': 'running',
+            'started_at': '2026-08-09T00:05:00Z',
+        }
+    try:
+        banner = dashboard_app._active_run_banner('options')
+        assert banner['run_id'] == 'newer'
+    finally:
+        with dashboard_app._RUNS_LOCK:
+            dashboard_app._RUNS.pop('older', None)
+            dashboard_app._RUNS.pop('newer', None)

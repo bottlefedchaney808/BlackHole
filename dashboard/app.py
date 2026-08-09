@@ -1448,9 +1448,23 @@ def quant_console(request: Request):
 
 
 def _active_run_banner(suite_key: str) -> Optional[Dict[str, Any]]:
-    """Task 8 fills this in; returns None for now so Task 7's route/template
-    wiring can be tested independently of the live-run banner feature."""
-    return None
+    """The most recently started queued/running run tracked in _RUNS that's
+    relevant to `suite_key` -- either a suite-kind run for this exact suite,
+    or a unified run (which touches every suite). Reuses the existing
+    _RUNS/GET-/runs/{run_id} polling infrastructure Quant Console already
+    established (3s client-side poll) -- deliberately NOT the
+    /suites/{suite}/live WebSocket, since nothing in this repo currently
+    writes to the log file it tails (see that route's own comments)."""
+    with _RUNS_LOCK:
+        candidates = [
+            dict(entry) for entry in _RUNS.values()
+            if entry.get('status') in ('queued', 'running')
+            and entry.get('kind') in (suite_key, 'unified')
+        ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda e: e.get('started_at') or '', reverse=True)
+    return candidates[0]
 
 
 @app.get('/suites/{suite}', response_class=HTMLResponse)
