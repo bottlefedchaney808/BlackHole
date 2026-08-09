@@ -42,8 +42,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
-from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -75,6 +75,9 @@ from shared.schemas import validate_quant_summary  # noqa: E402
 from shared.summary import build_run_summary  # noqa: E402
 from dashboard.quant_modules import MODULE_REGISTRY  # noqa: E402
 from dashboard.worker_env import build_worker_env  # noqa: E402
+from dashboard.output_runs import (
+    discover_runs, get_run, build_file_view, claim_files_for_suite, SUITE_LABELS,
+)  # noqa: E402
 import dashboard.job_object as job_object  # noqa: E402
 import dashboard.worker_worktree as worker_worktree  # noqa: E402
 from Tools.registry import TOOLS, get_tool  # noqa: E402
@@ -155,6 +158,18 @@ def _fmt_ts(value: Any) -> str:
 TEMPLATES.env.filters['num'] = _fmt_num
 TEMPLATES.env.filters['usd'] = _fmt_usd
 TEMPLATES.env.filters['ts'] = _fmt_ts
+
+
+def _fmt_epoch_ts(value: Any) -> str:
+    if not value:
+        return '--'
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError, OSError):
+        return '--'
+
+
+TEMPLATES.env.filters['epochts'] = _fmt_epoch_ts
 
 
 # --------------------------------------------------------------------------
@@ -540,120 +555,6 @@ def _live_writer_exited(suite: str) -> bool:
         return False
 
 
-# Newest-file globs per suite, most specific first. Everything under a
-# virtualenv or site-packages is filtered out afterwards -- Options_Suite and
-# Vol_Suite each still carry their own .venv full of vendored CSVs named
-# things like `comparisons.py` and `test_gamma.py`.
-SUITE_OUTPUT_GLOBS: Dict[str, Dict[str, Any]] = {
-    'options': {
-        'label': 'Options_Suite',
-        'globs': [
-            os.path.join(SUITE_ROOTS['options'], 'comparison_*.csv'),
-            os.path.join(ORCH_OUTPUT, '*', 'options_result.json'),
-        ],
-        'hint': 'newest comparison_*.csv in Options_Suite/',
-    },
-    'vol': {
-        'label': 'Vol_Suite',
-        'globs': [
-            os.path.join(SUITE_ROOTS['vol'], 'outputs', '*', '*gamma*.csv'),
-            os.path.join(SUITE_ROOTS['vol'], 'outputs', '*', '*vanna*.csv'),
-            os.path.join(SUITE_ROOTS['vol'], '*gamma*.csv'),
-            os.path.join(SUITE_ROOTS['vol'], '*vanna*.csv'),
-            os.path.join(SUITE_ROOTS['vol'], 'outputs', '*', '*.csv'),
-        ],
-        'hint': 'newest gamma/vanna CSV in Vol_Suite/outputs/<run>/',
-    },
-    'var': {
-        'label': 'VaR_Tools_Simulations',
-        'globs': [
-            os.path.join(ORCH_OUTPUT, '*', 'var_result.json'),
-            os.path.join(SUITE_ROOTS['var'], 'outputs', '*.csv'),
-            os.path.join(SUITE_ROOTS['var'], '*.csv'),
-        ],
-        'hint': 'newest var_result.json written to orchestrator_output/<run>/',
-    },
-    'sentiment': {
-        'label': 'sentiment-scanner',
-        'globs': [
-            os.path.join(ORCH_OUTPUT, '*', 'sentiment_result.json'),
-            os.path.join(SUITE_ROOTS['sentiment'], 'data', 'exports',
-                         'highlighted_ticker_packs', '*.json'),
-        ],
-        'hint': 'newest sentiment_result.json / exported ticker pack',
-    },
-}
-
-_EXCLUDED_PATH_BITS = (os.sep + '.venv' + os.sep, os.sep + 'site-packages' + os.sep,
-                       os.sep + '__pycache__' + os.sep, os.sep + '.git' + os.sep)
-
-MAX_TABLE_ROWS = 250
-MAX_TABLE_COLS = 40
-
-
-def _newest_matching(patterns: List[str]) -> Optional[str]:
-    for pattern in patterns:
-        candidates = [p for p in glob.glob(pattern)
-                      if os.path.isfile(p)
-                      and not any(bit in p for bit in _EXCLUDED_PATH_BITS)]
-        if candidates:
-            return max(candidates, key=os.path.getmtime)
-    return None
-
-
-def _read_csv_table(path: str) -> Dict[str, Any]:
-    with open(path, 'r', encoding='utf-8-sig', newline='') as f:
-        reader = csv.reader(f)
-        rows = []
-        for i, row in enumerate(reader):
-            rows.append(row[:MAX_TABLE_COLS])
-            if i > MAX_TABLE_ROWS:
-                break
-    if not rows:
-        return {'kind': 'empty', 'headers': [], 'rows': [], 'truncated': False}
-    headers, body = rows[0], rows[1:]
-    truncated = len(body) > MAX_TABLE_ROWS
-    return {
-        'kind': 'table',
-        'headers': headers,
-        'rows': body[:MAX_TABLE_ROWS],
-        'truncated': truncated,
-    }
-
-
-def _read_json_view(path: str) -> Dict[str, Any]:
-    with open(path, 'r', encoding='utf-8-sig') as f:
-        payload = json.load(f)
-
-    if isinstance(payload, list) and payload and all(isinstance(r, dict) for r in payload):
-        headers: List[str] = []
-        for record in payload[:MAX_TABLE_ROWS]:
-            for key in record:
-                if key not in headers:
-                    headers.append(key)
-        headers = headers[:MAX_TABLE_COLS]
-        rows = [[_scalar(record.get(h)) for h in headers]
-                for record in payload[:MAX_TABLE_ROWS]]
-        return {'kind': 'table', 'headers': headers, 'rows': rows,
-                'truncated': len(payload) > MAX_TABLE_ROWS}
-
-    if isinstance(payload, dict):
-        pairs = [(k, _scalar(v)) for k, v in payload.items()]
-        return {'kind': 'pairs', 'pairs': pairs,
-                'raw': json.dumps(payload, indent=2, default=str)[:20000]}
-
-    return {'kind': 'raw', 'raw': json.dumps(payload, indent=2, default=str)[:20000]}
-
-
-def _scalar(value: Any) -> str:
-    if value is None:
-        return ''
-    if isinstance(value, (dict, list)):
-        text = json.dumps(value, default=str)
-        return text if len(text) <= 400 else text[:400] + ' ...'
-    return str(value)
-
-
 # --------------------------------------------------------------------------
 # routes
 # --------------------------------------------------------------------------
@@ -684,7 +585,7 @@ def home(request: Request):
         'default_timeout': orchestrator.DEFAULT_TIMEOUT_SEC,
         'shared_python': orchestrator.SHARED_PYTHON,
         'shared_python_ok': os.path.exists(orchestrator.SHARED_PYTHON),
-        'suites': SUITE_OUTPUT_GLOBS,
+        'suites': SUITE_LABELS,
     })
 
 
@@ -1546,44 +1447,96 @@ def quant_console(request: Request):
     })
 
 
+def _active_run_banner(suite_key: str) -> Optional[Dict[str, Any]]:
+    """Task 8 fills this in; returns None for now so Task 7's route/template
+    wiring can be tested independently of the live-run banner feature."""
+    return None
+
+
 @app.get('/suites/{suite}', response_class=HTMLResponse)
-def suite_output(request: Request, suite: str):
+def suite_output(request: Request, suite: str, run_id: Optional[str] = None):
     key = suite.strip().lower()
-    spec = SUITE_OUTPUT_GLOBS.get(key)
-    if spec is None:
+    if key not in SUITE_LABELS:
         return TEMPLATES.TemplateResponse(request, 'suite.html', {
-            'active': 'suites', 'suite': key, 'spec': None,
-            'path': None, 'view': None,
+            'active': 'suites', 'suite': key, 'runs': [], 'run': None,
+            'file_views': [], 'grouped_file_views': None, 'active_run_banner': None,
             'error': f'unknown suite {suite!r}; expected one of '
-                     f'{", ".join(sorted(SUITE_OUTPUT_GLOBS))}',
-            'suites': SUITE_OUTPUT_GLOBS,
+                     f'{", ".join(sorted(SUITE_LABELS))}',
+            'suites': SUITE_LABELS,
         }, status_code=404)
 
-    path = _newest_matching(spec['globs'])
-    view: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    modified: Optional[str] = None
+    all_runs = discover_runs(key)
+    runs = all_runs[:10]
 
-    if path:
-        try:
-            modified = datetime.fromtimestamp(
-                os.path.getmtime(path), tz=timezone.utc).isoformat()
-            view = (_read_json_view(path) if path.lower().endswith('.json')
-                    else _read_csv_table(path))
-        except Exception as e:
-            error = f'could not parse {os.path.basename(path)}: {type(e).__name__}: {e}'
+    run = None
+    if run_id:
+        run = next((r for r in runs if r.run_id == run_id), None) or get_run(key, run_id)
+    if run is None and runs:
+        run = runs[0]
+
+    file_views = []
+    grouped_file_views: Optional[Dict[str, List[Any]]] = None
+    error: Optional[str] = None
+    if run is not None:
+        if key == 'unified':
+            # A unified run's files span multiple suites with no per-file
+            # suite tag on RunFile itself -- re-derive ownership the same
+            # way discover_rundir_runs does, purely for grouping the display,
+            # rather than adding an owner_suite field every OTHER discovery
+            # path would have to populate too.
+            names = [os.path.basename(f.abs_path) for f in run.files]
+            grouped_file_views = {}
+            for s in ('options', 'var', 'sentiment', 'vol'):
+                claimed = set(claim_files_for_suite(names, s))
+                s_files = [f for f in run.files if os.path.basename(f.abs_path) in claimed]
+                if not s_files:
+                    continue
+                grouped_file_views[s] = []
+                for f in s_files:
+                    try:
+                        grouped_file_views[s].append((f, build_file_view(f)))
+                    except Exception as e:
+                        error = f'could not parse {os.path.basename(f.abs_path)}: {type(e).__name__}: {e}'
+        else:
+            for f in run.files:
+                try:
+                    file_views.append((f, build_file_view(f)))
+                except Exception as e:
+                    error = f'could not parse {os.path.basename(f.abs_path)}: {type(e).__name__}: {e}'
 
     return TEMPLATES.TemplateResponse(request, 'suite.html', {
         'active': 'suites',
         'suite': key,
-        'spec': spec,
-        'path': path,
-        'rel_path': os.path.relpath(path, ROOT) if path else None,
-        'modified': modified,
-        'view': view,
+        'runs': runs,
+        'run': run,
+        'file_views': file_views,
+        'grouped_file_views': grouped_file_views,
+        'active_run_banner': _active_run_banner(key),
         'error': error,
-        'suites': SUITE_OUTPUT_GLOBS,
+        'suites': SUITE_LABELS,
     })
+
+
+@app.get('/suites/{suite}/asset')
+def suite_asset(suite: str, run_id: str, rel_path: str):
+    """Serves one file's raw bytes for inline images/PDFs and generic
+    downloads. Never trusts `rel_path` directly: only serves it if it is an
+    EXACT match against a file that discover_runs/get_run already
+    enumerated server-side for this exact run_id -- no path-joining of user
+    input, no traversal surface."""
+    key = suite.strip().lower()
+    if key not in SUITE_LABELS:
+        raise HTTPException(status_code=404, detail='unknown suite')
+
+    run = get_run(key, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail='run not found')
+
+    match = next((f for f in run.files if f.rel_path == rel_path), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail='file not part of this run')
+
+    return FileResponse(match.abs_path)
 
 
 @app.websocket('/suites/{suite}/live')
@@ -1610,7 +1563,7 @@ async def suite_live_log(websocket: WebSocket, suite: str) -> None:
     await websocket.accept()
 
     key = suite.strip().lower()
-    if key not in SUITE_OUTPUT_GLOBS:
+    if key not in SUITE_LABELS:
         await websocket.close(code=1008, reason=f'unknown suite {suite!r}')
         return
 
