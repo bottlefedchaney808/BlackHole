@@ -352,3 +352,53 @@ def test_discover_clustered_runs_skips_missing_files(tmp_path):
     runs = discover_clustered_runs([str(a), missing], "options", "cmp")
     assert len(runs) == 1
     assert len(runs[0].files) == 1
+
+
+from dashboard.output_runs import discover_date_bucket_runs
+
+
+def test_discover_date_bucket_runs_one_run_per_date_folder(tmp_path):
+    day1 = tmp_path / "20260727"
+    day2 = tmp_path / "20260728"
+    day1.mkdir()
+    day2.mkdir()
+    (day1 / "pack-a.json").write_text("{}")
+    (day2 / "pack-b.json").write_text("{}")
+    (day2 / "pack-c.json").write_text("{}")
+
+    runs = discover_date_bucket_runs(str(tmp_path / "*"), "sentiment", "pack")
+    assert len(runs) == 2
+    by_id = {r.run_id: r for r in runs}
+    assert "pack:20260728" in by_id
+    assert len(by_id["pack:20260728"].files) == 2
+    assert "2026-07-28" in by_id["pack:20260728"].label
+
+
+def test_discover_date_bucket_runs_ignores_manifest_file(tmp_path):
+    day = tmp_path / "20260728"
+    day.mkdir()
+    (day / "pack-a.json").write_text("{}")
+    # latest_manifest.json lives one level up (a sibling of the date
+    # folders), not inside one -- glob on tmp_path/* wouldn't match it, but
+    # confirm a same-named file INSIDE a date folder still just shows up as
+    # a normal file (no special-casing needed/wanted here).
+    (day / "latest_manifest.json").write_text("{}")
+
+    runs = discover_date_bucket_runs(str(tmp_path / "*"), "sentiment", "pack")
+    assert len(runs[0].files) == 2
+
+
+def test_discover_date_bucket_runs_skips_empty_date_folders(tmp_path):
+    empty = tmp_path / "20260728"
+    empty.mkdir()
+    runs = discover_date_bucket_runs(str(tmp_path / "*"), "sentiment", "pack")
+    assert runs == []
+
+
+def test_discover_date_bucket_runs_sorts_newest_first(tmp_path):
+    for d in ("20260101", "20260201"):
+        folder = tmp_path / d
+        folder.mkdir()
+        (folder / "pack.json").write_text("{}")
+    runs = discover_date_bucket_runs(str(tmp_path / "*"), "sentiment", "pack")
+    assert [r.run_id for r in runs] == ["pack:20260201", "pack:20260101"]

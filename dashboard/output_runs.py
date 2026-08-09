@@ -340,3 +340,63 @@ def discover_clustered_runs(paths: List[str], suite: str, run_id_prefix: str,
 
     runs.sort(key=lambda r: r.timestamp, reverse=True)
     return runs
+
+
+def discover_date_bucket_runs(root_glob: str, suite: str, run_id_prefix: str) -> List[RunInfo]:
+    """Each directory matching `root_glob` is treated as one run bucket --
+    built for sentiment-scanner's data/exports/highlighted_ticker_packs/
+    <YYYYMMDD>/ layout. Since sentiment-scanner loops continuously
+    (SCAN_INTERVAL_MINUTES), this deliberately collapses multiple scan
+    cycles in one day into one bucket rather than trying to separate them."""
+    candidate_dirs = [d for d in glob.glob(root_glob) if os.path.isdir(d)]
+    candidate_dirs.sort(key=os.path.getmtime, reverse=True)
+    candidate_dirs = candidate_dirs[:_MAX_CANDIDATES]
+
+    runs: List[RunInfo] = []
+    for d in candidate_dirs:
+        files: List[RunFile] = []
+        for name in os.listdir(d):
+            abs_path = os.path.join(d, name)
+            if not os.path.isfile(abs_path):
+                continue
+            try:
+                stat = os.stat(abs_path)
+            except OSError:
+                continue
+            files.append(RunFile(
+                abs_path=abs_path,
+                rel_path=os.path.relpath(abs_path, ROOT),
+                kind=classify_file(abs_path),
+                size_bytes=stat.st_size,
+                modified=stat.st_mtime,
+            ))
+        if not files:
+            continue
+
+        dirname = os.path.basename(d.rstrip(os.sep))
+        try:
+            parsed_date = datetime.strptime(dirname, '%Y%m%d')
+            label = parsed_date.strftime('%Y-%m-%d')
+            # Prefer the folder's own date over raw mtime for sort ordering:
+            # two date folders created back-to-back (as this function's own
+            # "sorts newest first" test does, and as a real backfill/restore
+            # could too) can land on identical mtimes at this filesystem's
+            # granularity -- confirmed directly (Task 4 hit the same failure
+            # mode with clustered files). The folder name is the actual
+            # identity of the run; mtime is only a fallback for the
+            # unparseable case below.
+            run_timestamp = parsed_date.timestamp()
+        except ValueError:
+            label = dirname
+            run_timestamp = max(f.modified for f in files)
+
+        runs.append(RunInfo(
+            suite=suite,
+            run_id=f"{run_id_prefix}:{dirname}",
+            label=label,
+            timestamp=run_timestamp,
+            files=files,
+        ))
+
+    runs.sort(key=lambda r: r.timestamp, reverse=True)
+    return runs
