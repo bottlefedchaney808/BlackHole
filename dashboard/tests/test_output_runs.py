@@ -127,3 +127,135 @@ def test_run_info_holds_fields():
     assert r.suite == "vol"
     assert r.files[0] is f
     assert r.sibling_suites == []
+
+
+import json
+import os
+
+from dashboard.output_runs import (
+    claim_files_for_suite, label_from_marker, discover_rundir_runs,
+)
+
+
+# ---------------------------------------------------------------------------
+# claim_files_for_suite -- ownership filter for a shared unified-run directory
+# ---------------------------------------------------------------------------
+
+def test_claim_files_for_suite_options_claims_its_own_marker_and_context():
+    names = ["options_result.json", "suite_context_options.json",
+             "var_result.json", "suite_context.json", "SPY_gamma_records.csv"]
+    claimed = claim_files_for_suite(names, "options")
+    assert set(claimed) == {"options_result.json", "suite_context_options.json"}
+
+
+def test_claim_files_for_suite_var_claims_its_own_marker_and_context():
+    names = ["options_result.json", "var_result.json", "suite_context_var.json"]
+    assert set(claim_files_for_suite(names, "var")) == {"var_result.json", "suite_context_var.json"}
+
+
+def test_claim_files_for_suite_sentiment_claims_its_own_marker_and_context():
+    names = ["sentiment_result.json", "suite_context_sentiment.json", "var_result.json"]
+    assert set(claim_files_for_suite(names, "sentiment")) == \
+        {"sentiment_result.json", "suite_context_sentiment.json"}
+
+
+def test_claim_files_for_suite_vol_claims_everything_not_claimed_by_others():
+    names = ["options_result.json", "var_result.json", "sentiment_result.json",
+             "suite_context.json", "suite_context_options.json",
+             "SPY_gamma_records_20260716.csv", "volatility_suite_20260716.pdf"]
+    claimed = claim_files_for_suite(names, "vol")
+    assert set(claimed) == {"SPY_gamma_records_20260716.csv", "volatility_suite_20260716.pdf"}
+
+
+def test_claim_files_for_suite_excludes_bare_suite_context_everywhere():
+    names = ["suite_context.json"]
+    for suite in ("options", "var", "sentiment", "vol"):
+        assert claim_files_for_suite(names, suite) == []
+
+
+# ---------------------------------------------------------------------------
+# label_from_marker
+# ---------------------------------------------------------------------------
+
+def test_label_from_marker_options(tmp_path):
+    p = tmp_path / "options_result.json"
+    p.write_text(json.dumps({"suite": "options", "status": "ok",
+                              "ticker": "AAPL", "method": "CRR"}))
+    assert label_from_marker(str(p), "options") == "AAPL · CRR · ok"
+
+
+def test_label_from_marker_var(tmp_path):
+    p = tmp_path / "var_result.json"
+    p.write_text(json.dumps({"suite": "var", "status": "ok", "module": "corr_sim"}))
+    assert label_from_marker(str(p), "var") == "corr_sim · ok"
+
+
+def test_label_from_marker_returns_none_on_missing_file():
+    assert label_from_marker("/does/not/exist.json", "options") is None
+
+
+def test_label_from_marker_returns_none_on_malformed_json(tmp_path):
+    p = tmp_path / "options_result.json"
+    p.write_text("not json{{{")
+    assert label_from_marker(str(p), "options") is None
+
+
+# ---------------------------------------------------------------------------
+# discover_rundir_runs
+# ---------------------------------------------------------------------------
+
+def test_discover_rundir_runs_finds_options_marker_and_labels_it(tmp_path):
+    run_dir = tmp_path / "20260729T055306Z"
+    run_dir.mkdir()
+    (run_dir / "options_result.json").write_text(json.dumps(
+        {"suite": "options", "status": "ok", "ticker": "AAPL", "method": "CRR"}))
+    (run_dir / "suite_context_options.json").write_text("{}")
+    (run_dir / "var_result.json").write_text(json.dumps({"suite": "var", "status": "ok"}))
+
+    runs = discover_rundir_runs(str(tmp_path / "*"), "options", "orch")
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.suite == "options"
+    assert run.run_id == "orch:20260729T055306Z"
+    assert run.label == "AAPL · CRR · ok"
+    claimed_names = {os.path.basename(f.abs_path) for f in run.files}
+    assert claimed_names == {"options_result.json", "suite_context_options.json"}
+    # var_result.json belongs to a different suite -- must not leak in
+    assert "var_result.json" not in claimed_names
+
+
+def test_discover_rundir_runs_skips_directories_with_nothing_for_this_suite(tmp_path):
+    run_dir = tmp_path / "20260729T055306Z"
+    run_dir.mkdir()
+    (run_dir / "var_result.json").write_text(json.dumps({"suite": "var", "status": "ok"}))
+
+    runs = discover_rundir_runs(str(tmp_path / "*"), "options", "orch")
+    assert runs == []
+
+
+def test_discover_rundir_runs_falls_back_to_dirname_label_without_a_marker(tmp_path):
+    run_dir = tmp_path / "20260716_142405"
+    run_dir.mkdir()
+    (run_dir / "SPY_gamma_records_20260716.csv").write_text("a,b\n1,2\n")
+
+    runs = discover_rundir_runs(str(tmp_path / "*"), "vol", "vsout")
+    assert len(runs) == 1
+    assert runs[0].run_id == "vsout:20260716_142405"
+    assert "20260716" in runs[0].label
+
+
+def test_discover_rundir_runs_sorts_newest_first(tmp_path):
+    older = tmp_path / "20260101T000000Z"
+    newer = tmp_path / "20260201T000000Z"
+    older.mkdir()
+    newer.mkdir()
+    (older / "options_result.json").write_text(json.dumps({"suite": "options", "status": "ok",
+                                                              "ticker": "A", "method": "CRR"}))
+    (newer / "options_result.json").write_text(json.dumps({"suite": "options", "status": "ok",
+                                                              "ticker": "B", "method": "CRR"}))
+    import os as _os
+    old_time = _os.path.getmtime(str(older / "options_result.json")) - 1000
+    _os.utime(str(older / "options_result.json"), (old_time, old_time))
+
+    runs = discover_rundir_runs(str(tmp_path / "*"), "options", "orch")
+    assert [r.run_id for r in runs] == ["orch:20260201T000000Z", "orch:20260101T000000Z"]

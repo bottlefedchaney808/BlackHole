@@ -123,3 +123,131 @@ def cluster_by_timestamp(paths: List[str], window_seconds: int = 10) -> List[Lis
     result = [[p for p, _ in cluster] for cluster in clusters]
     result.extend([u] for u in undated)
     return result
+
+
+import glob
+import json
+
+
+# ---------------------------------------------------------------------------
+# Shared orchestrator_output/<run_id>/ directories -- one directory can hold
+# multiple suites' files at once (a unified run writes all four). Ownership
+# of a file is inferred from naming convention, since there is no per-file
+# suite tag.
+# ---------------------------------------------------------------------------
+
+#: Marker/context files a suite claims for itself out of a shared directory.
+SUITE_MARKER_FILES = {
+    'options': ('options_result.json', 'suite_context_options.json'),
+    'var': ('var_result.json', 'suite_context_var.json'),
+    'sentiment': ('sentiment_result.json', 'suite_context_sentiment.json'),
+}
+
+#: Filenames no suite claims as "its own result to review" -- cross-suite
+#: plumbing, excluded from every suite's per-file list.
+_UNCLAIMED_FILES = {'suite_context.json'}
+
+#: The full set of filenames options/var/sentiment could ever claim, used by
+#: vol's exclusion rule below.
+_NON_VOL_MARKERS = {name for names in SUITE_MARKER_FILES.values() for name in names}
+
+
+def claim_files_for_suite(filenames: List[str], suite: str) -> List[str]:
+    """Given every filename in one shared run directory, returns the subset
+    'suite' claims as its own. options/var/sentiment claim their own named
+    marker+context files; vol claims everything NOT claimed by one of the
+    other three and not in _UNCLAIMED_FILES (Vol_Suite writes its rich
+    CSV/PNG/PDF assets straight into the shared directory via VS_OUTPUT_DIR,
+    with no marker file of its own to key off)."""
+    if suite in SUITE_MARKER_FILES:
+        wanted = set(SUITE_MARKER_FILES[suite])
+        return [f for f in filenames if f in wanted]
+    if suite == 'vol':
+        return [f for f in filenames if f not in _NON_VOL_MARKERS and f not in _UNCLAIMED_FILES]
+    return []
+
+
+def label_from_marker(marker_path: str, suite: str) -> Optional[str]:
+    """Reads a suite's own result JSON and builds a human-readable label.
+    Returns None if the file is missing/unreadable/malformed -- callers fall
+    back to a directory-name-derived label in that case."""
+    try:
+        with open(marker_path, 'r', encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+
+    status = data.get('status', '?')
+    if suite == 'options':
+        return f"{data.get('ticker', '?')} · {data.get('method', '?')} · {status}"
+    if suite == 'var':
+        return f"{data.get('module', '?')} · {status}"
+    if suite == 'sentiment':
+        return f"sentiment · {status}"
+    return status
+
+
+#: Only the newest this many candidate directories are ever inspected per
+#: source, per suite -- keeps a page load cheap even as orchestrator_output/
+#: grows into the hundreds of run directories. Comfortably covers "last 10
+#: runs that have files for this suite" with margin for interleaved
+#: unified/other-suite-only runs in between.
+_MAX_CANDIDATES = 40
+
+
+def discover_rundir_runs(root_glob: str, suite: str, run_id_prefix: str) -> List[RunInfo]:
+    """Each directory matching `root_glob` is one candidate run. A directory
+    contributes a RunInfo for `suite` only if claim_files_for_suite finds at
+    least one file it owns there. Labeled from that suite's own marker file
+    when present, falling back to the directory's own name (typically an
+    embedded timestamp) otherwise."""
+    candidate_dirs = [d for d in glob.glob(root_glob) if os.path.isdir(d)]
+    candidate_dirs.sort(key=os.path.getmtime, reverse=True)
+    candidate_dirs = candidate_dirs[:_MAX_CANDIDATES]
+
+    runs: List[RunInfo] = []
+    for d in candidate_dirs:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        claimed_names = claim_files_for_suite(names, suite)
+        if not claimed_names:
+            continue
+
+        files: List[RunFile] = []
+        for name in claimed_names:
+            abs_path = os.path.join(d, name)
+            try:
+                stat = os.stat(abs_path)
+            except OSError:
+                continue
+            files.append(RunFile(
+                abs_path=abs_path,
+                rel_path=os.path.relpath(abs_path, ROOT),
+                kind=classify_file(abs_path),
+                size_bytes=stat.st_size,
+                modified=stat.st_mtime,
+            ))
+        if not files:
+            continue
+
+        label = None
+        if suite in SUITE_MARKER_FILES:
+            marker_name = SUITE_MARKER_FILES[suite][0]
+            if marker_name in claimed_names:
+                label = label_from_marker(os.path.join(d, marker_name), suite)
+        dirname = os.path.basename(d.rstrip(os.sep))
+        if label is None:
+            label = dirname
+
+        runs.append(RunInfo(
+            suite=suite,
+            run_id=f"{run_id_prefix}:{dirname}",
+            label=label,
+            timestamp=max(f.modified for f in files),
+            files=files,
+        ))
+
+    runs.sort(key=lambda r: r.timestamp, reverse=True)
+    return runs
