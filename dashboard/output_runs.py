@@ -455,6 +455,12 @@ def discover_runs(suite_key: str) -> List[RunInfo]:
         paths = (glob.glob(os.path.join(root, 'comparison_*.csv')) +
                 glob.glob(os.path.join(root, 'comparison_*.pdf')))
         paths = [p for p in paths if not any(bit in p for bit in _EXCLUDED_PATH_BITS)]
+        # Cap before clustering (not after) -- this pile has no retention policy
+        # and grows unboundedly (see design doc's Known Limitations), so without
+        # this the mtime-sort/stat/cluster work below would run over every file
+        # on disk on every page load instead of just the newest candidates.
+        paths.sort(key=os.path.getmtime, reverse=True)
+        paths = paths[:_MAX_CANDIDATES]
         runs.extend(discover_clustered_runs(paths, 'options', 'cmp'))
 
     if suite_key == 'vol':

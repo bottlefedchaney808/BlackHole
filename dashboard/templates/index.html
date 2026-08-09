@@ -266,10 +266,10 @@
 
 <!-- ------------------------------------------------------------------ -->
 <div class="panel">
-  <header><h2>Latest suite output</h2><span class="note">newest matching file on disk per suite</span></header>
+  <header><h2>Latest suite output</h2><span class="note">jump to a suite's Output tab</span></header>
   <div class="body">
-    {% for key, spec in suites.items() %}
-      <a href="/suites/{{ key }}" class="pill plain" style="margin-right:8px;">{{ key }} &middot; {{ spec.label }}</a>
+    {% for key, label in suites.items() %}
+      <a href="/suites/{{ key }}" class="pill plain" style="margin-right:8px;">{{ label }}</a>
     {% endfor %}
   </div>
 </div>
