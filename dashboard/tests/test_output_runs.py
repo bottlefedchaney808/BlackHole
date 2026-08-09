@@ -259,3 +259,49 @@ def test_discover_rundir_runs_sorts_newest_first(tmp_path):
 
     runs = discover_rundir_runs(str(tmp_path / "*"), "options", "orch")
     assert [r.run_id for r in runs] == ["orch:20260201T000000Z", "orch:20260101T000000Z"]
+
+
+from dashboard.output_runs import discover_loose_bucket
+
+
+def test_vol_standalone_rundir_is_discovered_via_discover_rundir_runs(tmp_path):
+    # Vol_Suite/outputs/<ts>/ already has one directory per run -- no new
+    # function needed, discover_rundir_runs (Task 2) handles it directly.
+    run_dir = tmp_path / "20260716_142405"
+    run_dir.mkdir()
+    (run_dir / "SPY_gamma_records_20260716_142448.csv").write_text("a,b\n1,2\n")
+    (run_dir / "volatility_suite_20260716_142527.pdf").write_bytes(b"%PDF-1.4")
+
+    runs = discover_rundir_runs(str(tmp_path / "*"), "vol", "vsout")
+    assert len(runs) == 1
+    assert {os.path.basename(f.abs_path) for f in runs[0].files} == \
+        {"SPY_gamma_records_20260716_142448.csv", "volatility_suite_20260716_142527.pdf"}
+
+
+def test_discover_loose_bucket_wraps_a_flat_directory_as_one_run(tmp_path):
+    (tmp_path / "correlation_matrix_20260801_171619.csv").write_text("a,b\n1,2\n")
+    (tmp_path / "INTC_gamma_records_20260801_171652.csv").write_text("a,b\n1,2\n")
+
+    run = discover_loose_bucket(str(tmp_path), "vol", "loose:vs_output", "Legacy vs_output (ungrouped)")
+    assert run is not None
+    assert run.run_id == "loose:vs_output"
+    assert run.label == "Legacy vs_output (ungrouped)"
+    assert len(run.files) == 2
+
+
+def test_discover_loose_bucket_returns_none_for_empty_or_missing_directory(tmp_path):
+    assert discover_loose_bucket(str(tmp_path / "does_not_exist"), "vol",
+                                  "loose:vs_output", "x") is None
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert discover_loose_bucket(str(empty), "vol", "loose:vs_output", "x") is None
+
+
+def test_discover_loose_bucket_ignores_subdirectories(tmp_path):
+    (tmp_path / "a.csv").write_text("x")
+    sub = tmp_path / "subdir"
+    sub.mkdir()
+    (sub / "b.csv").write_text("y")
+
+    run = discover_loose_bucket(str(tmp_path), "vol", "loose:vs_output", "x")
+    assert len(run.files) == 1

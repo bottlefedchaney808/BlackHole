@@ -251,3 +251,42 @@ def discover_rundir_runs(root_glob: str, suite: str, run_id_prefix: str) -> List
 
     runs.sort(key=lambda r: r.timestamp, reverse=True)
     return runs
+
+
+def discover_loose_bucket(directory: str, suite: str, run_id: str, label: str) -> Optional[RunInfo]:
+    """Wraps every FILE (not subdirectory) directly inside `directory` as one
+    single synthetic RunInfo. For legacy output locations with no per-run
+    separation at all (Vol_Suite/vs_output/, multiple tickers' files mixed
+    together with no run boundary in the data) -- rather than pretending to
+    reconstruct run boundaries that don't exist, this shows it honestly as
+    one "everything that's here" bucket. Returns None if the directory is
+    missing or has no files directly in it."""
+    if not os.path.isdir(directory):
+        return None
+
+    files: List[RunFile] = []
+    for name in os.listdir(directory):
+        abs_path = os.path.join(directory, name)
+        if not os.path.isfile(abs_path):
+            continue
+        try:
+            stat = os.stat(abs_path)
+        except OSError:
+            continue
+        files.append(RunFile(
+            abs_path=abs_path,
+            rel_path=os.path.relpath(abs_path, ROOT),
+            kind=classify_file(abs_path),
+            size_bytes=stat.st_size,
+            modified=stat.st_mtime,
+        ))
+    if not files:
+        return None
+
+    return RunInfo(
+        suite=suite,
+        run_id=run_id,
+        label=label,
+        timestamp=max(f.modified for f in files),
+        files=files,
+    )
