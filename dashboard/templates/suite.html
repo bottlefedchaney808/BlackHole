@@ -1,87 +1,188 @@
 {% extends "base.html" %}
-{% block title %}{{ suite }} output -- FinancialDevelopment Dashboard{% endblock %}
+{% block title %}{{ suites.get(suite, suite) }} output -- FinancialDevelopment Dashboard{% endblock %}
 
-{% block content %}
-<h1>Latest {{ suite }} output</h1>
-<p class="sub">
-  {% if spec %}{{ spec.label }} &middot; {{ spec.hint }}{% else %}unknown suite{% endif %}
-</p>
-
-<div class="panel">
-  <header><h2>Suites</h2><span class="note">newest matching file wins</span></header>
-  <div class="body">
-    {% for key, s in suites.items() %}
-      <a href="/suites/{{ key }}"
-         class="pill {{ 'plain' if key == suite else '' }}"
-         style="margin-right:8px; {{ '' if key == suite else 'border-color:var(--border); color:var(--muted);' }}">
-        {{ key }} &middot; {{ s.label }}
-      </a>
-    {% endfor %}
-  </div>
-</div>
-
-{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
-
-{% if spec and not path %}
-  <div class="panel"><div class="body">
-    <div class="empty">
-      <strong>Nothing produced yet.</strong><br>
-      No file matched {{ spec.hint }}.<br>
-      <span class="small">Trigger a run from the <a href="/">overview page</a>; output shows up here once the suite writes it.</span>
-    </div>
-    <details style="margin-top:12px;">
-      <summary class="muted small" style="cursor:pointer;">globs searched</summary>
-      <pre class="json" style="margin-top:8px;">{% for g in spec.globs %}{{ g }}
-{% endfor %}</pre>
-    </details>
-  </div></div>
-{% elif path %}
-  <div class="panel">
+{% macro filecard(f, view, suite, run) %}
+  <div class="panel filecard {{ f.kind }}">
     <header>
-      <h2 class="mono" style="font-size:13px;">{{ rel_path }}</h2>
-      <span class="note">modified {{ modified | ts }} UTC</span>
+      <h2 class="mono" style="font-size:13px;">
+        {% if f.rel_path.endswith('quant_summary.json') %}
+          Quant Summary
+        {% else %}
+          {{ f.rel_path }}
+        {% endif %}
+      </h2>
+      <span class="note">{{ f.kind }} &middot; {{ f.size_bytes }} bytes</span>
     </header>
 
-    {% if view and view.kind == 'table' %}
-      <div class="tablewrap scrollbox">
-        <table>
-          <thead><tr>{% for h in view.headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-          <tbody>
-          {% for row in view.rows %}
-            <tr>
-              {% for cell in row %}
-                <td class="small">{{ cell if cell not in (none, '') else '--' }}</td>
-              {% endfor %}
-              {% for _ in range(view.headers | length - row | length) %}<td class="muted">--</td>{% endfor %}
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="pager muted small">
-        {{ view.rows | length }} row{{ '' if view.rows | length == 1 else 's' }} shown
-        {% if view.truncated %}(truncated -- open the file for the rest){% endif %}
-      </div>
-
-    {% elif view and view.kind == 'pairs' %}
+    {% if f.rel_path.endswith('quant_summary.json') and view.kind == 'pairs' %}
       <div class="body">
         <div class="kv">
           {% for k, v in view.pairs %}
             <div>{{ k }}</div><div class="val">{{ v if v != '' else '--' }}</div>
           {% endfor %}
         </div>
-        <details style="margin-top:14px;">
-          <summary class="muted small" style="cursor:pointer;">raw JSON</summary>
-          <pre class="json" style="margin-top:8px;">{{ view.raw }}</pre>
-        </details>
+        {% for k, v in view.pairs %}
+          {% if k == 'run_id' %}
+            <p class="small" style="margin-top:10px;">
+              <a href="/runs/{{ v }}/summary">Raw Quant Summary (JSON) &rarr;</a>
+            </p>
+          {% endif %}
+        {% endfor %}
       </div>
 
-    {% elif view and view.kind == 'raw' %}
+    {% elif view.kind == 'table' %}
+      <div class="tablewrap scrollbox">
+        <table>
+          <thead><tr>{% for h in view.headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+          <tbody>
+          {% for row in view.rows %}
+            <tr>{% for cell in row %}<td class="small">{{ cell if cell not in (none, '') else '--' }}</td>{% endfor %}</tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if view.truncated %}<div class="pager muted small">truncated -- open the file for the rest</div>{% endif %}
+
+    {% elif view.kind == 'pairs' %}
+      <div class="body">
+        <div class="kv">
+          {% for k, v in view.pairs %}
+            <div>{{ k }}</div><div class="val">{{ v if v != '' else '--' }}</div>
+          {% endfor %}
+        </div>
+      </div>
+
+    {% elif view.kind == 'raw' %}
       <div class="body"><pre class="json">{{ view.raw }}</pre></div>
 
+    {% elif view.kind == 'image' %}
+      <div class="body">
+        <img src="/suites/{{ suite }}/asset?run_id={{ run.run_id }}&rel_path={{ f.rel_path | urlencode }}"
+             alt="{{ f.rel_path }}" style="max-width:100%; border-radius:8px; border:1px solid var(--border);">
+      </div>
+
+    {% elif view.kind == 'pdf' %}
+      <div class="body">
+        <embed src="/suites/{{ suite }}/asset?run_id={{ run.run_id }}&rel_path={{ f.rel_path | urlencode }}"
+               type="application/pdf" width="100%" height="500px"
+               style="border-radius:8px; border:1px solid var(--border);">
+        <p class="small" style="margin-top:8px;">
+          <a href="/suites/{{ suite }}/asset?run_id={{ run.run_id }}&rel_path={{ f.rel_path | urlencode }}" target="_blank">Open in new tab &rarr;</a>
+        </p>
+      </div>
+
     {% else %}
-      <div class="body"><div class="empty">File found but it is empty.</div></div>
+      <div class="body">
+        <a href="/suites/{{ suite }}/asset?run_id={{ run.run_id }}&rel_path={{ f.rel_path | urlencode }}">Download {{ f.rel_path.split('/') | last }} &rarr;</a>
+      </div>
     {% endif %}
   </div>
+{% endmacro %}
+
+{% block content %}
+<h1>{{ suites.get(suite, suite) }} output</h1>
+<p class="sub">Last {{ runs | length }} run{{ '' if runs | length == 1 else 's' }} on disk for this suite.</p>
+
+<div class="panel">
+  <header><h2>Suites</h2><span class="note">last {{ runs | length }} runs shown</span></header>
+  <div class="body">
+    {% for key, label in suites.items() %}
+      <a href="/suites/{{ key }}"
+         class="pill suitepill {{ 'on' if key == suite else '' }}">
+        {{ label }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if active_run_banner %}
+<div class="panel banner-live" id="live-banner" data-run-id="{{ active_run_banner.run_id }}">
+  <div class="body">
+    <span class="pill running">{{ active_run_banner.status }}</span>
+    a <strong>{{ active_run_banner.kind }}</strong> run is in progress
+    {% if active_run_banner.started_at %}(started {{ active_run_banner.started_at | ts }} UTC){% endif %}
+    -- this page will refresh automatically when it finishes.
+  </div>
+</div>
+{% endif %}
+
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+{% if not runs %}
+  <div class="panel"><div class="body">
+    <div class="empty">
+      <strong>Nothing produced yet.</strong><br>
+      No run found on disk for {{ suites.get(suite, suite) }}.<br>
+      <span class="small">Trigger a run from the <a href="/">overview page</a>; output shows up here once it writes something.</span>
+    </div>
+  </div></div>
+{% elif run %}
+  <div class="panel">
+    <header>
+      <h2>{{ run.label }}</h2>
+      <span class="note">{{ run.files | length }} file{{ '' if run.files | length == 1 else '' }} &middot; modified {{ run.timestamp | epochts }} UTC</span>
+    </header>
+    <div class="body">
+      <form method="get" action="/suites/{{ suite }}" class="runform">
+        <div class="field">
+          <label for="run_id">Run</label>
+          <select name="run_id" id="run_id" onchange="this.form.submit()">
+            {% for r in runs %}
+              <option value="{{ r.run_id }}" {{ 'selected' if r.run_id == run.run_id else '' }}>
+                {{ r.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      </form>
+
+      {% if run.sibling_suites %}
+        <p class="small muted" style="margin-top:10px;">
+          Part of a unified run -- also produced: {{ run.sibling_suites | join(', ') }}.
+          <a href="/suites/unified?run_id={{ run.run_id }}">View all &rarr;</a>
+        </p>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if suite == 'unified' and grouped_file_views %}
+    {% for owning_suite, views in grouped_file_views.items() %}
+      <h2 style="margin: 20px 0 8px;">{{ suites.get(owning_suite, owning_suite) }}</h2>
+      {% for f, view in views %}
+        {{ filecard(f, view, suite, run) }}
+      {% endfor %}
+    {% endfor %}
+  {% else %}
+    {% for f, view in file_views %}
+      {{ filecard(f, view, suite, run) }}
+    {% endfor %}
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if active_run_banner %}
+<script>
+// No framework, no CDN -- matches quant.html's own polling script (same
+// 3s interval, same GET /runs/{run_id} endpoint this dashboard already
+// established for watching an in-flight run to completion).
+(function () {
+  var banner = document.getElementById('live-banner');
+  if (!banner) return;
+  var runId = banner.getAttribute('data-run-id');
+
+  function tick() {
+    fetch('/runs/' + encodeURIComponent(runId))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.status && data.status !== 'queued' && data.status !== 'running') {
+          window.location.reload();
+        }
+      })
+      .catch(function () { /* transient fetch error -- just try again next tick */ });
+  }
+  setInterval(tick, 3000);
+})();
+</script>
 {% endif %}
 {% endblock %}
