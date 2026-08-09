@@ -300,6 +300,27 @@ def test_a_real_error_status_still_raises():
 
 
 @pytest.mark.unit
+def test_hist_stock_eod_retries_transient_502_before_succeeding():
+    """hist_stock_eod paginates via a bare self._get + raise_for_status with
+    no retry wrapper, unlike every other route in this file -- a single
+    transient 502 on one 28-day chunk crashes the whole multi-chunk pull.
+    Confirmed live: backtest_stage3.py SMCI 120 crashed exactly this way
+    under concurrent proxy load, then succeeded on an identical, unmodified
+    re-run once load cleared (docs/PROJECT_AUDIT_AND_SPEC.md finding #17)."""
+    calls = {"n": 0}
+
+    def _get(path, params=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FakeResponse(502)
+        return FakeResponse(200, [["date", "close"], [params["start_date"], 100.0]])
+
+    rows = make_controller(_get).hist_stock_eod("SPY", "20260101", "20260110")
+    assert rows == [{"date": "20260101", "close": 100.0}]
+    assert calls["n"] == 2
+
+
+@pytest.mark.unit
 def test_open_interest_history_is_also_stamped_and_chunked():
     def _get(path, params=None):
         assert "ivl" not in (params or {}), "OI is daily, not interval-bucketed"

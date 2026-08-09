@@ -782,7 +782,7 @@ class ThetaDataController:
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
-            r = self._get(
+            r = self._get_with_retry(
                 f"/api/theta/hist/stock/eod/{root}",
                 params={
                     "start_date": chunk_start.strftime(fmt),
