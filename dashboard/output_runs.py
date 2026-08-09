@@ -324,15 +324,17 @@ def discover_clustered_runs(paths: List[str], suite: str, run_id_prefix: str,
             earliest = min(timestamps)
             run_id_suffix = earliest.strftime('%Y%m%d_%H%M%S')
             label = earliest.strftime('%Y-%m-%d %H:%M:%S')
+            run_timestamp = earliest.timestamp()
         else:
             run_id_suffix = os.path.basename(files[0].abs_path)
             label = run_id_suffix
+            run_timestamp = max(f.modified for f in files)
 
         runs.append(RunInfo(
             suite=suite,
             run_id=f"{run_id_prefix}:{run_id_suffix}",
             label=label,
-            timestamp=max(f.modified for f in files),
+            timestamp=run_timestamp,
             files=files,
         ))
 
