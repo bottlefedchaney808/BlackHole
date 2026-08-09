@@ -400,3 +400,210 @@ def discover_date_bucket_runs(root_glob: str, suite: str, run_id_prefix: str) ->
 
     runs.sort(key=lambda r: r.timestamp, reverse=True)
     return runs
+
+
+import csv as _csv
+
+SUITE_LABELS = {
+    'options': 'Options_Suite',
+    'vol': 'Vol_Suite',
+    'var': 'VaR_Tools_Simulations',
+    'sentiment': 'sentiment-scanner',
+    'unified': 'Unified',
+}
+
+MAX_TABLE_ROWS = 250
+MAX_TABLE_COLS = 40
+
+_EXCLUDED_PATH_BITS = (os.sep + '.venv' + os.sep, os.sep + 'site-packages' + os.sep,
+                       os.sep + '__pycache__' + os.sep, os.sep + '.git' + os.sep)
+
+
+def _rundir_sources_for(suite: str):
+    """(source_tag, glob_pattern) pairs to scan for `suite`, beyond the
+    shared orchestrator_output/ scan every suite gets."""
+    if suite == 'vol':
+        return [('vsout', os.path.join(SUITE_ROOTS['vol'], 'outputs', '*'))]
+    return []
+
+
+def discover_runs(suite_key: str) -> List[RunInfo]:
+    """Combines every discovery source relevant to `suite_key`, marks
+    unified-run siblings, and returns all discovered runs sorted
+    newest-first. Callers slice [:10] for the dropdown.
+
+    Sibling-suite detection happens HERE, once, for every run this function
+    returns -- not as a fallback bolted onto get_run() -- because the normal
+    route path (Task 7) reads straight from this function's result list
+    first and only calls get_run() for a run_id that fell out of the last-10
+    window. Computing siblings only inside get_run() would mean the
+    "part of a unified run" note almost never actually shows up."""
+    if suite_key not in SUITE_LABELS:
+        return []
+
+    if suite_key == 'unified':
+        runs = _discover_unified_runs()
+        runs.sort(key=lambda r: r.timestamp, reverse=True)
+        return runs
+
+    runs = discover_rundir_runs(os.path.join(ORCH_OUTPUT, '*'), suite_key, 'orch')
+    for tag, pattern in _rundir_sources_for(suite_key):
+        runs.extend(discover_rundir_runs(pattern, suite_key, tag))
+
+    if suite_key == 'options':
+        root = SUITE_ROOTS['options']
+        paths = (glob.glob(os.path.join(root, 'comparison_*.csv')) +
+                glob.glob(os.path.join(root, 'comparison_*.pdf')))
+        paths = [p for p in paths if not any(bit in p for bit in _EXCLUDED_PATH_BITS)]
+        runs.extend(discover_clustered_runs(paths, 'options', 'cmp'))
+
+    if suite_key == 'vol':
+        loose = discover_loose_bucket(
+            os.path.join(SUITE_ROOTS['vol'], 'vs_output'), 'vol', 'loose:vs_output',
+            'Legacy vs_output (ungrouped)')
+        if loose is not None:
+            runs.append(loose)
+
+    if suite_key == 'sentiment':
+        runs.extend(discover_date_bucket_runs(
+            os.path.join(SUITE_ROOTS['sentiment'], 'data', 'exports',
+                        'highlighted_ticker_packs', '*'),
+            'sentiment', 'pack'))
+
+    unified_siblings = {r.run_id: [s for s in r.sibling_suites if s != suite_key]
+                        for r in _discover_unified_runs()}
+    runs = [
+        r if r.run_id not in unified_siblings else
+        RunInfo(suite=r.suite, run_id=r.run_id, label=r.label, timestamp=r.timestamp,
+                files=r.files, sibling_suites=unified_siblings[r.run_id])
+        for r in runs
+    ]
+
+    runs.sort(key=lambda r: r.timestamp, reverse=True)
+    return runs
+
+
+def _discover_unified_runs() -> List[RunInfo]:
+    """orchestrator_output/<run_id>/ directories claimed by 2+ of
+    {options, var, sentiment, vol} -- i.e. an actual unified run, not a
+    suite-kind run that happened to share the directory naming scheme."""
+    candidate_dirs = [d for d in glob.glob(os.path.join(ORCH_OUTPUT, '*')) if os.path.isdir(d)]
+    candidate_dirs.sort(key=os.path.getmtime, reverse=True)
+    candidate_dirs = candidate_dirs[:_MAX_CANDIDATES]
+
+    runs: List[RunInfo] = []
+    for d in candidate_dirs:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        per_suite = {s: claim_files_for_suite(names, s)
+                     for s in ('options', 'var', 'sentiment', 'vol')}
+        suites_present = [s for s, claimed in per_suite.items() if claimed]
+        if len(suites_present) < 2:
+            continue
+
+        files: List[RunFile] = []
+        for s in suites_present:
+            for name in per_suite[s]:
+                abs_path = os.path.join(d, name)
+                try:
+                    stat = os.stat(abs_path)
+                except OSError:
+                    continue
+                files.append(RunFile(
+                    abs_path=abs_path,
+                    rel_path=os.path.relpath(abs_path, ROOT),
+                    kind=classify_file(abs_path),
+                    size_bytes=stat.st_size,
+                    modified=stat.st_mtime,
+                ))
+        if not files:
+            continue
+
+        dirname = os.path.basename(d.rstrip(os.sep))
+        runs.append(RunInfo(
+            suite='unified',
+            run_id=f"orch:{dirname}",
+            label=f"unified · {', '.join(sorted(suites_present))}",
+            timestamp=max(f.modified for f in files),
+            files=files,
+            sibling_suites=sorted(suites_present),
+        ))
+    return runs
+
+
+def get_run(suite_key: str, run_id: str) -> Optional[RunInfo]:
+    """Re-derives suite_key's full run list (already carrying correct
+    sibling_suites -- see discover_runs) and returns the one matching
+    run_id, or None."""
+    return next((r for r in discover_runs(suite_key) if r.run_id == run_id), None)
+
+
+def _scalar(value) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, default=str)
+        return text if len(text) <= 400 else text[:400] + ' ...'
+    return str(value)
+
+
+def read_csv_table(path: str) -> dict:
+    with open(path, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = _csv.reader(f)
+        rows = []
+        for i, row in enumerate(reader):
+            rows.append(row[:MAX_TABLE_COLS])
+            if i > MAX_TABLE_ROWS:
+                break
+    if not rows:
+        return {'kind': 'empty', 'headers': [], 'rows': [], 'truncated': False}
+    headers, body = rows[0], rows[1:]
+    truncated = len(body) > MAX_TABLE_ROWS
+    return {
+        'kind': 'table',
+        'headers': headers,
+        'rows': body[:MAX_TABLE_ROWS],
+        'truncated': truncated,
+    }
+
+
+def read_json_view(path: str) -> dict:
+    with open(path, 'r', encoding='utf-8-sig') as f:
+        payload = json.load(f)
+
+    if isinstance(payload, list) and payload and all(isinstance(r, dict) for r in payload):
+        headers: List[str] = []
+        for record in payload[:MAX_TABLE_ROWS]:
+            for key in record:
+                if key not in headers:
+                    headers.append(key)
+        headers = headers[:MAX_TABLE_COLS]
+        rows = [[_scalar(record.get(h)) for h in headers]
+                for record in payload[:MAX_TABLE_ROWS]]
+        return {'kind': 'table', 'headers': headers, 'rows': rows,
+                'truncated': len(payload) > MAX_TABLE_ROWS}
+
+    if isinstance(payload, dict):
+        pairs = [(k, _scalar(v)) for k, v in payload.items()]
+        return {'kind': 'pairs', 'pairs': pairs,
+                'raw': json.dumps(payload, indent=2, default=str)[:20000]}
+
+    return {'kind': 'raw', 'raw': json.dumps(payload, indent=2, default=str)[:20000]}
+
+
+def build_file_view(run_file: RunFile) -> dict:
+    """Dispatches a RunFile to its renderable view. json/csv get parsed
+    content (pairs/table/raw); png/pdf/other get a bare kind marker -- the
+    template renders those directly against the asset route, no parsing
+    needed."""
+    if run_file.kind == 'json':
+        return read_json_view(run_file.abs_path)
+    if run_file.kind == 'csv':
+        return read_csv_table(run_file.abs_path)
+    if run_file.kind == 'png':
+        return {'kind': 'image'}
+    if run_file.kind == 'pdf':
+        return {'kind': 'pdf'}
+    return {'kind': 'download'}

@@ -402,3 +402,97 @@ def test_discover_date_bucket_runs_sorts_newest_first(tmp_path):
         (folder / "pack.json").write_text("{}")
     runs = discover_date_bucket_runs(str(tmp_path / "*"), "sentiment", "pack")
     assert [r.run_id for r in runs] == ["pack:20260201", "pack:20260101"]
+
+
+from dashboard.output_runs import (
+    discover_runs, get_run, read_json_view, read_csv_table, build_file_view,
+    SUITE_LABELS,
+)
+
+
+def test_suite_labels_covers_all_five_keys():
+    assert set(SUITE_LABELS) == {'options', 'vol', 'var', 'sentiment', 'unified'}
+
+
+def test_discover_runs_combines_sources_and_detects_unified_siblings(tmp_path, monkeypatch):
+    orch = tmp_path / "orchestrator_output"
+    orch.mkdir()
+    run_dir = orch / "20260729T055306Z"
+    run_dir.mkdir()
+    (run_dir / "options_result.json").write_text(json.dumps(
+        {"suite": "options", "status": "ok", "ticker": "AAPL", "method": "CRR"}))
+    (run_dir / "var_result.json").write_text(json.dumps({"suite": "var", "status": "ok"}))
+
+    import dashboard.output_runs as output_runs_mod
+    monkeypatch.setattr(output_runs_mod, "ORCH_OUTPUT", str(orch))
+    monkeypatch.setattr(output_runs_mod, "SUITE_ROOTS", {
+        'options': str(tmp_path / "Options_Suite"),
+        'vol': str(tmp_path / "Vol_Suite"),
+        'var': str(tmp_path / "VaR_Tools_Simulations"),
+        'sentiment': str(tmp_path / "sentiment-scanner"),
+    })
+
+    runs = discover_runs('options')
+    assert len(runs) == 1
+    assert runs[0].run_id == "orch:20260729T055306Z"
+    assert runs[0].sibling_suites == ['var']
+
+
+def test_get_run_finds_a_run_by_id(tmp_path, monkeypatch):
+    orch = tmp_path / "orchestrator_output"
+    orch.mkdir()
+    run_dir = orch / "20260729T055306Z"
+    run_dir.mkdir()
+    (run_dir / "options_result.json").write_text(json.dumps(
+        {"suite": "options", "status": "ok", "ticker": "AAPL", "method": "CRR"}))
+
+    import dashboard.output_runs as output_runs_mod
+    monkeypatch.setattr(output_runs_mod, "ORCH_OUTPUT", str(orch))
+    monkeypatch.setattr(output_runs_mod, "SUITE_ROOTS", {
+        'options': str(tmp_path / "Options_Suite"), 'vol': str(tmp_path / "Vol_Suite"),
+        'var': str(tmp_path / "VaR_Tools_Simulations"),
+        'sentiment': str(tmp_path / "sentiment-scanner"),
+    })
+
+    run = get_run('options', 'orch:20260729T055306Z')
+    assert run is not None
+    assert run.run_id == 'orch:20260729T055306Z'
+    assert get_run('options', 'orch:nonexistent') is None
+
+
+def test_read_json_view_pairs_kind(tmp_path):
+    p = tmp_path / "options_result.json"
+    p.write_text(json.dumps({"ticker": "AAPL", "status": "ok"}))
+    view = read_json_view(str(p))
+    assert view['kind'] == 'pairs'
+    assert ('ticker', 'AAPL') in view['pairs']
+
+
+def test_read_csv_table_table_kind(tmp_path):
+    p = tmp_path / "data.csv"
+    p.write_text("a,b\n1,2\n3,4\n")
+    view = read_csv_table(str(p))
+    assert view['kind'] == 'table'
+    assert view['headers'] == ['a', 'b']
+    assert view['rows'] == [['1', '2'], ['3', '4']]
+
+
+def test_build_file_view_dispatches_by_kind(tmp_path):
+    json_file = RunFile(abs_path=str(tmp_path / "a.json"), rel_path="a.json",
+                        kind="json", size_bytes=2, modified=0.0)
+    (tmp_path / "a.json").write_text("{}")
+    csv_file = RunFile(abs_path=str(tmp_path / "b.csv"), rel_path="b.csv",
+                       kind="csv", size_bytes=2, modified=0.0)
+    (tmp_path / "b.csv").write_text("a\n1\n")
+    png_file = RunFile(abs_path=str(tmp_path / "c.png"), rel_path="c.png",
+                       kind="png", size_bytes=2, modified=0.0)
+    pdf_file = RunFile(abs_path=str(tmp_path / "d.pdf"), rel_path="d.pdf",
+                       kind="pdf", size_bytes=2, modified=0.0)
+    other_file = RunFile(abs_path=str(tmp_path / "e.txt"), rel_path="e.txt",
+                         kind="other", size_bytes=2, modified=0.0)
+
+    assert build_file_view(json_file)['kind'] == 'pairs'
+    assert build_file_view(csv_file)['kind'] == 'table'
+    assert build_file_view(png_file) == {'kind': 'image'}
+    assert build_file_view(pdf_file) == {'kind': 'pdf'}
+    assert build_file_view(other_file) == {'kind': 'download'}
