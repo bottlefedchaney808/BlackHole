@@ -1867,6 +1867,75 @@ async def tools_backtest_run(request: Request):
     })
 
 
+# Tools whose UI is just "pick a context, run" (plus, for whale-flow, two
+# optional numeric overrides) -- everything registered in Tools.registry
+# except options-strategy and backtesting, which have bespoke forms above
+# because their run() takes extra required/structured inputs.
+GENERIC_TOOL_SLUGS = {
+    'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
+    'liquidity-map', 'direction-signal',
+}
+
+
+@app.get('/tools/{slug}', response_class=HTMLResponse)
+def tools_generic_form(slug: str, request: Request):
+    if slug not in GENERIC_TOOL_SLUGS:
+        raise HTTPException(status_code=404, detail=f'no tool page for slug {slug!r}')
+    tool = get_tool(slug)
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_generic.html', {
+        'active': 'tools',
+        'tool': tool,
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+        'selected_path': '',
+        'min_premium': '',
+        'threshold_bps': '',
+        'result': None,
+        'result_json': None,
+        'error': None,
+    })
+
+
+@app.post('/tools/{slug}', response_class=HTMLResponse)
+async def tools_generic_run(slug: str, request: Request):
+    if slug not in GENERIC_TOOL_SLUGS:
+        raise HTTPException(status_code=404, detail=f'no tool page for slug {slug!r}')
+    tool = get_tool(slug)
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+
+    context_path = str(body.get('context_path') or '').strip()
+    min_premium = str(body.get('min_premium') or '').strip()
+    threshold_bps = str(body.get('threshold_bps') or '').strip()
+
+    context, error = _load_selected_context(context_path)
+    result = None
+    if context is not None:
+        if slug == 'whale-flow':
+            if min_premium:
+                context['min_premium'] = min_premium
+            if threshold_bps:
+                context['threshold_bps'] = threshold_bps
+        result, run_error = _run_tool_safe(slug, context)
+        if run_error:
+            error = run_error
+
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_generic.html', {
+        'active': 'tools',
+        'tool': tool,
+        'contexts': contexts,
+        'contexts_error': contexts_error,
+        'selected_path': context_path,
+        'min_premium': min_premium,
+        'threshold_bps': threshold_bps,
+        'result': result,
+        'result_json': result_json,
+        'error': error,
+    })
+
+
 # --------------------------------------------------------------------------
 # cross-source analytics endpoints
 # --------------------------------------------------------------------------

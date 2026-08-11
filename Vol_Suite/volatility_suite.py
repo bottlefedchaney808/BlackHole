@@ -1080,6 +1080,21 @@ def _run_core_analysis(
                 getattr(basket_stats, "dispersion_score", None))
         artifacts["basket"]["betas"] = _json_safe(
             dict(getattr(basket_stats, "individual_betas", {}) or {}))
+        # Realized annualized vol per basket ticker and the pairwise
+        # correlation matrix were computed here (compute_basket_stats) but
+        # previously only ever reached disk as a CSV/PNG artifact -- nothing
+        # downstream (VaR's context-mode) could read them, so every VaR run
+        # fell back to a flat 0.25 vol and an identity correlation matrix
+        # regardless of what this basket actually showed. Publish both in
+        # vol_result.json, keyed by the same tickers list already in the
+        # basket block, so the orchestrator can thread real numbers into
+        # VaR's context instead of leaving it to guess.
+        artifacts["basket"]["individual_vols"] = _json_safe(
+            dict(getattr(basket_stats, "individual_vols", {}) or {}))
+        corr_matrix = getattr(basket_stats, "correlation_matrix", None)
+        if corr_matrix is not None:
+            artifacts["basket"]["correlation_matrix"] = _json_safe(corr_matrix)
+            artifacts["basket"]["correlation_tickers"] = list(getattr(basket_stats, "tickers", tickers))
     except Exception as e:
         print(f"  Basket/correlation engine failed: {e}")
         _note_error("correlation_engine", e)

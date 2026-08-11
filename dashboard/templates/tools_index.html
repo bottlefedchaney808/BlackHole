@@ -49,7 +49,7 @@
             {% elif t.slug == 'backtesting' %}
               <a href="/tools/backtest">Open &rarr;</a>
             {% else %}
-              <span class="muted">--</span>
+              <a href="/tools/{{ t.slug }}">Open &rarr;</a>
             {% endif %}
           </td>
         </tr>

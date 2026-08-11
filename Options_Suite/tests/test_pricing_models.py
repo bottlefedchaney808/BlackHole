@@ -135,6 +135,49 @@ class TestVannaVolga:
             f"Positive RR: call vol {vol_call:.4f} should exceed put vol {vol_put:.4f}"
 
     @pytest.mark.unit
+    def test_rr_bf_symmetry_matches_their_definitions(self):
+        """Regression test for the RR/BF symmetry-swap bug (see get_vol's
+        own 'BUG FIX' comment): the old code flipped BF's sign between call
+        and put (should be SYMMETRIC) while keeping RR's sign the same on
+        both (should be ANTI-symmetric) -- the exact opposite of correct.
+        The existing test_get_vol_wing_separation ('positive RR -> call vol
+        > put vol') does NOT catch this: with bf25 > 0 the old buggy formula
+        also satisfies call > put, since BF's flipped contribution alone
+        determines the direction. This test instead re-derives the pillar
+        vols directly from get_auto_rr_bf's own docstring definitions:
+        RR25 = sigma_25C - sigma_25P, BF25 = (sigma_25C+sigma_25P)/2 - ATM.
+        """
+        from VannaVolga import get_vol
+
+        S, T, r, q = 100.0, 0.5, 0.05, 0.0
+        atm_vol, rr25, bf25 = 0.25, 7.0, 3.0
+
+        # Locate the exact 25-delta pillar strikes using get_vol's own
+        # internal formula (Step 2), fed with the pillar vols get_vol itself
+        # would compute (Step 1) -- at K == K_25C exactly, the inverse-
+        # distance interpolation weight on that pillar dominates by ~1e7x
+        # (the eps=1e-8 floor vs. the other pillars' finite log-strike
+        # distance), so get_vol(K_25C) recovers sigma_25C to ~1e-6 precision.
+        from scipy.stats import norm
+        sigma_25c_expected = atm_vol + bf25 / 100.0 + rr25 / 200.0
+        sigma_25p_expected = atm_vol + bf25 / 100.0 - rr25 / 200.0
+        F = S * math.exp((r - q) * T)
+        d1_put = -norm.ppf(0.25)
+        k_25p = F * math.exp(-d1_put * sigma_25p_expected * math.sqrt(T) + 0.5 * sigma_25p_expected**2 * T)
+        d1_call = norm.ppf(0.25)
+        k_25c = F * math.exp(-d1_call * sigma_25c_expected * math.sqrt(T) + 0.5 * sigma_25c_expected**2 * T)
+
+        vol_25c = get_vol(S, k_25c, T, r, q, atm_vol, rr25, bf25)
+        vol_25p = get_vol(S, k_25p, T, r, q, atm_vol, rr25, bf25)
+
+        assert (vol_25c - vol_25p) == pytest.approx(rr25 / 100.0, abs=1e-6), (
+            "sigma_25C - sigma_25P must equal rr25/100 (anti-symmetric RR)"
+        )
+        assert ((vol_25c + vol_25p) / 2 - atm_vol) == pytest.approx(bf25 / 100.0, abs=1e-6), (
+            "(sigma_25C + sigma_25P)/2 - ATM must equal bf25/100 (symmetric BF)"
+        )
+
+    @pytest.mark.unit
     def test_get_vol_batch_matches_scalar(self):
         """get_vol_batch should produce the same values as get_vol per-strike."""
         from VannaVolga import get_vol, get_vol_batch
@@ -211,4 +254,78 @@ class TestAmericanLSMPricer:
 
         with pytest.raises(ValueError, match="Option type"):
             AmericanLSMPricer(S=100.0, K=100.0, T=0.5, r=0.05, q=0.0,
-                              sigma=0.25, option='invalid')
+                              sigma=0.25, simulations=5000, steps=50, option='invalid')
+
+    @pytest.mark.unit
+    def test_mc_all_greeks_gamma_is_stable_and_positive_across_seeds(self):
+        """Regression test for the pre-CRN Greek-noise bug (see mc_all_greeks's
+        own docstring): raw bump-and-revalue with fresh randoms per pricing
+        gave gamma seed-to-seed noise so large it went NEGATIVE (-0.005, pure
+        noise, at dS=1%) and rho varied with std ~162 across seeds for
+        identical inputs. Common Random Numbers (the same pre-generated
+        Gaussian draws reused across every bumped pricing) should cancel that
+        noise. This doesn't re-derive an exact expected value (MC is
+        inherently stochastic) -- it instead locks in the qualitative
+        property CRN exists to guarantee: gamma stays positive and rho stays
+        tightly clustered across seeds, instead of flipping sign or swinging
+        wildly the way the pre-CRN implementation did."""
+        from MC import mc_all_greeks
+
+        S, K, T, r, q, sigma = 100.0, 100.0, 0.5, 0.05, 0.0, 0.25
+        gammas, rhos = [], []
+        for seed in (1, 2, 3):
+            g = mc_all_greeks(S, K, T, r, q, sigma, sims=8000, steps=50,
+                              option='put', seed=seed)
+            gammas.append(g['gamma'])
+            rhos.append(g['rho'])
+
+        assert all(gm > 0 for gm in gammas), (
+            f"gamma went non-positive across seeds {gammas} -- CRN cancellation "
+            f"may have regressed"
+        )
+        rho_spread = max(rhos) - min(rhos)
+        assert rho_spread < 5.0, (
+            f"rho spread {rho_spread} across seeds {rhos} is far wider than "
+            f"CRN-stabilized runs show -- historically this bug's spread was "
+            f"~162 (std) with fresh-random bump-and-revalue"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Heston pricer tests
+# ---------------------------------------------------------------------------
+
+class TestHestonEuropeanCallPrice:
+    """Regression coverage for the malformed-discriminant bug in
+    heston_european_call_price (see its own docstring): the previous
+    discriminant dropped both the xi^2 scaling and the u_j=+/-0.5 term that
+    distinguishes P1 from P2, so the pricer failed its most basic sanity
+    check -- as xi->0 (vol-of-vol vanishes) with theta=v0 (flat variance),
+    Heston must converge to Black-Scholes at sigma=sqrt(v0), but the broken
+    discriminant returned near-zero/negative values instead. Heston has zero
+    other test coverage in this suite (docs/PROJECT_AUDIT_AND_SPEC.md finding
+    #15), so this is the only thing currently locking the fix in."""
+
+    @pytest.mark.unit
+    def test_converges_to_black_scholes_as_vol_of_vol_vanishes(self):
+        from MCHestonLSM import heston_european_call_price
+
+        def bs_call(S, K, T, r, q, sigma):
+            d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+            d2 = d1 - sigma * math.sqrt(T)
+            n = lambda x: 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+            return S * math.exp(-q * T) * n(d1) - K * math.exp(-r * T) * n(d2)
+
+        S, K, T, r, q = 100.0, 100.0, 0.5, 0.03, 0.0
+        v0 = 0.04
+        sigma = math.sqrt(v0)
+        kappa, theta, rho, xi = 2.0, v0, 0.0, 1e-4
+
+        heston_price = heston_european_call_price(S, K, T, r, q, v0, kappa, theta, xi, rho)
+        bs_price = bs_call(S, K, T, r, q, sigma)
+
+        assert heston_price == pytest.approx(bs_price, abs=1e-4), (
+            f"Heston({heston_price}) should converge to BS({bs_price}) as "
+            f"xi->0 with theta=v0 -- a malformed discriminant would return "
+            f"near-zero/negative instead"
+        )

@@ -23,6 +23,20 @@ from typing import Any, Dict, Optional
 import MCHestonLSM
 import data_source_config
 
+# Load the root .env before checking credentials -- nothing else in this
+# file's import chain does it early enough (market_data's ThetaData client is
+# imported lazily, well after this check), so this check used to only pass
+# when the *caller's* process already had the vars set (e.g. orchestrator.py,
+# which never loads .env either). shared/ is only on sys.path when a caller
+# set PYTHONPATH to the repo root (orchestrator.py does; options_suite.bat
+# does not), so this is best-effort and silently no-ops otherwise -- same
+# behavior as before for a truly standalone launch.
+try:
+    from shared.config import load_env_once
+    load_env_once()
+except Exception:
+    pass
+
 # Check ThetaData credentials early, fail fast
 # ThetaData uses CF Access (Cloudflare) authentication
 CLIENT_ID = os.environ.get('THETADATA_CF_ACCESS_CLIENT_ID')
@@ -162,7 +176,7 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
             "suite": "options",
             "status": "error",
             "ticker": ticker,
-            "method": "CRR",
+            "method": None,
             "error": "Missing required context fields: " + ", ".join(missing),
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
@@ -175,28 +189,34 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
         S = market_data.fetch_spot_price(ticker)
         r = market_data.fetch_risk_free_rate()
         q = market_data.fetch_dividend_yield(ticker)
-        K = fields["strike"] if fields["strike"] is not None else round(float(S), 2)
+        if fields["strike"] is not None:
+            K = fields["strike"]
+        else:
+            # ATM default must land on an actually-listed strike, same as the
+            # interactive path's validate_strike -- round(spot, 2) almost never
+            # matches a real strike (listed in $0.50/$1 increments), which made
+            # every unset-strike context-mode run fail IV solve with "no usable
+            # market price" even though a nearby listed strike had one.
+            val_res = market_data.validate_strike(ticker, round(float(S), 2))
+            K = val_res["closest"]
 
         vol_manager = VolManager()
-        sigma = float(vol_manager.get_sigma(ticker, K, target_years, method="CRR", option_type=option_type))
+        sigma = float(vol_manager.get_sigma(ticker, K, target_years, method="LeisenReimer", option_type=option_type))
 
-        # CRR prices via its own Cox-Ross-Rubinstein tree -- not
-        # AmericanLSMPricer's generic Longstaff-Schwartz Monte Carlo. See the
-        # interactive choice=='1' path's own fix for the full reasoning: a
-        # constant-vol plain American option is exactly what a deterministic
-        # tree is for.
+        # Leisen-Reimer prices via its own binomial tree (better strike/step
+        # convergence than plain CRR for American options) -- not
+        # AmericanLSMPricer's generic Longstaff-Schwartz Monte Carlo.
         is_call = (option_type == 'call')
-        price = float(crr_american_price(S, K, target_years, r, sigma, q, is_call))
-        # Non-interactive/context-mode path uses CRR sigma, so Greeks come
-        # from crr_all_greeks (CRR's own tree engine) -- matches the
-        # interactive choice=='1' branch below.
-        greeks = {k: float(v) for k, v in crr_all_greeks(S, K, target_years, r, sigma, q, is_call).items()}
+        price = float(leisen_reimer_american_price(S, K, target_years, r, sigma, q, is_call))
+        # Non-interactive/context-mode path uses LR sigma, so Greeks come
+        # from lr_all_greeks (LR's own tree engine), not CRR's.
+        greeks = {k: float(v) for k, v in lr_all_greeks(S, K, target_years, r, sigma, q, is_call).items()}
 
         payload = {
             "suite": "options",
             "status": "ok",
             "ticker": ticker,
-            "method": "CRR",
+            "method": "LeisenReimer",
             "sigma": sigma,
             "price": price,
             "greeks": greeks,
@@ -210,7 +230,7 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
             "suite": "options",
             "status": "error",
             "ticker": ticker,
-            "method": "CRR",
+            "method": "LeisenReimer",
             "error": str(exc),
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }

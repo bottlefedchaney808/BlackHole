@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ tool.name }} -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<h1>{{ tool.name }}</h1>
+<p class="sub">
+  {{ tool.description }}
+  <a href="/tools">&larr; back to Tools</a>
+</p>
+
+{% if contexts_error %}<div class="errbox">{{ contexts_error }}</div>{% endif %}
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Run</h2></header>
+  <div class="body">
+    <form class="runform" method="post" action="/tools/{{ tool.slug }}">
+      <div class="field" style="min-width:340px;">
+        <label for="context_path">Context</label>
+        <select id="context_path" name="context_path" required>
+          <option value="" {{ 'selected' if not selected_path else '' }}>-- choose a context --</option>
+          {% for c in contexts if c.valid %}
+          <option value="{{ c.path }}" {{ 'selected' if c.path == selected_path else '' }}>
+            {{ c.ticker or '?' }} &middot; {{ c.suite }} &middot; {{ c.run_id }} &middot; {{ c.created_at_utc | ts }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% if tool.slug == 'whale-flow' %}
+      <div class="field">
+        <label for="min_premium">Min premium ($, optional)</label>
+        <input id="min_premium" name="min_premium" value="{{ min_premium }}" placeholder="25000" size="10" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="threshold_bps">Threshold (bps, optional)</label>
+        <input id="threshold_bps" name="threshold_bps" value="{{ threshold_bps }}" placeholder="premium-relative bar" size="14" autocomplete="off">
+      </div>
+      {% endif %}
+      <button type="submit">Run tool</button>
+    </form>
+  </div>
+</div>
+
+{% if result %}
+<div class="panel">
+  <header><h2>Result</h2></header>
+  <div class="body">
+    <pre class="json">{{ result_json }}</pre>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

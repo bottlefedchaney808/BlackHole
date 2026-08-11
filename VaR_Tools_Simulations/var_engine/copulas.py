@@ -69,7 +69,12 @@ def _uniform_to_returns(U, marginal_dfs, vols, dt):
         if df < 2 or df > 300:
             returns[:, j] = norm.ppf(U[:, j]) * vols[j] * np.sqrt(dt)
         else:
-            returns[:, j] = student_t.ppf(U[:, j], df=df) * vols[j] * np.sqrt(dt)
+            # A standard Student-T(df) has variance df/(df-2), not 1 -- must
+            # normalize to unit variance before scaling by the target vol, or
+            # every fat-tailed marginal (df ~3-6, the whole point of calibrating
+            # marginal_dfs) silently overstates vol/VaR by sqrt(df/(df-2)).
+            t_std = np.sqrt(df / (df - 2))
+            returns[:, j] = (student_t.ppf(U[:, j], df=df) / t_std) * vols[j] * np.sqrt(dt)
     return returns
 
 

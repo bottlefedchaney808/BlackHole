@@ -126,6 +126,29 @@ class TestCrrAllGreeks:
         assert 0.3 <= call_d <= 0.9, f"Call delta {call_d} out of range"
         assert -0.9 <= put_d <= -0.3, f"Put delta {put_d} out of range"
 
+    @pytest.mark.unit
+    def test_gamma_bump_width_is_wide_enough_to_avoid_oscillation_noise(self):
+        """Regression test for the dS_frac=1% -> 3% fix documented in
+        crr_all_greeks's own docstring: CRR's tree has oscillating (not
+        monotonic) convergence, so a 1%-of-spot bump landed the +/-dS prices
+        on differently-aligned tree lattices and the 2nd finite difference
+        picked that up as false signal -- gamma came out ~3x too small
+        (+0.00098) on the AMD 480 put case (2026-07-27 comparison report)
+        instead of the correct, LR/BS-matching +0.00295. Pins the case that
+        was actually measured, so a future change that narrows the bump back
+        down reintroduces a value this test would catch."""
+        from american_binomial import crr_all_greeks
+
+        greeks = crr_all_greeks(S=494.95, K=480.0, T=0.107, r=0.05,
+                                sigma=0.8131, q=0.0, cp=False, steps=401)
+        # Fixed value is ~0.00291-0.00295; the bug's value was ~0.00098 (3x
+        # smaller) -- a 15% tolerance around the fixed value comfortably
+        # excludes the old bug without pinning to unstable precision.
+        assert greeks["gamma"] == pytest.approx(0.00295, rel=0.15), (
+            f"CRR gamma {greeks['gamma']} suggests the bump width regressed "
+            f"back toward the old, too-narrow dS_frac"
+        )
+
 
 class TestCrrPriceBoundedByIntrinsic:
     """American option price must be at least the immediate exercise value."""

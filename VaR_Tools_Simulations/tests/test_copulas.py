@@ -202,4 +202,29 @@ class TestCopulaEdgeCases:
         U = _sample_gaussian(10_000, corr, rng)
         assert U.shape == (10_000, 1)
         assert U.min() >= 0.0
+
+    def test_student_t_marginal_matches_target_vol(self):
+        """Regression test: _uniform_to_returns used to scale a raw (unnormalized)
+        Student-T quantile by the target vol directly. A standard Student-T(df)
+        has variance df/(df-2), not 1, so a fat-tailed marginal (e.g. df=3, used
+        for realistic calibrated tails) silently overstated realized vol by
+        sqrt(df/(df-2)) -- ~1.73x at df=3. This checks the empirical stdev of
+        simulated one-day returns for a single fat-tailed asset actually matches
+        the requested annualized vol, not vol*sqrt(df/(df-2))."""
+        from var_engine.copulas import _uniform_to_returns
+
+        n_sims, df, target_vol, dt = 200_000, 3.0, 0.25, 1.0
+        rng = np.random.default_rng(7)
+        U = rng.uniform(1e-6, 1 - 1e-6, size=(n_sims, 1))
+        marginal_dfs = np.array([df])
+        vols = np.array([target_vol])
+
+        returns = _uniform_to_returns(U, marginal_dfs, vols, dt)
+        realized_vol = returns[:, 0].std()
+
+        assert realized_vol == pytest.approx(target_vol, rel=0.03), (
+            f"realized vol {realized_vol:.4f} should match target {target_vol} "
+            f"-- got {realized_vol / target_vol:.3f}x, suggesting the "
+            f"Student-T marginal isn't normalized to unit variance before scaling"
+        )
         assert U.max() <= 1.0

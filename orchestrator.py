@@ -224,6 +224,18 @@ def _import_suite_context():
     return suite_context
 
 
+def _import_volatility_suite():
+    """Import Vol_Suite/volatility_suite.py so basket resolution reuses the
+    same index-constituents logic the interactive flow uses (_resolve_basket),
+    instead of the orchestrator silently defaulting every run to a one-name
+    basket. Import-safe: main() only runs under __main__."""
+    vol_root = SUITE_ROOTS['vol']
+    if vol_root not in sys.path:
+        sys.path.insert(0, vol_root)
+    import volatility_suite  # noqa: E402  (path is set immediately above)
+    return volatility_suite
+
+
 def _iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
@@ -376,8 +388,33 @@ def build_context(focus: Dict[str, Any],
     if not ticker:
         raise ValueError("focus.ticker is required")
 
-    basket_tickers = list(focus.get('basket_tickers') or [ticker])
-    basket_weights = list(focus.get('basket_weights')
+    index_ticker = str(focus.get('index_ticker') or 'SPY').upper()
+    basket_tickers = focus.get('basket_tickers')
+    if not basket_tickers:
+        # Previously defaulted straight to [ticker] -- a permanently
+        # degenerate one-name "basket" with no correlation/dispersion
+        # possible, for every orchestrator/unified/dashboard run that didn't
+        # explicitly pass basket_tickers (nothing in the dashboard's trigger
+        # form does). Resolve real index peers the same way the interactive
+        # flow's _resolve_basket does, and only fall back to single-name if
+        # that resolution genuinely comes back empty (e.g. holdings sources
+        # unreachable).
+        basket_size = int(focus.get('basket_size') or 10)
+        try:
+            vs = _import_volatility_suite()
+            basket_tickers, resolved_weights = vs._resolve_basket(ticker, index_ticker, basket_size)
+            if not basket_tickers:
+                raise ValueError("basket resolution returned no names")
+        except Exception as exc:
+            print(f"WARNING: basket resolution against {index_ticker} failed ({exc}); "
+                  f"falling back to a single-name basket for {ticker}.")
+            basket_tickers = [ticker]
+            resolved_weights = None
+    else:
+        basket_tickers = list(basket_tickers)
+        resolved_weights = None
+
+    basket_weights = list(focus.get('basket_weights') or resolved_weights
                           or [1.0 / len(basket_tickers)] * len(basket_tickers))
 
     expiration = focus.get('expiration_date')
@@ -409,7 +446,7 @@ def build_context(focus: Dict[str, Any],
         strike=focus.get('strike'),
         target_years=float(target_years),
         expiration_date=str(expiration),
-        index_ticker=str(focus.get('index_ticker') or 'SPY').upper(),
+        index_ticker=index_ticker,
         basket_tickers=basket_tickers,
         basket_weights=basket_weights,
         sentiment_manifest_path=(focus.get('sentiment_manifest_path')
@@ -603,6 +640,13 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
     # out of charmap_decode partway through a Vol_Suite run.
     env['PYTHONIOENCODING'] = 'utf-8'
     env['PYTHONUTF8'] = '1'
+    # Vol_Suite's context mode skips the options chain scanner by default
+    # (it's the one step expensive enough to opt out of in a headless batch)
+    # unless VS_RUN_CHAIN_SCANNER is set. Orchestrator-driven runs -- unified
+    # or single-suite -- should always produce chain_strategies.json so
+    # Tools/tools/options_strategy_tool.py's cached mode has something to
+    # read; an operator can still override by exporting the var themselves.
+    env.setdefault('VS_RUN_CHAIN_SCANNER', '1')
 
     print(f"  [{name}] running {spec['entrypoint']} (timeout {timeout}s)... "
           f"output is captured, so this will look idle until it finishes.")
@@ -751,6 +795,44 @@ def _print_phase_header(phase_num: int, phase_name: str, description: str) -> No
     print("-" * 60)
 
 
+def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str, Any]) -> None:
+    """Vol_Suite computes a real per-ticker realized annualized vol and a
+    pairwise correlation matrix for the resolved basket (correlation_engine.py
+    ::compute_basket_stats) and now publishes both in vol_result.json's basket
+    block. Options/VaR are launched off the SAME context object built before
+    vol ran (see run_unified's docstring: "consume Vol_Suite's context"), so
+    without this mutation they never actually saw vol's numbers -- VaR's
+    context mode silently fell back to an identity correlation matrix and a
+    flat 0.25 annual vol for every basket ticker on every orchestrator run,
+    independent of what vol just measured for that exact basket.
+
+    Mutates `context` in place. Only injects data when the vol-side ticker
+    ordering matches the context's basket ordering exactly (or, for
+    volatilities, when every basket ticker has one) -- a mismatch usually
+    means a data fetch failure trimmed vol's ticker list, and silently
+    reindexing/subsetting a correlation matrix is worse than leaving VaR to
+    fall back to its own documented defaults.
+    """
+    basket_out = ((vol_result or {}).get('vol_surface') or {}).get('basket') or {}
+    ctx_tickers = list(context.get('basket', {}).get('tickers') or [])
+
+    corr_tickers = basket_out.get('correlation_tickers')
+    corr_matrix = basket_out.get('correlation_matrix')
+    if corr_tickers and corr_matrix and list(corr_tickers) == ctx_tickers:
+        context['basket']['correlation_matrix'] = corr_matrix
+    elif corr_matrix:
+        print(f"WARNING: vol's correlation ticker order {corr_tickers} doesn't match "
+              f"the basket {ctx_tickers}; not threading a correlation matrix into VaR.")
+
+    individual_vols = basket_out.get('individual_vols') or {}
+    if ctx_tickers and all(t in individual_vols for t in ctx_tickers):
+        context.setdefault('var', {})['volatilities'] = [float(individual_vols[t]) for t in ctx_tickers]
+    elif individual_vols:
+        missing = [t for t in ctx_tickers if t not in individual_vols]
+        print(f"WARNING: vol's individual_vols is missing {missing}; "
+              f"not threading volatilities into VaR.")
+
+
 def run_unified(focus: Dict[str, Any],
                 fail_on_suite_error: Optional[bool] = None,
                 validate: bool = True) -> Dict[str, Any]:
@@ -858,6 +940,8 @@ def run_unified(focus: Dict[str, Any],
                                    validate=validate)
         if 'error' in results['vol'] and fail_on_suite_error:
             aborted_by = 'vol'
+        elif 'error' not in results['vol']:
+            _thread_vol_stats_into_context(context, results['vol'])
 
     # ---- 3. Options_Suite + VaR_Tools_Simulations (consume Vol_Suite's context) ----
     if aborted_by:

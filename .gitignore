@@ -52,7 +52,11 @@ dtcc_data/
 swaps.db
 swaps.db-shm
 swaps.db-wal
+swaps.db.lock
 orchestrator_output/
 dashboard/dashboard_*.log
 Options_Suite/.claude/worktrees/
 .superpowers/
+
+# /improve slash command's scratch cache (written to $PWD, not a repo artifact)
+.improve-data/
