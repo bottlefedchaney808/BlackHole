@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 
 # ── Project root -----------------------------------------------------------
-# Resolves to /home/bottl/Financial_Development (i.e. Financial_Development/)
+# Resolves to the repo root (C:\Users\bottl\FinancialDevelopment on this host)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ── Credential env-var key constants ---------------------------------------

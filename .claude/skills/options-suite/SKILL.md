@@ -19,7 +19,7 @@ Headless/context mode: `python main.py --context PATH --context-out PATH`. Verif
 
 Gotcha (verified by running `python3 main.py --help` — it fails, does not print help): the ThetaData credential check (`THETADATA_CF_ACCESS_CLIENT_ID`/`THETADATA_CF_ACCESS_CLIENT_SECRET`) runs at **module import time**, before argparse even executes. Even `--help` exits with the credentials error if those env vars aren't set. Set them (or populate `.env`) before invoking `main.py` at all.
 
-Minor inconsistency: `options_suite.bat` calls `..\.venv\Scripts\python.exe` (repo-root venv), while `options_suite.sh` calls `Options_Suite/Financial_Dev_Env/bin/python3` (a suite-local venv name) — the two launchers don't point at the same venv location on paper; confirm which actually exists before assuming parity with the other suites' launchers.
+Minor inconsistency (resolved): `options_suite.bat` calls `..\.venv\Scripts\python.exe` (repo-root venv); `options_suite.sh` previously called a suite-local `Financial_Dev_Env/bin/python3` (WSL-era venv name) — both now use the shared root `.venv` (`../.venv/bin/python3` on POSIX).
 
 ## Dashboard / Tools relationship
 

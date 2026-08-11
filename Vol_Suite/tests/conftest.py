@@ -1,7 +1,7 @@
 """
 Pytest conftest for Vol_Suite tests.
 
-Adds the project root (/home/bottl/Financial_Development) to sys.path so that
+Adds the project root (C:/Users/bottl/FinancialDevelopment) to sys.path so that
 the shared/ package (shared.thetadata, etc.) is importable from tests that
 import modules re-exporting from it (e.g. thetadata_client).
 
