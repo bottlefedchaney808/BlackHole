@@ -267,3 +267,88 @@ def test_missing_schema_version_warns_and_defaults_to_v1_treatment():
     with pytest.raises(ValueError):
         with pytest.warns(UserWarning, match="schema_version"):
             validate_quant_summary(payload)
+
+
+# ── modules[].distributions (Task 11) ────────────────────────────────────
+
+def _distribution(**over):
+    """A minimal but schema-valid `modules[].distributions[]` entry."""
+    dist = {
+        "label": "mc_sim",
+        "unit": "price",
+        "bins": [{"low": 60.0, "high": 80.0, "count": 118}],
+        "percentiles": {"p5": 108.7, "p50": 194.2, "p95": 372.5},
+    }
+    dist.update(over)
+    return dist
+
+
+def _with_distributions(*dists):
+    return quant_summary_payload(modules=[module_entry(distributions=list(dists))])
+
+
+def _distribution_payload_with_unit(unit):
+    return _with_distributions(_distribution(unit=unit))
+
+
+@pytest.mark.unit
+def test_modules_entry_distributions_is_optional():
+    entry = module_entry()
+    assert "distributions" not in entry
+    validate_quant_summary(quant_summary_payload(modules=[entry]))
+
+
+@pytest.mark.unit
+def test_valid_distributions_pass():
+    validate_quant_summary(_with_distributions(_distribution()))
+
+
+@pytest.mark.unit
+def test_portfolio_value_unit_is_accepted():
+    validate_quant_summary(_distribution_payload_with_unit("portfolio_value"))
+
+
+@pytest.mark.unit
+def test_distributions_must_be_a_list():
+    entry = module_entry(distributions={"label": "mc_sim"})
+    with pytest.raises(ValueError, match="distributions"):
+        validate_quant_summary(quant_summary_payload(modules=[entry]))
+
+
+@pytest.mark.unit
+def test_distribution_entry_missing_label_fails():
+    dist = _distribution()
+    del dist["label"]
+    with pytest.raises(ValueError, match="label"):
+        validate_quant_summary(_with_distributions(dist))
+
+
+@pytest.mark.unit
+def test_distribution_entry_missing_bins_fails():
+    dist = _distribution()
+    del dist["bins"]
+    with pytest.raises(ValueError, match="bins"):
+        validate_quant_summary(_with_distributions(dist))
+
+
+@pytest.mark.unit
+def test_distribution_bins_must_be_a_list_of_objects():
+    with pytest.raises(ValueError, match="bins"):
+        validate_quant_summary(_with_distributions(_distribution(bins=["not a bin"])))
+
+
+@pytest.mark.unit
+def test_distribution_unit_enum_is_enforced():
+    # A bogus unit must not slip through: the renderer picks between
+    # "terminal price" and "terminal portfolio value" labelling from it, so an
+    # unrecognized value would silently mislabel corr_sim's chart.
+    with pytest.raises(ValueError, match="unit"):
+        validate_quant_summary(_distribution_payload_with_unit("dollars-ish"))
+
+
+@pytest.mark.unit
+def test_distribution_percentiles_must_be_an_object_of_numbers():
+    with pytest.raises(ValueError, match="percentiles"):
+        validate_quant_summary(
+            _with_distributions(_distribution(percentiles={"p50": "high-ish"}))
+        )

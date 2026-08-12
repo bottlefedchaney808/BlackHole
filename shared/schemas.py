@@ -617,6 +617,16 @@ QUANT_SUMMARY_MODULE_REQUIRED_KEYS = (
     "module", "status", "headline", "metrics", "warnings", "source_result",
 )
 
+#: Units a `modules[].distributions[]` histogram can be measured in.
+#: `price` = one ticker's terminal price (mc_sim / copula / price_dist);
+#: `portfolio_value` = corr_sim's terminal *portfolio* value, summed across up
+#: to three tickers' positions; `unknown` = the producing sim published a
+#: histogram without declaring `histogram_unit`. The dashboard labels its chart
+#: from this, so an unrecognized value is rejected rather than defaulted --
+#: silently reading corr_sim's bins as a price is exactly the mislabeling this
+#: field exists to prevent.
+QUANT_SUMMARY_DISTRIBUTION_UNITS = ("price", "portfolio_value", "unknown")
+
 
 def validate_quant_summary(data: Dict[str, Any]) -> None:
     """Validate a quant_summary.json payload produced by
@@ -669,3 +679,42 @@ def validate_quant_summary(data: Dict[str, Any]) -> None:
                  f"modules[{i}].warnings must be a list of strings")
         _require(isinstance(mod["source_result"], str),
                  f"modules[{i}].source_result must be a string")
+
+        # Optional: chartable terminal distributions lifted out of the market-
+        # signals bundle's sim payloads (shared/summary.py). Absent for every
+        # module that has no histogram to draw.
+        if "distributions" in mod:
+            _validate_quant_summary_distributions(mod["distributions"], i)
+
+
+def _validate_quant_summary_distributions(distributions: Any, i: int) -> None:
+    """Validate one `modules[i].distributions` list (optional key)."""
+    _require(isinstance(distributions, list),
+             f"modules[{i}].distributions must be a list")
+
+    for j, dist in enumerate(distributions):
+        where = f"modules[{i}].distributions[{j}]"
+        _require(isinstance(dist, dict), f"{where} must be an object")
+        for key in ("label", "bins"):
+            _require(key in dist, f"{where} missing required field: {key}")
+        _require(isinstance(dist["label"], str) and dist["label"].strip(),
+                 f"{where}.label must be a non-empty string")
+
+        _require(isinstance(dist["bins"], list), f"{where}.bins must be a list")
+        for k, bin_ in enumerate(dist["bins"]):
+            _require(isinstance(bin_, dict), f"{where}.bins[{k}] must be an object")
+            for key in ("low", "high", "count"):
+                _require(key in bin_ and _is_number(bin_[key]),
+                         f"{where}.bins[{k}].{key} must be numeric")
+
+        if "unit" in dist:
+            _require(dist["unit"] in QUANT_SUMMARY_DISTRIBUTION_UNITS,
+                     f"{where}.unit must be one of "
+                     f"{QUANT_SUMMARY_DISTRIBUTION_UNITS}, got {dist['unit']!r}")
+
+        if "percentiles" in dist:
+            pct = dist["percentiles"]
+            _require(isinstance(pct, dict), f"{where}.percentiles must be an object")
+            for key, value in pct.items():
+                _require(_is_number(value),
+                         f"{where}.percentiles.{key} must be numeric")

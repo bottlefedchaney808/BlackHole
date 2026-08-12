@@ -345,6 +345,183 @@ class TestExtractSentimentMarketSignalsBundle:
         assert entry["status"] == "degraded"
 
 
+class TestExtractSentimentBundleDistributions:
+    """Task 11: the sim builders' `terminal_price_histogram` (Task 8) is
+    array-shaped, so it never reaches `metrics`; it is surfaced instead as a
+    `distributions[]` list the dashboard renders as a bar chart."""
+
+    def test_histograms_become_distributions_with_percentiles(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        dists = {d["label"]: d for d in entry["distributions"]}
+        assert set(dists) == {"mc_sim", "copula"}
+
+        mc = dists["mc_sim"]
+        assert mc["bins"] == [
+            {"low": 60.0, "high": 80.0, "count": 118},
+            {"low": 80.0, "high": 100.0, "count": 642},
+        ]
+        assert mc["percentiles"] == {"p5": 108.7, "p50": 194.2, "p95": 372.5}
+
+    def test_price_histograms_are_labelled_with_their_unit(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        assert all(d["unit"] == "price" for d in entry["distributions"])
+
+    def test_corr_sim_histogram_keeps_its_portfolio_value_unit(self):
+        # corr_sim sums positions across up to three tickers, so its bins are
+        # terminal *portfolio values*, not one ticker's price -- the unit must
+        # survive into the module entry so the renderer cannot mislabel it.
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {
+                    "corr_sim": {
+                        "portfolio_value": 500.0,
+                        "terminal_price_histogram": [
+                            {"low": 400.0, "high": 500.0, "count": 12}
+                        ],
+                        "histogram_unit": "portfolio_value",
+                    }
+                },
+            }
+        )
+        (dist,) = entry["distributions"]
+        assert dist["label"] == "corr_sim"
+        assert dist["unit"] == "portfolio_value"
+
+    def test_missing_histogram_unit_is_reported_as_unknown_not_price(self):
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {
+                    "mystery": {
+                        "terminal_price_histogram": [
+                            {"low": 1.0, "high": 2.0, "count": 3}
+                        ]
+                    }
+                },
+            }
+        )
+        assert entry["distributions"][0]["unit"] == "unknown"
+
+    def test_median_falls_back_to_mean_when_absent(self):
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {
+                    "mc_sim": {
+                        "terminal_price_mean": 210.0,
+                        "terminal_price_histogram": [
+                            {"low": 1.0, "high": 2.0, "count": 3}
+                        ],
+                        "histogram_unit": "price",
+                    }
+                },
+            }
+        )
+        assert entry["distributions"][0]["percentiles"]["p50"] == pytest.approx(210.0)
+
+    def test_percentiles_are_omitted_rather_than_faked_when_unavailable(self):
+        # corr_sim / price_dist publish a histogram but no terminal_price_p*
+        # fields -- an absent percentile must not be invented from the bins.
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {
+                    "corr_sim": {
+                        "terminal_price_histogram": [
+                            {"low": 1.0, "high": 2.0, "count": 3}
+                        ],
+                        "histogram_unit": "portfolio_value",
+                    }
+                },
+            }
+        )
+        assert entry["distributions"][0]["percentiles"] == {}
+
+    def test_sims_without_a_histogram_contribute_no_distribution(self):
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {"mc_sim": {"terminal_price_mean": 210.0}},
+            }
+        )
+        assert entry["distributions"] == []
+
+    def test_failed_sim_contributes_no_distribution(self):
+        entry = _extract_sentiment(
+            {
+                "status": "partial",
+                "scanners": {},
+                "simulations": {
+                    "corr_sim": {
+                        "error": "no peers",
+                        "terminal_price_histogram": [
+                            {"low": 1.0, "high": 2.0, "count": 3}
+                        ],
+                    }
+                },
+            }
+        )
+        assert entry["distributions"] == []
+
+    def test_malformed_bins_are_dropped_without_raising(self):
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {
+                    "mc_sim": {
+                        "terminal_price_histogram": [
+                            {"low": 1.0, "high": 2.0, "count": 3},
+                            "not a bin",
+                            {"low": None, "high": 4.0, "count": 5},
+                        ],
+                        "histogram_unit": "price",
+                    },
+                    "copula": {"terminal_price_histogram": "not a list"},
+                },
+            }
+        )
+        (dist,) = entry["distributions"]
+        assert dist["label"] == "mc_sim"
+        assert dist["bins"] == [{"low": 1.0, "high": 2.0, "count": 3}]
+
+    def test_distributions_key_is_present_even_when_empty(self):
+        entry = _extract_sentiment(
+            {"status": "ok", "scanners": {}, "simulations": {}}
+        )
+        assert entry["distributions"] == []
+
+    def test_error_bundle_entry_also_carries_a_distributions_key(self):
+        entry = _extract_sentiment(
+            {
+                "status": "error",
+                "scanners": {},
+                "simulations": {},
+                "errors": ["boom"],
+            }
+        )
+        assert entry["status"] == "error"
+        assert entry["distributions"] == []
+
+    def test_bundle_entry_with_distributions_is_schema_valid(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        validate_quant_summary(
+            {
+                "schema_version": 1,
+                "run_id": "run-1",
+                "ticker": "NVDA",
+                "created_at_utc": "2026-08-12T00:00:00Z",
+                "modules": [entry],
+            }
+        )
+
+
 # ── build_run_summary ────────────────────────────────────────────────────
 
 

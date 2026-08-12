@@ -350,11 +350,78 @@ def _bundle_metric_key(prefix: str, field: str) -> str:
     return f"{prefix}_{field}"
 
 
+#: `histogram_unit` values the sim builders emit, mirrored by
+#: `shared.schemas`'s `distributions[].unit` check. corr_sim's bins are terminal
+#: *portfolio values* summed across up to three tickers' positions, not one
+#: ticker's price, so the renderer must be able to tell them apart.
+_HISTOGRAM_UNITS = ("price", "portfolio_value")
+
+#: Used when a sim publishes a histogram without declaring its unit. Guessing
+#: `"price"` here is exactly the mislabeling `histogram_unit` exists to prevent,
+#: so the renderer is told the unit is unknown and drops the unit wording.
+_UNKNOWN_HISTOGRAM_UNIT = "unknown"
+
+
+def _histogram_bins(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The `terminal_price_histogram` bins of one sim payload, keeping only
+    well-formed `{low, high, count}` entries. A malformed bin is dropped rather
+    than raised on: a bad chart row must not cost the whole run its summary."""
+    raw = payload.get("terminal_price_histogram")
+    if not isinstance(raw, list):
+        return []
+    bins: List[Dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        values = [entry.get(k) for k in ("low", "high", "count")]
+        if any(v is None or isinstance(v, bool) or not isinstance(v, (int, float))
+               for v in values):
+            continue
+        bins.append({"low": entry["low"], "high": entry["high"], "count": entry["count"]})
+    return bins
+
+
+def _histogram_percentiles(payload: Dict[str, Any]) -> Dict[str, float]:
+    """The sim's own p5/median/p95, when it publishes them. corr_sim and
+    price_dist publish a histogram but no `terminal_price_p*` fields, so those
+    keys are simply omitted -- interpolating them out of the coarse bins would
+    invent precision the source data does not have."""
+    median = payload.get("terminal_price_median")
+    if not isinstance(median, (int, float)) or isinstance(median, bool):
+        median = payload.get("terminal_price_mean")
+    candidates = {
+        "p5": payload.get("terminal_price_p5"),
+        "p50": median,
+        "p95": payload.get("terminal_price_p95"),
+    }
+    return {
+        key: value
+        for key, value in candidates.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+
+
+def _bundle_distribution(name: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """One `distributions[]` entry from a successful sim payload, or None when
+    it carries no usable histogram."""
+    bins = _histogram_bins(payload)
+    if not bins:
+        return None
+    unit = payload.get("histogram_unit")
+    return {
+        "label": name,
+        "unit": unit if unit in _HISTOGRAM_UNITS else _UNKNOWN_HISTOGRAM_UNIT,
+        "bins": bins,
+        "percentiles": _histogram_percentiles(payload),
+    }
+
+
 def _flatten_bundle_section(
     section: Dict[str, Any],
     kind: str,
     metrics: Dict[str, Any],
     warnings: List[str],
+    distributions: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """Flatten one scanner/simulation map into *metrics*; return the ok count.
 
@@ -364,6 +431,10 @@ def _flatten_bundle_section(
     `pain_profile`/`top_strikes`/`rich_strikes` from the scanners) stays in the
     source result, where a chart renderer can reach it, rather than being
     stringified into a metrics row.
+
+    When *distributions* is supplied (the simulations pass), each successful
+    payload's `terminal_price_histogram` is additionally lifted into it as a
+    chartable `distributions[]` entry.
     """
     ok_count = 0
     for name, payload in section.items():
@@ -378,6 +449,10 @@ def _flatten_bundle_section(
             warnings.append(f"{name} {kind} failed: {failure}")
             continue
         ok_count += 1
+        if distributions is not None:
+            dist = _bundle_distribution(name, payload)
+            if dist is not None:
+                distributions.append(dist)
         for key, value in payload.items():
             if key in _BUNDLE_NON_METRIC_KEYS:
                 continue
@@ -411,9 +486,12 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
 
     metrics: Dict[str, Any] = {}
     warnings: List[str] = []
+    distributions: List[Dict[str, Any]] = []
 
     ok_scanners = _flatten_bundle_section(scanners, "scanner", metrics, warnings)
-    ok_sims = _flatten_bundle_section(simulations, "sim", metrics, warnings)
+    ok_sims = _flatten_bundle_section(
+        simulations, "sim", metrics, warnings, distributions=distributions
+    )
 
     direction = result.get("direction")
     direction_summary = ""
@@ -460,6 +538,7 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
             "headline": detail,
             "metrics": metrics,
             "warnings": warnings,
+            "distributions": distributions,
             "source_result": "",
         }
 
@@ -490,6 +569,7 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
         "headline": headline,
         "metrics": metrics,
         "warnings": warnings,
+        "distributions": distributions,
         "source_result": "",
     }
 
