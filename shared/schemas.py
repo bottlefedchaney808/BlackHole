@@ -547,6 +547,12 @@ def validate_vol_result(data: Dict[str, Any]) -> None:
     _require(vol_surface.get("vol_spread_pts") is None
              or _is_number(vol_surface["vol_spread_pts"]),
              "vol_surface.vol_spread_pts must be numeric or null")
+    # Optional -- absent on runs where GARCH was skipped or failed. Present
+    # means shared/summary.py copies it straight into quant_summary.json's
+    # metrics, so a non-numeric value here would poison that artifact.
+    _require(vol_surface.get("garch_conditional_vol") is None
+             or _is_number(vol_surface["garch_conditional_vol"]),
+             "vol_surface.garch_conditional_vol must be numeric or null")
 
     basket = vol_surface["basket"]
     _require(isinstance(basket, dict), "vol_surface.basket must be an object")

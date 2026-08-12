@@ -44,10 +44,16 @@ def test_run_garch_module_vol_is_none_on_failure(monkeypatch, tmp_path):
         raise RuntimeError("fit failed")
 
     monkeypatch.setattr(ga, "run_garch_analysis", _raise)
-    files, interp, vol = ga.run_garch_module("AAPL", output_dir=str(tmp_path))
+    result = ga.run_garch_module("AAPL", output_dir=str(tmp_path))
+    files, interp, vol = result
     assert vol is None
     assert files == []
     assert "failed" in interp
+    # The exception is reported out-of-band so the caller can record it in
+    # vol_result.json's `errors` -- a swallowed fit that leaves no trace is
+    # exactly the regression this guards.
+    assert isinstance(result.error, RuntimeError)
+    assert "fit failed" in str(result.error)
 
 
 @pytest.mark.unit
@@ -59,6 +65,10 @@ def test_run_garch_module_vol_is_none_when_series_empty(monkeypatch, tmp_path):
     res.conditional_volatility = pd.Series(dtype=float)
     monkeypatch.setattr(ga, "run_garch_analysis",
                         lambda ticker, start=None, end=None: res)
-    _files, interp, vol = ga.run_garch_module("AAPL", output_dir=str(tmp_path))
+    result = ga.run_garch_module("AAPL", output_dir=str(tmp_path))
+    _files, interp, vol = result
     assert vol is None
     assert "GARCH(1,1) params" in interp
+    # Succeeded -- vol is None only because the series was empty. `error`
+    # must stay None or the caller would log a phantom module failure.
+    assert result.error is None

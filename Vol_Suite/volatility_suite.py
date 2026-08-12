@@ -1198,12 +1198,22 @@ def _run_core_analysis(
     garch_conditional_vol = None
     try:
         import garch_analysis as ga
-        files, interp, garch_conditional_vol = ga.run_garch_module(ticker, output_dir=out_root)
+        garch_result = ga.run_garch_module(ticker, output_dir=out_root)
+        files, interp, garch_conditional_vol = garch_result
         produced.extend(files)
         sections.append({
             "title": f"GARCH Analysis: {ticker}", "text": interp or "",
             "images": [f for f in files if f.lower().endswith('.png')]
         })
+        # run_garch_module swallows a failing fit so one dead module does not
+        # cost us dealer positioning, and reports it out-of-band via .error.
+        # Without this check the failure would leave no machine-readable trace
+        # and garch_ran would claim a clean run. Note a *successful* fit can
+        # still legitimately yield garch_conditional_vol=None (empty vol
+        # series), so .error -- not the None -- is the failure signal.
+        garch_error = getattr(garch_result, "error", None)
+        if garch_error is not None:
+            raise garch_error
         artifacts["garch_ran"] = True
     except Exception as e:
         print(f"  GARCH failed: {e}")

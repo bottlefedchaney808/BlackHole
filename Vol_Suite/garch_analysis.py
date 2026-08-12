@@ -323,17 +323,44 @@ def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None)
     return res
 
 
+class GarchModuleResult(tuple):
+    """The 3-tuple ``run_garch_module`` returns, plus an out-of-band ``error``.
+
+    Unpacks exactly like the documented
+    ``(output_files, interpretation_text, annualized_conditional_vol)`` contract,
+    so every existing call site is unaffected. The extra ``.error`` attribute
+    exists because the wrapper deliberately swallows a failing fit (so one dead
+    GARCH run does not cost the caller its other modules) -- without it, callers
+    could not distinguish "fit raised" from "fit succeeded but the conditional
+    volatility series was empty", both of which yield a ``None`` third element.
+    Callers that record machine-readable failures (volatility_suite.py's
+    ``artifacts["errors"]``) read ``.error``; everyone else ignores it.
+    """
+
+    # No __slots__: CPython rejects a non-empty __slots__ on a subtype of a
+    # variable-length builtin like tuple.
+
+    def __new__(cls, files, interp, conditional_vol, error=None):
+        obj = super().__new__(cls, (files, interp, conditional_vol))
+        obj.error = error
+        return obj
+
+
 def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, output_dir: str = None) -> tuple:
     """Wrapper that sets VS_OUTPUT_DIR and runs run_garch_analysis.
 
-    Returns ``(output_files, interpretation_text, annualized_conditional_vol)``.
+    Returns ``(output_files, interpretation_text, annualized_conditional_vol)``
+    -- concretely a :class:`GarchModuleResult`, which is that tuple plus an
+    ``.error`` attribute holding the exception when the fit raised (``None``
+    otherwise).
 
     The third element is the *current* GARCH conditional volatility, annualized
     and expressed as a decimal fraction (0.31 == 31%). It used to exist only as
     a console print inside run_garch_analysis, which meant every downstream
     consumer -- notably the VaR Monte Carlo -- had to re-fit the model or fall
     back to a hardcoded guess. It is ``None`` when the fit failed or the result
-    object carried no conditional volatility series.
+    object carried no conditional volatility series -- check ``.error`` to tell
+    those two apart.
     """
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
@@ -342,7 +369,8 @@ def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, o
         res = run_garch_analysis(ticker, start=start, end=end)
     except Exception as e:
         print(f"  GARCH module failed: {e}")
-        return [], f"Ticker: {ticker} - GARCH analysis failed: {e}", None
+        return GarchModuleResult(
+            [], f"Ticker: {ticker} - GARCH analysis failed: {e}", None, error=e)
 
     # Collect files generated for this ticker in out_dir
     files = []
@@ -356,8 +384,12 @@ def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, o
     try:
         daily_vol_pct = float(res.conditional_volatility.iloc[-1])
         garch_conditional_vol = daily_vol_pct / 100.0 * np.sqrt(ANNUALIZE)
-    except Exception:
-        pass
+    except Exception as e:
+        # Not a module failure -- the fit converged, only the vol extraction
+        # did not. Print it anyway; every other failure path in this module
+        # prints, and a silent None here is indistinguishable from a
+        # deliberately absent value downstream.
+        print(f"  Warning: conditional volatility extraction failed: {e}")
 
     # Build interpretation text
     try:
@@ -375,7 +407,7 @@ def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, o
     except Exception:
         interp_lines = [f"Ticker: {ticker} - GARCH analysis completed."]
     interp = "\n".join(interp_lines)
-    return files, interp, garch_conditional_vol
+    return GarchModuleResult(files, interp, garch_conditional_vol)
 
 
 def main():
