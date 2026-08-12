@@ -1,17 +1,26 @@
 import numpy as np
 from typing import Optional, Tuple
-from market_data import MarketDataController
+try:
+    from .market_data import MarketDataController
+except ImportError:
+    from market_data import MarketDataController
 from scipy.integrate import quad
 from scipy.optimize import minimize
 from scipy.stats import norm
-from NewtonRaphsonIV import implied_volatility_nr, black_scholes_func
+try:
+    from .NewtonRaphsonIV import implied_volatility_nr, black_scholes_func
+except ImportError:
+    from NewtonRaphsonIV import implied_volatility_nr, black_scholes_func
 # Reuse MC.py's GPU/CPU array-backend detection (xp = cupy if a real, working
 # CUDA device is present, else numpy -- see that module's docstring for the
 # "cheap real op, not just an import check" verification) rather than
 # duplicating it. Before this, every array op in this file was hardcoded to
 # `np.`, so the Heston path simulation below never ran on GPU even when
 # cupy/CUDA were available and MC.py's own GBM simulation was using them.
-from MC import xp, GPU_ACTIVE, _to_scalar
+try:
+    from .MC import xp, GPU_ACTIVE, _to_scalar
+except ImportError:
+    from MC import xp, GPU_ACTIVE, _to_scalar
 import time
 
 
@@ -307,7 +316,10 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     sizes; the price returned in the report still uses the full
     heston_lsm_price with production sims/steps.
     """
-    from american_binomial import _bs_rho
+    try:
+        from .american_binomial import _bs_rho
+    except ImportError:
+        from american_binomial import _bs_rho
 
     is_call = (option == 'call')
     sigma_eff = float(np.sqrt(max(V0, 1e-9)))

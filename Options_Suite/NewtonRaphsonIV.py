@@ -1,6 +1,9 @@
 import numpy as np
 from scipy.stats import norm
-from barone_adesi_whaley import baw_american_price
+try:
+    from .barone_adesi_whaley import baw_american_price
+except ImportError:
+    from barone_adesi_whaley import baw_american_price
 
 def black_scholes_func(S, K, T, r, sigma, cp, q=0.0):
     """

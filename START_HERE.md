@@ -25,6 +25,7 @@ else needs its own `.env` anymore.
 | **DTCC backfill** | `python backfill.py` | One-time (or re-run anytime): pulls the full available history for SEC + CFTC equity swaps. Real volume is large (roughly 1.5M rows/day for SEC alone) — expect this to run for hours the first time. Safe to interrupt and re-run; it resumes where it left off. |
 | **Orchestrator** | `orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16` | Runs sentiment-scanner → Vol_Suite → Options_Suite + VaR_Tools_Simulations in dependency order, or a single suite with `--suite options\|vol\|var\|sentiment`. Also reachable from the dashboard's "Trigger a run" panel. |
 | **Individual suites** | `Options_Suite\options_suite.bat`, `Vol_Suite\vol_suite.bat`, `VaR_Tools_Simulations\var.bat`, `sentiment-scanner\sentiment.bat` | Run any suite standalone and interactively, same as before — they now share the one root `.venv` instead of their own. |
+| **Backtest tournament** | `.venv\Scripts\python.exe Backtests\main.py --harness all --ticker SPY,QQQ --lookback-days 1` | Runs the transferred standalone Backtests package for pricing, greeks, and signal evaluation. Writes text/JSON artifacts to `Backtests\outputs\` and keeps existing `Vol_Suite` backtests separate. |
 
 ## Query swap data directly
 
@@ -53,6 +54,15 @@ straight from DTCC's public API — no manual downloads).
    (can also be kicked off and left running unattended).
 4. Trigger orchestrator runs from the dashboard, or `orchestrator.bat`
    directly, whenever you want a cross-suite analysis for a ticker.
+
+
+## Workflow helpers
+
+Run these from Git Bash at the repo root when you need a quick workflow check:
+
+- `bash scripts/burst_checkpoint.sh vol` - prints `git diff --stat` and runs the narrow Vol_Suite checkpoint slice before another burst of changes.
+- `git config core.hooksPath scripts/hooks` - installs `scripts/hooks/commit-msg`, which enforces the repo's commit-subject policy on each commit.
+- `bash scripts/verify_tradingview_submodule.sh` - verifies the `tradingview-mcp` checkout (gitlink when configured, source entrypoint always) and treats the live Hermes/CDP probe as informational on this Windows repo.
 
 ## Sharing the dashboard publicly
 

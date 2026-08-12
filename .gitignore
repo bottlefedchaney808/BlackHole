@@ -14,6 +14,11 @@ venv/
 .vs/
 .claude/worktrees/
 
+# Node (tradingview-mcp is flattened into root, not a submodule)
+node_modules/
+tradingview-mcp/node_modules/
+tradingview-mcp/screenshots/
+
 # Caches
 .cache/
 .shared_cache/
@@ -30,6 +35,7 @@ venv/
 comparison_*.csv
 comparison_*.pdf
 outputs/
+Backtests/outputs/
 *_hedging_heatmap_*.png
 *_variance_swap_plots_*.png
 *_garch_*.png

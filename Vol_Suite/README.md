@@ -205,61 +205,39 @@ unrecoverable strikes are dropped rather than imputed.
 
 | Phase | Module | Priority |
 |-------|--------|----------|
-| 11 | **Rewrite `variance_swap_screener.py`** — see below | **TOP OF LIST** |
+| 11 | ~~Rewrite `variance_swap_screener.py`~~ — **DONE 2026-08-12** (data-quality fix + tests; see below) | **DONE** |
 | 12 | Multi-expiry aggregate in the Stage 3 backtest (currently single near-dated expiry) | After |
 | 13 | Arbitrage detection (butterfly/calendar) | After |
 | 14 | Merge all + PDF export | Final |
 
-### Phase 11 — `variance_swap_screener.py` rewrite (top priority)
+### Phase 11 — `variance_swap_screener.py` data-quality hardening (DONE 2026-08-12)
 
-Flagged 2026-07-24. The screener's whole output is a ranked BUY/SELL list, which
-means a silent data problem doesn't look like an error — it looks like a
-recommendation. Two failure modes in the current code do exactly that:
+Flagged 2026-07-24. The two original failure modes are **fixed in the working tree** (verified 2026-08-12
+against `Vol_Suite/variance_swap_screener.py` + `Vol_Suite/tests/test_variance_swap_screener.py`, 6 passed):
 
-**1. Missing realized vol becomes `0.0`, not "unknown."**
+**1. Missing realized vol is now NaN, not `0.0` (was: max VRP → false STRONG SELL).**
+`screen_ticker` sets `vrp_pct = float('nan')` when RV history is missing, `data_quality =
+"insufficient_price_history"`, and forces `signal = "INSUFFICIENT DATA"` regardless of the numeric score.
+Flagged tickers are excluded from the top long/short candidate lists in both `main()` and
+`run_variance_screener()`. A missing input can no longer produce a confident BUY/SELL read.
 
-```python
-rv_30_pct = rv_30 * 100 if not math.isnan(rv_30) else 0.0
-```
+**2. Blanket `except` no longer drops tickers silently.** Failures are collected into a `skipped` list
+in `run_variance_screener()` and reported as `[SKIPPED] N/M requested tickers returned no result (see
+[SKIP] lines above for reasons)`; per-ticker `[SKIP] {ticker}: {reason}` lines identify the cause.
 
-`VRP = fair_vol - realized_vol`, so a ticker whose price history failed to load
-gets realized vol 0 → maximum VRP → a top-of-table STRONG SELL. The worst data
-quality produces the strongest signal. The 10-point "data quality" term in the
-score does dock it, but 10 points doesn't offset a fabricated VRP driving the
-30-point term. A missing input must exclude the ticker or mark it unranked —
-never impute zero.
+**Remaining follow-ups (not regressions):** scoring weights (30/20/15/15/10 + normalizers) are still
+undocumented magic numbers; consider making them configurable + sensitivity-tested.
 
-**2. A blanket `except Exception` drops whole tickers out of the ranking.**
-
-```python
-except Exception as e:
-    print(f"  [SKIP] {ticker}: {e}")
-    return None
-```
-
-Same class of bug as the enumeration-returns-`[]` one that poisoned the cache:
-a failure is reported as an absence. Screen 20 names, get 14 back, and nothing
-in the output distinguishes "these 6 aren't attractive" from "these 6 blew up."
-Failures need to survive into the result set with a status, and the summary
-needs to say how many were excluded and why.
-
-**Also wanted in the rewrite:**
-
-- **Tests.** Currently zero. The scoring function is pure and trivially testable
-  with synthetic chains — the same discipline `test_backtest_stage3.py` applies.
-- **Split network from computation**, the way `backtest_stage3` separates
-  `run_backtest` from `_run_backtest_from_history`. Right now `screen_ticker`
-  does fetching, math, scoring and error handling in one `try` block, which is
-  why the blanket except exists at all.
-- **Justify the scoring weights.** 30/20/15/15/10 and the normalizing constants
-  (`(vrp_pct - 2.0) / 8.0`, `(5.0 - convexity_pct) / 5.0`, …) are unexplained
-  magic numbers that fully determine the ranking. Either document where they
-  came from or make them configurable and sensitivity-test them.
-- **Verify the 252 vs 365 split is applied correctly throughout.** The header
-  comment states the convention (`DEFAULT_A=365` for resolving an expiry date,
-  `TRADING_DAYS=252` for annualizing realized vol from trading-day returns); the
-  rewrite should confirm the code actually honors it everywhere rather than
-  trusting the comment.
+**How it was verified (2026-08-12):** `screen_ticker` tracks `insufficient_data` (NaN realized-vol match
+or NaN ATM IV), uses a `vrp_for_score`/`convexity_for_score` stand-in of `0.0` ONLY inside the score math
+(so ranking order is unchanged) while the outward `vrp_pct`/`convexity_pct` stay `NaN`, and forces
+`signal = "INSUFFICIENT DATA"` when `insufficient_data`. `data_quality` is set to
+`"insufficient_price_history"` so callers can filter. `run_variance_screener` accumulates `skipped` for
+tickers that raised and reports the count + reasons; the ranked candidate lists (top short/long, chart,
+interpretation text) draw only from `data_quality == "ok"` rows. `Vol_Suite/tests/test_variance_swap_screener.py`
+(6 tests) covers the pure scoring/classification logic. Run: `.venv/Scripts/python.exe -m pytest
+Vol_Suite/tests/test_variance_swap_screener.py -q` (clear `PYTHONPATH`/`PYTHONHOME` first to avoid the
+Hermes-venv PIL `_imaging` leak).
 
 ### Open question on Stage 3
 

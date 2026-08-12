@@ -1,7 +1,10 @@
 import numpy as np
 from datetime import datetime
 from scipy.stats import norm
-from MC import AmericanLSMPricer
+try:
+    from .MC import AmericanLSMPricer
+except ImportError:
+    from MC import AmericanLSMPricer
 
 try:
     from thetadata_controller import ThetaDataController
@@ -310,7 +313,10 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
     POINTS like 7.0 = 7 vol pts). This is the same market read
     get_auto_rr_bf provides, passed through main.py's VannaVolga branch.
     """
-    from american_binomial import leisen_reimer_american_price, _bs_rho
+    try:
+        from .american_binomial import leisen_reimer_american_price, _bs_rho
+    except ImportError:
+        from american_binomial import leisen_reimer_american_price, _bs_rho
 
     def smile_sigma(S_, T_, r_, atm_vol_=None, freeze_pillars=False):
         av = atm_vol if atm_vol_ is None else atm_vol_

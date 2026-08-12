@@ -201,7 +201,10 @@ def baw_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=None):
     closed form. This keeps every reported Greek attributable to BAW's
     own early-exercise boundary, not a European approximation of it.
     """
-    from american_binomial import _bs_rho
+    try:
+        from .american_binomial import _bs_rho
+    except ImportError:
+        from american_binomial import _bs_rho
 
     if T <= 0 or sigma <= 1e-6:
         return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,

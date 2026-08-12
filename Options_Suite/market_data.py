@@ -20,7 +20,10 @@ deliberately not in this path anymore.
 import logging
 from typing import Dict, Optional, Union
 
-import data_source_config
+try:
+    from . import data_source_config
+except ImportError:
+    import data_source_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

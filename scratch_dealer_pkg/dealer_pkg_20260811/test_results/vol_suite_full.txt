@@ -1,0 +1,15 @@
+FULL Vol_Suite/tests RUN — 2026-08-11 (verbatim tail)
+
+Command:
+  cd /home/bottl/Financial_Development
+  env -u PYTHONPATH -u VIRTUAL_ENV Financial_Dev_Env/bin/python3 -m pytest Vol_Suite/tests -q -p no:cacheprovider
+
+Output (tail):
+  nvm is not compatible with the "npm_config_prefix" environment variable: currently set to "/home/bottl/.local"
+  Run `unset npm_config_prefix` to unset it.
+      ax.legend(facecolor=DARK_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR)
+
+  -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+  =========================== short test summary info ============================
+  SKIPPED [5] Vol_Suite/tests/test_implied_vol.py:98: price below the floor where vol is recoverable
+  378 passed, 5 skipped, 1 warning in 332.29s (0:05:32)

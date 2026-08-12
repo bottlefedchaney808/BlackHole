@@ -1,7 +1,10 @@
 import numpy as np
 from scipy.stats import norm
 from datetime import datetime
-import data_source_config
+try:
+    from . import data_source_config
+except ImportError:
+    import data_source_config
 try:
     from thetadata_controller import ThetaDataController, strike_from_theta
     _THETADATA_AVAILABLE = True
@@ -426,7 +429,10 @@ def sabr_all_greeks(S, K, T, r, q, cp, calibration, steps=401):
     SABRCalibrator.calibrate(). Passed in explicitly (not looked up from a
     cache) so this function is a pure map from (state, params) to Greeks.
     """
-    from american_binomial import leisen_reimer_american_price, _bs_rho
+    try:
+        from .american_binomial import leisen_reimer_american_price, _bs_rho
+    except ImportError:
+        from american_binomial import leisen_reimer_american_price, _bs_rho
 
     alpha = float(calibration['alpha'])
     beta = float(calibration['beta'])

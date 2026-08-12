@@ -10,9 +10,10 @@ local web dashboard. Everything shares one root `.venv` (Python 3.12) except `se
 which keeps its own project-local venv. There is no cloud deployment path in active use — this is
 a single-machine, localhost-only setup (see `START_HERE.md` for the human-facing quick-start).
 
-**Nested git repos**: `Options_Suite/` and `mcp-stockflow/` each contain their own independent `.git`
-directory with their own remote (not submodules — no `.gitmodules`). Root-level `git` commands don't
-see into them; treat them as separate repos when making changes inside those directories.
+**Git structure (flattened 2026-08-12)**: the repo is a single flat git repo. `Options_Suite/` and
+`tradingview-mcp/` are tracked as ordinary files inside the root repo (their nested `.git` dirs were
+removed). `mcp-stockflow/` was purged (vendored-and-never-integrated third-party yfinance MCP server).
+There are no submodules and no `.gitmodules`. Root `git` commands see everything.
 
 **This repo already has `.claude/skills/`** with detailed, verified debugging knowledge for each
 suite's launch conventions, quirks, and known bugs — read the relevant one before debugging a launch
@@ -44,6 +45,7 @@ see `CROSS_PLATFORM.md` for exactly how path/venv resolution works on each OS.
 | One-time full swap history backfill (resumable, hours-long) | `python backfill.py` | same |
 | Query swap DB directly | `python swaps_query.py`, or `from swaps_query import SwapsQuery` | same |
 | Run a suite standalone/interactively | `Options_Suite\options_suite.bat`, `Vol_Suite\vol_suite.bat`, `VaR_Tools_Simulations\var.bat`, `sentiment-scanner\sentiment.bat` | `.sh` equivalents |
+| Backtests tournament harness | `.venv\Scripts\python.exe Backtests\main.py --harness all --ticker SPY,QQQ --lookback-days 1` | `python -m Backtests.main ...` |
 
 Only run **one** `dashboard.bat`/`tools.bat` and **one** `run_scheduler.bat` at a time — both scripts
 refuse to double-launch on their port, since a second instance racing the first against `swaps.db`
@@ -58,6 +60,15 @@ pytest tests/test_identifiers.py::test_some_case   # a single test
 pytest Vol_Suite/tests/         # one suite only
 ```
 `conftest.py` files add the repo root to `sys.path` so `shared.*` imports resolve inside suite tests.
+
+`Backtests/` is now a separate root-level package for pricing/greeks/signals evaluation. It complements, and does not replace, `Vol_Suite/backtest_stage3.py` or `Tools/tools/backtesting_tool.py`.
+
+
+### Workflow helper scripts
+
+- `bash scripts/burst_checkpoint.sh vol` prints `git diff --stat` and runs the current narrow Vol_Suite checkpoint slice via `.venv\Scripts\python.exe`.
+- `git config core.hooksPath scripts/hooks` enables `scripts/hooks/commit-msg`, preserving the migrated subject policy (`feat|fix|test|docs|refactor|chore|security|improve` or `reconcile:`).
+- `bash scripts/verify_tradingview_submodule.sh` checks `tradingview-mcp` gitlink state when the parent repo configures one, always verifies `tradingview-mcp/src/server.js`, and treats missing `hermes` or live CDP output as informational on this Windows repo.
 
 ### Lint
 
@@ -116,9 +127,10 @@ redoing the work. Schema owned by `Vol_Suite/suite_context.py`; validated by `sh
 - **Market data client**: `thetadata.py` (43KB) — `ThetaDataController`, the merged replacement for
   what used to be separate `Options_Suite`/`Vol_Suite` ThetaData clients (`api.potatohedge.com`). All
   four suites, plus `Options_Suite/thetadata_controller.py` and `Vol_Suite/thetadata_client.py` (both
-  now thin re-export stubs), route through this one implementation — despite `Options_Suite` and
-  `mcp-stockflow` having their own nested `.git`/`.venv`, their live data layer is fully merged into
-  the parent repo's `shared/`, not independent.
+  now thin re-export stubs), route through this one implementation — despite `Options_Suite` having
+  had its own nested `.git`/`.venv`, its live data layer is fully merged into the parent repo's
+  `shared/`, not independent. (`mcp-stockflow`, a never-integrated third-party yfinance MCP server,
+  was purged 2026-08-12.)
 
 Credentials live in exactly one place, the root `.env` (`THETADATA_CF_ACCESS_CLIENT_ID`/`_SECRET`) —
 no suite needs its own `.env` for ThetaData anymore, even though some still have `.env.example` files

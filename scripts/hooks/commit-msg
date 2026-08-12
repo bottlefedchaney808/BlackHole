@@ -1,0 +1,26 @@
+#!/bin/bash
+# commit-msg hook -- enforces the repo's commit-subject convention
+#
+# Accepted:  ^(feat|fix|test|docs|refactor|chore|security|improve)(\([^)]*\))?: .+
+#            reconcile: .+
+# Rejected:  malformed docs/launchers: ... and merge-only subjects.
+#
+# Install:   git config core.hooksPath scripts/hooks
+#            (or copy this file to .git/hooks/commit-msg and chmod +x)
+
+subject="$(sed -n '1p' "$1" | tr -d '\r')"
+
+if echo "$subject" | grep -qE '^(feat|fix|test|docs|refactor|chore|security|improve)(\([^)]*\))?: .+'; then
+    exit 0
+fi
+
+if echo "$subject" | grep -qE '^reconcile: .+'; then
+    exit 0
+fi
+
+echo "commit-msg: subject does not match the repo convention" >&2
+echo "  got:      $subject" >&2
+echo "  want:     ^(feat|fix|test|docs|refactor|chore|security|improve)(\([^)]*\))?: .+" >&2
+echo "            or reconcile: ..." >&2
+echo "  (merge-only and docs/launchers: subjects are rejected)" >&2
+exit 1

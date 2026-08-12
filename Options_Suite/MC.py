@@ -2,7 +2,10 @@ import math
 import os
 import warnings
 import numpy as np
-from american_binomial import american_all_greeks
+try:
+    from .american_binomial import american_all_greeks
+except ImportError:
+    from american_binomial import american_all_greeks
 
 # numpy's polyfit warns (RankWarning) whenever the regression matrix is
 # poorly conditioned -- routine and EXPECTED here: the LSM continuation-value
@@ -392,7 +395,10 @@ def mc_all_greeks(S, K, T, r, q, sigma, sims=50000, steps=100, option='put', see
     gamma_t_dn = (p(S_=S + dS, T_=T2_dn) - 2 * p(T_=T2_dn) + p(S_=S - dS, T_=T2_dn)) / (dS * dS)
     color = (gamma_t_up - gamma_t_dn) / T2_span
 
-    from american_binomial import _bs_rho
+    try:
+        from .american_binomial import _bs_rho
+    except ImportError:
+        from american_binomial import _bs_rho
     rho_euro = _bs_rho(S, K, T, r, q, sigma, is_call)
     rho_ee_premium = rho - rho_euro
 
