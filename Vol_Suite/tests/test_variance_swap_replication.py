@@ -243,3 +243,37 @@ def test_corrugation_absolute_and_relative_directions_are_opposite(wide_sparse_s
 
     assert abs_near < abs_far, "absolute ripple should shrink near expiry"
     assert rel_near > rel_far, "relative ripple should grow near expiry"
+
+
+# ---------------------------------------------------------------------------
+# Trade sizing: vega notional must scale with spot, not be a flat constant
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_compute_vega_notional_scales_with_spot():
+    """A $2000 stock and a $20 stock must not be sized identically -- the old
+    code hardcoded vega_notional = 100000 for every ticker on every run."""
+    from variance_swap_live import compute_vega_notional
+    low = compute_vega_notional(spot=20.0)
+    high = compute_vega_notional(spot=2000.0)
+    assert high > low
+
+
+@pytest.mark.unit
+def test_compute_vega_notional_at_reference_spot_matches_base():
+    from variance_swap_live import compute_vega_notional
+    assert compute_vega_notional(spot=100.0) == pytest.approx(100_000.0)
+
+
+@pytest.mark.unit
+def test_compute_vega_notional_floors_at_base_for_cheap_tickers():
+    """Cheap underlyings must not collapse toward a near-zero vega notional."""
+    from variance_swap_live import compute_vega_notional
+    assert compute_vega_notional(spot=1.0) >= 100_000.0
+
+
+@pytest.mark.unit
+def test_compute_vega_notional_handles_nonpositive_spot():
+    from variance_swap_live import compute_vega_notional
+    assert compute_vega_notional(spot=0.0) == pytest.approx(100_000.0)
+    assert compute_vega_notional(spot=-5.0) == pytest.approx(100_000.0)
