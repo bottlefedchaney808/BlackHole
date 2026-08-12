@@ -68,6 +68,7 @@ def _load_tools() -> List[ToolSpec]:
     from Tools.tools import direction_signal_tool
     from Tools.tools import hedge_optimizer_tool
     from Tools.tools import vrp_term_structure_tool
+    from Tools.tools import price_dist_tool
 
     return [
         options_strategy_tool.TOOL_SPEC,
@@ -80,6 +81,7 @@ def _load_tools() -> List[ToolSpec]:
         direction_signal_tool.TOOL_SPEC,
         hedge_optimizer_tool.TOOL_SPEC,
         vrp_term_structure_tool.TOOL_SPEC,
+        price_dist_tool.TOOL_SPEC,
         # Add new tools' TOOL_SPEC here -- see module docstring above.
     ]
 

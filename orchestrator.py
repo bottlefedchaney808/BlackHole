@@ -385,7 +385,11 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             try:
                 sim_result = builder(sim_context, ticker)
                 bundle['simulations'][key] = sim_result
-                print(f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in ('correlation_matrix', 'sim_vols', 'sim_corr')})}")
+                # Bulk array-shaped fields (matrices, the 20-bin terminal-price
+                # histogram) are kept in the bundle but out of the console line.
+                _noisy = ('correlation_matrix', 'sim_vols', 'sim_corr',
+                          'terminal_price_histogram')
+                print(f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in _noisy})}")
             except Exception as e:
                 msg = f"{key} sim failed: {e}"
                 print(f"  [market-signals] {msg}")

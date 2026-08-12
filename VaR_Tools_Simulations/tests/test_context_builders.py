@@ -181,3 +181,87 @@ def test_corr_sim_rejects_non_positive_horizon(stub_live_price):
 def test_corr_sim_rejects_non_integer_horizon(stub_live_price):
     with pytest.raises(var_main.ContextModeError):
         var_main._build_corr_sim_from_context(_corr_payload(corr_sim_days="ten"))
+
+
+# ── price_dist (new context-mode builder) ─────────────────────────────────
+# price_dist.py had no context-mode builder at all, so its lognormal table and
+# MC probability engine were unreachable outside the interactive menu.
+
+def test_price_dist_builder_returns_distribution_table_and_histogram(stub_market):
+    result = var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    assert result["status"] == "ok"
+    assert result["module"] == "price_dist_1yr"
+    assert result["ticker"] == "AAPL"
+    assert result["spot"] == pytest.approx(200.0)
+    assert result["vol"] == pytest.approx(0.30)
+    assert len(result["distribution_table"]) > 0
+    row = result["distribution_table"][0]
+    assert set(row) == {"price", "prob_at", "prob_below", "prob_above"}
+    assert len(result["terminal_price_histogram"]) > 0
+    assert sum(b["count"] for b in result["terminal_price_histogram"]) == result["n_sims"]
+    assert result["avg_end_price"] > 0
+
+
+def test_price_dist_builder_reports_vol_and_drift_sources(stub_market):
+    stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: None)
+    stub_market.setattr(data_loader, "estimate_geometric_return", lambda tk: None)
+    result = var_main._build_price_dist_from_context(_base_payload(garch_vol=None), "AAPL")
+    assert result["vol"] == pytest.approx(0.25)
+    assert result["data_quality"]["vol_source"] == "fallback"
+    assert result["data_quality"]["expected_return_source"] == "unavailable"
+
+
+def test_price_dist_builder_rejects_unfetchable_spot(stub_market):
+    stub_market.setattr(data_loader, "fetch_spot", lambda tk: 0.0)
+    with pytest.raises(var_main.ContextModeError):
+        var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL")
+
+
+def test_price_dist_builder_is_json_serializable(stub_market):
+    import json
+    raw = json.dumps(var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL"))
+    assert "NaN" not in raw and "Infinity" not in raw
+
+
+# ── terminal_price_histogram on every sim builder ─────────────────────────
+# Task 11's renderer draws the same histogram for all four builders, so each
+# one must expose the same field, with every simulated draw accounted for.
+
+def _assert_histogram(hist, n_sims):
+    assert len(hist) == 20
+    for b in hist:
+        assert set(b) == {"low", "high", "count"}
+        assert b["high"] >= b["low"]
+        assert isinstance(b["count"], int)
+    assert sum(b["count"] for b in hist) == n_sims
+
+
+def test_histogram_bins_accounts_for_every_value():
+    hist = var_main._histogram_bins(np.array([1.0, 2.0, 3.0, 4.0]), n_bins=4)
+    assert len(hist) == 4
+    assert sum(b["count"] for b in hist) == 4
+    assert hist[0]["low"] == pytest.approx(1.0)
+    assert hist[-1]["high"] == pytest.approx(4.0)
+
+
+def test_mc_sim_exposes_terminal_price_histogram(stub_market):
+    result = var_main._build_mc_sim_from_context(_base_payload(garch_vol=0.22), "AAPL")
+    _assert_histogram(result["terminal_price_histogram"], result["n_sims"])
+    assert result["n_sims"] == 10_000
+
+
+def test_copula_exposes_terminal_price_histogram(stub_market):
+    result = var_main._build_copula_from_context(_base_payload(garch_vol=0.22), "AAPL")
+    _assert_histogram(result["terminal_price_histogram"], result["n_sims"])
+    assert result["n_sims"] == 50_000
+
+
+def test_corr_sim_peer_exposes_terminal_portfolio_histogram(stub_market, capture_corr_inputs):
+    stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: 0.30)
+    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
+    stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
+
+    payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
+    result = var_main._build_corr_sim_peer_from_context(payload, "AAPL")
+    _assert_histogram(result["terminal_price_histogram"], result["n_sims"])
+    assert result["n_sims"] == 10_000
