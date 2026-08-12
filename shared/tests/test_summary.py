@@ -238,9 +238,68 @@ class TestExtractSentimentMarketSignalsBundle:
         assert metrics["direction_signal_whale"] is True
         assert metrics["direction_signal_wave3"] is False
 
-    def test_bundle_level_errors_are_surfaced_as_warnings(self):
+    def test_partial_bundle_fixture_produces_warnings(self):
+        # The shipped fixture's failures are per-scanner/per-sim, so this only
+        # covers `_flatten_bundle_section`'s warnings -- see
+        # `test_bundle_level_errors_only_still_warn` for the top-level list.
         entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
         assert entry["warnings"]
+
+    def test_bundle_level_errors_only_still_warn(self):
+        # A scanner/var_engine import failure leaves `scanners`/`simulations`
+        # empty, so the stage's `partial` status has no per-item error to
+        # flatten -- the reason lives only in the top-level `errors` list.
+        bundle = {
+            "suite": "sentiment",
+            "status": "partial",
+            "ticker": "AAPL",
+            "scanners": {},
+            "simulations": {},
+            "direction": None,
+            "errors": ["scanner import failed: boom"],
+        }
+        entry = _extract_sentiment(bundle)
+        assert entry["status"] == "ok"
+        assert any("boom" in w for w in entry["warnings"])
+
+    def test_bundle_level_errors_are_not_double_reported(self):
+        # The stage writes per-item failures into BOTH the per-key payload and
+        # the top-level `errors` list, using identical wording.
+        bundle = {
+            "status": "partial",
+            "ticker": "AAPL",
+            "scanners": {"iv_rank": {"error": "timeout"}},
+            "simulations": {"mc_sim": {"var_1yr": 1.5}},
+            "direction": {"conviction": "WEAK", "score": 1, "signals": {}},
+            "errors": ["iv_rank scanner failed: timeout"],
+        }
+        entry = _extract_sentiment(bundle)
+        assert len([w for w in entry["warnings"] if "timeout" in w]) == 1
+
+    def test_malformed_direction_warns_and_stays_out_of_metrics(self):
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {},
+                "direction": ["not", "a", "dict"],
+            }
+        )
+        assert any("direction" in w for w in entry["warnings"])
+        assert "direction_conviction" not in entry["metrics"]
+
+    def test_non_scalar_direction_conviction_never_lands_in_metrics(self):
+        entry = _extract_sentiment(
+            {
+                "status": "ok",
+                "scanners": {},
+                "simulations": {},
+                "direction": {"conviction": {"nested": "junk"}, "score": 3},
+            }
+        )
+        assert "direction_conviction" not in entry["metrics"]
+        for value in entry["metrics"].values():
+            assert isinstance(value, (bool, int, float, str))
 
     def test_all_ok_bundle_reports_full_scanner_and_sim_counts(self):
         bundle = {

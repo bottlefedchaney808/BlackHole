@@ -420,7 +420,7 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(direction, dict):
         conviction = direction.get("conviction")
         score = direction.get("score")
-        if conviction is not None:
+        if isinstance(conviction, (bool, int, float, str)):
             metrics["direction_conviction"] = conviction
         if isinstance(score, (int, float)) and not isinstance(score, bool):
             metrics["direction_score"] = score
@@ -433,7 +433,9 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
             direction_summary = f", direction {conviction}"
             if score is not None:
                 direction_summary += f" ({score}/5)"
-    elif direction is None:
+    else:
+        # `None` (the stage's own failure/skip sentinel) *or* anything that
+        # isn't a usable dict -- both mean no direction signal to report.
         warnings.append("direction suite produced no signal")
 
     ticker = result.get("ticker") or ""
@@ -443,8 +445,10 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
         f"{ok_sims}/{len(simulations)} 1yr sims{direction_summary}"
     )
 
+    bundle_errors = result.get("errors")
+
     if status == "error":
-        errors = result.get("errors")
+        errors = bundle_errors
         detail = (
             "; ".join(str(e) for e in errors)
             if isinstance(errors, list) and errors
@@ -458,6 +462,27 @@ def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
             "warnings": warnings,
             "source_result": "",
         }
+
+    # `run_market_signals_stage` records some failures *only* in the top-level
+    # `errors` list, with no per-scanner/per-sim entry to flatten: a scanner or
+    # var_engine import failure leaves `scanners`/`simulations` empty, a GARCH
+    # fit failure has no owning key at all, and a direction-suite crash leaves
+    # `direction` as None. The stage still computes `partial` in those cases
+    # (every per-key `.get("error") is None` check is vacuously true over an
+    # empty dict), so without this the summary would report a clean
+    # `0/0 scanners, 0/0 1yr sims` with no warnings and silently lose the
+    # reason. Per-item failures already warn from `_flatten_bundle_section`
+    # using the same wording the stage puts in `errors`
+    # (`"{key} scanner failed: {e}"` / `"{key} sim failed: {e}"`), so dedupe by
+    # content rather than re-reporting them.
+    if isinstance(bundle_errors, list):
+        for err in bundle_errors:
+            text = str(err).strip()
+            if not text:
+                continue
+            if any(text in existing for existing in warnings):
+                continue
+            warnings.append(text)
 
     return {
         "module": "sentiment",
