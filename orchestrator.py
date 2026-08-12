@@ -328,7 +328,15 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             ('unusual_oi', scan_unusual_oi, format_unusual_oi),
         ):
             try:
-                scan = scan_fn(ticker)
+                if key == 'max_pain':
+                    # Pin Max Pain to the expiry this run is analyzing instead
+                    # of letting it self-select its own nearest-~30DTE one.
+                    scan = scan_fn(
+                        ticker,
+                        expiry=(context.get('focus') or {}).get('expiration_date'),
+                    )
+                else:
+                    scan = scan_fn(ticker)
                 line = fmt_fn(scan)
                 print(line)
                 bundle['scanners'][key] = _to_jsonable(scan)
