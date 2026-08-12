@@ -1,0 +1,14 @@
+date,ticker,side,qty,price,value_usd,conviction,status,order_id,thesis
+2026-08-10,SOUN,buy,6,7.55,45.30,4/5,queued_gfd,6a7a8b27-944f-469d-9b3b-8f8b116ecafc,Record Q2 +45% YoY raised guide LivePerson 2H26 42% SI (3/3 streams)
+2026-08-10,UUUU,buy,3,14.45,43.35,4/5,queued_gfd,6a7a8b28-04a6-4854-8a5b-4f25aa715054,US uranium + govt-backed REE mine-to-magnet OSC 725M ASM close Aug
+2026-08-10,TGB,buy,4,8.90,35.60,4/5,queued_gfd,6a7a8b28-2e84-44cc-8e2c-73b7bbbe88e7,Copper producer strongest chart bullish EMA stack 90d high pos earnings
+2026-08-10,NEXA,buy,3,15.05,45.15,3.8/5,queued_gfd,6a7a8b29-1010-4e05-b1bb-c65753c1bdc4,Base metals Zn/Cu/Ag clean EMA alignment up-day volume
+2026-08-11,SOUN,FILL,6,7.42,44.52,4/5,filled_open,6a7a8b27-944f-469d-9b3b-8f8b116ecafc,filled at open below limit
+2026-08-11,UUUU,FILL,3,14.17,42.51,4/5,filled_open,6a7a8b28-04a6-4854-8a5b-4f25aa715054,filled at open below limit
+2026-08-11,TGB,FILL,4,8.90,35.60,4/5,filled_open,6a7a8b28-2e84-44cc-8e2c-73b7bbbe88e7,filled at open at limit
+2026-08-11,NEXA,FILL,3,14.79,44.37,3.8/5,filled_open,6a7a8b29-1010-4e05-b1bb-c65753c1bdc4,filled at open below limit
+2026-08-11,KOS,buy,3,2.60,7.80,2.5/5,placed_gfd,6a7b4d2d-894e-45b5-94a0-738e4927f343,Energy tactical oil-spike beta (research 2.5/5) - free cash deployment
+2026-08-11,NEXA,sell,3,14.50,43.50,3.8/5,placed_gfd,6a7b4d2e-28d2-4980-bb4f-343cd0d59306,ROTATION: weakest laggard (base metals no catalyst) -> energy leader CRGY tomorrow
+2026-08-11,INR,buy,3,13.95,41.76,3.5/5,filled,6a7b613f-d2b1-412d-8f8c-a9475e71a76e,Energy rotation via limited-margin buying power - fresh Q2 beat in-band 13.30-14.00
+2026-08-11,INR,sell,3,13.98,41.95,2/5,filled,6a7b7a91-d8bb-4d8f-ae28-a90d7824ee98,POWER-HOUR TRIM: weak Direction (2/5 NONE, whale false) -> free buying power for TGB add
+2026-08-11,TGB,buy,4,8.82,35.24,4/5,filled,6a7b7aa8-d76f-4c39-acab-a06a05eabc8d,POWER-HOUR ADD: Direction 4/5 HIGH whale true, above 8.80 push trigger; now 8 TGB total, avg ~8.855, protected by 2x GTC stops @7.50
