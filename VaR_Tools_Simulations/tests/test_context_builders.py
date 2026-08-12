@@ -134,3 +134,50 @@ def test_corr_sim_peer_without_garch_fit_uses_default(stub_market, capture_corr_
 
     assert list(capture_corr_inputs['inputs'].volatilities) == pytest.approx([0.35, 0.25])
     assert result["data_quality"]["vol_source"] == "garch_fit"
+
+
+# ── corr_sim horizon defaulting ───────────────────────────────────────────
+# `var.horizon_days` used to be mandatory, so a context that only carried a
+# confidence level aborted the whole module. It now defaults to a 1-year
+# (252 trading day) horizon, matching the MC sim, and an explicit top-level
+# `corr_sim_days` overrides whatever `var.horizon_days` says.
+
+@pytest.fixture
+def stub_live_price(monkeypatch):
+    """`live_price` lives on main itself, not on data_loader."""
+    monkeypatch.setattr(var_main, "live_price", lambda tk: 100.0)
+    return monkeypatch
+
+
+def _corr_payload(**extra):
+    payload = {"ticker": "AAPL", "weights": [1.0], "var": {"confidence": 0.99}}
+    payload.update(extra)
+    return payload
+
+
+def test_corr_sim_defaults_to_252_days_when_horizon_omitted(stub_live_price):
+    result = var_main._build_corr_sim_from_context(_corr_payload())
+    assert result["horizon_days"] == 252
+
+
+def test_corr_sim_uses_var_horizon_days_when_given(stub_live_price):
+    payload = _corr_payload(var={"confidence": 0.99, "horizon_days": 10})
+    result = var_main._build_corr_sim_from_context(payload)
+    assert result["horizon_days"] == 10
+
+
+def test_corr_sim_respects_explicit_corr_sim_days_override(stub_live_price):
+    payload = _corr_payload(var={"confidence": 0.99, "horizon_days": 10},
+                            corr_sim_days=30)
+    result = var_main._build_corr_sim_from_context(payload)
+    assert result["horizon_days"] == 30
+
+
+def test_corr_sim_rejects_non_positive_horizon(stub_live_price):
+    with pytest.raises(var_main.ContextModeError):
+        var_main._build_corr_sim_from_context(_corr_payload(corr_sim_days=0))
+
+
+def test_corr_sim_rejects_non_integer_horizon(stub_live_price):
+    with pytest.raises(var_main.ContextModeError):
+        var_main._build_corr_sim_from_context(_corr_payload(corr_sim_days="ten"))

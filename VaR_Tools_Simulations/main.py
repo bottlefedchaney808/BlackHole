@@ -162,17 +162,25 @@ def _build_corr_sim_from_context(payload: dict):
     var_cfg = payload.get("var")
     if not isinstance(var_cfg, dict):
         raise ContextModeError("Missing required object field 'var'.")
-    if "horizon_days" not in var_cfg:
-        raise ContextModeError("Missing required field 'var.horizon_days'.")
     if "confidence" not in var_cfg:
         raise ContextModeError("Missing required field 'var.confidence'.")
 
+    # Horizon is optional: a top-level 'corr_sim_days' wins, then 'var.horizon_days',
+    # then a 1-year (252 trading day) default matching the MC sim's horizon.
+    horizon_source = payload.get("corr_sim_days")
+    if horizon_source is None:
+        horizon_source = var_cfg.get("horizon_days")
+    if horizon_source is None:
+        horizon_source = 252
+        notes.append("horizon missing; used default 252-day (1y) horizon.")
     try:
-        horizon_days = int(var_cfg["horizon_days"])
+        horizon_days = int(horizon_source)
     except Exception as e:
-        raise ContextModeError("Field 'var.horizon_days' must be an integer.") from e
+        raise ContextModeError(
+            "Field 'corr_sim_days' (or 'var.horizon_days') must be an integer.") from e
     if horizon_days <= 0:
-        raise ContextModeError("Field 'var.horizon_days' must be > 0.")
+        raise ContextModeError(
+            "Field 'corr_sim_days' (or 'var.horizon_days') must be > 0.")
 
     try:
         confidence = float(var_cfg["confidence"])

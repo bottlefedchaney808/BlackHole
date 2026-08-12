@@ -470,6 +470,17 @@ def _focus_from_body(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str
     if index:
         focus['index_ticker'] = index.upper()
 
+    # Optional VaR horizon override; orchestrator falls back to 1 day when absent.
+    horizon = body.get('var_horizon_days')
+    if horizon not in (None, ''):
+        try:
+            horizon = int(horizon)
+        except (TypeError, ValueError):
+            return {}, 'var_horizon_days must be an integer'
+        if horizon <= 0:
+            return {}, 'var_horizon_days must be a positive integer'
+        focus['var_horizon_days'] = horizon
+
     try:
         focus['timeout'] = int(body.get('timeout') or orchestrator.DEFAULT_TIMEOUT_SEC)
     except (TypeError, ValueError):
