@@ -117,7 +117,7 @@ def main():
         )
     lines.append("")
     lines.append("Direction: score 0-5 (whale=dealer/whale flow, wave3, squeeze, trend, liquidity); conv = conviction.")
-    lines.append("CRGY 5/5 = strongest directional setup. High 1d-implied-move + strong Direction = power-hour candidate.")
+    lines.append("Rule: strong Direction (>=3) AND whale=True = buy candidate. High 1d-implied-move + strong Direction = power-hour candidate.")
     td.close()
     out = "\n".join(lines) + "\n"
     os.makedirs(f"{REPO}/trading_journal", exist_ok=True)
