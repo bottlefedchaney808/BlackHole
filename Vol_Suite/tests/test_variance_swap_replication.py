@@ -277,3 +277,30 @@ def test_compute_vega_notional_handles_nonpositive_spot():
     from variance_swap_live import compute_vega_notional
     assert compute_vega_notional(spot=0.0) == pytest.approx(100_000.0)
     assert compute_vega_notional(spot=-5.0) == pytest.approx(100_000.0)
+
+
+# ---------------------------------------------------------------------------
+# Variance notional: N_var = N_vol / (2 * sigma_strike), None on degraded input
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_compute_variance_notional_zero_strike_vol_returns_none():
+    """compute_fair_variance_strike returns fair_vol = 0.0 for a degraded /
+    illiquid chain. Dividing by it would be a ZeroDivisionError, and
+    substituting a fake 0.0 would silently misreport trade size -- the only
+    correct answer is None so callers report "N/A"."""
+    from variance_swap_live import compute_variance_notional
+    assert compute_variance_notional(100_000.0, 0.0) is None
+
+
+@pytest.mark.unit
+def test_compute_variance_notional_none_strike_vol_returns_none():
+    from variance_swap_live import compute_variance_notional
+    assert compute_variance_notional(100_000.0, None) is None
+
+
+@pytest.mark.unit
+def test_compute_variance_notional_normal_case():
+    """N_var = N_vol / (2 * sigma) -> 100000 / (2 * 0.20) = 250000."""
+    from variance_swap_live import compute_variance_notional
+    assert compute_variance_notional(100_000.0, 0.20) == pytest.approx(250_000.0)

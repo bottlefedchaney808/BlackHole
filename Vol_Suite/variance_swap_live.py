@@ -75,7 +75,7 @@ def compute_vega_notional(spot: float, base_notional: float = 100_000.0,
     return max(base_notional, base_notional * (spot / reference_spot))
 
 
-def compute_variance_notional(vega_notional: float, strike_vol: float):
+def compute_variance_notional(vega_notional: float, strike_vol: float | None) -> float | None:
     """N_var = N_vol / (2 * sigma_strike). Returns None -- never a fabricated
     number -- when the fair strike vol isn't a usable positive value.
 
@@ -323,7 +323,9 @@ def export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match
     # dict and the console print.
     vega_notional = compute_vega_notional(result["S0"])
     variance_notional = compute_variance_notional(vega_notional, result["fair_variance_swap_strike_vol"])
-    variance_notional_str = "N/A" if variance_notional is None else variance_notional
+    # Numeric on the happy path (like the other raw-number cells such as
+    # Vega_Notional / S0), "N/A" only when the fair strike vol was unusable.
+    variance_notional_cell = "N/A" if variance_notional is None else variance_notional
 
     data = {
         "Metric": [
@@ -347,7 +349,7 @@ def export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match
             rv_30_str, rv_60_str, rv_90_str,
             rv_match_str, vrp_str,
             vega_notional,
-            variance_notional_str
+            variance_notional_cell
         ]
     }
     df = pd.DataFrame(data)
