@@ -331,6 +331,30 @@ def _context_seed(payload: dict, default: int = 42) -> int:
     return default
 
 
+def _resolve_vol_and_quality(payload: dict, tk: str) -> tuple:
+    """Prefer suite_context's Vol_Suite-computed GARCH vol; fall back to VaR's
+    own GARCH fit, then to a fixed default. Returns (vol, vol_source)."""
+    from var_engine import data_loader
+    focus = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
+    ctx_vol = focus.get("garch_conditional_vol")
+    if isinstance(ctx_vol, (int, float)) and not isinstance(ctx_vol, bool) and ctx_vol > 0:
+        return float(ctx_vol), "context"
+    fit_vol = data_loader.estimate_garch_vol(tk)
+    if fit_vol is not None:
+        return float(fit_vol), "garch_fit"
+    return 0.25, "fallback"
+
+
+def _resolve_drift_and_quality(tk: str) -> tuple:
+    """VaR's own historical geometric drift -- Vol_Suite has no drift/expected-
+    return concept to source from. Returns (drift, expected_return_source)."""
+    from var_engine import data_loader
+    drift = data_loader.estimate_geometric_return(tk)
+    if drift is None:
+        return 0.0, "unavailable"
+    return float(drift), "computed"
+
+
 def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     """Non-interactive 1-year-out MC price-distribution sim, seeded from
     live spot + GARCH vol + historical geometric drift."""
@@ -341,8 +365,8 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     spot = data_loader.fetch_spot(tk)
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
-    vol = data_loader.estimate_garch_vol(tk) or 0.25
-    drift = data_loader.estimate_geometric_return(tk)
+    vol, vol_source = _resolve_vol_and_quality(payload, tk)
+    drift, drift_source = _resolve_drift_and_quality(tk)
     seed = _context_seed(payload)
 
     r = run(MCSimInputs(
@@ -368,6 +392,7 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
         "terminal_price_p95": float(np.quantile(terminal, 0.95)),
         "var_1yr": float(r.var_full), "cvar_1yr": float(r.cvar_full),
+        "data_quality": {"vol_source": vol_source, "expected_return_source": drift_source},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -382,8 +407,8 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
     spot = data_loader.fetch_spot(tk)
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
-    vol = data_loader.estimate_garch_vol(tk) or 0.25
-    drift = data_loader.estimate_geometric_return(tk)
+    vol, vol_source = _resolve_vol_and_quality(payload, tk)
+    drift, drift_source = _resolve_drift_and_quality(tk)
     seed = _context_seed(payload)
 
     r = run(CopulaInputs(
@@ -411,6 +436,7 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
         "terminal_price_p95": float(np.quantile(terminal, 0.95)),
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
+        "data_quality": {"vol_source": vol_source, "expected_return_source": drift_source},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -435,10 +461,14 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
     seed = _context_seed(payload)
     start, end = data_loader.default_date_range()
 
+    focus_vol, vol_source = _resolve_vol_and_quality(payload, tk)
+
     spots, vols, rets = [], [], {}
     for t in tickers:
         spots.append(data_loader.fetch_spot(t))
-        vols.append(data_loader.estimate_garch_vol(t) or 0.25)
+        # Only the focus ticker has a context-supplied GARCH vol -- peers are
+        # not covered by suite_context's `focus` block, so they refit.
+        vols.append(focus_vol if t == tk else (data_loader.estimate_garch_vol(t) or 0.25))
         try:
             rets[t] = data_loader.fetch_log_returns(t, start, end)
         except Exception:
@@ -478,6 +508,8 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
         "portfolio_value": float(r.portfolio_value),
         "cholesky_ok": bool(r.cholesky_ok),
+        # vol_source describes the focus ticker only; peers always refit.
+        "data_quality": {"vol_source": vol_source, "expected_return_source": "not_applicable"},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
