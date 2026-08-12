@@ -56,6 +56,18 @@
 .module-entry-head { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .warnings-list { margin: 6px 0 0; padding-left: 18px; color: var(--warn); }
 
+/* Terminal-distribution histograms (Task 11). mc_sim / copula / corr_sim /
+   price_dist are single-step-to-horizon simulators -- they retain no per-step
+   path data, only the spread of terminal outcomes across n_sims draws -- so
+   this charts that terminal distribution rather than a (fabricated) path fan.
+   The bars are drawn as inline SVG: no chart library is loaded on this page,
+   and the dashboard is deliberately offline/localhost-only. */
+.dist-chart { margin: 10px 0 0; }
+.dist-chart-title { color: var(--muted); margin-bottom: 2px; }
+.dist-chart svg { display: block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
+.dist-bar { fill: var(--accent); }
+.dist-percentiles { margin-top: 3px; color: var(--muted); }
+
 /* Worker dispatch (Quant Console Task 12) -- a completed dispatch job's
    report is a Claude worker's *interpretation* of a module's already-run
    quant_summary.json/*_result.json, not the automated suite's own output,
@@ -266,6 +278,91 @@ function renderModuleEntry(container, entry) {
     });
     container.appendChild(ul);
   }
+
+  (entry.distributions || []).forEach(function (dist) {
+    var chart = renderDistribution(dist);
+    if (chart) container.appendChild(chart);
+  });
+}
+
+// corr_sim sums positions across up to three tickers, so its bins are terminal
+// PORTFOLIO VALUES, not one ticker's price -- the producing builder says which
+// via `histogram_unit`, carried here as `unit`. Never default an unrecognized
+// unit to "price": mislabeling a portfolio-value chart as a price chart is the
+// exact failure this field exists to prevent.
+var DIST_UNIT_LABELS = {
+  price: 'terminal price distribution',
+  portfolio_value: 'terminal portfolio-value distribution',
+  unknown: 'terminal distribution (units unreported)'
+};
+function distUnitLabel(unit) {
+  return DIST_UNIT_LABELS[unit] || DIST_UNIT_LABELS.unknown;
+}
+
+var SVG_NS = 'http://www.w3.org/2000/svg';
+
+function renderDistribution(dist) {
+  var bins = (dist && dist.bins) || [];
+  if (!bins.length) return null;
+
+  var wrap = document.createElement('div');
+  wrap.className = 'dist-chart';
+
+  var title = document.createElement('div');
+  title.className = 'small dist-chart-title';
+  title.textContent = (dist.label || 'simulation') + ' — ' + distUnitLabel(dist.unit);
+  wrap.appendChild(title);
+
+  var W = 320, H = 80, PAD = 2;
+  var barW = W / bins.length;
+  // An all-zero histogram would divide by zero; floor the scale at 1 so the
+  // chart renders flat-empty rather than producing NaN geometry.
+  var maxCount = bins.reduce(function (m, b) {
+    return Math.max(m, typeof b.count === 'number' ? b.count : 0);
+  }, 0) || 1;
+
+  var svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', String(H));
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', title.textContent);
+
+  bins.forEach(function (b, i) {
+    var count = typeof b.count === 'number' ? b.count : 0;
+    var barH = (count / maxCount) * (H - PAD);
+    var rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', String(i * barW));
+    rect.setAttribute('y', String(H - barH));
+    rect.setAttribute('width', String(Math.max(barW - 1, 0.5)));
+    rect.setAttribute('height', String(barH));
+    rect.setAttribute('class', 'dist-bar');
+    var tip = document.createElementNS(SVG_NS, 'title');
+    tip.textContent = fmtMetricValue(b.low) + '–' + fmtMetricValue(b.high) +
+      ': ' + fmtMetricValue(count);
+    rect.appendChild(tip);
+    svg.appendChild(rect);
+  });
+  wrap.appendChild(svg);
+
+  // Percentiles are omitted upstream (not zero-filled) when the sim doesn't
+  // publish them -- corr_sim and price_dist ship a histogram but no
+  // terminal_price_p* fields -- so render only the ones that exist.
+  var pct = dist.percentiles || {};
+  var parts = ['p5', 'p50', 'p95'].filter(function (k) {
+    return typeof pct[k] === 'number';
+  }).map(function (k) {
+    return k + ': ' + fmtMetricValue(pct[k]);
+  });
+  var line = document.createElement('div');
+  line.className = 'small dist-percentiles';
+  line.textContent = parts.length
+    ? parts.join('  ·  ')
+    : 'percentiles not reported by this simulation';
+  wrap.appendChild(line);
+
+  return wrap;
 }
 
 function renderSummary(card, summary) {

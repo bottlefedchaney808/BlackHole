@@ -125,6 +125,7 @@ def build_suite_context(
     var_horizon_days: int = 1,
     var_confidence: float = 0.99,
     var_positions: Optional[Sequence[Dict[str, Any]]] = None,
+    garch_conditional_vol: Optional[float] = None,
     run_options_suite: bool = False,
     run_var_suite: bool = False,
     compile_pdf: bool = False,
@@ -146,6 +147,12 @@ def build_suite_context(
             "strike": strike,
             "target_years": float(target_years),
             "expiration_date": _normalize_expiration(expiration_date),
+            # Annualized current GARCH(1,1) conditional vol as a decimal
+            # fraction, or None when the GARCH module did not run/failed.
+            # Consumers (VaR Monte Carlo) prefer this over re-fitting.
+            "garch_conditional_vol": (
+                float(garch_conditional_vol) if garch_conditional_vol is not None else None
+            ),
         },
         "basket": {
             "index_ticker": str(index_ticker).upper(),
@@ -211,6 +218,13 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
     _require(focus["strike"] is None or isinstance(focus["strike"], (int, float)), "focus.strike must be null or number")
     _require(isinstance(focus["target_years"], (int, float)), "focus.target_years must be numeric")
     _require(isinstance(focus["expiration_date"], str) and focus["expiration_date"].strip(), "focus.expiration_date must be a non-empty string")
+    # Optional: contexts written before Vol_Suite published the GARCH
+    # conditional vol are still valid, so only type-check it when present.
+    if "garch_conditional_vol" in focus:
+        _require(focus["garch_conditional_vol"] is None
+                 or (isinstance(focus["garch_conditional_vol"], (int, float))
+                     and not isinstance(focus["garch_conditional_vol"], bool)),
+                 "focus.garch_conditional_vol must be numeric or null")
 
     basket = context["basket"]
     _require(isinstance(basket, dict), "basket must be an object")

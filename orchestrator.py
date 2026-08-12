@@ -265,6 +265,22 @@ def _import_var_engine_builders():
     return var_main
 
 
+def _import_vol_garch():
+    """Import Vol_Suite's GARCH module and return its `run_garch_module`.
+
+    The Market Signals stage needs a conditional-vol estimate for its 1-year-out
+    sims, but it runs as phase 1 -- before Vol_Suite (phase 2) has had a chance
+    to write `focus.garch_conditional_vol` into suite_context. Rather than
+    reorder the pipeline, this stage fits GARCH itself, once, and shares the
+    result across its own MC/copula/corr sims.
+    """
+    vol_root = SUITE_ROOTS['vol']
+    if vol_root not in sys.path:
+        sys.path.insert(0, vol_root)
+    from garch_analysis import run_garch_module  # noqa: E402  (path set above)
+    return run_garch_module
+
+
 def _import_direction_suite():
     """Import the 5-tool Direction signal suite (whale/elliott/bollinger/
     trend/liquidity, combined into one conviction call)."""
@@ -312,7 +328,15 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             ('unusual_oi', scan_unusual_oi, format_unusual_oi),
         ):
             try:
-                scan = scan_fn(ticker)
+                if key == 'max_pain':
+                    # Pin Max Pain to the expiry this run is analyzing instead
+                    # of letting it self-select its own nearest-~30DTE one.
+                    scan = scan_fn(
+                        ticker,
+                        expiry=(context.get('focus') or {}).get('expiration_date'),
+                    )
+                else:
+                    scan = scan_fn(ticker)
                 line = fmt_fn(scan)
                 print(line)
                 bundle['scanners'][key] = _to_jsonable(scan)
@@ -325,6 +349,31 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
         errors.append(f"scanner import failed: {e}")
         print(f"  [market-signals] scanner import failed: {e}")
 
+    # ---- GARCH conditional vol for the sims below ----
+    # Vol_Suite computes this too, but only in phase 2 -- after this stage. Fit
+    # it here so the sims get a real estimate instead of each falling back to
+    # their own refit/hardcoded guess. A failure is not fatal: the builders
+    # degrade to their own vol resolution.
+    garch_vol = None
+    try:
+        run_garch_module = _import_vol_garch()
+        _files, _interp, garch_vol = run_garch_module(
+            ticker, output_dir=context.get('output_dir'))
+        if garch_vol is not None:
+            print(f"  [garch] {ticker}: conditional vol {garch_vol:.2%} (annualized)")
+        else:
+            print(f"  [garch] {ticker}: no conditional vol produced")
+    except Exception as e:
+        errors.append(f"garch fit failed: {e}")
+        print(f"  [market-signals] garch fit failed: {e}")
+
+    # Private copy -- `context` is shared with every later stage and must not
+    # pick up a value Vol_Suite has not actually written yet.
+    sim_context = dict(context)
+    sim_context['focus'] = dict(context.get('focus') or {})
+    if garch_vol is not None:
+        sim_context['focus']['garch_conditional_vol'] = garch_vol
+
     # ---- 1-year-out simulations (MC, copula, correlation) ----
     try:
         var_main = _import_var_engine_builders()
@@ -334,9 +383,13 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             ('corr_sim', var_main._build_corr_sim_peer_from_context),
         ):
             try:
-                sim_result = builder(context, ticker)
+                sim_result = builder(sim_context, ticker)
                 bundle['simulations'][key] = sim_result
-                print(f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in ('correlation_matrix', 'sim_vols', 'sim_corr')})}")
+                # Bulk array-shaped fields (matrices, the 20-bin terminal-price
+                # histogram) are kept in the bundle but out of the console line.
+                _noisy = ('correlation_matrix', 'sim_vols', 'sim_corr',
+                          'terminal_price_histogram')
+                print(f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in _noisy})}")
             except Exception as e:
                 msg = f"{key} sim failed: {e}"
                 print(f"  [market-signals] {msg}")

@@ -7,6 +7,7 @@ No yfinance.  No fallbacks that cost money.
 """
 import os
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -14,6 +15,8 @@ from typing import List, Dict, Optional
 from shared.cache import load as _cache_load, save as _cache_save
 
 import numpy as np
+
+_LOGGER = logging.getLogger(__name__)
 
 # ── lazy ThetaData client ───────────────────────────────────────────────────
 def _theta_client():
@@ -176,39 +179,46 @@ def default_date_range(lookback_days: int = 504):
 
 def estimate_garch_vol(ticker: str,
                        lookback_days: int = 504,
-                       trading_days: float = 252.0) -> float:
-    """Quick GARCH(1,1) estimate: return annualized conditional vol for *ticker*.
+                       trading_days: float = 252.0) -> Optional[float]:
+    """Quick GARCH(1,1) estimate: annualized conditional vol for *ticker*.
     Uses the same scipy-based fit as hist_sim.py (no arch/statsmodels dep).
-    Returns 0.0 if fit fails.
+    Returns None (not 0.0) on failure — callers must not treat a fetch/fit
+    error as a legitimately-computed zero volatility.
     """
     from .hist_sim import _garch_fit
     start, end = default_date_range(lookback_days)
     try:
         rets = fetch_log_returns(ticker, start, end)
         if len(rets) < 60:
-            return 0.0
+            _LOGGER.warning("estimate_garch_vol(%s): only %d return points (<60), skipping fit",
+                            ticker, len(rets))
+            return None
         g = _garch_fit(rets)
         # current_vol is daily — annualize
         return float(g["current_vol"] * np.sqrt(trading_days))
     except Exception:
-        return 0.0
+        _LOGGER.warning("estimate_garch_vol(%s) failed", ticker, exc_info=True)
+        return None
 
 
 def estimate_geometric_return(ticker: str,
                               lookback_days: int = 504,
-                              trading_days: float = 252.0) -> float:
+                              trading_days: float = 252.0) -> Optional[float]:
     """Annualized geometric mean return from historical prices.
-    Computed as (P_T / P_0)^(252/T) - 1.
+    Computed as (P_T / P_0)^(252/T) - 1.  Returns None (not 0.0) on failure.
     """
     start, end = default_date_range(lookback_days)
     try:
         px = fetch_price_series(ticker, start, end)
         if len(px) < 60:
-            return 0.0
+            _LOGGER.warning("estimate_geometric_return(%s): only %d price points (<60)",
+                            ticker, len(px))
+            return None
         r = (px[-1] / px[0]) ** (trading_days / len(px)) - 1.0
         return float(r)
     except Exception:
-        return 0.0
+        _LOGGER.warning("estimate_geometric_return(%s) failed", ticker, exc_info=True)
+        return None
 
 
 def estimate_dividend_yield(ticker: str,

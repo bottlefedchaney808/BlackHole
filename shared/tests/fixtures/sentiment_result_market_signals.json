@@ -1,0 +1,145 @@
+{
+  "suite": "sentiment",
+  "status": "partial",
+  "ticker": "NVDA",
+  "timestamp": "2026-08-12T14:03:11Z",
+  "scanners": {
+    "iv_rank": {
+      "ticker": "NVDA",
+      "spot": 182.4,
+      "atm_iv_pct": 48.2,
+      "garch_cond_vol_pct": 41.0,
+      "rv_30_pct": 39.5,
+      "rv_60_pct": 40.1,
+      "rv_90_pct": 42.7,
+      "fair_vol_pct": 43.9,
+      "vrp_pct": 4.3,
+      "regime": "RICH",
+      "timestamp": "2026-08-12T14:03:01Z",
+      "error": null
+    },
+    "max_pain": {
+      "ticker": "NVDA",
+      "spot": 182.4,
+      "expiry": "2026-10-16",
+      "T_years": 0.18,
+      "max_pain_strike": 180.0,
+      "max_pain_value": 41200000.0,
+      "second_pain_strike": 185.0,
+      "price_vs_pain_pct": 1.32,
+      "near_pin": true,
+      "pain_profile": [
+        {"strike": 175.0, "pain_value": 44100000.0, "call_oi": 12000, "put_oi": 8000},
+        {"strike": 180.0, "pain_value": 41200000.0, "call_oi": 15000, "put_oi": 9000}
+      ],
+      "num_strikes": 42,
+      "timestamp": "2026-08-12T14:03:04Z",
+      "error": null
+    },
+    "skew": {
+      "ticker": "NVDA",
+      "spot": 0.0,
+      "forward": 0.0,
+      "expiry": "",
+      "T_years": 0.0,
+      "atm_iv_pct": 0.0,
+      "put_skew_pts": 0.0,
+      "num_strikes_total": 0,
+      "num_otm_strikes": 0,
+      "sabr_fit_success": false,
+      "sabr_alpha": null,
+      "sabr_rho": null,
+      "sabr_nu": null,
+      "sabr_rmse": null,
+      "fitter": "quadratic",
+      "rich_strikes": [],
+      "cheap_strikes": [],
+      "skew_signal": "FLAT",
+      "timestamp": "2026-08-12T14:03:06Z",
+      "error": "no option chain returned for 2026-10-16"
+    },
+    "unusual_oi": {
+      "ticker": "NVDA",
+      "current_total_oi": 4210000,
+      "baseline_total_oi": 3980000,
+      "oi_change_pct": 5.78,
+      "surge_detected": false,
+      "top_strikes": [
+        {"strike": 190.0, "right": "C", "oi": 88000, "expiry": "2026-10-16"}
+      ],
+      "num_expiries": 6,
+      "timestamp": "2026-08-12T14:03:08Z",
+      "error": null
+    }
+  },
+  "simulations": {
+    "mc_sim": {
+      "suite": "var",
+      "status": "ok",
+      "module": "mc_sim_1yr",
+      "ticker": "NVDA",
+      "spot": 182.4,
+      "vol": 0.41,
+      "expected_return": 0.14,
+      "seed": 20260812,
+      "horizon_days": 252,
+      "n_sims": 10000,
+      "terminal_price_mean": 209.8,
+      "terminal_price_median": 194.2,
+      "terminal_price_p5": 108.7,
+      "terminal_price_p95": 372.5,
+      "terminal_price_histogram": [
+        {"low": 60.0, "high": 80.0, "count": 118},
+        {"low": 80.0, "high": 100.0, "count": 642}
+      ],
+      "histogram_unit": "price",
+      "var_1yr": 73200.5,
+      "cvar_1yr": 91455.2,
+      "data_quality": {"vol_source": "context", "expected_return_source": "historical"},
+      "timestamp": "2026-08-12T14:03:20Z"
+    },
+    "copula": {
+      "suite": "var",
+      "status": "ok",
+      "module": "copula_1yr",
+      "ticker": "NVDA",
+      "spot": 182.4,
+      "vol": 0.41,
+      "expected_return": 0.14,
+      "seed": 20260812,
+      "horizon_days": 252,
+      "n_sims": 50000,
+      "copula_type": "student_t",
+      "terminal_price_mean": 208.1,
+      "terminal_price_median": 193.0,
+      "terminal_price_p5": 101.2,
+      "terminal_price_p95": 389.4,
+      "terminal_price_histogram": [
+        {"low": 55.0, "high": 75.0, "count": 401}
+      ],
+      "histogram_unit": "price",
+      "var_1yr": 78900.1,
+      "cvar_1yr": 99120.7,
+      "data_quality": {"vol_source": "context", "expected_return_source": "historical"},
+      "timestamp": "2026-08-12T14:03:31Z"
+    },
+    "corr_sim": {
+      "error": "Need at least one basket peer distinct from the focus ticker for corr_sim."
+    }
+  },
+  "direction": {
+    "ticker": "NVDA",
+    "price": 182.4,
+    "signals": {
+      "whale": true,
+      "wave3": false,
+      "squeeze": true,
+      "trend": true,
+      "liquidity": false
+    },
+    "score": 3,
+    "conviction": "MODERATE",
+    "details": {"whale": {"notional": 4.2e8}}
+  },
+  "errors": ["skew scanner failed: no option chain returned for 2026-10-16"]
+}

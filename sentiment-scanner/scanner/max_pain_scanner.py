@@ -22,6 +22,11 @@ from scanner.options_scanner_base import get_td, strike_from_theta
 PIN_STRIKE_RADIUS = 2
 # Minimum OI for a strike to count
 MIN_OI = 10
+# Calendar days per year -- same convention as Vol_Suite's expiry_selector
+# (DEFAULT_A = 365), so a caller-supplied expiry and a self-selected one
+# report T_years on the same basis.
+DAYS_PER_YEAR = 365.0
+EXPIRY_DATE_FMT = "%Y%m%d"
 
 
 @dataclass
@@ -60,12 +65,30 @@ def _compute_pain_for_strike(K: float, strikes: np.ndarray,
     return float(np.sum(call_payout + put_payout))
 
 
-def scan_max_pain(ticker: str) -> MaxPainScan:
+def _resolve_given_expiry(expiry: str) -> Tuple[str, float]:
+    """Normalize a caller-supplied expiry to (YYYYMMDD, T_years).
+
+    Accepts ``YYYYMMDD`` or ``YYYY-MM-DD``. Raises ValueError on anything
+    else so the caller can surface it as a scan error rather than silently
+    falling back to a different expiry than the run is analyzing.
+    """
+    exp_norm = str(expiry).strip().replace("-", "")
+    exp_date = datetime.strptime(exp_norm, EXPIRY_DATE_FMT).date()
+    today = datetime.now(timezone.utc).date()
+    T_years = max((exp_date - today).days, 0) / DAYS_PER_YEAR
+    return exp_norm, T_years
+
+
+def scan_max_pain(ticker: str, expiry: Optional[str] = None) -> MaxPainScan:
     """Run max pain detection for one ticker.
 
     Parameters
     ----------
     ticker : str
+    expiry : str, optional
+        Expiry to scan, as ``YYYYMMDD`` or ``YYYY-MM-DD``. When given (e.g.
+        the expiry the rest of the orchestrator run is analyzing), it is used
+        directly and the internal nearest-~30DTE selection is skipped.
 
     Returns
     -------
@@ -93,13 +116,16 @@ def scan_max_pain(ticker: str) -> MaxPainScan:
             timestamp=ts, error="no_spot",
         )
 
-    # Nearest ~30DTE expiry
+    # Caller-supplied expiry wins; otherwise self-select the nearest ~30DTE.
     try:
-        from scanner.options_scanner_base import VolSuiteImporter
-        vsi = VolSuiteImporter()
-        expiry, T_years = vsi.expiry_selector.nearest_expiry(
-            td, ticker, target_years=0.083
-        )
+        if expiry:
+            expiry, T_years = _resolve_given_expiry(expiry)
+        else:
+            from scanner.options_scanner_base import VolSuiteImporter
+            vsi = VolSuiteImporter()
+            expiry, T_years = vsi.expiry_selector.nearest_expiry(
+                td, ticker, target_years=0.083
+            )
     except Exception as e:
         return MaxPainScan(
             ticker=ticker, spot=spot, expiry="", T_years=0.0,

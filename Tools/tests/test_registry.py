@@ -107,6 +107,27 @@ def test_direction_signal_tool_is_registered():
 
 
 @pytest.mark.unit
+def test_hedge_optimizer_tool_is_registered():
+    tool = get_tool("hedge-optimizer")
+    assert tool.slug == "hedge-optimizer"
+    assert tool.name == "Hedge Optimizer"
+
+
+@pytest.mark.unit
+def test_vrp_term_structure_tool_is_registered():
+    tool = get_tool("vrp-term-structure")
+    assert tool.slug == "vrp-term-structure"
+    assert tool.name == "VRP Term Structure"
+
+
+@pytest.mark.unit
+def test_price_dist_tool_is_registered():
+    tool = get_tool("price-distribution")
+    assert tool.slug == "price-distribution"
+    assert tool.name == "Price Distribution"
+
+
+@pytest.mark.unit
 def test_all_six_direction_tools_and_original_two_are_registered():
     slugs = {tool.slug for tool in TOOLS}
     expected = {

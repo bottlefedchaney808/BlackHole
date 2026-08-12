@@ -128,6 +128,36 @@ print(combined["conviction"], combined["score"])
 None of these six tools is wired into `Vol_Suite/dealer_positioning.py`'s
 live sign models -- they're standalone, same as every other `Tools/` plugin.
 
+### VRP Term Structure Tool
+
+- **VRP Term Structure** (`slug="vrp-term-structure"`) -- the variance risk
+  premium across tenors (1mo/3mo/6mo/12mo) for one ticker: fair variance-swap
+  strike vol, ATM IV, VRP and trailing 30d realized vol at each, plus the
+  classified shape (`flat`/`upward`/`downward`/`humped`). Delegates to
+  `Vol_Suite/vrp_term_structure.py::compute_vrp_term_structure` -- the same
+  function `volatility_suite.py` runs -- but without the rest of a Vol_Suite
+  run. Give it an `output_dir` (or `_output_dir_override`) and it also writes
+  the chart PNG.
+
+  ```python
+  vrp = get_tool("vrp-term-structure").run({"focus": {"ticker": "NVDA"}})
+  print(vrp["shape"], [p["vrp_pct"] for p in vrp["points"]])
+  ```
+
+  The result dict is shaped exactly like `vol_result.json`'s
+  `vrp_term_structure` block, so one consumer reads both. Failures come back
+  as `{"available": False, "error": ...}` rather than raising.
+
+### Social Media Sentiment Scanner (placeholder)
+
+- **Social Media Sentiment Scanner** (`slug="social-sentiment"`) -- a stub, not
+  an implementation. It makes no network call and returns
+  `status: "not_implemented"` overall and for each of `reddit`, `youtube` and
+  `stocktwits` (or `status: "error"` if the context has no focus ticker). It is
+  deliberately **not** wired to the `sentiment-scanner/` suite, which is a
+  separate, already-functional project; this entry only reserves the slot in
+  the Tools listing ahead of a real implementation.
+
 ## Adding a new tool (the plugin pattern)
 
 1. Create a new module under `Tools/tools/`, e.g.

@@ -89,7 +89,7 @@ def _install_common_stubs(monkeypatch, calls: dict):
     monkeypatch.setattr(vsl, "run_variance_swap_live", fake_run_variance_swap_live)
 
     import garch_analysis as ga
-    monkeypatch.setattr(ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done"))
+    monkeypatch.setattr(ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31))
 
     import dealer_positioning as dp
 
@@ -204,3 +204,76 @@ def test_focus_workflow_reaches_the_same_pipeline_calls(monkeypatch, tmp_path):
     vsuite.run_focus_workflow()
 
     _assert_full_pipeline_ran_on_the_pack_basket(calls)
+
+
+def _core_analysis_kwargs(out_root: str) -> dict:
+    """The minimum _run_core_analysis call that reaches the GARCH step with
+    every network-facing module stubbed out."""
+    return {
+        "ticker": "TSLA",
+        "pack_ctx": None,
+        "group_tickers": [],
+        "use_pack_basket": False,
+        "tickers": ["TSLA", "INTC"],
+        "weights": [0.5, 0.5],
+        "chosen_index": "SPY",
+        "target_years": 0.4,
+        "expiration": "20261218",
+        "sign_model": "vol_surface_replication",
+        "run_options_chain": False,
+        "out_root": out_root,
+        "run_group_screener": False,
+    }
+
+
+@pytest.mark.unit
+def test_garch_failure_is_recorded_in_artifacts_errors(monkeypatch, tmp_path):
+    """run_garch_module swallows a failing fit on purpose (so a dead GARCH
+    does not cost the caller its dealer-positioning run), which means the
+    CALLER -- not an exception -- has to leave the machine-readable trace.
+    Without this check vol_result.json reported a clean run after a blown fit."""
+    import garch_analysis as ga
+    real_run_garch_module = ga.run_garch_module
+
+    calls: dict = {}
+    _install_common_stubs(monkeypatch, calls)
+    # _install_common_stubs replaces run_garch_module with a canned success;
+    # put the real wrapper back so its internal failure handling is exercised.
+    monkeypatch.setattr(ga, "run_garch_module", real_run_garch_module)
+
+    def _boom(ticker, start=None, end=None):
+        raise RuntimeError("fit did not converge")
+
+    monkeypatch.setattr(ga, "run_garch_analysis", _boom)
+    monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
+
+    _produced, _sections, artifacts = vsuite._run_core_analysis(
+        **_core_analysis_kwargs(str(tmp_path)))
+
+    assert artifacts["garch_ran"] is False
+    assert artifacts["garch_conditional_vol"] is None
+    garch_errors = [e for e in artifacts["errors"] if e["step"] == "garch"]
+    assert len(garch_errors) == 1
+    assert "fit did not converge" in garch_errors[0]["error"]
+
+
+@pytest.mark.unit
+def test_garch_success_with_no_conditional_vol_is_not_an_error(monkeypatch, tmp_path):
+    """A converged fit whose conditional-volatility series is empty also
+    returns None for the third element -- that must NOT read as a failure,
+    which is why the caller keys off .error rather than off the None."""
+    calls: dict = {}
+    _install_common_stubs(monkeypatch, calls)
+
+    import garch_analysis as ga
+    monkeypatch.setattr(
+        ga, "run_garch_module",
+        lambda ticker, output_dir=None: ga.GarchModuleResult([], "GARCH done", None))
+    monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
+
+    _produced, _sections, artifacts = vsuite._run_core_analysis(
+        **_core_analysis_kwargs(str(tmp_path)))
+
+    assert artifacts["garch_ran"] is True
+    assert artifacts["garch_conditional_vol"] is None
+    assert [e for e in artifacts["errors"] if e["step"] == "garch"] == []

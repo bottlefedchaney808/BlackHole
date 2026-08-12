@@ -84,6 +84,10 @@
         <input id="target" name="target_years" value="0.25" size="6" autocomplete="off">
       </div>
       <div class="field">
+        <label for="varhorizon">VaR horizon (days)</label>
+        <input id="varhorizon" name="var_horizon_days" value="" size="6" placeholder="1" autocomplete="off">
+      </div>
+      <div class="field">
         <label for="kind">Target</label>
         <select id="kind">
           <option value="unified">unified (sentiment &rarr; vol &rarr; options + var)</option>
@@ -341,7 +345,8 @@ function startRun() {
     strike: document.getElementById('strike').value.trim(),
     expiry: document.getElementById('expiry').value.trim(),
     option_type: document.getElementById('option_type').value,
-    target_years: document.getElementById('target').value.trim()
+    target_years: document.getElementById('target').value.trim(),
+    var_horizon_days: document.getElementById('varhorizon').value.trim()
   };
   var kind = document.getElementById('kind').value;
 

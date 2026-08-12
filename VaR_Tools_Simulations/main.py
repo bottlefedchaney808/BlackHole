@@ -162,17 +162,25 @@ def _build_corr_sim_from_context(payload: dict):
     var_cfg = payload.get("var")
     if not isinstance(var_cfg, dict):
         raise ContextModeError("Missing required object field 'var'.")
-    if "horizon_days" not in var_cfg:
-        raise ContextModeError("Missing required field 'var.horizon_days'.")
     if "confidence" not in var_cfg:
         raise ContextModeError("Missing required field 'var.confidence'.")
 
+    # Horizon is optional: a top-level 'corr_sim_days' wins, then 'var.horizon_days',
+    # then a 1-year (252 trading day) default matching the MC sim's horizon.
+    horizon_source = payload.get("corr_sim_days")
+    if horizon_source is None:
+        horizon_source = var_cfg.get("horizon_days")
+    if horizon_source is None:
+        horizon_source = 252
+        notes.append("horizon missing; used default 252-day (1y) horizon.")
     try:
-        horizon_days = int(var_cfg["horizon_days"])
+        horizon_days = int(horizon_source)
     except Exception as e:
-        raise ContextModeError("Field 'var.horizon_days' must be an integer.") from e
+        raise ContextModeError(
+            "Field 'corr_sim_days' (or 'var.horizon_days') must be an integer.") from e
     if horizon_days <= 0:
-        raise ContextModeError("Field 'var.horizon_days' must be > 0.")
+        raise ContextModeError(
+            "Field 'corr_sim_days' (or 'var.horizon_days') must be > 0.")
 
     try:
         confidence = float(var_cfg["confidence"])
@@ -331,6 +339,45 @@ def _context_seed(payload: dict, default: int = 42) -> int:
     return default
 
 
+def _histogram_bins(values: np.ndarray, n_bins: int = 20) -> list:
+    """Bucket *values* into n_bins equal-width bins for chart rendering.
+
+    The dashboard has no path-level data to draw (mc_sim/copula/corr_sim are
+    single-step-to-horizon, not multi-step path simulators), so a terminal-
+    distribution histogram is the honest visual: it shows the actual shape of
+    the simulated outcome, not a fabricated path. Every simulated draw lands in
+    exactly one bin, so sum(bin["count"]) == len(values).
+    """
+    values = np.asarray(values, dtype=float)
+    counts, edges = np.histogram(values, bins=n_bins)
+    return [{"low": float(edges[i]), "high": float(edges[i + 1]), "count": int(counts[i])}
+            for i in range(n_bins)]
+
+
+def _resolve_vol_and_quality(payload: dict, tk: str) -> tuple:
+    """Prefer suite_context's Vol_Suite-computed GARCH vol; fall back to VaR's
+    own GARCH fit, then to a fixed default. Returns (vol, vol_source)."""
+    from var_engine import data_loader
+    focus = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
+    ctx_vol = focus.get("garch_conditional_vol")
+    if isinstance(ctx_vol, (int, float)) and not isinstance(ctx_vol, bool) and ctx_vol > 0:
+        return float(ctx_vol), "context"
+    fit_vol = data_loader.estimate_garch_vol(tk)
+    if fit_vol is not None:
+        return float(fit_vol), "garch_fit"
+    return 0.25, "fallback"
+
+
+def _resolve_drift_and_quality(tk: str) -> tuple:
+    """VaR's own historical geometric drift -- Vol_Suite has no drift/expected-
+    return concept to source from. Returns (drift, expected_return_source)."""
+    from var_engine import data_loader
+    drift = data_loader.estimate_geometric_return(tk)
+    if drift is None:
+        return 0.0, "unavailable"
+    return float(drift), "computed"
+
+
 def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     """Non-interactive 1-year-out MC price-distribution sim, seeded from
     live spot + GARCH vol + historical geometric drift."""
@@ -341,9 +388,10 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     spot = data_loader.fetch_spot(tk)
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
-    vol = data_loader.estimate_garch_vol(tk) or 0.25
-    drift = data_loader.estimate_geometric_return(tk)
+    vol, vol_source = _resolve_vol_and_quality(payload, tk)
+    drift, drift_source = _resolve_drift_and_quality(tk)
     seed = _context_seed(payload)
+    n_sims = 10_000
 
     r = run(MCSimInputs(
         market_ids=[tk],
@@ -353,7 +401,7 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
         var_days=252,
         trading_days=252,
         confidence=0.99,
-        n_sims=10_000,
+        n_sims=n_sims,
         seed=seed,
         positions=[Position(pos_type=1, market_id=tk, quantity=1.0)],
         expected_returns=np.array([drift]),
@@ -362,12 +410,80 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     return {
         "suite": "var", "status": "ok", "module": "mc_sim_1yr",
         "ticker": tk, "spot": float(spot), "vol": float(vol), "expected_return": float(drift),
-        "seed": seed, "horizon_days": 252,
+        "seed": seed, "horizon_days": 252, "n_sims": n_sims,
         "terminal_price_mean": float(terminal.mean()),
         "terminal_price_median": float(np.median(terminal)),
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
         "terminal_price_p95": float(np.quantile(terminal, 0.95)),
+        "terminal_price_histogram": _histogram_bins(terminal),
+        "histogram_unit": "price",
         "var_1yr": float(r.var_full), "cvar_1yr": float(r.cvar_full),
+        "data_quality": {"vol_source": vol_source, "expected_return_source": drift_source},
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
+    """Non-interactive 1-year-out price-distribution table + MC terminal
+    histogram, same seed/vol/spot/drift inputs as _build_mc_sim_from_context.
+
+    price_dist.py previously had no context-mode builder at all -- its analytic
+    lognormal table and MC probability engine were reachable only from the
+    interactive menu (run_price_dist), so no headless/dashboard caller could
+    use them.
+    """
+    from var_engine import data_loader
+    from var_engine.price_dist import lognormal_dist, mc_probabilities, MCProbInputs
+
+    tk = _focus_ticker(payload, ticker)
+    spot = data_loader.fetch_spot(tk)
+    if spot <= 0:
+        raise ContextModeError(f"Could not fetch live spot for {tk}.")
+    vol, vol_source = _resolve_vol_and_quality(payload, tk)
+    drift, drift_source = _resolve_drift_and_quality(tk)
+    seed = _context_seed(payload)
+    n_sims = 10_000
+    days = 252
+    # One annualization convention for the analytic table, the MC probability
+    # engine and the histogram draw below, so they can't silently diverge.
+    trading_days = 252.0
+
+    table = lognormal_dist(spot, days=days, vol=vol, mu=drift,
+                           trading_days=trading_days, n_points=50)
+    mc = mc_probabilities(MCProbInputs(
+        spot=spot, upper=spot * 1.5, lower=spot * 0.5, days=days,
+        vol=vol, mu=drift, n_sims=n_sims, seed=seed,
+        trading_days=trading_days,
+    ))
+
+    # mc_probabilities reports summary probabilities only (no terminal-price
+    # vector), so the histogram is drawn from an equivalent one-step GBM draw
+    # to the same 1-year horizon.
+    rng = np.random.default_rng(seed)
+    T = days / trading_days
+    terminal = spot * np.exp((drift - 0.5 * vol ** 2) * T
+                             + vol * np.sqrt(T) * rng.standard_normal(n_sims))
+
+    return {
+        "suite": "var", "status": "ok", "module": "price_dist_1yr",
+        "ticker": tk, "spot": float(spot), "vol": float(vol),
+        "expected_return": float(drift),
+        "seed": seed, "horizon_days": days, "n_sims": n_sims,
+        "distribution_table": [
+            {"price": e.price, "prob_at": e.prob_at,
+             "prob_below": e.prob_below, "prob_above": e.prob_above}
+            for e in table
+        ],
+        "terminal_price_histogram": _histogram_bins(terminal),
+        "histogram_unit": "price",
+        "avg_end_price": float(mc.avg_end_price),
+        "prob_above_upper_at_expiry": float(mc.above_upper_at_expiry),
+        "prob_below_lower_at_expiry": float(mc.below_lower_at_expiry),
+        "prob_touch_upper_any_time": float(mc.above_upper_any_time),
+        "prob_touch_lower_any_time": float(mc.below_lower_any_time),
+        "upper_target": float(spot * 1.5), "lower_target": float(spot * 0.5),
+        "data_quality": {"vol_source": vol_source,
+                         "expected_return_source": drift_source},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -382,9 +498,10 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
     spot = data_loader.fetch_spot(tk)
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
-    vol = data_loader.estimate_garch_vol(tk) or 0.25
-    drift = data_loader.estimate_geometric_return(tk)
+    vol, vol_source = _resolve_vol_and_quality(payload, tk)
+    drift, drift_source = _resolve_drift_and_quality(tk)
     seed = _context_seed(payload)
+    n_sims = 50_000
 
     r = run(CopulaInputs(
         tickers=[tk],
@@ -396,7 +513,7 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
         var_days=252,
         trading_days=252,
         confidence=0.99,
-        n_sims=50_000,
+        n_sims=n_sims,
         seed=seed,
         spot_prices=np.array([spot]),
         expected_returns=np.array([drift]),
@@ -405,12 +522,16 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
     return {
         "suite": "var", "status": "ok", "module": "copula_1yr",
         "ticker": tk, "spot": float(spot), "vol": float(vol), "expected_return": float(drift),
-        "seed": seed, "horizon_days": 252, "copula_type": "student_t",
+        "seed": seed, "horizon_days": 252, "n_sims": n_sims,
+        "copula_type": "student_t",
         "terminal_price_mean": float(terminal.mean()),
         "terminal_price_median": float(np.median(terminal)),
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
         "terminal_price_p95": float(np.quantile(terminal, 0.95)),
+        "terminal_price_histogram": _histogram_bins(terminal),
+        "histogram_unit": "price",
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
+        "data_quality": {"vol_source": vol_source, "expected_return_source": drift_source},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -435,10 +556,14 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
     seed = _context_seed(payload)
     start, end = data_loader.default_date_range()
 
+    focus_vol, vol_source = _resolve_vol_and_quality(payload, tk)
+
     spots, vols, rets = [], [], {}
     for t in tickers:
         spots.append(data_loader.fetch_spot(t))
-        vols.append(data_loader.estimate_garch_vol(t) or 0.25)
+        # Only the focus ticker has a context-supplied GARCH vol -- peers are
+        # not covered by suite_context's `focus` block, so they refit.
+        vols.append(focus_vol if t == tk else (data_loader.estimate_garch_vol(t) or 0.25))
         try:
             rets[t] = data_loader.fetch_log_returns(t, start, end)
         except Exception:
@@ -457,6 +582,7 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         raise ContextModeError(f"Could not fetch live spot for one of: {', '.join(tickers)}.")
     vols = np.array(vols, dtype=float)
     n_shares = np.ones(len(tickers))
+    n_sims = 10_000
 
     r = run(CorrSimInputs(
         current_prices=spots,
@@ -466,18 +592,30 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         var_days=252,
         trading_days=252,
         confidence=0.99,
-        n_sims=10_000,
+        n_sims=n_sims,
         seed=seed,
         asset_names=tickers,
     ))
+    # corr_sim returns a portfolio P&L vector rather than per-asset terminal
+    # prices, so the comparable histogram here is of terminal *portfolio*
+    # values (start value + simulated P&L) -- one entry per simulation, same
+    # as the single-name builders' terminal price vectors.
+    terminal = r.portfolio_value + np.asarray(r.pnl_distribution, dtype=float)
     return {
         "suite": "var", "status": "ok", "module": "corr_sim_1yr",
-        "tickers": tickers, "seed": seed, "horizon_days": 252,
+        "tickers": tickers, "seed": seed, "horizon_days": 252, "n_sims": n_sims,
         "correlation_matrix": corr_matrix.tolist(),
         "sim_vols": r.sim_vols.tolist(), "sim_corr": r.sim_corr.tolist(),
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
         "portfolio_value": float(r.portfolio_value),
+        "terminal_price_histogram": _histogram_bins(terminal),
+        # Unlike the single-name builders, these bins are terminal *portfolio*
+        # values, not prices -- consumers must read this field rather than
+        # assume "price" from the histogram field's name.
+        "histogram_unit": "portfolio_value",
         "cholesky_ok": bool(r.cholesky_ok),
+        # vol_source describes the focus ticker only; peers always refit.
+        "data_quality": {"vol_source": vol_source, "expected_return_source": "not_applicable"},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -1180,13 +1318,13 @@ def run_price_dist():
 
     # Auto-populate GARCH vol in background — no prompt delay
     garch_vol = estimate_garch_vol(tk)
-    def_vol = garch_vol if garch_vol > 0.0 else 0.30
+    def_vol = garch_vol if garch_vol is not None and garch_vol > 0.0 else 0.30
     vol_label = f"Annual volatility [GARCH(1,1)={def_vol:.2f}]"
     vol   = inp(vol_label, default=def_vol, cast=float)
 
     # Auto-populate geometric mean return
     geo_ret = estimate_geometric_return(tk)
-    def_mu = geo_ret if geo_ret != 0.0 else 0.08
+    def_mu = geo_ret if geo_ret is not None and geo_ret != 0.0 else 0.08
     mu_label = f"Expected annual return [geometric mean={def_mu:.4f}]"
     mu    = inp(mu_label, default=def_mu, cast=float)
 

@@ -243,3 +243,64 @@ def test_corrugation_absolute_and_relative_directions_are_opposite(wide_sparse_s
 
     assert abs_near < abs_far, "absolute ripple should shrink near expiry"
     assert rel_near > rel_far, "relative ripple should grow near expiry"
+
+
+# ---------------------------------------------------------------------------
+# Trade sizing: vega notional must scale with spot, not be a flat constant
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_compute_vega_notional_scales_with_spot():
+    """A $2000 stock and a $20 stock must not be sized identically -- the old
+    code hardcoded vega_notional = 100000 for every ticker on every run."""
+    from variance_swap_live import compute_vega_notional
+    low = compute_vega_notional(spot=20.0)
+    high = compute_vega_notional(spot=2000.0)
+    assert high > low
+
+
+@pytest.mark.unit
+def test_compute_vega_notional_at_reference_spot_matches_base():
+    from variance_swap_live import compute_vega_notional
+    assert compute_vega_notional(spot=100.0) == pytest.approx(100_000.0)
+
+
+@pytest.mark.unit
+def test_compute_vega_notional_floors_at_base_for_cheap_tickers():
+    """Cheap underlyings must not collapse toward a near-zero vega notional."""
+    from variance_swap_live import compute_vega_notional
+    assert compute_vega_notional(spot=1.0) >= 100_000.0
+
+
+@pytest.mark.unit
+def test_compute_vega_notional_handles_nonpositive_spot():
+    from variance_swap_live import compute_vega_notional
+    assert compute_vega_notional(spot=0.0) == pytest.approx(100_000.0)
+    assert compute_vega_notional(spot=-5.0) == pytest.approx(100_000.0)
+
+
+# ---------------------------------------------------------------------------
+# Variance notional: N_var = N_vol / (2 * sigma_strike), None on degraded input
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_compute_variance_notional_zero_strike_vol_returns_none():
+    """compute_fair_variance_strike returns fair_vol = 0.0 for a degraded /
+    illiquid chain. Dividing by it would be a ZeroDivisionError, and
+    substituting a fake 0.0 would silently misreport trade size -- the only
+    correct answer is None so callers report "N/A"."""
+    from variance_swap_live import compute_variance_notional
+    assert compute_variance_notional(100_000.0, 0.0) is None
+
+
+@pytest.mark.unit
+def test_compute_variance_notional_none_strike_vol_returns_none():
+    from variance_swap_live import compute_variance_notional
+    assert compute_variance_notional(100_000.0, None) is None
+
+
+@pytest.mark.unit
+def test_compute_variance_notional_normal_case():
+    """N_var = N_vol / (2 * sigma) -> 100000 / (2 * 0.20) = 250000."""
+    from variance_swap_live import compute_variance_notional
+    assert compute_variance_notional(100_000.0, 0.20) == pytest.approx(250_000.0)

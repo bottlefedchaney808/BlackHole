@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -10,7 +11,27 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import main as main_mod
+
+def _load_sentiment_main():
+    """Load sentiment-scanner/main.py under a unique module name.
+
+    Options_Suite, VaR_Tools_Simulations and sentiment-scanner each ship
+    their own `main.py` -- a bare `import main` silently returns whichever
+    one another test file already cached in sys.modules under that generic
+    name during pytest's combined collection, instead of raising.
+    """
+    module_name = "sentiment_scanner_main"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib.util.spec_from_file_location(
+        module_name, str(Path(__file__).resolve().parent.parent / "main.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+main_mod = _load_sentiment_main()
 
 
 class _FakeScan:
