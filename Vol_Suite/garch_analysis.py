@@ -323,17 +323,42 @@ def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None)
     return res
 
 
-def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, output_dir: str = None) -> list:
-    """Wrapper that sets VS_OUTPUT_DIR and runs run_garch_analysis, returning list of output files for the ticker."""
+def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, output_dir: str = None) -> tuple:
+    """Wrapper that sets VS_OUTPUT_DIR and runs run_garch_analysis.
+
+    Returns ``(output_files, interpretation_text, annualized_conditional_vol)``.
+
+    The third element is the *current* GARCH conditional volatility, annualized
+    and expressed as a decimal fraction (0.31 == 31%). It used to exist only as
+    a console print inside run_garch_analysis, which meant every downstream
+    consumer -- notably the VaR Monte Carlo -- had to re-fit the model or fall
+    back to a hardcoded guess. It is ``None`` when the fit failed or the result
+    object carried no conditional volatility series.
+    """
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     os.environ['VS_OUTPUT_DIR'] = out_dir
-    res = run_garch_analysis(ticker, start=start, end=end)
+    try:
+        res = run_garch_analysis(ticker, start=start, end=end)
+    except Exception as e:
+        print(f"  GARCH module failed: {e}")
+        return [], f"Ticker: {ticker} - GARCH analysis failed: {e}", None
+
     # Collect files generated for this ticker in out_dir
     files = []
     for fn in os.listdir(out_dir):
         if fn.startswith(f"{ticker}_garch_") and (fn.lower().endswith('.png') or fn.lower().endswith('.pdf')):
             files.append(os.path.join(out_dir, fn))
+
+    # res.conditional_volatility is daily and on the *percent* scale, because
+    # run_garch_analysis fits the model on log returns scaled by 100.
+    garch_conditional_vol = None
+    try:
+        daily_vol_pct = float(res.conditional_volatility.iloc[-1])
+        garch_conditional_vol = daily_vol_pct / 100.0 * np.sqrt(ANNUALIZE)
+    except Exception:
+        pass
+
     # Build interpretation text
     try:
         alpha = float(res.params.get('alpha[1]', np.nan))
@@ -345,10 +370,12 @@ def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None, o
             f"GARCH(1,1) params: alpha={alpha:.4f}, beta={beta:.4f}, persistence={persistence:.4f}",
             f"t-distribution df: {nu:.2f}",
         ]
+        if garch_conditional_vol is not None:
+            interp_lines.append(f"Annualized conditional vol: {garch_conditional_vol:.2%}")
     except Exception:
         interp_lines = [f"Ticker: {ticker} - GARCH analysis completed."]
     interp = "\n".join(interp_lines)
-    return files, interp
+    return files, interp, garch_conditional_vol
 
 
 def main():

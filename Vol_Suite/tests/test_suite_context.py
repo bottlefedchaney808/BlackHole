@@ -385,3 +385,35 @@ def test_suite_context_round_trip_with_strategies(tmp_path):
     assert loaded["strategies"][0]["vol_regime"] == "RICH"
     assert loaded["strategies"][0]["rank_score"] == 0.90
     assert len(loaded["strategies"][0]["legs"]) == 2
+
+
+@pytest.mark.unit
+def test_garch_conditional_vol_included_when_given(tmp_path):
+    context = _ctx(tmp_path, garch_conditional_vol=0.31)
+    assert context["focus"]["garch_conditional_vol"] == pytest.approx(0.31)
+    validate_suite_context(context)
+
+
+@pytest.mark.unit
+def test_garch_conditional_vol_defaults_to_none(tmp_path):
+    context = _ctx(tmp_path)
+    assert context["focus"]["garch_conditional_vol"] is None
+    validate_suite_context(context)
+
+
+@pytest.mark.unit
+def test_garch_conditional_vol_survives_round_trip(tmp_path):
+    output_dir = tmp_path / "outputs" / "20260812_090000"
+    output_dir.mkdir(parents=True)
+    context = _ctx(tmp_path, output_dir=str(output_dir), garch_conditional_vol=0.2875)
+    loaded = read_suite_context(
+        write_suite_context(context, str(output_dir / "suite_context.json")))
+    assert loaded["focus"]["garch_conditional_vol"] == pytest.approx(0.2875)
+
+
+@pytest.mark.unit
+def test_validate_suite_context_rejects_non_numeric_garch_conditional_vol(tmp_path):
+    context = _ctx(tmp_path)
+    context["focus"]["garch_conditional_vol"] = "0.31"
+    with pytest.raises(ValueError, match="garch_conditional_vol"):
+        validate_suite_context(context)

@@ -713,6 +713,7 @@ def _build_vol_surface(artifacts: Dict[str, Any]) -> Dict[str, Any]:
         "focus": vs.get("focus"),
         "index": vs.get("index"),
         "vol_spread_pts": vs.get("vol_spread_pts"),
+        "garch_conditional_vol": artifacts.get("garch_conditional_vol"),
         "basket": artifacts.get("basket", {}),
         "opportunities": artifacts.get("opportunities", ""),
     }
@@ -1194,9 +1195,10 @@ def _run_core_analysis(
     print(f"\n[4/5] Running remaining modules for {ticker}...")
 
     print("\n[Running] GARCH Analysis")
+    garch_conditional_vol = None
     try:
         import garch_analysis as ga
-        files, interp = ga.run_garch_module(ticker, output_dir=out_root)
+        files, interp, garch_conditional_vol = ga.run_garch_module(ticker, output_dir=out_root)
         produced.extend(files)
         sections.append({
             "title": f"GARCH Analysis: {ticker}", "text": interp or "",
@@ -1206,6 +1208,7 @@ def _run_core_analysis(
     except Exception as e:
         print(f"  GARCH failed: {e}")
         _note_error("garch", e)
+    artifacts["garch_conditional_vol"] = garch_conditional_vol
 
     if run_vol_surface_2d:
         print("\n[Running] 2D Vol Surface (strike x tenor)")
@@ -1476,6 +1479,7 @@ def run_unified_flow():
         sentiment_pack_json_path=sentiment_pack_json,
         sentiment_group_id=sentiment_group_id,
         sentiment_ranked_tickers=group_tickers,
+        garch_conditional_vol=artifacts.get("garch_conditional_vol"),
         run_options_suite=run_options_suite,
         run_var_suite=run_var_suite,
         compile_pdf=compile_pdf,

@@ -89,7 +89,7 @@ def _install_common_stubs(monkeypatch, calls: dict):
     monkeypatch.setattr(vsl, "run_variance_swap_live", fake_run_variance_swap_live)
 
     import garch_analysis as ga
-    monkeypatch.setattr(ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done"))
+    monkeypatch.setattr(ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31))
 
     import dealer_positioning as dp
 

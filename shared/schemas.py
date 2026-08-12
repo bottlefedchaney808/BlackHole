@@ -142,6 +142,12 @@ def validate_suite_context(data: Dict[str, Any]) -> None:
              "focus.target_years must be numeric")
     _require(isinstance(focus["expiration_date"], str) and focus["expiration_date"].strip(),
              "focus.expiration_date must be a non-empty string")
+    # Optional, not required: contexts written before Vol_Suite started
+    # publishing the GARCH conditional vol are still valid.
+    if "garch_conditional_vol" in focus:
+        _require(focus["garch_conditional_vol"] is None
+                 or _is_number(focus["garch_conditional_vol"]),
+                 "focus.garch_conditional_vol must be numeric or null")
 
     # ── basket ────────────────────────────────────────────────────────
     basket = data["basket"]

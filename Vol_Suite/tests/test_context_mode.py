@@ -150,7 +150,7 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
 
     import garch_analysis as ga
     monkeypatch.setattr(ga, "run_garch_module",
-                        lambda ticker, output_dir=None: ([], "GARCH done"))
+                        lambda ticker, output_dir=None: ([], "GARCH done", 0.31))
 
     import variance_swap_screener as vss
 

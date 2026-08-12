@@ -180,6 +180,10 @@ def _extract_vol(result: Any) -> Dict[str, Any]:
         if vol_spread is not None:
             metrics["vol_spread_pts"] = vol_spread
 
+        garch_cond_vol = vol_surface.get("garch_conditional_vol")
+        if garch_cond_vol is not None:
+            metrics["garch_conditional_vol"] = garch_cond_vol
+
         basket = vol_surface.get("basket") or {}
         dispersion = basket.get("dispersion_score")
         if dispersion is not None:
