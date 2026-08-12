@@ -68,6 +68,21 @@ async def call(sess, tool, args):
     res = await sess.call_tool(tool, args)
     return _text_block(res)
 
+def evaluate_position(sym, last, avg, stop, scale):
+    """Pure logic for one holding. Returns (checkpoint_line, alert_or_None).
+    Alert on: last at/below stop OR within 2% of it; up +8%+ from avg (scale-out).
+    """
+    if last is None:
+        return f"{sym} n/a/{stop}", f"ALERT {sym}: no quote"
+    dist_pct = (last - stop) / stop * 100 if stop else 0.0
+    ret_pct = (last - avg) / avg * 100 if avg else 0.0
+    line = f"{sym} {last:.2f}/{stop:.2f}"
+    if last <= stop or dist_pct <= 2.0:
+        return line, f"ALERT {sym}: last {last:.2f} at/below stop {stop} ({dist_pct:+.1f}%) — stop likely triggered"
+    if ret_pct >= 8.0:
+        return line, f"ALERT {sym}: up {ret_pct:+.1f}% from avg {avg} (last {last:.2f}) — scale-out candidate (trigger {scale})"
+    return line, None
+
 async def main():
     import httpx
     from mcp import ClientSession
@@ -117,15 +132,10 @@ async def main():
         last = quotes.get(sym)
         q = qty.get(sym, exp_qty)
         q = int(q) if q == int(q) else q
-        if last is None:
-            lines.append(f"{sym} n/a/{stop}"); alerts.append(f"ALERT {sym}: no quote"); continue
-        dist_pct = (last - stop) / stop * 100 if stop else 0.0
-        ret_pct = (last - avg) / avg * 100 if avg else 0.0
-        lines.append(f"{sym} {last:.2f}/{stop}")
-        if last <= stop or dist_pct <= 2.0:
-            alerts.append(f"ALERT {sym}: last {last:.2f} at/below stop {stop} ({dist_pct:+.1f}%) — stop likely triggered")
-        elif ret_pct >= 8.0:
-            alerts.append(f"ALERT {sym}: up {ret_pct:+.1f}% from avg {avg} (last {last:.2f}) — scale-out candidate (trigger {scale})")
+        line, alert = evaluate_position(sym, last, avg, stop, scale)
+        lines.append(line)
+        if alert:
+            alerts.append(alert)
         if q != exp_qty:
             alerts.append(f"ALERT {sym}: qty changed {exp_qty}->{q} — likely a fill/stop")
 
