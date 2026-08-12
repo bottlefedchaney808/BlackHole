@@ -99,6 +99,7 @@ class MCSimInputs:
     seed:         Optional[int] = 42
     positions:    List[Position] = field(default_factory=list)
     filter_type:  int = 0   # 0=all, 1=stock only, 2=options only, 3=bonds only
+    expected_returns: Optional[np.ndarray] = None  # annualised drift per market id; None = zero-drift (legacy)
 
 
 @dataclass
@@ -110,6 +111,7 @@ class MCSimResults:
     pnl_partial:   np.ndarray
     pnl_full:      np.ndarray
     position_vars: dict    # pos_type → VaR from full reval
+    terminal_prices: Optional[np.ndarray] = None  # (n_sims, n) simulated spot paths at horizon
 
 
 def run(inp: MCSimInputs) -> MCSimResults:
@@ -134,6 +136,9 @@ def run(inp: MCSimInputs) -> MCSimResults:
     # simulate market moves
     Z      = rng.standard_normal((inp.n_sims, n))
     lr     = Z @ L.T * np.sqrt(dt)                    # (n_sims, n) log returns
+    if inp.expected_returns is not None:
+        drift = (np.asarray(inp.expected_returns) - 0.5 * inp.volatilities**2) * dt
+        lr    = lr + drift
     S_sim  = inp.spot_prices * np.exp(lr)              # (n_sims, n) simulated prices
 
     pnl_full    = np.zeros(inp.n_sims)
@@ -222,6 +227,7 @@ def run(inp: MCSimInputs) -> MCSimResults:
         cvar_partial=cvp, cvar_full=cvf,
         pnl_partial=pnl_partial, pnl_full=pnl_full,
         position_vars=pos_vars,
+        terminal_prices=S_sim,
     )
 
 

@@ -58,9 +58,10 @@ def _nearest_pd(m: np.ndarray) -> np.ndarray:
 
 # ── Marginal quantile transform ───────────────────────────────────────────────
 
-def _uniform_to_returns(U, marginal_dfs, vols, dt):
+def _uniform_to_returns(U, marginal_dfs, vols, dt, expected_returns=None):
     """Transform (n_sims, n) uniforms → log returns using per-asset marginal.
     marginal_dfs: array of df per asset (0 or large → normal).
+    expected_returns: annualised drift per asset; None = zero-drift (legacy).
     """
     n_sims, n = U.shape
     returns   = np.empty_like(U)
@@ -75,6 +76,8 @@ def _uniform_to_returns(U, marginal_dfs, vols, dt):
             # marginal_dfs) silently overstates vol/VaR by sqrt(df/(df-2)).
             t_std = np.sqrt(df / (df - 2))
             returns[:, j] = (student_t.ppf(U[:, j], df=df) / t_std) * vols[j] * np.sqrt(dt)
+        if expected_returns is not None:
+            returns[:, j] += (expected_returns[j] - 0.5 * vols[j]**2) * dt
     return returns
 
 
@@ -95,6 +98,8 @@ class CopulaInputs:
     confidence:     float  = 0.99
     n_sims:         int    = 50_000
     seed:           Optional[int] = 42
+    spot_prices:    Optional[np.ndarray] = None    # per-ticker spot; required for terminal_prices
+    expected_returns: Optional[np.ndarray] = None  # annualised drift per ticker; None = zero-drift (legacy)
 
 
 @dataclass
@@ -103,6 +108,7 @@ class CopulaResults:
     cvar:             float
     copula_type:      str
     pnl_distribution: np.ndarray
+    terminal_prices:  Optional[np.ndarray] = None  # (n_sims, n) simulated spot paths at horizon, if spot_prices given
 
 
 def run(inp: CopulaInputs) -> CopulaResults:
@@ -122,7 +128,7 @@ def run(inp: CopulaInputs) -> CopulaResults:
         raise ValueError(f"Unknown copula: {inp.copula_type}")
 
     # 2. transform uniforms → asset returns via marginals
-    R = _uniform_to_returns(U, mdf, inp.volatilities, dt)  # (n_sims, n)
+    R = _uniform_to_returns(U, mdf, inp.volatilities, dt, inp.expected_returns)  # (n_sims, n)
 
     # 3. portfolio P&L
     pnl = R @ inp.position_vals
@@ -133,10 +139,15 @@ def run(inp: CopulaInputs) -> CopulaResults:
     tail = pnl[pnl <= cut]
     cvar = float(-tail.mean()) if len(tail) > 0 else var
 
+    terminal_prices = None
+    if inp.spot_prices is not None:
+        terminal_prices = np.asarray(inp.spot_prices) * np.exp(R)
+
     return CopulaResults(
         var=var, cvar=cvar,
         copula_type=inp.copula_type,
         pnl_distribution=pnl,
+        terminal_prices=terminal_prices,
     )
 
 

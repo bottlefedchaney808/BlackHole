@@ -1873,7 +1873,7 @@ async def tools_backtest_run(request: Request):
 # because their run() takes extra required/structured inputs.
 GENERIC_TOOL_SLUGS = {
     'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
-    'liquidity-map', 'direction-signal',
+    'liquidity-map', 'direction-signal', 'hedge-optimizer',
 }
 
 

@@ -363,7 +363,13 @@ def test_validation_verdict_is_logged_fail_with_suite_row_marked_invalid(fake_en
 
 @pytest.fixture
 def unified_env(tmp_path, monkeypatch):
-    """run_unified with build_context/run_suite/log_run stubbed out."""
+    """run_unified with build_context/run_suite/log_run/market-signals stubbed out.
+
+    The market-signals stage (IV Rank/Max Pain/Skew/Unusual OI scanners + 1yr
+    MC/copula/corr sims + Direction suite) runs in-process, not through
+    `run_suite`, so it is stubbed separately via `run_market_signals_stage`
+    rather than appearing in `outcomes`/`calls` alongside vol/options/var.
+    """
     output_dir = tmp_path / 'unified_output'
     output_dir.mkdir()
 
@@ -377,23 +383,7 @@ def unified_env(tmp_path, monkeypatch):
                         lambda: (_ for _ in ()).throw(RuntimeError('stubbed')))
 
     calls = []
-    # The sentiment stage's payload is not inert here: stage 1b folds it into
-    # the context under audit, and the audit rejects anything that is not a
-    # valid schema_version=2 sentiment context export. So the default "this
-    # stage succeeded" result for sentiment has to be a real one.
-    outcomes = {
-        'sentiment': {
-            'suite': 'sentiment', 'status': 'ok',
-            'schema_version': 2, 'run_id': 'sent-1', 'created_at_utc': TS,
-            'sentiment': {
-                'manifest_path': '/data/run_manifest.json',
-                'pack_json_path': '/data/run_pack.json',
-                'group_id': 'cns-threshold-alerts',
-                'ranked_tickers': ['NVDA'],
-            },
-            '_validation': {'status': 'PASS'},
-        },
-    }
+    outcomes = {}
 
     def fake_run_suite(name, ctx, timeout=1800, validate=True):
         calls.append(name)
@@ -402,6 +392,16 @@ def unified_env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(orchestrator, 'run_suite', fake_run_suite)
 
+    sentiment_state = {
+        'result': {'suite': 'sentiment', 'status': 'ok', 'ticker': 'NVDA',
+                   '_validation': {'status': 'PASS'}},
+    }
+
+    def fake_market_signals(ticker, ctx):
+        return sentiment_state['result']
+
+    monkeypatch.setattr(orchestrator, 'run_market_signals_stage', fake_market_signals)
+
     class Env:
         pass
 
@@ -409,6 +409,7 @@ def unified_env(tmp_path, monkeypatch):
     env.calls = calls
     env.outcomes = outcomes
     env.context = context
+    env.set_sentiment_result = lambda payload: sentiment_state.__setitem__('result', payload)
     return env
 
 
@@ -426,7 +427,9 @@ def test_unified_continues_past_a_failed_stage_by_default(unified_env):
 
     combined = orchestrator.run_unified({'ticker': 'NVDA'})
 
-    assert unified_env.calls == ['sentiment', 'vol', 'options', 'var']
+    # Market-signals runs in-process (not through run_suite), so it never
+    # appears in `calls` -- only the three subprocess suites do.
+    assert unified_env.calls == ['vol', 'options', 'var']
     assert combined['status'] == 'partial'
     assert combined['aborted_by'] is None
 
@@ -438,7 +441,7 @@ def test_unified_aborts_on_invalid_vol_output_when_flag_set(unified_env):
     combined = orchestrator.run_unified({'ticker': 'NVDA'},
                                         fail_on_suite_error=True)
 
-    assert unified_env.calls == ['sentiment', 'vol'], \
+    assert unified_env.calls == ['vol'], \
         "options/var must not run against unvalidated Vol_Suite output"
     assert combined['status'] == 'aborted'
     assert combined['aborted_by'] == 'vol'
@@ -449,14 +452,19 @@ def test_unified_aborts_on_invalid_vol_output_when_flag_set(unified_env):
 
 
 @pytest.mark.unit
-def test_unified_aborts_at_sentiment_and_skips_everything_downstream(unified_env):
-    unified_env.outcomes['sentiment'] = invalid('sentiment')
+def test_unified_aborts_when_market_signals_stage_errors(unified_env):
+    """A market-signals stage status of 'error' fails the context audit --
+    unconditionally, the same as a bad context mutation would, since every
+    remaining stage is handed the same context regardless of --fail-on-suite-error."""
+    unified_env.set_sentiment_result(
+        {'suite': 'sentiment', 'status': 'error', 'ticker': 'NVDA',
+         'errors': ['scanner import failed: boom']})
 
-    combined = orchestrator.run_unified({'ticker': 'NVDA'},
-                                        fail_on_suite_error=True)
+    combined = orchestrator.run_unified({'ticker': 'NVDA'})
 
-    assert unified_env.calls == ['sentiment']
-    assert combined['aborted_by'] == 'sentiment'
+    assert unified_env.calls == []
+    assert combined['aborted_by'] == 'context_audit'
+    assert combined['context_audit']['validation_status'] == 'FAIL'
     assert all(combined['results'][s]['skipped'] for s in ('vol', 'options', 'var'))
 
 
@@ -468,7 +476,7 @@ def test_unified_reads_flag_from_focus_when_not_passed_explicitly(unified_env):
                                          'fail_on_suite_error': True})
 
     assert combined['status'] == 'aborted'
-    assert unified_env.calls == ['sentiment', 'vol']
+    assert unified_env.calls == ['vol']
 
 
 @pytest.mark.unit
@@ -497,18 +505,18 @@ def test_unified_does_not_fold_invalid_sentiment_block_into_context(unified_env)
 @pytest.mark.unit
 def test_unified_validate_false_is_threaded_to_every_stage(unified_env, monkeypatch):
     seen = []
-    ok = unified_env.outcomes['sentiment']
 
     def fake_run_suite(name, ctx, timeout=1800, validate=True):
         seen.append((name, validate))
-        return ok if name == 'sentiment' else {'suite': name, 'status': 'ok'}
+        return {'suite': name, 'status': 'ok'}
 
     monkeypatch.setattr(orchestrator, 'run_suite', fake_run_suite)
 
     orchestrator.run_unified({'ticker': 'NVDA'}, validate=False)
 
-    assert seen == [('sentiment', False), ('vol', False),
-                    ('options', False), ('var', False)]
+    # Market-signals has no subprocess to validate, so `validate` is only
+    # threaded through to the three run_suite-driven stages.
+    assert seen == [('vol', False), ('options', False), ('var', False)]
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
@@ -611,37 +619,22 @@ def test_summarize_reports_skipped_stages_and_validation_errors():
     assert 'options=SKIPPED' in text
 
 
-# ── run_unified: context mutation audit ──────────────────────────────────
-
-def valid_sentiment_export(**over):
-    """A sentiment stage result that satisfies the schema_version=2 contract."""
-    payload = {
-        'suite': 'sentiment',
-        'schema_version': 2,
-        'run_id': 'unified-test',
-        'created_at_utc': '2026-07-29T12:00:00Z',
-        'sentiment': {
-            'manifest_path': '/run/latest_manifest.json',
-            'pack_json_path': '/run/pack.json',
-            'group_id': 'cns-threshold-alerts',
-            'ranked_tickers': ['NVDA', 'GME'],
-        },
-        '_validation': {'status': 'PASS'},
-    }
-    payload.update(over)
-    return payload
-
+# ── run_unified: market-signals stage audit ──────────────────────────────
+#
+# There is no producer/consumer context handoff for this stage anymore --
+# the market-signals stage (IV Rank/Max Pain/Skew/Unusual OI scanners + 1yr
+# sims + Direction suite) runs in-process against the ticker the orchestrator
+# already knows, and writes nothing into suite_context.json's `sentiment`
+# block. "context_audit" here just records the stage's own ok/error status;
+# there is no fold, no mutation, and nothing to roll back.
 
 @pytest.mark.unit
-def test_unified_audits_the_sentiment_fold(unified_env):
-    unified_env.outcomes['sentiment'] = valid_sentiment_export()
-
+def test_unified_audit_passes_when_market_signals_stage_succeeds(unified_env):
     combined = orchestrator.run_unified({'ticker': 'NVDA'})
 
     audit = combined['context_audit']
     assert audit['validation_status'] == 'PASS'
-    assert 'sentiment.manifest_path' in audit['mutations_detected']
-    assert audit['before_context']['sha256'] != audit['after_context']['sha256']
+    assert audit['mutations_detected'] == []
     assert audit['rolled_back'] is False
     # The audit is not a suite: it must not count towards the per-suite tally.
     assert 'context_audit' not in combined['results']
@@ -649,56 +642,28 @@ def test_unified_audits_the_sentiment_fold(unified_env):
 
 
 @pytest.mark.unit
-def test_unified_still_folds_the_producer_block_in(unified_env):
-    unified_env.outcomes['sentiment'] = valid_sentiment_export()
-
+def test_unified_does_not_mutate_the_sentiment_block(unified_env):
     orchestrator.run_unified({'ticker': 'NVDA'})
 
     context = orchestrator.build_context({}, None)
-    assert context['sentiment']['manifest_path'] == '/run/latest_manifest.json'
-    assert context['sentiment']['ranked_tickers'] == ['NVDA', 'GME']
-
-
-@pytest.mark.unit
-def test_unified_rolls_back_and_fails_on_a_bad_mutation(unified_env, monkeypatch):
-    import shared.context_audit as ca
-
-    def wrecking_fold(ctx, payload):
-        ctx['sentiment']['ranked_tickers'] = {'NVDA': 1}   # schema says list
-        return ['sentiment.ranked_tickers']
-
-    monkeypatch.setattr(ca, 'fold_sentiment_block', wrecking_fold)
-    unified_env.outcomes['sentiment'] = valid_sentiment_export()
-
-    combined = orchestrator.run_unified({'ticker': 'NVDA'})
-
-    # A damaged context is not degradable: nothing downstream may consume it,
-    # with or without --fail-on-suite-error.
-    assert unified_env.calls == ['sentiment']
-    assert combined['status'] == 'error'
-    assert combined['aborted_by'] == 'context_audit'
-    assert combined['context_audit']['rolled_back'] is True
-    for stage in ('vol', 'options', 'var'):
-        assert combined['results'][stage]['skipped'] is True
-        assert 'rolled back' in combined['results'][stage]['error']
-
-    # Rolled back in place, so the object the stages hold is the baseline again.
-    context = orchestrator.build_context({}, None)
+    assert context['sentiment']['manifest_path'] == '/data/latest_manifest.json'
     assert context['sentiment']['ranked_tickers'] == []
 
 
 @pytest.mark.unit
-def test_unified_audit_passes_when_the_producer_stage_failed(unified_env):
-    unified_env.outcomes['sentiment'] = invalid('sentiment')
+def test_unified_audit_passes_when_the_market_signals_stage_failed(unified_env):
+    unified_env.set_sentiment_result(
+        {'suite': 'sentiment', 'status': 'partial', 'ticker': 'NVDA',
+         'errors': ['iv_rank scanner failed: boom']})
 
     combined = orchestrator.run_unified({'ticker': 'NVDA'})
 
-    # A scanner crash is not context corruption: the audit passes with zero
-    # mutations and the chain continues on the untouched context.
+    # A partial scanner/sim failure is not context corruption: the audit
+    # passes and the chain continues (only a 'error' status aborts it -- see
+    # test_unified_aborts_when_market_signals_stage_errors).
     assert combined['context_audit']['validation_status'] == 'PASS'
-    assert combined['context_audit']['mutations_detected'] == []
     assert combined['aborted_by'] is None
-    assert unified_env.calls == ['sentiment', 'vol', 'options', 'var']
+    assert unified_env.calls == ['vol', 'options', 'var']
 
 
 @pytest.mark.unit

@@ -224,6 +224,151 @@ def _import_suite_context():
     return suite_context
 
 
+def _import_sentiment_scanners():
+    """Import the 4 non-social option-chain scanners directly (IV Rank, Max
+    Pain, Skew, Unusual OI) -- no StockTwits/Reddit/YouTube/GEX, no ticker
+    discovery, since the orchestrator already knows the ticker."""
+    sentiment_root = SUITE_ROOTS['sentiment']
+    if sentiment_root not in sys.path:
+        sys.path.insert(0, sentiment_root)
+    from scanner.iv_rank_scanner import scan_iv_rank, format_iv_rank
+    from scanner.max_pain_scanner import scan_max_pain, format_max_pain
+    from scanner.skew_scanner import scan_skew, format_skew
+    from scanner.unusual_oi_scanner import scan_unusual_oi, format_unusual_oi
+    return (scan_iv_rank, format_iv_rank, scan_max_pain, format_max_pain,
+            scan_skew, format_skew, scan_unusual_oi, format_unusual_oi)
+
+
+def _import_var_engine_builders():
+    """Import the non-interactive builder functions from VaR_Tools_Simulations
+    /main.py (mc_sim, copula, corr_sim, hedge_optimizer). Safe to import --
+    main.py only launches the interactive CLI under `if __name__ == '__main__'`.
+
+    Loaded under a unique module name via importlib rather than `import main`
+    -- Options_Suite, VaR_Tools_Simulations and sentiment-scanner each have
+    their own `main.py`, so a bare `import main` returns whichever one first
+    landed in sys.modules under that generic name (e.g. from an earlier
+    Tools/ call in the same long-lived dashboard process), silently handing
+    back a module missing these builder functions instead of raising.
+    """
+    var_root = SUITE_ROOTS['var']
+    if var_root not in sys.path:
+        sys.path.insert(0, var_root)
+    module_name = 'var_tools_main'
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib.util.spec_from_file_location(
+        module_name, os.path.join(var_root, 'main.py'))
+    var_main = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = var_main
+    spec.loader.exec_module(var_main)
+    return var_main
+
+
+def _import_direction_suite():
+    """Import the 5-tool Direction signal suite (whale/elliott/bollinger/
+    trend/liquidity, combined into one conviction call)."""
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    from Direction.signal_generator import generate  # noqa: E402
+    return generate
+
+
+def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Replaces the old sentiment-scanner stage: option-chain scanners that
+    don't need social-media scraping, three 1-year-out simulations seeded
+    from live spot + GARCH vol, and the 5-tool Direction suite.
+
+    Every sub-piece is independently try/excepted -- one failing scanner or
+    simulation must not blank out the rest of the bundle.
+    """
+    import dataclasses
+
+    def _to_jsonable(obj):
+        if dataclasses.is_dataclass(obj):
+            return dataclasses.asdict(obj)
+        return obj
+
+    bundle: Dict[str, Any] = {
+        'suite': 'sentiment',
+        'status': 'ok',
+        'ticker': ticker,
+        'timestamp': _iso_utc_now(),
+        'scanners': {},
+        'simulations': {},
+        'direction': None,
+    }
+    errors: List[str] = []
+
+    # ---- option-chain scanners (IV Rank, Max Pain, Skew, Unusual OI) ----
+    try:
+        (scan_iv_rank, format_iv_rank, scan_max_pain, format_max_pain,
+         scan_skew, format_skew, scan_unusual_oi, format_unusual_oi) = _import_sentiment_scanners()
+
+        for key, scan_fn, fmt_fn in (
+            ('iv_rank', scan_iv_rank, format_iv_rank),
+            ('max_pain', scan_max_pain, format_max_pain),
+            ('skew', scan_skew, format_skew),
+            ('unusual_oi', scan_unusual_oi, format_unusual_oi),
+        ):
+            try:
+                scan = scan_fn(ticker)
+                line = fmt_fn(scan)
+                print(line)
+                bundle['scanners'][key] = _to_jsonable(scan)
+            except Exception as e:
+                msg = f"{key} scanner failed: {e}"
+                print(f"  {ticker:6s} | {key.upper()}: ERROR — {e}")
+                errors.append(msg)
+                bundle['scanners'][key] = {'error': str(e)}
+    except Exception as e:
+        errors.append(f"scanner import failed: {e}")
+        print(f"  [market-signals] scanner import failed: {e}")
+
+    # ---- 1-year-out simulations (MC, copula, correlation) ----
+    try:
+        var_main = _import_var_engine_builders()
+        for key, builder in (
+            ('mc_sim', var_main._build_mc_sim_from_context),
+            ('copula', var_main._build_copula_from_context),
+            ('corr_sim', var_main._build_corr_sim_peer_from_context),
+        ):
+            try:
+                sim_result = builder(context, ticker)
+                bundle['simulations'][key] = sim_result
+                print(f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in ('correlation_matrix', 'sim_vols', 'sim_corr')})}")
+            except Exception as e:
+                msg = f"{key} sim failed: {e}"
+                print(f"  [market-signals] {msg}")
+                errors.append(msg)
+                bundle['simulations'][key] = {'error': str(e)}
+    except Exception as e:
+        errors.append(f"var_engine import failed: {e}")
+        print(f"  [market-signals] var_engine import failed: {e}")
+
+    # ---- Direction 5-tool suite ----
+    try:
+        generate = _import_direction_suite()
+        direction = generate(ticker)
+        bundle['direction'] = direction
+        sig = direction.get('signals', {})
+        print(f"  [direction] {ticker}: {direction.get('conviction')} | "
+              f"score {direction.get('score')}/5 | "
+              + " ".join(f"{k}={'ON' if v else 'off'}" for k, v in sig.items()))
+    except Exception as e:
+        errors.append(f"direction suite failed: {e}")
+        print(f"  [market-signals] direction suite failed: {e}")
+
+    if errors:
+        bundle['status'] = 'partial' if any(
+            bundle['scanners'].get(k, {}).get('error') is None
+            for k in ('iv_rank', 'max_pain', 'skew', 'unusual_oi')
+        ) or bundle['direction'] is not None else 'error'
+        bundle['errors'] = errors
+
+    return bundle
+
+
 def _import_volatility_suite():
     """Import Vol_Suite/volatility_suite.py so basket resolution reuses the
     same index-constituents logic the interactive flow uses (_resolve_basket),
@@ -901,25 +1046,50 @@ def run_unified(focus: Dict[str, Any],
             'timestamp': _iso_utc_now(),
         }
 
-    # ---- 1. sentiment-scanner (producer) ----
-    # SKIP sentiment-scanner by default (unreliable network dependency).
-    # Vol/Options/VaR suites don't require it; it's optional enrichment.
-    # TODO: Make this opt-in via --include-sentiment flag if needed.
-    print("\n[1/3] SENTIMENT SCANNER")
-    print("       (SKIPPED: unreliable network dependency, not required for vol/options/var)")
-    print("-" * 60)
-    sentiment_result = {'status': 'skipped', 'skipped': True}
+    # ---- 1. MARKET SIGNALS (option-chain scanners + 1yr sims + direction suite) ----
+    # Replaces the old sentiment-scanner stage (StockTwits/Reddit/YouTube/GEX),
+    # which was hard-skipped here as an unreliable network dependency. This
+    # stage runs in-process (no subprocess, no producer/consumer context
+    # handoff) since the ticker is already known.
+    _print_phase_header(1, "MARKET SIGNALS",
+                       "IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite")
+    sentiment_result = run_market_signals_stage(context['focus']['ticker'], context)
     results['sentiment'] = sentiment_result
 
-    # ---- 1b. audited fold of the producer's sentiment block ----
-    # Sentiment is skipped, so context_audit is a no-op pass.
+    # Write the same two marker files a subprocess suite would have written,
+    # so the dashboard's existing 'sentiment' file-claiming logic picks this
+    # bundle up under the (relabeled) unified Output tab section unchanged.
+    try:
+        sentiment_marker = os.path.join(output_dir, 'sentiment_result.json')
+        with open(sentiment_marker, 'w', encoding='utf-8') as f:
+            json.dump(sentiment_result, f, indent=2, default=str)
+            f.write('\n')
+        sentiment_ctx_copy = os.path.join(output_dir, 'suite_context_sentiment.json')
+        with open(sentiment_ctx_copy, 'w', encoding='utf-8') as f:
+            json.dump(context, f, indent=2, default=str)
+            f.write('\n')
+    except Exception as e:
+        print(f"  [market-signals] WARNING: could not write marker files: {e}")
+
+    # ---- 1b. context audit ----
+    # Nothing mutates suite_context.json's sentiment block anymore (there is
+    # no producer/consumer handoff for this stage), so there is no real
+    # mutation to audit -- this just records the stage's own status.
     print("\n[unified] Stage 1b/3: context mutation audit (sentiment block)...")
-    # Create a minimal pass audit since sentiment is skipped
-    class _DummyAudit:
-        passed = True
+    class _MarketSignalsAudit:
+        def __init__(self, status: str):
+            self.passed = status != 'error'
+            self._status = status
         def to_dict(self):
-            return {'status': 'passed', 'reason': 'sentiment skipped'}
-    context_audit = _DummyAudit()
+            return {
+                'validation_status': 'PASS' if self.passed else 'FAIL',
+                'mutations_detected': [],
+                'rolled_back': False,
+                'validation_errors': ([] if self.passed else
+                                      [f'market signals stage status={self._status}']),
+                'reason': f'market signals stage status={self._status}; no context mutation performed',
+            }
+    context_audit = _MarketSignalsAudit(sentiment_result.get('status', 'ok'))
     if not context_audit.passed:
         # Unlike a suite failure, this is not degradable by --fail-on-suite-error:
         # the context is the input to every remaining stage, so running them

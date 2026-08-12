@@ -310,6 +310,262 @@ def _build_corr_sim_from_context(payload: dict):
     }
 
 
+def _focus_ticker(payload: dict, ticker: str = None) -> str:
+    tk = ticker
+    if not tk and isinstance(payload.get("focus"), dict):
+        tk = payload["focus"].get("ticker")
+    if not tk:
+        tk = payload.get("ticker")
+    if not isinstance(tk, str) or not tk.strip():
+        raise ContextModeError("Missing ticker (payload.focus.ticker / payload.ticker).")
+    return tk.strip().upper()
+
+
+def _context_seed(payload: dict, default: int = 42) -> int:
+    var_cfg = payload.get("var")
+    if isinstance(var_cfg, dict) and "seed" in var_cfg:
+        try:
+            return int(var_cfg["seed"])
+        except Exception:
+            return default
+    return default
+
+
+def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
+    """Non-interactive 1-year-out MC price-distribution sim, seeded from
+    live spot + GARCH vol + historical geometric drift."""
+    from var_engine import data_loader
+    from var_engine.mc_sim import run, MCSimInputs, Position
+
+    tk = _focus_ticker(payload, ticker)
+    spot = data_loader.fetch_spot(tk)
+    if spot <= 0:
+        raise ContextModeError(f"Could not fetch live spot for {tk}.")
+    vol = data_loader.estimate_garch_vol(tk) or 0.25
+    drift = data_loader.estimate_geometric_return(tk)
+    seed = _context_seed(payload)
+
+    r = run(MCSimInputs(
+        market_ids=[tk],
+        spot_prices=np.array([spot]),
+        volatilities=np.array([vol]),
+        corr_matrix=np.array([[1.0]]),
+        var_days=252,
+        trading_days=252,
+        confidence=0.99,
+        n_sims=10_000,
+        seed=seed,
+        positions=[Position(pos_type=1, market_id=tk, quantity=1.0)],
+        expected_returns=np.array([drift]),
+    ))
+    terminal = r.terminal_prices[:, 0]
+    return {
+        "suite": "var", "status": "ok", "module": "mc_sim_1yr",
+        "ticker": tk, "spot": float(spot), "vol": float(vol), "expected_return": float(drift),
+        "seed": seed, "horizon_days": 252,
+        "terminal_price_mean": float(terminal.mean()),
+        "terminal_price_median": float(np.median(terminal)),
+        "terminal_price_p5": float(np.quantile(terminal, 0.05)),
+        "terminal_price_p95": float(np.quantile(terminal, 0.95)),
+        "var_1yr": float(r.var_full), "cvar_1yr": float(r.cvar_full),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
+    """Non-interactive 1-year-out Student-T copula price-distribution sim,
+    same seed/vol/spot/drift inputs as _build_mc_sim_from_context."""
+    from var_engine import data_loader
+    from var_engine.copulas import run, CopulaInputs
+
+    tk = _focus_ticker(payload, ticker)
+    spot = data_loader.fetch_spot(tk)
+    if spot <= 0:
+        raise ContextModeError(f"Could not fetch live spot for {tk}.")
+    vol = data_loader.estimate_garch_vol(tk) or 0.25
+    drift = data_loader.estimate_geometric_return(tk)
+    seed = _context_seed(payload)
+
+    r = run(CopulaInputs(
+        tickers=[tk],
+        position_vals=np.array([spot]),
+        volatilities=np.array([vol]),
+        corr_matrix=np.array([[1.0]]),
+        copula_type="student_t",
+        student_df=5.0,
+        var_days=252,
+        trading_days=252,
+        confidence=0.99,
+        n_sims=50_000,
+        seed=seed,
+        spot_prices=np.array([spot]),
+        expected_returns=np.array([drift]),
+    ))
+    terminal = r.terminal_prices[:, 0]
+    return {
+        "suite": "var", "status": "ok", "module": "copula_1yr",
+        "ticker": tk, "spot": float(spot), "vol": float(vol), "expected_return": float(drift),
+        "seed": seed, "horizon_days": 252, "copula_type": "student_t",
+        "terminal_price_mean": float(terminal.mean()),
+        "terminal_price_median": float(np.median(terminal)),
+        "terminal_price_p5": float(np.quantile(terminal, 0.05)),
+        "terminal_price_p95": float(np.quantile(terminal, 0.95)),
+        "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_peers: int = 2) -> dict:
+    """Non-interactive 1-year-out correlation sim between the focus ticker and
+    up to *max_peers* Vol_Suite basket peers, using the same GARCH-vol
+    methodology and seed as the MC/copula sims above."""
+    from var_engine import data_loader
+    from var_engine.corr_sim import run, CorrSimInputs
+
+    tk = _focus_ticker(payload, ticker)
+    basket = payload.get("basket") if isinstance(payload.get("basket"), dict) else None
+    basket_tickers = basket.get("tickers") if basket else []
+    if not isinstance(basket_tickers, list):
+        basket_tickers = []
+    peers = [str(t).strip().upper() for t in basket_tickers if str(t).strip().upper() != tk][:max_peers]
+    if not peers:
+        raise ContextModeError("Need at least one basket peer distinct from the focus ticker for corr_sim.")
+
+    tickers = [tk] + peers
+    seed = _context_seed(payload)
+    start, end = data_loader.default_date_range()
+
+    spots, vols, rets = [], [], {}
+    for t in tickers:
+        spots.append(data_loader.fetch_spot(t))
+        vols.append(data_loader.estimate_garch_vol(t) or 0.25)
+        try:
+            rets[t] = data_loader.fetch_log_returns(t, start, end)
+        except Exception:
+            rets[t] = None
+
+    lens = [len(r) for r in rets.values() if r is not None]
+    min_len = min(lens) if lens else 0
+    if min_len >= 20 and all(rets[t] is not None for t in tickers):
+        mat = np.array([rets[t][-min_len:] for t in tickers])
+        corr_matrix = np.corrcoef(mat)
+    else:
+        corr_matrix = np.eye(len(tickers))
+
+    spots = np.array(spots, dtype=float)
+    if np.any(spots <= 0):
+        raise ContextModeError(f"Could not fetch live spot for one of: {', '.join(tickers)}.")
+    vols = np.array(vols, dtype=float)
+    n_shares = np.ones(len(tickers))
+
+    r = run(CorrSimInputs(
+        current_prices=spots,
+        n_shares=n_shares,
+        volatilities=vols,
+        corr_matrix=corr_matrix,
+        var_days=252,
+        trading_days=252,
+        confidence=0.99,
+        n_sims=10_000,
+        seed=seed,
+        asset_names=tickers,
+    ))
+    return {
+        "suite": "var", "status": "ok", "module": "corr_sim_1yr",
+        "tickers": tickers, "seed": seed, "horizon_days": 252,
+        "correlation_matrix": corr_matrix.tolist(),
+        "sim_vols": r.sim_vols.tolist(), "sim_corr": r.sim_corr.tolist(),
+        "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
+        "portfolio_value": float(r.portfolio_value),
+        "cholesky_ok": bool(r.cholesky_ok),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _build_hedge_optimizer_from_context(payload: dict, ticker: str = None,
+                                         output_dir: str = None, max_hedges: int = 3) -> dict:
+    """Non-interactive minimum-variance hedge optimizer. Position notional is
+    read from options_result.json in *output_dir* if present, else defaulted
+    to spot*100 shares. Hedge-instrument candidates default to Vol_Suite
+    basket peers, with vol/correlation estimated the same way as corr_sim."""
+    from var_engine import data_loader
+    from var_engine.hedge_optimizer import min_var_hedge, HedgeOptimizerInputs, HedgeInstrument
+
+    tk = _focus_ticker(payload, ticker)
+
+    position_value = None
+    if output_dir:
+        opt_path = os.path.join(output_dir, "options_result.json")
+        if os.path.exists(opt_path):
+            try:
+                with open(opt_path, "r", encoding="utf-8-sig") as f:
+                    opt_data = json.load(f)
+                for key in ("notional", "position_value", "total_notional"):
+                    if isinstance(opt_data.get(key), (int, float)):
+                        position_value = float(opt_data[key])
+                        break
+            except Exception:
+                position_value = None
+    if not position_value:
+        spot = data_loader.fetch_spot(tk)
+        if spot <= 0:
+            raise ContextModeError(f"Could not fetch live spot for {tk}.")
+        position_value = spot * 100.0
+
+    basket = payload.get("basket") if isinstance(payload.get("basket"), dict) else None
+    basket_tickers = basket.get("tickers") if basket else []
+    if not isinstance(basket_tickers, list):
+        basket_tickers = []
+    peers = [str(t).strip().upper() for t in basket_tickers if str(t).strip().upper() != tk][:max_hedges]
+    if not peers:
+        raise ContextModeError("Need at least one basket peer to build hedge-instrument candidates.")
+
+    tk_vol = data_loader.estimate_garch_vol(tk) or 0.25
+    start, end = data_loader.default_date_range()
+    try:
+        tk_rets = data_loader.fetch_log_returns(tk, start, end)
+    except Exception:
+        tk_rets = None
+
+    hedge_instruments = []
+    for p in peers:
+        p_vol = data_loader.estimate_garch_vol(p) or 0.25
+        corr = 0.0
+        try:
+            p_rets = data_loader.fetch_log_returns(p, start, end)
+            if tk_rets is not None and p_rets is not None:
+                n = min(len(tk_rets), len(p_rets))
+                if n >= 20:
+                    corr = float(np.corrcoef(tk_rets[-n:], p_rets[-n:])[0, 1])
+        except Exception:
+            pass
+        beta = corr * (p_vol / tk_vol) if tk_vol else 0.0
+        hedge_instruments.append(HedgeInstrument(
+            name=p, volatility=p_vol,
+            correlation_to_positions=np.array([corr]), beta=beta,
+        ))
+
+    cov_matrix = np.array([[tk_vol ** 2]])
+    out = min_var_hedge(HedgeOptimizerInputs(
+        positions=np.array([position_value]),
+        cov_matrix=cov_matrix,
+        hedge_instruments=hedge_instruments,
+        var_horizon=252,
+        trading_days=252,
+        confidence=0.99,
+    ))
+    return {
+        "suite": "var", "status": "ok", "module": "hedge_optimizer",
+        "ticker": tk, "position_value": float(position_value),
+        "hedge_names": out.hedge_names,
+        "optimal_weights": [float(w) for w in out.optimal_weights],
+        "base_var": float(out.base_var), "hedged_var": float(out.hedged_var),
+        "var_reduction_pct": float(out.var_reduction_pct),
+        "base_port_vol": float(out.base_port_vol), "hedged_port_vol": float(out.hedged_port_vol),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
 def run_context_mode(context_path: str, context_out_path: str = None, module: int = None) -> int:
     if module is not None and module != 1:
         payload = {

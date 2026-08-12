@@ -183,7 +183,7 @@ def label_from_marker(marker_path: str, suite: str) -> Optional[str]:
     if suite == 'var':
         return f"{data.get('module', '?')} · {status}"
     if suite == 'sentiment':
-        return f"sentiment · {status}"
+        return f"{data.get('ticker', '?')} · market signals · {status}"
     return status
 
 
@@ -408,7 +408,7 @@ SUITE_LABELS = {
     'options': 'Options_Suite',
     'vol': 'Vol_Suite',
     'var': 'VaR_Tools_Simulations',
-    'sentiment': 'sentiment-scanner',
+    'sentiment': 'Market Signals',
     'unified': 'Unified',
 }
 
