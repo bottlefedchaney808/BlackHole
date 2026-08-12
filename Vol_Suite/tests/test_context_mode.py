@@ -42,6 +42,15 @@ from suite_context import build_suite_context
 # ---------------------------------------------------------------------------
 
 class FakeTD:
+    def fetch_spot_price(self, ticker):
+        return 250.0
+
+    def fetch_dividend_yield(self, ticker):
+        return 0.0
+
+    def fetch_risk_free_rate(self, t):
+        return 0.05
+
     def close(self):
         pass
 
@@ -183,6 +192,32 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
         raise AssertionError("chain scanner must be opt-in in context mode")
 
     monkeypatch.setattr(ocs, "run_chain_scanner", fake_run_chain_scanner)
+
+    # VRP term structure runs by DEFAULT in context mode, so every context
+    # test now walks through it -- stub it rather than letting it reach for
+    # a live chain (which would land in the except branch and quietly stuff
+    # an error into artifacts["errors"] for unrelated tests).
+    import vrp_term_structure as vts
+
+    def fake_compute_vrp(ticker, td, spot, r, q):
+        calls["vrp_args"] = (ticker, spot, r, q)
+        return vts.VrpTermStructureResult(
+            ticker=ticker,
+            timestamp="2026-08-12T00:00:00Z",
+            points=[
+                vts.VrpTermPoint("1mo", "20260918", 0.1, 31.0, 29.0, 2.0, 27.0),
+                vts.VrpTermPoint("3mo", "20261218", 0.35, 32.0, 29.0, 3.0, 27.0),
+                vts.VrpTermPoint("6mo", "20270319", 0.6, 34.0, 29.0, 5.0, 27.0),
+            ],
+            shape="upward",
+        )
+
+    def fake_plot_vrp(result, path):
+        calls["vrp_chart_path"] = path
+        return path
+
+    monkeypatch.setattr(vts, "compute_vrp_term_structure", fake_compute_vrp)
+    monkeypatch.setattr(vts, "plot_vrp_term_structure", fake_plot_vrp)
 
 
 def _no_stdin(monkeypatch):
@@ -417,6 +452,64 @@ def test_main_selects_context_mode_from_flags_and_from_env(monkeypatch, tmp_path
     monkeypatch.setenv("SUITE_CONTEXT_PATH", ctx_path)
     assert vsuite.main([]) == 0
     assert (out_dir / "vol_result.json").exists()
+
+
+@pytest.mark.unit
+def test_vrp_term_structure_runs_by_default_in_context_mode(monkeypatch, tmp_path, capsys):
+    """VS_RUN_VRP_TERM_STRUCTURE used to default to False, so a normal
+    unified run never produced a VRP term structure at all -- vol_result.json
+    always carried {"available": False} and nothing said why. It is now
+    default-on, and its table prints in the vol-suite console block."""
+    monkeypatch.delenv("VS_RUN_VRP_TERM_STRUCTURE", raising=False)
+    calls: dict = {}
+    _install_stubs(monkeypatch, calls, dealer_result=FakeDealerResult())
+    _no_stdin(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ctx_path = _write_context(tmp_path, out_dir)
+    out_json = tmp_path / "vol_result.json"
+
+    assert vsuite.run_context_mode(ctx_path, str(out_json)) == 0
+
+    payload = json.loads(out_json.read_text(encoding="utf-8"))
+    validate_vol_result(payload)
+
+    vrp = payload["vrp_term_structure"]
+    assert vrp["available"] is True
+    assert vrp["shape"] == "upward"
+    assert [p["expiry_label"] for p in vrp["points"]] == ["1mo", "3mo", "6mo"]
+    assert vrp["chart_path"] == calls["vrp_chart_path"]
+    # ticker, spot, r, q -- r is the risk-free rate, q the dividend yield.
+    assert calls["vrp_args"] == ("TSLA", 250.0, 0.05, 0.0)
+    assert "vrp_term_structure" not in {e["step"] for e in payload["errors"]}
+
+    # ...and it is visible on the vol-suite block, not only in the JSON.
+    out = capsys.readouterr().out
+    assert "VRP Term Structure" in out
+    assert "1mo" in out and "6mo" in out
+    assert "+5.00" in out          # the 6mo VRP value
+    assert "upward" in out
+
+
+@pytest.mark.unit
+def test_vrp_term_structure_can_still_be_switched_off_by_env(monkeypatch, tmp_path):
+    """Default-on, not forced-on: the env knob still turns it off for a run
+    that cannot afford the extra chain fetches."""
+    monkeypatch.setenv("VS_RUN_VRP_TERM_STRUCTURE", "0")
+    calls: dict = {}
+    _install_stubs(monkeypatch, calls, dealer_result=FakeDealerResult())
+    _no_stdin(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ctx_path = _write_context(tmp_path, out_dir)
+    out_json = tmp_path / "vol_result.json"
+
+    assert vsuite.run_context_mode(ctx_path, str(out_json)) == 0
+    payload = json.loads(out_json.read_text(encoding="utf-8"))
+    assert payload["vrp_term_structure"] == {"available": False}
+    assert "vrp_args" not in calls
 
 
 @pytest.mark.unit

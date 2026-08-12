@@ -1269,6 +1269,25 @@ def _run_core_analysis(
                 vrp_result = vts.compute_vrp_term_structure(ticker, td_vrp, vrp_spot, vrp_r, vrp_q)
             finally:
                 td_vrp.close()
+            # Print the table on the suite's own console block. Until this
+            # existed the term structure only ever reached the PDF section
+            # and vol_result.json, so a headless run's log gave no way to
+            # tell a computed term structure from a skipped one.
+            print(f"\n  {'Tenor':<6} {'Expiry':<10} {'FairVol%':<10} "
+                  f"{'ATM IV%':<10} {'VRP%':<10} {'RV30%':<10}")
+            print("  " + "-" * 58)
+
+            def _fmt(v, spec=".2f"):
+                # Failed tenors come back as NaN by design (see
+                # VrpTermPoint) -- render the gap, don't print 'nan'.
+                return format(v, spec) if not math.isnan(v) else "N/A"
+
+            for p in vrp_result.points:
+                print(f"  {p.expiry_label:<6} {p.expiry_date:<10} "
+                      f"{_fmt(p.fair_vol_pct):<10} {_fmt(p.atm_iv_pct):<10} "
+                      f"{_fmt(p.vrp_pct, '+.2f'):<10} {_fmt(p.rv_30d_pct):<10}")
+            print(f"  Term structure shape: {vrp_result.shape}")
+
             ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
             vrp_path = os.path.join(out_root, f"{ticker}_vrp_term_structure_{ts_tag}.png")
             vts.plot_vrp_term_structure(vrp_result, vrp_path)
@@ -1763,7 +1782,15 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
     run_options_chain = _env_flag("VS_RUN_CHAIN_SCANNER", False)
     run_group_screener = _env_flag("VS_RUN_GROUP_SCREENER", False)
     run_vol_surface_2d = _env_flag("VS_RUN_VOL_SURFACE_2D", False)
-    run_vrp_term_structure = _env_flag("VS_RUN_VRP_TERM_STRUCTURE", False)
+    # Default-ON, unlike its opt-in neighbours above: the VRP term structure
+    # is the headline output consumers read off vol_result.json, and while it
+    # defaulted to False every unified run published
+    # {"available": False} with nothing saying the step had simply never been
+    # asked for. It costs a handful of extra chain fetches (one per tenor),
+    # which is the same order as the replication legs already running -- not
+    # the per-ticker re-runs that keep the screener/chain scanner opt-in.
+    # Set VS_RUN_VRP_TERM_STRUCTURE=0 to skip it.
+    run_vrp_term_structure = _env_flag("VS_RUN_VRP_TERM_STRUCTURE", True)
     run_sentiment_backtest = _env_flag("VS_RUN_SENTIMENT_BACKTEST", False)
 
     print("=" * 60)
