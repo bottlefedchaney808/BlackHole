@@ -1180,13 +1180,13 @@ def run_price_dist():
 
     # Auto-populate GARCH vol in background — no prompt delay
     garch_vol = estimate_garch_vol(tk)
-    def_vol = garch_vol if garch_vol > 0.0 else 0.30
+    def_vol = garch_vol if garch_vol is not None and garch_vol > 0.0 else 0.30
     vol_label = f"Annual volatility [GARCH(1,1)={def_vol:.2f}]"
     vol   = inp(vol_label, default=def_vol, cast=float)
 
     # Auto-populate geometric mean return
     geo_ret = estimate_geometric_return(tk)
-    def_mu = geo_ret if geo_ret != 0.0 else 0.08
+    def_mu = geo_ret if geo_ret is not None and geo_ret != 0.0 else 0.08
     mu_label = f"Expected annual return [geometric mean={def_mu:.4f}]"
     mu    = inp(mu_label, default=def_mu, cast=float)
 
