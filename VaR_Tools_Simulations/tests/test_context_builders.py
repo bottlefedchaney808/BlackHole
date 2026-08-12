@@ -199,6 +199,7 @@ def test_price_dist_builder_returns_distribution_table_and_histogram(stub_market
     assert set(row) == {"price", "prob_at", "prob_below", "prob_above"}
     assert len(result["terminal_price_histogram"]) > 0
     assert sum(b["count"] for b in result["terminal_price_histogram"]) == result["n_sims"]
+    assert result["histogram_unit"] == "price"
     assert result["avg_end_price"] > 0
 
 
@@ -248,12 +249,14 @@ def test_mc_sim_exposes_terminal_price_histogram(stub_market):
     result = var_main._build_mc_sim_from_context(_base_payload(garch_vol=0.22), "AAPL")
     _assert_histogram(result["terminal_price_histogram"], result["n_sims"])
     assert result["n_sims"] == 10_000
+    assert result["histogram_unit"] == "price"
 
 
 def test_copula_exposes_terminal_price_histogram(stub_market):
     result = var_main._build_copula_from_context(_base_payload(garch_vol=0.22), "AAPL")
     _assert_histogram(result["terminal_price_histogram"], result["n_sims"])
     assert result["n_sims"] == 50_000
+    assert result["histogram_unit"] == "price"
 
 
 def test_corr_sim_peer_exposes_terminal_portfolio_histogram(stub_market, capture_corr_inputs):
@@ -263,5 +266,11 @@ def test_corr_sim_peer_exposes_terminal_portfolio_histogram(stub_market, capture
 
     payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
     result = var_main._build_corr_sim_peer_from_context(payload, "AAPL")
-    _assert_histogram(result["terminal_price_histogram"], result["n_sims"])
+    hist = result["terminal_price_histogram"]
+    _assert_histogram(hist, result["n_sims"])
     assert result["n_sims"] == 10_000
+    # These bins are terminal *portfolio* values, not a single ticker's price:
+    # the starting portfolio value must fall inside the simulated range, and
+    # the unit label must say so for Task 11's renderer.
+    assert result["histogram_unit"] == "portfolio_value"
+    assert hist[0]["low"] < result["portfolio_value"] < hist[-1]["high"]

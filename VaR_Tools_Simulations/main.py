@@ -416,6 +416,7 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
         "terminal_price_p95": float(np.quantile(terminal, 0.95)),
         "terminal_price_histogram": _histogram_bins(terminal),
+        "histogram_unit": "price",
         "var_1yr": float(r.var_full), "cvar_1yr": float(r.cvar_full),
         "data_quality": {"vol_source": vol_source, "expected_return_source": drift_source},
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -443,19 +444,23 @@ def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
     seed = _context_seed(payload)
     n_sims = 10_000
     days = 252
+    # One annualization convention for the analytic table, the MC probability
+    # engine and the histogram draw below, so they can't silently diverge.
+    trading_days = 252.0
 
     table = lognormal_dist(spot, days=days, vol=vol, mu=drift,
-                           trading_days=252.0, n_points=50)
+                           trading_days=trading_days, n_points=50)
     mc = mc_probabilities(MCProbInputs(
         spot=spot, upper=spot * 1.5, lower=spot * 0.5, days=days,
         vol=vol, mu=drift, n_sims=n_sims, seed=seed,
+        trading_days=trading_days,
     ))
 
     # mc_probabilities reports summary probabilities only (no terminal-price
     # vector), so the histogram is drawn from an equivalent one-step GBM draw
     # to the same 1-year horizon.
     rng = np.random.default_rng(seed)
-    T = days / 252.0
+    T = days / trading_days
     terminal = spot * np.exp((drift - 0.5 * vol ** 2) * T
                              + vol * np.sqrt(T) * rng.standard_normal(n_sims))
 
@@ -470,6 +475,7 @@ def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
             for e in table
         ],
         "terminal_price_histogram": _histogram_bins(terminal),
+        "histogram_unit": "price",
         "avg_end_price": float(mc.avg_end_price),
         "prob_above_upper_at_expiry": float(mc.above_upper_at_expiry),
         "prob_below_lower_at_expiry": float(mc.below_lower_at_expiry),
@@ -523,6 +529,7 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
         "terminal_price_p95": float(np.quantile(terminal, 0.95)),
         "terminal_price_histogram": _histogram_bins(terminal),
+        "histogram_unit": "price",
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
         "data_quality": {"vol_source": vol_source, "expected_return_source": drift_source},
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -602,6 +609,10 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
         "portfolio_value": float(r.portfolio_value),
         "terminal_price_histogram": _histogram_bins(terminal),
+        # Unlike the single-name builders, these bins are terminal *portfolio*
+        # values, not prices -- consumers must read this field rather than
+        # assume "price" from the histogram field's name.
+        "histogram_unit": "portfolio_value",
         "cholesky_ok": bool(r.cholesky_ok),
         # vol_source describes the focus ticker only; peers always refit.
         "data_quality": {"vol_source": vol_source, "expected_return_source": "not_applicable"},
