@@ -152,6 +152,140 @@ class TestExtractSentiment:
         assert entry["module"] == "sentiment"
 
 
+class TestExtractSentimentMarketSignalsBundle:
+    """`sentiment_result.json` has two producers.
+
+    `orchestrator.py::run_market_signals_stage` writes a
+    scanners/simulations/direction bundle under the same filename the real
+    sentiment-scanner's `--export-context` uses. Before this branch existed
+    every unified run's market-signals block fell through to `degraded`.
+    """
+
+    def test_bundle_yields_ok_status_and_module_id(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        assert entry["module"] == "sentiment"
+        # Fixture is `status: partial` (skew + corr_sim failed) -- partial data
+        # is still real data, so it reports `ok` with warnings, not `degraded`.
+        assert entry["status"] == "ok"
+        assert entry["headline"]
+
+    def test_scanner_metrics_are_flattened_without_double_prefixing(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        metrics = entry["metrics"]
+        # `MaxPainScan.max_pain_strike` already carries the scanner name.
+        assert metrics["max_pain_strike"] == 180.0
+        assert metrics["max_pain_value"] == 41200000.0
+        assert metrics["iv_rank_regime"] == "RICH"
+        assert metrics["iv_rank_vrp_pct"] == 4.3
+        # `UnusualOiScan.oi_change_pct` does *not* start with the scanner key,
+        # so it keeps the prefix.
+        assert metrics["unusual_oi_oi_change_pct"] == 5.78
+
+    def test_successful_scanner_with_null_error_field_is_not_treated_as_failed(self):
+        # Every scanner dataclass carries `error: Optional[str] = None`, so a
+        # successful scan still serializes `"error": null` -- a bare
+        # `"error" in scan` membership test would mark all four as failed.
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        assert not any("iv_rank" in w for w in entry["warnings"])
+        assert "iv_rank_regime" in entry["metrics"]
+        assert "iv_rank_error" not in entry["metrics"]
+
+    def test_failed_scanner_becomes_a_warning_and_contributes_no_metrics(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        assert any("skew" in w for w in entry["warnings"])
+        assert not any(k.startswith("skew") for k in entry["metrics"])
+
+    def test_simulation_metrics_are_flattened(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        metrics = entry["metrics"]
+        assert metrics["mc_sim_terminal_price_mean"] == 209.8
+        assert metrics["mc_sim_terminal_price_p5"] == 108.7
+        assert metrics["copula_terminal_price_p95"] == 389.4
+
+    def test_failed_simulation_becomes_a_warning(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        assert any("corr_sim" in w for w in entry["warnings"])
+        assert not any(k.startswith("corr_sim") for k in entry["metrics"])
+
+    def test_array_and_dict_fields_never_land_in_metrics(self):
+        # Task 8's `terminal_price_histogram` (20 bin dicts), corr_sim's
+        # matrices, `data_quality`, and the scanners' `pain_profile` /
+        # `top_strikes` lists must not be flattened into scalar metrics.
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        for key, value in entry["metrics"].items():
+            assert isinstance(value, (int, float, str, bool)), key
+        assert "mc_sim_terminal_price_histogram" not in entry["metrics"]
+        assert "mc_sim_data_quality" not in entry["metrics"]
+        assert "max_pain_pain_profile" not in entry["metrics"]
+
+    def test_bookkeeping_fields_are_not_reported_as_metrics(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        for noise in (
+            "mc_sim_suite",
+            "mc_sim_status",
+            "mc_sim_timestamp",
+            "mc_sim_module",
+            "iv_rank_ticker",
+            "iv_rank_timestamp",
+        ):
+            assert noise not in entry["metrics"]
+
+    def test_direction_conviction_and_signals_are_surfaced(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        metrics = entry["metrics"]
+        assert metrics["direction_conviction"] == "MODERATE"
+        assert metrics["direction_score"] == 3
+        assert metrics["direction_signal_whale"] is True
+        assert metrics["direction_signal_wave3"] is False
+
+    def test_bundle_level_errors_are_surfaced_as_warnings(self):
+        entry = _extract_sentiment(_load("sentiment_result_market_signals.json"))
+        assert entry["warnings"]
+
+    def test_all_ok_bundle_reports_full_scanner_and_sim_counts(self):
+        bundle = {
+            "suite": "sentiment",
+            "status": "ok",
+            "ticker": "AAPL",
+            "scanners": {"iv_rank": {"regime": "FAIR", "error": None}},
+            "simulations": {"mc_sim": {"terminal_price_mean": 210.0}},
+            "direction": {"conviction": "STRONG", "score": 5, "signals": {}},
+        }
+        entry = _extract_sentiment(bundle)
+        assert entry["status"] == "ok"
+        assert entry["warnings"] == []
+        assert "1/1" in entry["headline"]
+
+    def test_bundle_status_error_passes_through_as_error(self):
+        bundle = {
+            "suite": "sentiment",
+            "status": "error",
+            "ticker": "AAPL",
+            "scanners": {"iv_rank": {"error": "boom"}},
+            "simulations": {},
+            "direction": None,
+            "errors": ["scanner import failed: boom"],
+        }
+        entry = _extract_sentiment(bundle)
+        assert entry["status"] == "error"
+        assert "boom" in entry["headline"]
+
+    def test_bundle_detected_by_simulations_key_alone(self):
+        entry = _extract_sentiment(
+            {"status": "ok", "simulations": {"mc_sim": {"var_1yr": 1.5}}}
+        )
+        assert entry["status"] == "ok"
+        assert entry["metrics"]["mc_sim_var_1yr"] == 1.5
+
+    def test_garbage_bundle_still_degrades_instead_of_raising(self):
+        entry = _extract_sentiment({"scanners": "not a dict", "simulations": 7})
+        assert entry["status"] == "degraded"
+
+    def test_unknown_bundle_status_degrades(self):
+        entry = _extract_sentiment({"status": "weird", "scanners": {}})
+        assert entry["status"] == "degraded"
+
+
 # ── build_run_summary ────────────────────────────────────────────────────
 
 
@@ -188,6 +322,21 @@ class TestBuildRunSummary:
         assert by_module["var"]["status"] == "ok"
         assert by_module["sentiment"]["status"] == "ok"
         assert by_module["vol"]["source_result"] == "vol_result.json"
+
+    def test_market_signals_bundle_marker_yields_ok_schema_valid_entry(self, tmp_path):
+        _populate(
+            tmp_path,
+            {"sentiment_result.json": "sentiment_result_market_signals.json"},
+        )
+
+        summary = build_run_summary(tmp_path, run_id="run-abc", ticker="NVDA")
+
+        validate_quant_summary(summary)
+        entry = summary["modules"][0]
+        assert entry["module"] == "sentiment"
+        assert entry["status"] == "ok"
+        assert entry["source_result"] == "sentiment_result.json"
+        assert entry["metrics"]["max_pain_strike"] == 180.0
 
     def test_does_not_write_any_file_to_run_dir(self, tmp_path):
         _populate(tmp_path, {"vol_result.json": "vol_result_ok.json"})

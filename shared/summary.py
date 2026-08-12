@@ -331,16 +331,204 @@ def _extract_var(result: Any) -> Dict[str, Any]:
         )
 
 
-def _extract_sentiment(result: Any) -> Dict[str, Any]:
-    """sentiment-scanner's `sentiment_result.json` -> a `modules[]` entry.
+#: Bookkeeping fields carried by every scanner dataclass / simulation builder
+#: payload that are provenance, not measurements -- flattening them would bury
+#: the real metrics under `mc_sim_suite`, `iv_rank_ticker`, four copies of
+#: `*_timestamp`, and so on. `error` is excluded because it is consumed as a
+#: failure marker before flattening, never reported as a metric.
+_BUNDLE_NON_METRIC_KEYS = frozenset(
+    {"suite", "status", "module", "ticker", "tickers", "timestamp", "error"}
+)
 
-    `sentiment_result.json` is the `--export-context` marker
+
+def _bundle_metric_key(prefix: str, field: str) -> str:
+    """`('max_pain', 'max_pain_strike') -> 'max_pain_strike'`, not
+    `'max_pain_max_pain_strike'` -- several scanner fields already carry their
+    own scanner's name."""
+    if field == prefix or field.startswith(f"{prefix}_"):
+        return field
+    return f"{prefix}_{field}"
+
+
+def _flatten_bundle_section(
+    section: Dict[str, Any],
+    kind: str,
+    metrics: Dict[str, Any],
+    warnings: List[str],
+) -> int:
+    """Flatten one scanner/simulation map into *metrics*; return the ok count.
+
+    Only scalars are lifted into `metrics`. Everything array- or object-shaped
+    (`terminal_price_histogram` and `data_quality` from the sim builders,
+    `correlation_matrix`/`sim_vols`/`sim_corr` from corr_sim,
+    `pain_profile`/`top_strikes`/`rich_strikes` from the scanners) stays in the
+    source result, where a chart renderer can reach it, rather than being
+    stringified into a metrics row.
+    """
+    ok_count = 0
+    for name, payload in section.items():
+        if not isinstance(payload, dict):
+            warnings.append(f"{name} {kind} returned no usable data")
+            continue
+        # Every scanner dataclass declares `error: Optional[str] = None`, so a
+        # *successful* scan still serializes `"error": null`. Membership alone
+        # would mark all four scanners failed -- test truthiness.
+        failure = payload.get("error")
+        if failure:
+            warnings.append(f"{name} {kind} failed: {failure}")
+            continue
+        ok_count += 1
+        for key, value in payload.items():
+            if key in _BUNDLE_NON_METRIC_KEYS:
+                continue
+            if isinstance(value, (bool, int, float, str)):
+                metrics[_bundle_metric_key(name, key)] = value
+    return ok_count
+
+
+def _extract_market_signals_bundle(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The `scanners`/`simulations`/`direction` bundle written by
+    `orchestrator.py::run_market_signals_stage` -> a `modules[]` entry.
+
+    The bundle's own `status` is `ok` / `partial` / `error`; `partial` is not a
+    `quant_summary` module status and, more importantly, is not a failure --
+    it means some sub-piece failed while the rest produced real numbers. It
+    maps to `ok` with the failures recorded as warnings, matching how
+    `_extract_vol` treats unavailable dealer positioning.
+    """
+    status = result.get("status", "ok")
+    if status not in ("ok", "partial", "error"):
+        raise ValueError(f"unexpected market-signals bundle status: {status!r}")
+
+    scanners = result.get("scanners") or {}
+    simulations = result.get("simulations") or {}
+    if not isinstance(scanners, dict):
+        raise TypeError(f"'scanners' must be an object, got {type(scanners).__name__}")
+    if not isinstance(simulations, dict):
+        raise TypeError(
+            f"'simulations' must be an object, got {type(simulations).__name__}"
+        )
+
+    metrics: Dict[str, Any] = {}
+    warnings: List[str] = []
+
+    ok_scanners = _flatten_bundle_section(scanners, "scanner", metrics, warnings)
+    ok_sims = _flatten_bundle_section(simulations, "sim", metrics, warnings)
+
+    direction = result.get("direction")
+    direction_summary = ""
+    if isinstance(direction, dict):
+        conviction = direction.get("conviction")
+        score = direction.get("score")
+        if conviction is not None:
+            metrics["direction_conviction"] = conviction
+        if isinstance(score, (int, float)) and not isinstance(score, bool):
+            metrics["direction_score"] = score
+        signals = direction.get("signals")
+        if isinstance(signals, dict):
+            for name, fired in signals.items():
+                if isinstance(fired, (bool, int, float, str)):
+                    metrics[f"direction_signal_{name}"] = fired
+        if conviction is not None:
+            direction_summary = f", direction {conviction}"
+            if score is not None:
+                direction_summary += f" ({score}/5)"
+    elif direction is None:
+        warnings.append("direction suite produced no signal")
+
+    ticker = result.get("ticker") or ""
+    subject = f"{ticker} market signals" if ticker else "Market signals"
+    headline = (
+        f"{subject}: {ok_scanners}/{len(scanners)} scanners, "
+        f"{ok_sims}/{len(simulations)} 1yr sims{direction_summary}"
+    )
+
+    if status == "error":
+        errors = result.get("errors")
+        detail = (
+            "; ".join(str(e) for e in errors)
+            if isinstance(errors, list) and errors
+            else "market-signals stage reported an error"
+        )
+        return {
+            "module": "sentiment",
+            "status": "error",
+            "headline": detail,
+            "metrics": metrics,
+            "warnings": warnings,
+            "source_result": "",
+        }
+
+    return {
+        "module": "sentiment",
+        "status": "ok",
+        "headline": headline,
+        "metrics": metrics,
+        "warnings": warnings,
+        "source_result": "",
+    }
+
+
+def _extract_sentiment_export(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The real sentiment-scanner suite's `--export-context` marker
     (`shared.schemas.validate_sentiment_context`), not the ticker-pack JSON --
     per `shared/suite_validation.py::SUITE_REQUIREMENTS['sentiment']`. It has
     no top-level `status`/`error` field of its own, so unlike the other three
     extractors there is no `error` passthrough branch here: a malformed or
-    incomplete block falls straight through to `degraded` via the exception
-    handler below.
+    incomplete block falls through to `degraded` via the caller's handler.
+    """
+    block = result.get("sentiment")
+    if not isinstance(block, dict):
+        raise ValueError("missing 'sentiment' block")
+
+    ranked = block.get("ranked_tickers")
+    if not isinstance(ranked, list):
+        raise ValueError("sentiment.ranked_tickers missing or not a list")
+
+    group_id = block.get("group_id")
+    pack_json_path = block.get("pack_json_path")
+
+    metrics: Dict[str, Any] = {"ranked_ticker_count": len(ranked)}
+    if group_id:
+        metrics["group_id"] = group_id
+
+    top_names = ", ".join(str(t) for t in ranked[:5])
+    if top_names:
+        headline = f"Sentiment scan ranked {len(ranked)} tickers; top: {top_names}"
+    else:
+        headline = "Sentiment scan produced no ranked tickers"
+
+    warnings: List[str] = []
+    if not pack_json_path:
+        warnings.append("no pack_json_path recorded (sentiment pack not exported)")
+
+    return {
+        "module": "sentiment",
+        "status": "ok",
+        "headline": headline,
+        "metrics": metrics,
+        "warnings": warnings,
+        "source_result": "",
+    }
+
+
+def _extract_sentiment(result: Any) -> Dict[str, Any]:
+    """`sentiment_result.json` -> a `modules[]` entry.
+
+    Two different producers write this one filename, so the shape has to be
+    sniffed rather than assumed:
+
+    * `orchestrator.py::run_market_signals_stage` -- the
+      `scanners`/`simulations`/`direction` bundle every unified run actually
+      writes today (the market-signals stage replaced the sentiment-scanner
+      stage in the unified pipeline).
+    * the sentiment-scanner suite's `--export-context` -- the older
+      `sentiment.ranked_tickers` block, still what a standalone sentiment run
+      produces.
+
+    Branching on `scanners`/`simulations` keeps both working; without it the
+    market-signals bundle always fell through to `degraded` and the dashboard's
+    unified `/quant` tab hid a full run's real numbers behind a fake failure.
     """
     try:
         if not isinstance(result, dict):
@@ -348,39 +536,9 @@ def _extract_sentiment(result: Any) -> Dict[str, Any]:
                 f"sentiment result must be an object, got {type(result).__name__}"
             )
 
-        block = result.get("sentiment")
-        if not isinstance(block, dict):
-            raise ValueError("missing 'sentiment' block")
-
-        ranked = block.get("ranked_tickers")
-        if not isinstance(ranked, list):
-            raise ValueError("sentiment.ranked_tickers missing or not a list")
-
-        group_id = block.get("group_id")
-        pack_json_path = block.get("pack_json_path")
-
-        metrics: Dict[str, Any] = {"ranked_ticker_count": len(ranked)}
-        if group_id:
-            metrics["group_id"] = group_id
-
-        top_names = ", ".join(str(t) for t in ranked[:5])
-        if top_names:
-            headline = f"Sentiment scan ranked {len(ranked)} tickers; top: {top_names}"
-        else:
-            headline = "Sentiment scan produced no ranked tickers"
-
-        warnings: List[str] = []
-        if not pack_json_path:
-            warnings.append("no pack_json_path recorded (sentiment pack not exported)")
-
-        return {
-            "module": "sentiment",
-            "status": "ok",
-            "headline": headline,
-            "metrics": metrics,
-            "warnings": warnings,
-            "source_result": "",
-        }
+        if "scanners" in result or "simulations" in result:
+            return _extract_market_signals_bundle(result)
+        return _extract_sentiment_export(result)
     except Exception as exc:  # noqa: BLE001
         return _degraded(
             "sentiment",
