@@ -148,6 +148,16 @@ live sign models -- they're standalone, same as every other `Tools/` plugin.
   `vrp_term_structure` block, so one consumer reads both. Failures come back
   as `{"available": False, "error": ...}` rather than raising.
 
+### Social Media Sentiment Scanner (placeholder)
+
+- **Social Media Sentiment Scanner** (`slug="social-sentiment"`) -- a stub, not
+  an implementation. It makes no network call and returns
+  `status: "not_implemented"` overall and for each of `reddit`, `youtube` and
+  `stocktwits` (or `status: "error"` if the context has no focus ticker). It is
+  deliberately **not** wired to the `sentiment-scanner/` suite, which is a
+  separate, already-functional project; this entry only reserves the slot in
+  the Tools listing ahead of a real implementation.
+
 ## Adding a new tool (the plugin pattern)
 
 1. Create a new module under `Tools/tools/`, e.g.
