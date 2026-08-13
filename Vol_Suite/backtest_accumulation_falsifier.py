@@ -45,6 +45,82 @@ import dealer_positioning
 import backtest_stage3
 import seed_data_loader
 
+# ---------------------------------------------------------------------------
+# Result cache -- persist heavy computed falsifier results to JSON so re-runs
+# load instead of recomputing the ~8-min per-day accumulated book across 12
+# tickers. The raw seed_data_*.json market data is ALREADY saved to disk; this
+# caches the DERIVED result (which doesn't change for the same (mode, fitter,
+# seed_mode, lookback, ticker)). `_force_recompute()` bypasses.
+# ---------------------------------------------------------------------------
+import json
+import os
+
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "outputs", "falsifier_cache")
+
+
+def _fitter_used() -> str:
+    return os.environ.get("VOL_SURFACE_FITTER", "svi").strip().lower() or "svi"
+
+
+def _cache_path(kind: str, **key) -> str:
+    """Deterministic cache file for a result kind + key tuple. Include the
+    sign-source fitter so SABR vs SVI results never collide."""
+    parts = [kind, _fitter_used()]
+    for k, v in key.items():
+        parts.append(f"{k}={v}")
+    fname = "_".join(str(p) for p in parts).replace("/", "_").replace("\\", "_") + ".json"
+    return os.path.join(_CACHE_DIR, fname)
+
+
+def _force_recompute() -> bool:
+    return os.environ.get("FALSIFIER_FORCE", "0") == "1"
+
+
+def _dataclass_to_dict(obj) -> dict:
+    from dataclasses import asdict
+    return asdict(obj)
+
+
+def _save_result(kind: str, key: dict, obj) -> str:
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        path = _cache_path(kind, **key)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(_dataclass_to_dict(obj), fh, indent=2, default=str)
+        return path
+    except Exception as e:
+        print(f"  [cache] failed to save {kind} result: {type(e).__name__} {e}")
+        return ""
+
+
+def _load_result(kind: str, key: dict):
+    path = _cache_path(kind, **key)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _hydrate(cls, data) -> object:
+    """Reconstruct a dataclass (with nested dict/list defaults) from a loaded
+    dict, tolerating missing optional fields."""
+    import dataclasses
+    fields = {f.name: f for f in dataclasses.fields(cls)}
+    kwargs = {}
+    for name, f in fields.items():
+        if name in data:
+            kwargs[name] = data[name]
+        elif f.default is not dataclasses.MISSING:
+            kwargs[name] = f.default
+        elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
+            kwargs[name] = f.default_factory()  # type: ignore[misc]
+    return cls(**kwargs)
+
+
 TRADING_DAYS_PER_YEAR = 252
 
 # Flat rate/dividend assumptions -- same values and same rationale as
@@ -803,6 +879,30 @@ def run_cross_sectional_falsifier(tickers: Optional[List[str]] = None,
     )
 
 
+def run_cross_sectional_falsifier_cached(
+        tickers: Optional[List[str]] = None, lookback_days: int = 150,
+        forward_window_days: int = 5, seed_mode: str = "replication",
+        cached_dir: Optional[str] = None,
+        ) -> CrossSectionalFalsifierResult:
+    """Caching wrapper over run_cross_sectional_falsifier: loads a saved result
+    if present for (mode, fitter, tickers, lookback, seed_mode), else computes
+    and saves. FALSIFIER_FORCE=1 bypasses. Avoids the ~8-min recompute."""
+    key = {"tickers": ",".join(sorted(tickers)) if tickers else "all",
+           "lb": lookback_days, "sm": seed_mode}
+    if not _force_recompute():
+        cached = _load_result("cross", key)
+        if cached is not None:
+            print(f"  [cache] loaded cross-sectional result for fitter={_fitter_used()} "
+                  f"(FALSIFIER_FORCE=1 to recompute)")
+            return _hydrate(CrossSectionalFalsifierResult, cached)
+    res = run_cross_sectional_falsifier(
+        tickers=tickers, lookback_days=lookback_days,
+        forward_window_days=forward_window_days, seed_mode=seed_mode,
+        cached_dir=cached_dir)
+    _save_result("cross", key, res)
+    return res
+
+
 def format_cross_sectional_falsifier_report(r: CrossSectionalFalsifierResult) -> str:
     lines = [
         f"CROSS-SECTIONAL falsifier -- {r.n_tickers} tickers, 1 (sign, rv-level) point each",
@@ -1028,6 +1128,23 @@ def run_svi_magnitude_cross_sectional_falsifier(
     return _run_svi_magnitude_cross_sectional_from_histories(ticker_histories)
 
 
+def run_svi_magnitude_cross_sectional_falsifier_cached(
+        tickers: Optional[List[str]] = None, cached_dir: Optional[str] = None,
+        ) -> SviMagnitudeFalsifierResult:
+    """Caching wrapper over run_svi_magnitude_cross_sectional_falsifier.
+    FALSIFIER_FORCE=1 bypasses."""
+    key = {"tickers": ",".join(sorted(tickers)) if tickers else "all"}
+    if not _force_recompute():
+        cached = _load_result("svimag", key)
+        if cached is not None:
+            print(f"  [cache] loaded SVI-magnitude result for fitter={_fitter_used()} "
+                  f"(FALSIFIER_FORCE=1 to recompute)")
+            return _hydrate(SviMagnitudeFalsifierResult, cached)
+    res = run_svi_magnitude_cross_sectional_falsifier(tickers=tickers, cached_dir=cached_dir)
+    _save_result("svimag", key, res)
+    return res
+
+
 def format_svi_magnitude_falsifier_report(r: SviMagnitudeFalsifierResult) -> str:
     lines = [
         f"SVI-MAGNITUDE cross-sectional falsifier -- {r.n_tickers} tickers",
@@ -1105,6 +1222,31 @@ def run_falsifier(ticker: str, expiry: Optional[str] = None,
     )
 
 
+def run_falsifier_cached(ticker: str, expiry: Optional[str] = None,
+                         lookback_days: int = 150, forward_window_days: int = 5,
+                         seed_mode: str = "replication", use_cached: bool = True,
+                         cached_path: Optional[str] = None,
+                         cached_dir: Optional[str] = None,
+                         ) -> FalsifierResult:
+    """Caching wrapper over run_falsifier (per-ticker). FALSIFIER_FORCE=1
+    bypasses. Keyed by (ticker, expiry, lookback, seed_mode, fitter)."""
+    key = {"ticker": ticker, "exp": expiry or "auto", "lb": lookback_days,
+           "fw": forward_window_days, "sm": seed_mode}
+    if use_cached and not _force_recompute():
+        cached = _load_result("falsifier", key)
+        if cached is not None:
+            print(f"  [cache] loaded falsifier result for {ticker} "
+                  f"(fitter={_fitter_used()}, FALSIFIER_FORCE=1 to recompute)")
+            return _hydrate(FalsifierResult, cached)
+    res = run_falsifier(
+        ticker, expiry=expiry, lookback_days=lookback_days,
+        forward_window_days=forward_window_days, seed_mode=seed_mode,
+        use_cached=use_cached, cached_path=cached_path, cached_dir=cached_dir)
+    if use_cached:
+        _save_result("falsifier", key, res)
+    return res
+
+
 def format_falsifier_report(r: FalsifierResult) -> str:
     lines = [
         f"{r.ticker} {r.expiry} -- OOS falsifier (n={r.n_days} usable days, "
@@ -1130,11 +1272,11 @@ if __name__ == "__main__":
         pooled_result = run_pooled_falsifier()
         print(format_pooled_falsifier_report(pooled_result))
     elif arg == "--cross":
-        cross_result = run_cross_sectional_falsifier()
+        cross_result = run_cross_sectional_falsifier_cached()
         print(format_cross_sectional_falsifier_report(cross_result))
     elif arg == "--svimag":
-        svimag_result = run_svi_magnitude_cross_sectional_falsifier()
+        svimag_result = run_svi_magnitude_cross_sectional_falsifier_cached()
         print(format_svi_magnitude_falsifier_report(svimag_result))
     else:
-        result = run_falsifier(arg, use_cached=True)
+        result = run_falsifier_cached(arg, use_cached=True)
         print(format_falsifier_report(result))
