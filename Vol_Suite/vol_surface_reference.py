@@ -106,6 +106,22 @@ SABR_BETA = 0.5
 _RHO_STARTS = (-0.5, 0.0, 0.5)
 _NU_STARTS = (0.3, 0.6, 0.9)
 
+# Reference-curve fitter selection (Jason 2026-08-12 "make all things smile
+# use SVI", re-affirmed 2026-08-13: SVI default, Option B). Default 'svi' =
+# SSVI via the reusable svi_rp module. 'sabr' = the Hagan-SABR fitter, and
+# 'quadratic' = near-ATM quadratic -- both kept reachable via this env toggle
+# so we can flip back without code changes if SVI misbehaves on a chain.
+#   VOL_SURFACE_FITTER=svi|sabr|quadratic
+_VALID_FITTERS = ("svi", "sabr", "quadratic")
+
+
+def _fitter() -> str:
+    """Lazily read VOL_SURFACE_FITTER (per-call, not import-time) so the env
+    toggle works at runtime / in tests, not just before module load."""
+    import os
+    val = os.environ.get("VOL_SURFACE_FITTER", "svi").strip().lower()
+    return val if val in _VALID_FITTERS else "svi"
+
 
 @dataclass
 class VolSurfaceReference:
@@ -293,6 +309,47 @@ def fit_sabr_reference(chain_iv: Dict[Tuple[float, str], float], forward: float,
     return {
         'alpha': float(alpha_v), 'beta': float(beta), 'rho': float(rho_v),
         'nu': float(nu_v), 'rmse': float(math.sqrt(best_err)), 'n_points': len(by_strike),
+    }
+
+
+def fit_svi_reference(chain_iv: Dict[Tuple[float, str], float], forward: float,
+                      T: float) -> Optional[dict]:
+    """SSVI/Gatheral-Jacquier reference fit via the reusable svi_rp module.
+
+    Uses the ROBUST full-SVI least-squares fit (`svi_rp.calibrate_svi`, the
+    2026-08-13 flat-smile fix) rather than the exact 3-observable SSVI
+    construction -- the exact construction saturates flat on a steep equity put
+    skew (measured on real SPY: reference 0.26 vs market 0.65 at K=300), which
+    would badly distort the dealer sign resolver's rich/cheap deviation.
+
+    Returns a params dict the caller uses to price per-strike reference IV via
+    `SviRpReference.sigma_ref` (carried in `_ref`), or None when the fit can't
+    run (thin chain / no OTM body / import failure) so the caller falls through
+    to SABR or quadratic.
+    """
+    try:
+        import svi_rp
+    except Exception:
+        return None
+    # OTM-only body (matches the SABR fitter's convention).
+    otm = {}
+    for (k, right), iv in chain_iv.items():
+        if iv is None or iv <= 0:
+            continue
+        if (right == 'C' and k > forward) or (right == 'P' and k < forward):
+            otm[(k, right)] = float(iv)
+    if len(otm) < MIN_SABR_POINTS or T <= 0:
+        return None
+    try:
+        ref = svi_rp.calibrate_svi(otm, float(forward), float(T))
+    except Exception:
+        return None
+    return {
+        'theta_t': ref.theta_t, 'sigma_atm': ref.sigma_atm,
+        'psi_t': ref.psi_t, 'p_t': ref.p_t,
+        'phi': ref.phi, 'rho': ref.rho,
+        'sigma_swap': ref.sigma_swap, 'K_var': ref.K_var,
+        'n_points': len(otm), '_ref': ref,
     }
 
 

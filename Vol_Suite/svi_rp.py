@@ -99,16 +99,30 @@ class SviRpReference:
     F0: float
     T: float
     butterfly_clamped: bool = False
+    # Robust full-SVI params (a, b, rho, m, sigma) when calibrated via
+    # calibrate_svi (the flat-smile fix). None => use the 3-observable SSVI
+    # shape (phi, rho) in sigma_ref. Present => sigma_ref uses the full SVI
+    # curve, which can represent a steep equity put skew that the exact
+    # 3-observable SSVI construction saturates flat on.
+    svi_params: Optional[Tuple[float, float, float, float, float]] = None
 
     def sigma_ref(self, strike: float) -> float:
         """Reference implied vol at a given strike."""
         k = math.log(strike / self.F0)
-        w = ssvi_w(np.array([k]), self.theta_t, self.phi, self.rho)[0]
+        if self.svi_params is not None:
+            a, b, rho, m, sigma = self.svi_params
+            w = svi_w(np.array([k]), a, b, rho, m, sigma)[0]
+        else:
+            w = ssvi_w(np.array([k]), self.theta_t, self.phi, self.rho)[0]
         return math.sqrt(max(w, 0.0) / self.T)
 
     def sigma_ref_batch(self, strikes) -> np.ndarray:
         ks = np.log(np.asarray(strikes, dtype=float) / self.F0)
-        w = ssvi_w(ks, self.theta_t, self.phi, self.rho)
+        if self.svi_params is not None:
+            a, b, rho, m, sigma = self.svi_params
+            w = svi_w(ks, a, b, rho, m, sigma)
+        else:
+            w = ssvi_w(ks, self.theta_t, self.phi, self.rho)
         return np.sqrt(np.maximum(w, 0.0) / self.T)
 
     def mark_chain(self, chain_iv: Dict[Tuple[float, str], float],
@@ -251,4 +265,125 @@ def calibrate_ssvi(
         sigma_atm=sigma_atm, theta_t=theta_t, psi_t=psi_t, p_t=p_t,
         phi=phi, rho=rho, sigma_swap=sigma_swap, K_var=K_var,
         F0=F0, T=T, butterfly_clamped=butterfly_clamped,
+    )
+
+
+def _svi_total_variance(ks: np.ndarray, a: float, b: float, rho: float,
+                        m: float, sigma: float) -> np.ndarray:
+    """Full SVI total implied variance (eq 3.1) as a vector."""
+    return a + b * (rho * (ks - m) + np.sqrt((ks - m) ** 2 + sigma ** 2))
+
+
+def calibrate_svi(
+    chain_iv: Dict[Tuple[float, str], float],
+    spot: float,
+    T: float,
+    oi_by: Optional[Dict[Tuple[float, str], int]] = None,
+    otm_weights: Optional[Dict[Tuple[float, str], float]] = None,
+    r: float = R_DEFAULT,
+    q: float = Q_DEFAULT,
+    butterfly_penalty: float = 10.0,
+) -> SviRpReference:
+    """Robust full-SVI reference smile (the flat-smile fix, 2026-08-13).
+
+    The exact 3-observable SSVI construction (`calibrate_ssvi`) is structurally
+    over-constrained on a steep equity put skew: psi_t (ATM vol skew) is so
+    large that the butterfly-arbitrage clamp caps `phi <= 4/(1+|rho|)`, `rho`
+    saturates at +-1, and the fit collapses to the FLATTEST arbitrage-free
+    curve -- which badly underfits a steep market put wing (measured on real
+    SPY: reference 0.26 vs market 0.65 at K=300).
+
+    This fits the FULL 5-parameter SVI curve by OI-weighted least squares to
+    the chain's total implied variance, with a penalty that grows when the
+    fitted curve admits butterfly (variance) arbitrage, so the result can
+    represent the steep equity put skew instead of flattening. Fits in
+    log-moneyness k = log(K/F0). Returns an SviRpReference carrying the fitted
+    (a, b, rho, m, sigma) in `svi_params`; `sigma_ref` then uses the full-SVI
+    curve. Falls back to `calibrate_ssvi` if the fit can't converge or the
+    chain is too thin.
+
+    Pure (no network): all inputs are pre-fetched dicts.
+    """
+    from scipy.optimize import least_squares
+
+    oi_by = oi_by or {}
+    F0 = spot * math.exp((r - q) * T)
+    ks = np.array([math.log(k / F0) for (k, right) in chain_iv])
+    sigs = np.array([chain_iv[(k, right)] for (k, right) in chain_iv])
+    # target total variance
+    w_target = np.clip(sigs, 1e-6, None) ** 2 * T
+    # OI weights (illiquid wings downweighted)
+    weights = np.array([max(oi_by.get((k, right), 0), 1.0) for (k, right) in chain_iv])
+    weights = weights / max(weights.sum(), 1e-9)
+
+    # ATM anchor for a good init
+    near = sorted(chain_iv.keys(), key=lambda kv: abs(kv[0] - spot))[:6]
+    sigma_atm = float(np.mean([chain_iv[(k, right)] for (k, right) in near]))
+    theta_t = max(sigma_atm ** 2 * T, 0.0)
+    k_min, k_max = float(ks.min()), float(ks.max())
+    # decent SVI init
+    p0 = np.array([theta_t, 0.5 * theta_t, -0.5, 0.0, max(0.05, 0.5 * (k_max - k_min))])
+
+    def _residuals(p):
+        a, b, rho, m, sigma = p
+        w = _svi_total_variance(ks, a, b, rho, m, sigma)
+        # butterfly (variance) arbitrage penalty: w''(k) >= 0 required
+        # (SSVI Corollary 4.1). Penalize negative second difference.
+        # second derivative of g(k)=sqrt((k-m)^2+sigma^2) = sigma^2/((k-m)^2+sigma^2)^1.5
+        # d2g/dk2 = -3 sigma^2 (k-m) / ((k-m)^2+sigma^2)^2.5 ... handle via finite diff
+        # Use a coarse numeric butterfly check and penalize.
+        penalty = 0.0
+        grid = np.linspace(k_min, k_max, 60)
+        wg = _svi_total_variance(grid, a, b, rho, m, sigma)
+        # second finite difference of total variance w.r.t. log-moneyness
+        d2 = np.gradient(np.gradient(wg, grid), grid)
+        viol = np.clip(-d2, 0.0, None).sum()
+        penalty = butterfly_penalty * viol * (grid[1] - grid[0])
+        return np.concatenate([weights * (w - w_target), np.array([penalty])])
+
+    try:
+        res = least_squares(_residuals, p0, method="trf",
+                            bounds=([1e-6, 1e-6, -0.999, k_min - 1.0, 1e-4],
+                                    [10.0, 10.0, 0.999, k_max + 1.0, 3.0]))
+        a, b, rho, m, sigma = res.x
+        if not np.all(np.isfinite(res.x)):
+            raise ValueError("non-finite SVI params")
+    except Exception:
+        return calibrate_ssvi(chain_iv, spot, T, oi_by=oi_by, otm_weights=otm_weights,
+                              r=r, q=q)
+
+    # RP strip fair variance (same as calibrate_ssvi) for the consistency check
+    if otm_weights is None:
+        try:
+            import replication_reference as rr
+            otm_weights = rr._otm_leg_weights(chain_iv, spot, T)
+        except Exception:
+            otm_weights = {
+                (k, right): 1.0 / max(k * k, 1e-9)
+                for (k, right) in chain_iv
+                if (right == "C" and k > spot) or (right == "P" and k < spot)
+            }
+    var = 0.0
+    for (k, right), ww in otm_weights.items():
+        if oi_by.get((k, right), 0) < OI_ILLIQUID:
+            continue
+        var += (2.0 / T) * ww * bs_price(spot, k, T, chain_iv[(k, right)], r, q, right)
+    K_var = max(var, 0.0)
+    sigma_swap = math.sqrt(K_var)
+
+    # ATM skew from the fitted curve (d sigma/dk at k=0) for psi_t reporting
+    k0 = math.log(spot / F0)
+    w0 = _svi_total_variance(np.array([k0]), a, b, rho, m, sigma)[0]
+    psi_t = 0.0
+    if w0 > 0:
+        eps = 1e-4
+        wp = _svi_total_variance(np.array([k0 + eps]), a, b, rho, m, sigma)[0]
+        wm = _svi_total_variance(np.array([k0 - eps]), a, b, rho, m, sigma)[0]
+        psi_t = (wp - wm) / (2 * eps) / (2 * math.sqrt(max(w0, 1e-9)) * T)  # d sigma/dk
+
+    return SviRpReference(
+        sigma_atm=sigma_atm, theta_t=theta_t, psi_t=psi_t, p_t=psi_t,
+        phi=float(b), rho=float(rho), sigma_swap=sigma_swap, K_var=K_var,
+        F0=F0, T=T, butterfly_clamped=False,
+        svi_params=(float(a), float(b), float(rho), float(m), float(sigma)),
     )
