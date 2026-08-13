@@ -145,17 +145,25 @@ def main() -> int:
     ticker = sys.argv[1].upper()
     lookback = int(sys.argv[2]) if len(sys.argv) > 2 else 150
     out_dir = sys.argv[3] if len(sys.argv) > 3 else "."
+    # Optional 4th arg = explicit expiry (skips the slow longest-history probe)
+    explicit_expiry = sys.argv[4].upper() if len(sys.argv) > 4 else None
     os.makedirs(out_dir, exist_ok=True)
 
     td = ThetaDataController()
     try:
-        # Resolve to the expiry with the LONGEST available option-chain history
-        # (a far-dated/LEAPS expiry listed >= lookback trading days ago), NOT the
-        # nearest 0.25-year one -- a recently-listed expiry has only a few weeks
-        # of history, which starves the falsifier/backtest window.
-        expiry = td.resolve_longest_history_expiry(ticker, lookback_days=lookback)
-        print(f"[seed_data_maker] {ticker}: resolved longest-history expiry {expiry} "
-              f"for {lookback}d lookback", flush=True)
+        if explicit_expiry:
+            expiry = explicit_expiry
+            print(f"[seed_data_maker] {ticker}: using explicit expiry {expiry}", flush=True)
+        else:
+            # Resolve to the expiry with the LONGEST available option-chain history
+            # (a far-dated/LEAPS expiry listed >= lookback trading days ago), NOT the
+            # nearest 0.25-year one -- a recently-listed expiry has only a few weeks
+            # of history, which starves the falsifier/backtest window. This probe is
+            # slow (probes up to 14 far-dated expiries); pass the expiry explicitly
+            # to skip it once you know it (e.g. 20261218 for QQQ/SPY).
+            expiry = td.resolve_longest_history_expiry(ticker, lookback_days=lookback)
+            print(f"[seed_data_maker] {ticker}: resolved longest-history expiry {expiry} "
+                  f"for {lookback}d lookback", flush=True)
         greeks, oi, spot = build_payload(td, ticker, expiry, lookback)
     finally:
         td.close()
