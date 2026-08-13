@@ -198,13 +198,19 @@ report (added specifically because the first run silently said `REDUNDANT` with 
 explanation, which cost real investigation time to diagnose) — check it before trusting
 any pooled verdict.
 
-**Recommended next step, not yet built**: a genuinely cross-sectional test — 12 data
-points (one accumulated sign per ticker) against something cross-sectional per ticker
-(e.g. each ticker's own realized-vol level or regime over the same window), rather than
-a day-level panel. Flag going in: 12 data points is thin and was already a live power
-concern in the panel debate (the quant seat's point). This is exactly the kind of test
-the seed-vs-flow debate still needs — don't skip straight to a verdict because
-`REDUNDANT` printed once.
+**Recommended next step, now BUILT (2026-08-13, Hermes session)**: the genuinely
+cross-sectional test — 12 data points (one accumulated sign per ticker) against
+each ticker's own realized-vol level over the same window, rather than a day-level
+panel. Added to `backtest_accumulation_falsifier.py` as
+`_run_cross_sectional_falsifier_from_histories` / `run_cross_sectional_falsifier`
+(CLI: `python backtest_accumulation_falsifier.py --cross`), reusing
+`_extract_paired_signals` per ticker so it never re-derives signal logic, and
+gated on `n_tickers >= 8` + permutation p-value so the thin 12-point sample can't
+false-positive. Tests: `tests/test_cross_sectional_falsifier.py` (6 network-free
+tests, incl. a constructed signal-detection case + a no-signal anti-case).
+Run it with `env -u PYTHONPATH -u VIRTUAL_ENV ../.venv/Scripts/python.exe
+backtest_accumulation_falsifier.py --cross` (slow — recomputes the per-day
+accumulated book for every ticker; ~6+ min on 12 tickers).
 
 **QQQ and SPY specifically remain thin** (14-21 and 55-62 usable days respectively,
 vs. 110-163 for the other 10 tickers) because their cached `seed_data_*.json` files

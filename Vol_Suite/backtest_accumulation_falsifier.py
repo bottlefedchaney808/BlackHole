@@ -575,6 +575,247 @@ def format_pooled_falsifier_report(r: PooledFalsifierResult) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Cross-sectional falsifier -- the follow-up test HANDOFF.md §5 recommends.
+#
+# The day-level pooled falsifier above is mechanically blind to BETWEEN-ticker
+# signal because the 150d-accumulated dealer-short read is CONSTANT within every
+# ticker's own window (verified on the real 12-ticker cached dataset: acc unique
+# set is {-1.0} for every ticker), and ticker-fixed-effects demeaning zeroes a
+# constant series regardless of whether real cross-sectional variation exists
+# (i.e. which tickers ended up long vs short, and whether that predicts anything).
+#
+# This test answers that between-ticker question directly: one accumulated sign
+# per ticker (the dominant/final read) against that ticker's own realized-vol
+# LEVEL over the same window, pooled as 12 (n_tickers) cross-sectional points.
+# Dealer-hedge hypothesis: dealers short gamma amplify realized vol, so tickers
+# whose accumulated book reads SHORT should have higher realized-vol levels than
+# tickers whose book reads LONG -- and the accumulated read should sort tickers'
+# realized-vol level better than the same-day snapshot read does.
+#
+# 12 data points is thin (the panel's quant seat flagged this as a live power
+# concern) -- the verdict is gated on n_tickers >= _MIN_CROSS_TICKERS and a
+# permutation p-value; below the floor it is INCONCLUSIVE, not a claim.
+# ---------------------------------------------------------------------------
+
+# Fewer than this many tickers and the cross-sectional regression has no power.
+_MIN_CROSS_TICKERS = 8
+
+
+@dataclass
+class CrossSectionalFalsifierResult:
+    tickers: List[str]
+    n_tickers: int
+    per_ticker_acc_sign: Dict[str, float] = field(default_factory=dict)
+    per_ticker_snap_sign: Dict[str, float] = field(default_factory=dict)
+    per_ticker_rv_level: Dict[str, float] = field(default_factory=dict)
+    rho_acc_rv: float = 0.0
+    rho_snap_rv: float = 0.0
+    r2_acc: float = 0.0
+    r2_snap: float = 0.0
+    delta_r2: float = 0.0
+    tstat_acc: float = 0.0
+    pvalue_acc: float = 1.0
+    mean_rv_short: float = 0.0
+    mean_rv_long: float = 0.0
+    n_short: int = 0
+    n_long: int = 0
+    permutation_pvalue: float = 1.0
+    verdict: str = "INCONCLUSIVE"
+    skipped: List[Tuple[str, str]] = field(default_factory=list)
+
+
+def _realized_vol_level(hist_spot_rows: List[dict]) -> Optional[float]:
+    """Annualized realized-vol LEVEL over the whole sample window for one
+    ticker, computed directly from its spot close series (std of log returns,
+    ddof=1, x sqrt(252)). Returns None if there aren't enough closes.
+    """
+    closes = []
+    for row in hist_spot_rows:
+        d = replication_reference._parse_hist_date(row)
+        if not d:
+            continue
+        try:
+            c = float(row.get("close", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if c > 0:
+            closes.append(c)
+    if len(closes) < 3:
+        return None
+    log_rets = np.diff(np.log(closes))
+    if len(log_rets) < 2:
+        return None
+    return float(np.std(log_rets, ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR))
+
+
+def _dominant_sign(series: np.ndarray) -> float:
+    """Reduce a per-day sign series to one dominant scalar sign. For the
+    accumulated arm this is the constant regime read (sign of the mean); for
+    the snapshot arm it's the net direction (fraction of days short/long).
+    Returns 0.0 when the series is empty or exactly balanced."""
+    if len(series) == 0:
+        return 0.0
+    m = float(np.mean(series))
+    if abs(m) < 1e-12:
+        return 0.0
+    return float(np.sign(m))
+
+
+def _run_cross_sectional_falsifier_from_histories(
+        ticker_histories: Dict[str, Tuple[str, List[dict], List[dict], List[dict]]],
+        lookback_days: int = 150, forward_window_days: int = 5,
+        seed_mode: str = "replication", n_perms: int = _N_PERMUTATIONS,
+        ) -> CrossSectionalFalsifierResult:
+    """Pure function: one (accumulated sign, snapshot sign, realized-vol level)
+    per ticker, pooled cross-sectionally. Uses _extract_paired_signals per
+    ticker (the SAME per-ticker signal logic the day-level falsifiers use),
+    reduces each to a dominant sign, and computes the ticker's own realized-vol
+    level from its spot series. Returns a CrossSectionalFalsifierResult.
+    """
+    per_ticker_acc: Dict[str, float] = {}
+    per_ticker_snap: Dict[str, float] = {}
+    per_ticker_rv: Dict[str, float] = {}
+    skipped: List[Tuple[str, str]] = []
+
+    for ticker, (expiry, greek_rows, oi_rows, spot_rows) in ticker_histories.items():
+        try:
+            _, snap, acc, _ = _extract_paired_signals(
+                ticker, expiry, greek_rows, oi_rows, spot_rows,
+                lookback_days=lookback_days, forward_window_days=forward_window_days,
+                seed_mode=seed_mode,
+            )
+        except ValueError as e:
+            skipped.append((ticker, str(e)))
+            continue
+        acc_sign = _dominant_sign(acc)
+        snap_sign = _dominant_sign(snap)
+        rv_level = _realized_vol_level(spot_rows)
+        if rv_level is None:
+            skipped.append((ticker, "insufficient spot history for rv level"))
+            continue
+        per_ticker_acc[ticker] = acc_sign
+        per_ticker_snap[ticker] = snap_sign
+        per_ticker_rv[ticker] = rv_level
+
+    if not per_ticker_rv:
+        raise ValueError(
+            "No ticker produced a usable cross-sectional signal "
+            f"(skipped: {skipped})."
+        )
+
+    tickers = sorted(per_ticker_rv)
+    n = len(tickers)
+    accs = np.array([per_ticker_acc[t] for t in tickers])
+    snaps = np.array([per_ticker_snap[t] for t in tickers])
+    rvs = np.array([per_ticker_rv[t] for t in tickers])
+
+    rho_acc = _safe_corr(accs, rvs)
+    rho_snap = _safe_corr(snaps, rvs)
+
+    ones = np.ones(n)
+    r2_acc, _, tstats_acc = _ols_r2_and_tstat(rvs, np.column_stack([ones, accs]))
+    r2_snap, _, _ = _ols_r2_and_tstat(rvs, np.column_stack([ones, snaps]))
+    tstat_acc = float(tstats_acc[1]) if len(tstats_acc) > 1 else 0.0
+    pvalue_acc = float(2 * (1 - _scipy_stats.t.cdf(abs(tstat_acc), max(n - 2, 1))))
+    delta_r2 = r2_acc - r2_snap
+
+    short_idx = accs < 0
+    long_idx = accs > 0
+    n_short = int(np.sum(short_idx))
+    n_long = int(np.sum(long_idx))
+    mean_rv_short = float(np.mean(rvs[short_idx])) if n_short else 0.0
+    mean_rv_long = float(np.mean(rvs[long_idx])) if n_long else 0.0
+
+    # Permutation p-value on |corr(accumulated sign, rv level)|: shuffle the
+    # accumulated signs across tickers (breaks the ticker->sign pairing while
+    # preserving the realized-vol levels) and see how often a random shuffle
+    # produces as extreme a |rho| as the observed one.
+    rng = np.random.RandomState(0)
+    perm_hits = 0
+    obs_abs_rho = abs(rho_acc)
+    for _ in range(n_perms):
+        perm = rng.permutation(accs)
+        if abs(_safe_corr(perm, rvs)) >= obs_abs_rho:
+            perm_hits += 1
+    perm_p = perm_hits / n_perms
+
+    if n < _MIN_CROSS_TICKERS:
+        verdict = "INCONCLUSIVE"
+    elif abs(tstat_acc) > _TSTAT_THRESHOLD and perm_p < _PERM_P_THRESHOLD:
+        verdict = "ACCUMULATION_CROSS_SECTIONAL_SIGNAL"
+    elif delta_r2 < 0.01:
+        verdict = "REDUNDANT"
+    else:
+        verdict = "INCONCLUSIVE"
+
+    return CrossSectionalFalsifierResult(
+        tickers=tickers, n_tickers=n,
+        per_ticker_acc_sign=per_ticker_acc, per_ticker_snap_sign=per_ticker_snap,
+        per_ticker_rv_level=per_ticker_rv,
+        rho_acc_rv=rho_acc, rho_snap_rv=rho_snap,
+        r2_acc=r2_acc, r2_snap=r2_snap, delta_r2=delta_r2,
+        tstat_acc=tstat_acc, pvalue_acc=pvalue_acc,
+        mean_rv_short=mean_rv_short, mean_rv_long=mean_rv_long,
+        n_short=n_short, n_long=n_long,
+        permutation_pvalue=perm_p, verdict=verdict, skipped=skipped,
+    )
+
+
+def run_cross_sectional_falsifier(tickers: Optional[List[str]] = None,
+                                  lookback_days: int = 150,
+                                  forward_window_days: int = 5,
+                                  seed_mode: str = "replication",
+                                  cached_dir: Optional[str] = None,
+                                  ) -> CrossSectionalFalsifierResult:
+    """Orchestrator: loads every cached ticker (or the given subset) via
+    seed_data_loader and runs the cross-sectional falsifier -- no ThetaData
+    load. Defaults to the handoff package's seed_data/ folder, same default as
+    run_pooled_falsifier."""
+    import os
+    search_dir = cached_dir or os.path.join(
+        os.path.dirname(__file__), "docs", "Dealer posistioning notes",
+        "_extracted", "handoff_20260812", "seed_data")
+    all_data = seed_data_loader.load_all_seed_data(search_dir)
+    if tickers:
+        all_data = {t: v for t, v in all_data.items() if t in tickers}
+    if not all_data:
+        raise ValueError(f"No cached seed_data found in {search_dir} for tickers={tickers}")
+
+    import glob
+    ticker_histories = {}
+    for ticker, (greeks, oi, spot) in all_data.items():
+        matches = glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
+        expiry = seed_data_loader.manifest_of(matches[0])["expiry"] if matches else "20261120"
+        ticker_histories[ticker] = (expiry, greeks, oi, spot)
+
+    return _run_cross_sectional_falsifier_from_histories(
+        ticker_histories, lookback_days=lookback_days,
+        forward_window_days=forward_window_days, seed_mode=seed_mode,
+    )
+
+
+def format_cross_sectional_falsifier_report(r: CrossSectionalFalsifierResult) -> str:
+    lines = [
+        f"CROSS-SECTIONAL falsifier -- {r.n_tickers} tickers, 1 (sign, rv-level) point each",
+    ]
+    if r.skipped:
+        lines.append(f"  skipped: {r.skipped}")
+    lines += [
+        f"  per-ticker accumulated sign:   {r.per_ticker_acc_sign}",
+        f"  per-ticker realized-vol level: {r.per_ticker_rv_level}",
+        f"  corr(accum sign, rv level):    {r.rho_acc_rv:+.4f}",
+        f"  corr(snapshot sign, rv level): {r.rho_snap_rv:+.4f}",
+        f"  R^2(acc): {r.r2_acc:.4f}  R^2(snap): {r.r2_snap:.4f}  delta: {r.delta_r2:+.4f}",
+        f"  accumulated coef t-stat:       {r.tstat_acc:+.3f}  (p={r.pvalue_acc:.4f})",
+        f"  mean rv (accum SHORT): {r.mean_rv_short:.4f}  (accum LONG): {r.mean_rv_long:.4f}  "
+        f"[n_short={r.n_short}, n_long={r.n_long}]",
+        f"  permutation p:                 {r.permutation_pvalue:.4f}",
+        f"  VERDICT:                       {r.verdict}",
+    ]
+    return "\n".join(lines)
+
+
 def run_falsifier(ticker: str, expiry: Optional[str] = None,
                    target_years: float = 0.25,
                    lookback_days: int = 150, forward_window_days: int = 5,
@@ -658,6 +899,9 @@ if __name__ == "__main__":
     if arg == "--pooled":
         pooled_result = run_pooled_falsifier()
         print(format_pooled_falsifier_report(pooled_result))
+    elif arg == "--cross":
+        cross_result = run_cross_sectional_falsifier()
+        print(format_cross_sectional_falsifier_report(cross_result))
     else:
         result = run_falsifier(arg, use_cached=True)
         print(format_falsifier_report(result))
