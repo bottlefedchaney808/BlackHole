@@ -176,7 +176,7 @@ def heston_lsm_price(S0: Optional[float] = None, K: Optional[float] = None, T: O
                 )
         payoff[~itm] = payoff[~itm] * discount
 
-    option_price = xp.exp(-r * T) * xp.mean(payoff)
+    option_price = discount * xp.mean(payoff)
     return _to_scalar(option_price)
 
 
@@ -235,7 +235,7 @@ def _heston_lsm_price_crn(S0, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
                 )
         payoff[~itm] = payoff[~itm] * discount
 
-    return _to_scalar(xp.exp(-r * T) * xp.mean(payoff))
+    return _to_scalar(discount * xp.mean(payoff))
 
 
 def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,

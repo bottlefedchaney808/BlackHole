@@ -1,9 +1,10 @@
 """
 Pytest configuration and shared test infrastructure for Options_Suite.
 
-Handles sys.path so that the Options_Suite root is importable while avoiding
-conflicts with other projects in the same parent (e.g. sentiment-scanner's
-config.py).  Provides a FakeThetaDataController for network-free testing.
+Handles sys.path so that both flat-name imports and package imports
+within Options_Suite stay importable while avoiding conflicts with other
+projects in the same parent (e.g. sentiment-scanner's config.py).
+Provides a FakeThetaDataController for network-free testing.
 """
 
 import os
@@ -86,6 +87,8 @@ def _suppress_cupy(monkeypatch):
     at test collection time.  The env-var set above already blocks it, but
     this guard is belt-and-suspenders."""
     import importlib
-    # Force-reload MC so the GPU_ACTIVE check re-runs with FORCE_CPU set
-    if "MC" in sys.modules:
-        importlib.reload(sys.modules["MC"])
+    # Force-reload either import style so the GPU_ACTIVE check re-runs with
+    # FORCE_CPU set before tests import package-qualified modules.
+    for name in ("MC", "Options_Suite.MC"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])

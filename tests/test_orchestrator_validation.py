@@ -455,17 +455,22 @@ def test_unified_aborts_on_invalid_vol_output_when_flag_set(unified_env):
 def test_unified_aborts_when_market_signals_stage_errors(unified_env):
     """A market-signals stage status of 'error' fails the context audit --
     unconditionally, the same as a bad context mutation would, since every
-    remaining stage is handed the same context regardless of --fail-on-suite-error."""
+    remaining stage is handed the same context regardless of --fail-on-suite-error.
+
+    Vol_Suite now runs BEFORE market signals (so its GARCH fit can be threaded
+    into context for the sims to reuse), so it has already run by the time
+    market signals errors -- only options/var, which come after, get skipped."""
     unified_env.set_sentiment_result(
         {'suite': 'sentiment', 'status': 'error', 'ticker': 'NVDA',
          'errors': ['scanner import failed: boom']})
 
     combined = orchestrator.run_unified({'ticker': 'NVDA'})
 
-    assert unified_env.calls == []
+    assert unified_env.calls == ['vol']
     assert combined['aborted_by'] == 'context_audit'
     assert combined['context_audit']['validation_status'] == 'FAIL'
-    assert all(combined['results'][s]['skipped'] for s in ('vol', 'options', 'var'))
+    assert 'skipped' not in combined['results']['vol']
+    assert all(combined['results'][s]['skipped'] for s in ('options', 'var'))
 
 
 @pytest.mark.unit

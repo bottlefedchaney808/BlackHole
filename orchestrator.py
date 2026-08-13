@@ -265,22 +265,6 @@ def _import_var_engine_builders():
     return var_main
 
 
-def _import_vol_garch():
-    """Import Vol_Suite's GARCH module and return its `run_garch_module`.
-
-    The Market Signals stage needs a conditional-vol estimate for its 1-year-out
-    sims, but it runs as phase 1 -- before Vol_Suite (phase 2) has had a chance
-    to write `focus.garch_conditional_vol` into suite_context. Rather than
-    reorder the pipeline, this stage fits GARCH itself, once, and shares the
-    result across its own MC/copula/corr sims.
-    """
-    vol_root = SUITE_ROOTS['vol']
-    if vol_root not in sys.path:
-        sys.path.insert(0, vol_root)
-    from garch_analysis import run_garch_module  # noqa: E402  (path set above)
-    return run_garch_module
-
-
 def _import_direction_suite():
     """Import the 5-tool Direction signal suite (whale/elliott/bollinger/
     trend/liquidity, combined into one conviction call)."""
@@ -349,32 +333,17 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
         errors.append(f"scanner import failed: {e}")
         print(f"  [market-signals] scanner import failed: {e}")
 
-    # ---- GARCH conditional vol for the sims below ----
-    # Vol_Suite computes this too, but only in phase 2 -- after this stage. Fit
-    # it here so the sims get a real estimate instead of each falling back to
-    # their own refit/hardcoded guess. A failure is not fatal: the builders
-    # degrade to their own vol resolution.
-    garch_vol = None
-    try:
-        run_garch_module = _import_vol_garch()
-        _files, _interp, garch_vol = run_garch_module(
-            ticker, output_dir=context.get('output_dir'))
-        if garch_vol is not None:
-            print(f"  [garch] {ticker}: conditional vol {garch_vol:.2%} (annualized)")
-        else:
-            print(f"  [garch] {ticker}: no conditional vol produced")
-    except Exception as e:
-        errors.append(f"garch fit failed: {e}")
-        print(f"  [market-signals] garch fit failed: {e}")
-
-    # Private copy -- `context` is shared with every later stage and must not
-    # pick up a value Vol_Suite has not actually written yet.
-    sim_context = dict(context)
-    sim_context['focus'] = dict(context.get('focus') or {})
-    if garch_vol is not None:
-        sim_context['focus']['garch_conditional_vol'] = garch_vol
-
     # ---- 1-year-out simulations (MC, copula, correlation) ----
+    # This stage now runs AFTER Vol_Suite (see run_unified) specifically so
+    # `context['focus']['garch_conditional_vol']` -- threaded in by
+    # `_thread_vol_stats_into_context` from Vol_Suite's own GARCH(1,1) fit --
+    # is already present. The builders' own vol resolution prefers that
+    # context value and only falls back to fitting GARCH themselves (once,
+    # not once-per-builder -- see `_resolve_vol_and_quality`) when it's
+    # missing, e.g. because Vol_Suite failed or found too little history.
+    # This used to fit GARCH a second time here unconditionally (once for
+    # this stage's own sims, once again inside Vol_Suite moments later) --
+    # doubling ThetaData load for every unified run's focus ticker.
     try:
         var_main = _import_var_engine_builders()
         for key, builder in (
@@ -383,7 +352,7 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             ('corr_sim', var_main._build_corr_sim_peer_from_context),
         ):
             try:
-                sim_result = builder(sim_context, ticker)
+                sim_result = builder(context, ticker)
                 bundle['simulations'][key] = sim_result
                 # Bulk array-shaped fields (matrices, the 20-bin terminal-price
                 # histogram) are kept in the bundle but out of the console line.
@@ -1030,20 +999,33 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
         print(f"WARNING: vol's individual_vols is missing {missing}; "
               f"not threading volatilities into VaR.")
 
+    # Vol_Suite fits GARCH(1,1) for the focus ticker as part of its own
+    # analysis (vol_surface.garch_conditional_vol). Thread it into
+    # `focus.garch_conditional_vol` so the Market Signals stage's 1yr-out
+    # sims (which now run AFTER vol -- see run_unified) reuse this one real
+    # fit via their existing context-vol-preferred resolution instead of
+    # fitting GARCH a second time for the same ticker in the same run.
+    garch_vol = ((vol_result or {}).get('vol_surface') or {}).get('garch_conditional_vol')
+    if isinstance(garch_vol, (int, float)) and not isinstance(garch_vol, bool) and garch_vol > 0:
+        context.setdefault('focus', {})['garch_conditional_vol'] = float(garch_vol)
+
 
 def run_unified(focus: Dict[str, Any],
                 fail_on_suite_error: Optional[bool] = None,
                 validate: bool = True) -> Dict[str, Any]:
     """Mirror of Vol_Suite's mode-2 dependency order, headless.
 
-    sentiment -> vol -> {options, var}. sentiment runs first because it is the
-    only *producer* of the `sentiment` block (its `--export-context` payload
-    carries manifest_path / pack_json_path / group_id / ranked_tickers, which
-    get folded into the context the rest of the chain consumes). Vol_Suite runs
-    second because Options_Suite and VaR read the vol-surface / dealer
-    positioning side of the run. Options and VaR run last and are siblings --
-    neither reads the other's output, exactly as `run_unified_flow` launches
-    them independently off the one context file.
+    vol -> sentiment (market signals) -> {options, var}. Vol_Suite runs first
+    now: it's the sole GARCH(1,1) fit for the focus ticker, and its result is
+    threaded into `context['focus']['garch_conditional_vol']` by
+    `_thread_vol_stats_into_context` so the Market Signals stage's 1yr-out
+    MC/copula/corr sims reuse it instead of each falling back to (or, before
+    this reorder, unconditionally doing) their own separate fit -- this used
+    to run market signals first and fit GARCH a second time just for its own
+    sims, doubling ThetaData load for the ticker every unified run. Options
+    and VaR run last and are siblings -- neither reads the other's output,
+    exactly as `run_unified_flow` launches them independently off the one
+    context file.
 
     Each stage's output is validated before the next stage is allowed to
     consume it -- `run_suite` checks the marker file and folds any validation
@@ -1099,36 +1081,22 @@ def run_unified(focus: Dict[str, Any],
             'timestamp': _iso_utc_now(),
         }
 
-    # ---- 1. MARKET SIGNALS (option-chain scanners + 1yr sims + direction suite) ----
+    # ---- 1. Vol_Suite (produces vol surface / dealer positioning / GARCH fit) ----
+    _print_phase_header(1, "VOL SUITE",
+                       "Dealer positioning / vol surface / gamma exposure")
+    results['vol'] = run_suite('vol', context, timeout=timeout,
+                               validate=validate)
+    if 'error' in results['vol'] and fail_on_suite_error:
+        aborted_by = 'vol'
+    elif 'error' not in results['vol']:
+        _thread_vol_stats_into_context(context, results['vol'])
+
+    # ---- 2. MARKET SIGNALS (option-chain scanners + 1yr sims + direction suite) ----
     # Replaces the old sentiment-scanner stage (StockTwits/Reddit/YouTube/GEX),
     # which was hard-skipped here as an unreliable network dependency. This
     # stage runs in-process (no subprocess, no producer/consumer context
-    # handoff) since the ticker is already known.
-    _print_phase_header(1, "MARKET SIGNALS",
-                       "IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite")
-    sentiment_result = run_market_signals_stage(context['focus']['ticker'], context)
-    results['sentiment'] = sentiment_result
-
-    # Write the same two marker files a subprocess suite would have written,
-    # so the dashboard's existing 'sentiment' file-claiming logic picks this
-    # bundle up under the (relabeled) unified Output tab section unchanged.
-    try:
-        sentiment_marker = os.path.join(output_dir, 'sentiment_result.json')
-        with open(sentiment_marker, 'w', encoding='utf-8') as f:
-            json.dump(sentiment_result, f, indent=2, default=str)
-            f.write('\n')
-        sentiment_ctx_copy = os.path.join(output_dir, 'suite_context_sentiment.json')
-        with open(sentiment_ctx_copy, 'w', encoding='utf-8') as f:
-            json.dump(context, f, indent=2, default=str)
-            f.write('\n')
-    except Exception as e:
-        print(f"  [market-signals] WARNING: could not write marker files: {e}")
-
-    # ---- 1b. context audit ----
-    # Nothing mutates suite_context.json's sentiment block anymore (there is
-    # no producer/consumer handoff for this stage), so there is no real
-    # mutation to audit -- this just records the stage's own status.
-    print("\n[unified] Stage 1b/3: context mutation audit (sentiment block)...")
+    # handoff) since the ticker is already known. Runs AFTER Vol_Suite so its
+    # sims can reuse Vol_Suite's GARCH fit via context instead of re-fitting.
     class _MarketSignalsAudit:
         def __init__(self, status: str):
             self.passed = status != 'error'
@@ -1142,29 +1110,53 @@ def run_unified(focus: Dict[str, Any],
                                       [f'market signals stage status={self._status}']),
                 'reason': f'market signals stage status={self._status}; no context mutation performed',
             }
-    context_audit = _MarketSignalsAudit(sentiment_result.get('status', 'ok'))
-    if not context_audit.passed:
-        # Unlike a suite failure, this is not degradable by --fail-on-suite-error:
-        # the context is the input to every remaining stage, so running them
-        # against one that just failed validation would only produce failures
-        # that say nothing about the suites themselves.
-        aborted_by = 'context_audit'
-    elif 'error' in sentiment_result and fail_on_suite_error:
-        aborted_by = 'sentiment'
 
-    # ---- 2. Vol_Suite (consumes sentiment, produces vol surface / dealer positioning) ----
     if aborted_by:
-        print(f"\n[2/3] VOL SUITE (SKIPPED — blocked by {aborted_by})")
-        results['vol'] = _skip('vol')
+        # Blocked by an earlier (vol) abort -- a skip here is not itself a new
+        # failure, so it must not touch `aborted_by` (which already names the
+        # real cause). `_skip()`'s dict always carries an `'error'` key, so
+        # this branch is kept structurally apart from the "did market signals
+        # itself fail" check below rather than trying to except it out there.
+        print(f"\n[2/3] MARKET SIGNALS (SKIPPED — blocked by {aborted_by})")
+        sentiment_result = _skip('sentiment')
+        results['sentiment'] = sentiment_result
+        context_audit = _MarketSignalsAudit('skipped')
     else:
-        _print_phase_header(2, "VOL SUITE",
-                           "Dealer positioning / vol surface / gamma exposure")
-        results['vol'] = run_suite('vol', context, timeout=timeout,
-                                   validate=validate)
-        if 'error' in results['vol'] and fail_on_suite_error:
-            aborted_by = 'vol'
-        elif 'error' not in results['vol']:
-            _thread_vol_stats_into_context(context, results['vol'])
+        _print_phase_header(2, "MARKET SIGNALS",
+                           "IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite")
+        sentiment_result = run_market_signals_stage(context['focus']['ticker'], context)
+        results['sentiment'] = sentiment_result
+
+        # Write the same two marker files a subprocess suite would have written,
+        # so the dashboard's existing 'sentiment' file-claiming logic picks this
+        # bundle up under the (relabeled) unified Output tab section unchanged.
+        try:
+            sentiment_marker = os.path.join(output_dir, 'sentiment_result.json')
+            with open(sentiment_marker, 'w', encoding='utf-8') as f:
+                json.dump(sentiment_result, f, indent=2, default=str)
+                f.write('\n')
+            sentiment_ctx_copy = os.path.join(output_dir, 'suite_context_sentiment.json')
+            with open(sentiment_ctx_copy, 'w', encoding='utf-8') as f:
+                json.dump(context, f, indent=2, default=str)
+                f.write('\n')
+        except Exception as e:
+            print(f"  [market-signals] WARNING: could not write marker files: {e}")
+
+        # ---- 2b. context audit ----
+        # Nothing mutates suite_context.json's sentiment block anymore (there
+        # is no producer/consumer handoff for this stage), so there is no
+        # real mutation to audit -- this just records the stage's own status.
+        print("\n[unified] Stage 2b/3: context mutation audit (sentiment block)...")
+        context_audit = _MarketSignalsAudit(sentiment_result.get('status', 'ok'))
+        if not context_audit.passed:
+            # Unlike a suite failure, this is not degradable by
+            # --fail-on-suite-error: the context is the input to every
+            # remaining stage, so running them against one that just failed
+            # validation would only produce failures that say nothing about
+            # the suites themselves.
+            aborted_by = 'context_audit'
+        elif 'error' in sentiment_result and fail_on_suite_error:
+            aborted_by = 'sentiment'
 
     # ---- 3. Options_Suite + VaR_Tools_Simulations (consume Vol_Suite's context) ----
     if aborted_by:

@@ -24,3 +24,5 @@ Task 2: complete (review clean - spec ?, quality Approved; direct CLI help and m
 Task 1: complete (docs archive approved, review clean)
 
 Task 2: complete (workflow scripts approved, review clean after fix loop)
+
+Task 3: complete (Options regressions approved, review clean after fix loop)

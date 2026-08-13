@@ -40,8 +40,9 @@ def _load_var_main():
 var_main = _load_var_main()
 
 
-def _base_payload(garch_vol=None, basket=None):
-    payload = {"focus": {"ticker": "AAPL", "garch_conditional_vol": garch_vol},
+def _base_payload(garch_vol=None, basket=None, expected_return=None):
+    payload = {"focus": {"ticker": "AAPL", "garch_conditional_vol": garch_vol,
+                         "expected_return": expected_return},
                "ticker": "AAPL"}
     if basket is not None:
         payload["basket"] = basket
@@ -65,6 +66,15 @@ def test_mc_sim_prefers_context_garch_vol(stub_market):
     assert result["vol"] == pytest.approx(0.22)
     assert result["data_quality"]["vol_source"] == "context"
     assert result["data_quality"]["expected_return_source"] == "computed"
+
+
+def test_mc_sim_prefers_context_expected_return(stub_market):
+    # estimate_geometric_return returns 0.10 and must NOT be used when the
+    # context carries a Vol_Suite-published focus.expected_return.
+    result = var_main._build_mc_sim_from_context(
+        _base_payload(garch_vol=0.22, expected_return=0.07), "AAPL")
+    assert result["expected_return"] == pytest.approx(0.07)
+    assert result["data_quality"]["expected_return_source"] == "context"
 
 
 def test_mc_sim_falls_back_to_garch_fit_when_context_vol_missing(stub_market):

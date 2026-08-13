@@ -173,16 +173,16 @@ summary.
   two flags: `--context`/`--context-out`) — the heavier pricing/reporting code
   (`vol_manager.py`, `chain_evaluation.py`, `reports.py`, `VannaVolga.py`, `bruteforceimpliedvol.py`) is
   **not currently wired into `main.py`**; it's reachable via a separate `chain_evaluation.py` →
-  `reports.py` path. Has its own nested git repo + venv but shares `shared/thetadata.py` for data.
+  `reports.py` path. Shares `shared/thetadata.py` for data.
 - **Vol_Suite** — the largest suite (`volatility_suite.py`, ~1850 lines): dealer positioning (three
   sign conventions — `oi_heuristic` v1, `replication` v2-1b, `vol_surface_replication` v2-1a+1b),
   variance-swap replication (Carr-Madan/Demeterfi) and VRP term structure, correlation/basket
   construction, GARCH(1,1), a multi-ticker screener, and a strategy recommender. Builds one shared
   context per focus ticker and runs it through `_run_core_analysis`. Owns the `suite_context.json`
   schema (`suite_context.py`) that the other suites consume. `instrument_resolver.py` bridges tickers
-  to cross-source UPIs via `shared.identifiers`. `README.md` flags `variance_swap_screener.py` as
-  needing a rewrite: missing realized vol silently becomes `0.0`, and a blanket `except Exception` drops
-  failing tickers from output without marking them failed.
+  to cross-source UPIs via `shared.identifiers`. The screener's two historical failure modes (missing
+  realized vol silently becoming `0.0`; a blanket `except` dropping tickers unmarked) are **fixed**
+  (NaN + `data_quality` + `INSUFFICIENT DATA` signal + `skipped` reporting) — see README Phase 11.
 - **VaR_Tools_Simulations** — a Python port of a legacy Excel VaR toolkit (`VaRtools Samples.xls` is
   the source spec), one `var_engine/` module per original sheet: `corr_sim.py` (correlated GBM Monte
   Carlo), `mc_sim.py`, `hist_sim.py` (basic/Hull-White/FHS-GARCH), `copulas.py` (Gaussian/Student-T/
@@ -219,6 +219,31 @@ removed since this is a single-user, localhost-only tool that already keeps its 
 exposes all swap data and lets anyone trigger billed ThetaData-backed orchestrator runs, including
 worker-dispatch (an LLM-driven subprocess with filesystem write access). Don't expose it beyond
 localhost without adding real auth back first.
+
+## Known fragile surfaces (read before changing these)
+
+- **`--unified` context-threading path.** Vol_Suite computes real per-ticker realized vol, a pairwise
+  correlation matrix, and GARCH conditional vol, then `orchestrator.py::_thread_vol_stats_into_context`
+  mutates the shared `suite_context` object so VaR's context mode actually sees them (it otherwise
+  silently falls back to an identity correlation matrix + flat 0.25 vol). Any change to the unified
+  run order, the `suite_context` focus/basket schema, or VaR's `_resolve_vol_and_quality` /
+  `_resolve_drift_and_quality` can silently re-break this. Run `tests/test_orchestrator_market_signals.py`
+  + `VaR_Tools_Simulations/tests/test_context_builders.py` after touching it.
+- **Options_Suite default pricing method is Leisen-Reimer, not CRR.** `main.py` resolves sigma via
+  `method="LeisenReimer"` and derives Greeks from LR's tree (better strike/step convergence for
+  American options). A regression to plain CRR for the default path is a bug Jason has reported
+  more than once. `test_crr_binomial.py` covers CRR as a *separate* model; don't let it become the
+  default.
+- **Flat cwd-relative imports.** `Options_Suite/main.py` (`from market_data import ...`) and several
+  suite entry points import from the suite directory, not as packages. `python -c "import orchestrator"`
+  from the wrong cwd, or a bare `import main` where Options/VaR/sentiment each ship a `main.py`, fails
+  with `ModuleNotFoundError`. Import-check from the suite's own directory, or load a suite `main.py`
+  under a unique module name via `importlib.util.spec_from_file_location` (the pattern
+  `Tools/tools/price_dist_tool.py` and `hedge_optimizer_tool.py` use).
+- **Hermes-venv leaks into the project venv.** Running the project venv python with `PYTHONPATH`/
+  `PYTHONHOME` inherited from a Hermes session can pull Hermes' site-packages (e.g. PIL lacking the
+  `_imaging` C extension, or a pydantic_core mismatch). Clear both with `env -u PYTHONPATH -u PYTHONHOME`
+  before invoking the project `.venv`.
 
 ## Notable env vars
 

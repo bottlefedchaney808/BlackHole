@@ -126,6 +126,7 @@ def build_suite_context(
     var_confidence: float = 0.99,
     var_positions: Optional[Sequence[Dict[str, Any]]] = None,
     garch_conditional_vol: Optional[float] = None,
+    expected_return: Optional[float] = None,
     run_options_suite: bool = False,
     run_var_suite: bool = False,
     compile_pdf: bool = False,
@@ -152,6 +153,13 @@ def build_suite_context(
             # Consumers (VaR Monte Carlo) prefer this over re-fitting.
             "garch_conditional_vol": (
                 float(garch_conditional_vol) if garch_conditional_vol is not None else None
+            ),
+            # Annualized expected/geometric return (decimal fraction) for the
+            # focus ticker, or None when no drift estimate is available.
+            # Consumers (VaR MC price-distribution sims) prefer this over
+            # re-deriving their own historical drift.
+            "expected_return": (
+                float(expected_return) if expected_return is not None else None
             ),
         },
         "basket": {
@@ -225,6 +233,13 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
                  or (isinstance(focus["garch_conditional_vol"], (int, float))
                      and not isinstance(focus["garch_conditional_vol"], bool)),
                  "focus.garch_conditional_vol must be numeric or null")
+    # Optional: contexts written before an expected-return was published are
+    # still valid, so only type-check it when present.
+    if "expected_return" in focus:
+        _require(focus["expected_return"] is None
+                 or (isinstance(focus["expected_return"], (int, float))
+                     and not isinstance(focus["expected_return"], bool)),
+                 "focus.expected_return must be numeric or null")
 
     basket = context["basket"]
     _require(isinstance(basket, dict), "basket must be an object")

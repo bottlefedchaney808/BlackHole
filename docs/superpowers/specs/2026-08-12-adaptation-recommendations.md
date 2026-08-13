@@ -196,6 +196,16 @@ If you want the next few changes in the best order, do them like this:
 
 ---
 
+## 2026-08-12 cleanup status
+
+- Research docs archived.
+- Workflow scripts adopted.
+- Three `Options_Suite` regression tests ported (`test_active_imports.py`, `test_gpu_parity.py`, `test_heston_lsm_discount.py`).
+- `sentiment-scanner` intentionally left alone.
+- Dashboard and `Tools` intentionally not touched.
+
+---
+
 ## Bottom line
 
 **Best things in migrated to adapt:**

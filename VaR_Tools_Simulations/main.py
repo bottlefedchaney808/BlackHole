@@ -368,10 +368,21 @@ def _resolve_vol_and_quality(payload: dict, tk: str) -> tuple:
     return 0.25, "fallback"
 
 
-def _resolve_drift_and_quality(tk: str) -> tuple:
-    """VaR's own historical geometric drift -- Vol_Suite has no drift/expected-
-    return concept to source from. Returns (drift, expected_return_source)."""
+def _resolve_drift_and_quality(payload: dict, tk: str) -> tuple:
+    """Prefer suite_context's focus.expected_return (published by Vol_Suite
+    when it computes one); fall back to VaR's own historical geometric drift.
+    Returns (drift, expected_return_source).
+
+    Mirrors _resolve_vol_and_quality: read the context first so an upstream
+    estimate wins, only fall back to a locally-computed value when the context
+    carries none. A missing drift is 0.0 with source "unavailable" -- never a
+    fabricated-looking nonzero value.
+    """
     from var_engine import data_loader
+    focus = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
+    ctx_drift = focus.get("expected_return")
+    if isinstance(ctx_drift, (int, float)) and not isinstance(ctx_drift, bool):
+        return float(ctx_drift), "context"
     drift = data_loader.estimate_geometric_return(tk)
     if drift is None:
         return 0.0, "unavailable"
@@ -389,7 +400,7 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
     vol, vol_source = _resolve_vol_and_quality(payload, tk)
-    drift, drift_source = _resolve_drift_and_quality(tk)
+    drift, drift_source = _resolve_drift_and_quality(payload, tk)
     seed = _context_seed(payload)
     n_sims = 10_000
 
@@ -440,7 +451,7 @@ def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
     vol, vol_source = _resolve_vol_and_quality(payload, tk)
-    drift, drift_source = _resolve_drift_and_quality(tk)
+    drift, drift_source = _resolve_drift_and_quality(payload, tk)
     seed = _context_seed(payload)
     n_sims = 10_000
     days = 252
@@ -499,7 +510,7 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
     if spot <= 0:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
     vol, vol_source = _resolve_vol_and_quality(payload, tk)
-    drift, drift_source = _resolve_drift_and_quality(tk)
+    drift, drift_source = _resolve_drift_and_quality(payload, tk)
     seed = _context_seed(payload)
     n_sims = 50_000
 

@@ -1,14 +1,18 @@
 """GARCH seeding of the Market Signals stage's 1-year-out simulations.
 
-The unified pipeline runs Market Signals (phase 1) *before* Vol_Suite (phase 2),
-so `suite_context['focus']['garch_conditional_vol']` -- which Vol_Suite fills in
--- is still None when this stage's MC/copula/corr sims run. Rather than reorder
-the pipeline, the stage fits GARCH once itself and hands the result to the sim
-builders through a private copy of the context; the shared context object other
-stages read must come back unmodified.
+The unified pipeline runs Vol_Suite (phase 1) *before* Market Signals (phase
+2): Vol_Suite is the sole GARCH(1,1) fit for the ticker, and
+`orchestrator._thread_vol_stats_into_context` copies its result into
+`context['focus']['garch_conditional_vol']` before Market Signals runs. This
+stage no longer fits GARCH itself -- it hands the real, shared `context`
+straight to the mc_sim/copula/corr_sim builders, which prefer that context
+value and only fall back to their own fit (see
+`VaR_Tools_Simulations/main.py::_resolve_vol_and_quality`) when it's absent.
+Fitting GARCH a second time here, redundant with Vol_Suite's own fit, used to
+double ThetaData load for the ticker on every unified run.
 
 Nothing here touches the network: the scanner import, the Direction suite and
-the GARCH/sim entry points are all stubbed.
+the sim entry points are all stubbed.
 """
 
 import pytest
@@ -53,39 +57,29 @@ def _context(**over):
     return ctx
 
 
-def test_stage_fits_garch_once_and_seeds_every_sim(isolated_stage):
-    fits = []
-
-    def fake_run_garch_module(ticker, output_dir=None):
-        fits.append(ticker)
-        return ([], 'interpretation', 0.37)
-
-    isolated_stage.setattr(orchestrator, '_import_vol_garch',
-                           lambda: fake_run_garch_module)
+def test_stage_seeds_every_sim_from_the_real_context_vol_no_refit(isolated_stage):
+    """Vol_Suite already fit GARCH (phase 1) and threaded 0.37 into context
+    before this stage (phase 2) runs -- the stage must hand that same real
+    context straight to every sim builder, not fit GARCH again itself."""
     fake_var = _FakeVarMain()
     isolated_stage.setattr(orchestrator, '_import_var_engine_builders',
                            lambda: fake_var)
+    assert not hasattr(orchestrator, '_import_vol_garch'), \
+        "the stage must not fit GARCH itself anymore -- Vol_Suite is the sole fit"
 
-    context = _context()
+    context = _context(focus={'ticker': 'NVDA', 'garch_conditional_vol': 0.37})
     bundle = orchestrator.run_market_signals_stage('NVDA', context)
 
-    # one fit, shared by all three sims
-    assert fits == ['NVDA']
     assert len(fake_var.calls) == 3
     for _name, payload in fake_var.calls:
+        assert payload is context
         assert payload['focus']['garch_conditional_vol'] == pytest.approx(0.37)
-
-    # the caller's context is untouched -- later stages must not see this value
-    assert context['focus']['garch_conditional_vol'] is None
     assert set(bundle['simulations']) == {'mc_sim', 'copula', 'corr_sim'}
 
 
-def test_stage_survives_a_failing_garch_fit(isolated_stage):
-    def exploding_garch(*a, **kw):
-        raise RuntimeError('arch package missing')
-
-    isolated_stage.setattr(orchestrator, '_import_vol_garch',
-                           lambda: exploding_garch)
+def test_stage_still_runs_its_sims_when_context_has_no_vol(isolated_stage):
+    """Vol_Suite may have failed or found too little history -- the stage must
+    still run its sims (each builder falls back to its own single fit)."""
     fake_var = _FakeVarMain()
     isolated_stage.setattr(orchestrator, '_import_var_engine_builders',
                            lambda: fake_var)
@@ -93,7 +87,6 @@ def test_stage_survives_a_failing_garch_fit(isolated_stage):
     context = _context()
     bundle = orchestrator.run_market_signals_stage('NVDA', context)
 
-    # sims still run, just without a context vol to prefer
     assert len(fake_var.calls) == 3
     for _name, payload in fake_var.calls:
         assert payload['focus']['garch_conditional_vol'] is None
@@ -135,8 +128,6 @@ def test_only_max_pain_is_pinned_to_the_run_expiry(monkeypatch):
     three scanners must still be called bare (they take no expiry)."""
     monkeypatch.setattr(orchestrator, '_import_direction_suite',
                         lambda: (_ for _ in ()).throw(RuntimeError('stubbed out')))
-    monkeypatch.setattr(orchestrator, '_import_vol_garch',
-                        lambda: lambda ticker, output_dir=None: ([], '', None))
     monkeypatch.setattr(orchestrator, '_import_var_engine_builders',
                         lambda: _FakeVarMain())
 
@@ -166,8 +157,6 @@ def test_max_pain_self_selects_when_the_context_carries_no_expiry(monkeypatch):
     falls back to its own nearest-~30DTE selection rather than erroring."""
     monkeypatch.setattr(orchestrator, '_import_direction_suite',
                         lambda: (_ for _ in ()).throw(RuntimeError('stubbed out')))
-    monkeypatch.setattr(orchestrator, '_import_vol_garch',
-                        lambda: lambda ticker, output_dir=None: ([], '', None))
     monkeypatch.setattr(orchestrator, '_import_var_engine_builders',
                         lambda: _FakeVarMain())
 
@@ -180,11 +169,10 @@ def test_max_pain_self_selects_when_the_context_carries_no_expiry(monkeypatch):
     assert scanners.calls['max_pain'] == (('NVDA',), {'expiry': None})
 
 
-def test_stage_keeps_an_existing_context_vol_when_the_fit_yields_nothing(isolated_stage):
-    """A GARCH module that converged on no usable vol must not blank out a
-    value the context already carried (e.g. a re-run over a filled context)."""
-    isolated_stage.setattr(orchestrator, '_import_vol_garch',
-                           lambda: lambda ticker, output_dir=None: ([], '', None))
+def test_stage_never_mutates_the_context_vol(isolated_stage):
+    """The stage only reads `context['focus']['garch_conditional_vol']` --
+    it must never write to it (that's Vol_Suite's/`_thread_vol_stats_into_
+    context`'s job, upstream of this stage)."""
     fake_var = _FakeVarMain()
     isolated_stage.setattr(orchestrator, '_import_var_engine_builders',
                            lambda: fake_var)
@@ -192,5 +180,6 @@ def test_stage_keeps_an_existing_context_vol_when_the_fit_yields_nothing(isolate
     context = _context(focus={'ticker': 'NVDA', 'garch_conditional_vol': 0.29})
     orchestrator.run_market_signals_stage('NVDA', context)
 
+    assert context['focus']['garch_conditional_vol'] == pytest.approx(0.29)
     for _name, payload in fake_var.calls:
         assert payload['focus']['garch_conditional_vol'] == pytest.approx(0.29)

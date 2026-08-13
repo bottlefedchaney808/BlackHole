@@ -148,6 +148,12 @@ def validate_suite_context(data: Dict[str, Any]) -> None:
         _require(focus["garch_conditional_vol"] is None
                  or _is_number(focus["garch_conditional_vol"]),
                  "focus.garch_conditional_vol must be numeric or null")
+    # Optional, not required: contexts written before an expected-return was
+    # published are still valid.
+    if "expected_return" in focus:
+        _require(focus["expected_return"] is None
+                 or _is_number(focus["expected_return"]),
+                 "focus.expected_return must be numeric or null")
 
     # ── basket ────────────────────────────────────────────────────────
     basket = data["basket"]
