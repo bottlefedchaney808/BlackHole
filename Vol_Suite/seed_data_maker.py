@@ -72,7 +72,7 @@ def build_payload(td, ticker: str, expiry: str, lookback_days: int = 150):
     start = end - datetime.timedelta(days=int(lookback_days * 1.6) + 10)
     start_str, end_str = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
-    price_rows = td.option_bulk_hist_eod(ticker, expiry, start_str, end_str)
+    price_rows = td.option_bulk_hist_eod_greeks(ticker, expiry, start_str, end_str)
     spot_rows = td.hist_stock_eod(ticker, start_str, end_str)
 
     # OI-by-day is the proxy-fragile route -- retry the whole fetch up to 3x
@@ -88,7 +88,7 @@ def build_payload(td, ticker: str, expiry: str, lookback_days: int = 150):
             print(f"  [seed_data_maker] {ticker} OI fetch attempt {attempt}: "
                   f"{type(e).__name__} {str(e)[:80]}, retrying", flush=True)
         time.sleep(15 * attempt)
-    print(f"  [seed_data_maker] {ticker} EOD={len(price_rows)} oi={len(oi_rows)} "
+    print(f"  [seed_data_maker] {ticker} EOD_greeks={len(price_rows)} oi={len(oi_rows)} "
           f"spot={len(spot_rows)} {start_str}->{end_str}", flush=True)
 
     close_by_date = {}
@@ -102,39 +102,39 @@ def build_payload(td, ticker: str, expiry: str, lookback_days: int = 150):
             if c > 0:
                 close_by_date[d] = c
 
-    exp_date = datetime.datetime.strptime(expiry, "%Y%m%d").date()
+    # The eod_greeks route already carries implied_vol + full greeks (solved by
+    # ThetaData, 17:15 ET close) -- no local IV inversion needed. We keep the
+    # same greek-row shape seed_data_loader expects: date, strike (theta-int),
+    # right, implied_vol, plus the dense vanna the accumulation/falsifier arms
+    # read. Preserve the other dense greeks (gamma/delta) for the snapshot arm.
     greeks = []
-    n_no_spot = n_no_mark = n_unsolved = 0
+    n_no_spot = 0
     for row in price_rows:
         d = _norm_date(row)
         if not d or d not in close_by_date:
             n_no_spot += 1
             continue
         try:
-            k = float(row["strike"]) / 1000.0 if float(row["strike"]) > 1000 else float(row["strike"])
-            right = "C" if str(row.get("right", ""))[:1] == "C" else (
-                "P" if str(row.get("right", ""))[:1] == "P" else "?")
+            k = int(float(row["strike"]))
+            right = str(row.get("right", ""))[:1].upper()
         except (KeyError, TypeError, ValueError):
             continue
         if right not in ("C", "P"):
             continue
-        spot = close_by_date[d]
-        T = max((exp_date - datetime.datetime.strptime(d, "%Y%m%d").date()).days, 1) / 365.0
-        mark = implied_vol_mod.mid_price(row.get("bid"), row.get("ask"), row.get("close"))
-        if not mark or mark <= 0:
-            n_no_mark += 1
+        iv = float(row.get("implied_vol", 0) or 0)
+        if iv <= 0:
             continue
-        solved = implied_vol_mod.implied_vol(mark, spot, k, T, _BT_R, _BT_Q, right)
-        if solved is None:
-            n_unsolved += 1
-            continue
-        vanna = -1.0 * _bs_vanna(spot, k, T, solved)
-        greeks.append({"date": d, "strike": str(int(round(k * 1000))), "right": right,
-                        "implied_vol": solved, "close": row.get("close"), "vanna": vanna})
+        greeks.append({
+            "date": d, "strike": str(k), "right": right, "implied_vol": iv,
+            "close": row.get("close"),
+            "vanna": row.get("vanna"),
+            "gamma": row.get("gamma"),
+            "delta": row.get("delta"),
+        })
 
     n_dates = len({g["date"] for g in greeks})
     print(f"  [seed_data_maker] {ticker}: {len(greeks)} greek rows across {n_dates} distinct "
-          f"dates ({n_no_spot} no-spot, {n_no_mark} no-mark, {n_unsolved} unsolved dropped)")
+          f"dates ({n_no_spot} no-spot dropped)")
     return greeks, oi_rows, spot_rows
 
 
@@ -149,7 +149,13 @@ def main() -> int:
 
     td = ThetaDataController()
     try:
-        expiry, _ = expiry_selector.resolve_expiration(td, ticker, None, 0.25)
+        # Resolve to the expiry with the LONGEST available option-chain history
+        # (a far-dated/LEAPS expiry listed >= lookback trading days ago), NOT the
+        # nearest 0.25-year one -- a recently-listed expiry has only a few weeks
+        # of history, which starves the falsifier/backtest window.
+        expiry = td.resolve_longest_history_expiry(ticker, lookback_days=lookback)
+        print(f"[seed_data_maker] {ticker}: resolved longest-history expiry {expiry} "
+              f"for {lookback}d lookback", flush=True)
         greeks, oi, spot = build_payload(td, ticker, expiry, lookback)
     finally:
         td.close()

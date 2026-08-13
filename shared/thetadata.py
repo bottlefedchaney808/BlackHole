@@ -302,7 +302,7 @@ class ThetaDataController:
 
     def list_expirations(self, root: str) -> List[str]:
         """List available expiration dates (YYYYMMDD) for a given root."""
-        r = self._get(f"/api/theta/list/expirations/{root}")
+        r = self._get_with_retry(f"/api/theta/list/expirations/{root}")
         r.raise_for_status()
         raw = r.json()
         if isinstance(raw, list):
@@ -311,6 +311,52 @@ class ThetaDataController:
             return [s.strip() for s in raw.split(",") if s.strip()]
         return []
 
+    def resolve_longest_history_expiry(self, root: str, lookback_days: int = 150,
+                                       min_dates: Optional[int] = None) -> str:
+        """Pick the expiry with the LONGEST available option-chain history —
+        the right expiry for a full lookback-window backtest (a recently-listed
+        expiry like the nearest 0.25-year one has only a few weeks of history).
+
+        Probes each far-dated expiry's EARLIEST 28-day window via a small
+        bulk_hist/option/eod_greeks call (the full-range call 502s on
+        LARGE_REQUEST, so we probe one small chunk at the window's start: if it
+        returns rows, the expiry reaches back that far). Returns the furthest-
+        reaching expiry with >= the required date count; falls back to the
+        latest-listed expiry if nothing reaches the full window.
+        """
+        fmt = "%Y%m%d"
+        end_dt = datetime.now().date()
+        start_dt = end_dt - timedelta(days=int(lookback_days * 1.6) + 20)
+        # probe just the first ~28d of the window (small request, no LARGE_REQUEST)
+        earliest = start_dt.strftime(fmt)
+        probe_end = (start_dt + timedelta(days=27)).strftime(fmt)
+        need = min_dates or int(lookback_days * 0.9)
+
+        exps = self.list_expirations(root)
+        far = sorted([e for e in exps if int(e) > int(end_dt.strftime(fmt))],
+                     key=int, reverse=True)
+        best_exp, best_dates = None, 0
+        for exp in far[:14]:  # cap probes to avoid proxy churn
+            try:
+                path = f"/api/theta/bulk_hist/option/eod_greeks/{root}/{exp}"
+                r = self._get_with_retry(path, params={
+                    "start_date": earliest,
+                    "end_date": probe_end,
+                })
+                if r.status_code == 404:
+                    continue
+                r.raise_for_status()
+                rows = self._parse_rows(r)
+                n = len({self._normalize_date(row) for row in rows})
+                if n > best_dates:
+                    best_exp, best_dates = exp, n
+                if n >= need:
+                    return exp
+            except Exception as e:
+                print(f"  [resolve_longest_history_expiry] {root}/{exp}: "
+                      f"{type(e).__name__}: {str(e)[:60]}", flush=True)
+        return best_exp or (far[0] if far else exps[-1])
+
     def list_strikes(self, root: str, exp: str) -> List[float]:
         """List available strikes for a given root and expiration.
 
@@ -318,7 +364,7 @@ class ThetaDataController:
         confirmed the /list/strikes endpoint already returns dollar-value
         floats, not theta-scaled ints.
         """
-        r = self._get(f"/api/theta/list/strikes/{root}/{exp}")
+        r = self._get_with_retry(f"/api/theta/list/strikes/{root}/{exp}")
         r.raise_for_status()
         rows = self._parse_rows(r)
         result = []
@@ -334,7 +380,7 @@ class ThetaDataController:
 
     def stock_snapshot_quote(self, root: str):
         """Latest stock quote snapshot."""
-        r = self._get(f"/api/theta/snapshot/stock/quote/{root}")
+        r = self._get_with_retry(f"/api/theta/snapshot/stock/quote/{root}")
         r.raise_for_status()
         rows = self._parse_rows(r)
         return rows[0] if rows else {}
@@ -345,7 +391,7 @@ class ThetaDataController:
         the quote feed has nothing posted -- outside regular trading hours,
         stock_snapshot_quote's bid/ask can come back '0.0000' for every
         ticker, not just illiquid ones."""
-        r = self._get(f"/api/theta/snapshot/stock/trade/{root}")
+        r = self._get_with_retry(f"/api/theta/snapshot/stock/trade/{root}")
         r.raise_for_status()
         rows = self._parse_rows(r)
         return rows[0] if rows else {}
@@ -353,7 +399,7 @@ class ThetaDataController:
     def option_snapshot_quote(self, root: str, exp: str, strike: float, right: str = "C"):
         """Latest option quote snapshot for a single contract."""
         k = strike_to_theta(strike)
-        r = self._get(f"/api/theta/snapshot/option/quote/{root}/{exp}/{k}/{right}")
+        r = self._get_with_retry(f"/api/theta/snapshot/option/quote/{root}/{exp}/{k}/{right}")
         r.raise_for_status()
         rows = self._parse_rows(r)
         return rows[0] if rows else {}
@@ -362,20 +408,20 @@ class ThetaDataController:
 
     def option_bulk_greeks(self, root: str, exp: str):
         """Snapshot first-order greeks + IV for all strikes/rights at one expiry."""
-        r = self._get(f"/api/theta/bulk_snapshot/option/all_greeks/{root}/{exp}")
+        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/all_greeks/{root}/{exp}")
         r.raise_for_status()
         return self._parse_rows(r)
 
     def option_bulk_greeks_second_order(self, root: str, exp: str):
         """Snapshot second-order greeks (vanna, charm, vomma, veta, etc.)
         for all strikes/rights at one expiry."""
-        r = self._get(f"/api/theta/bulk_snapshot/option/greeks_second_order/{root}/{exp}")
+        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/greeks_second_order/{root}/{exp}")
         r.raise_for_status()
         return self._parse_rows(r)
 
     def option_bulk_oi(self, root: str, exp: str):
         """Snapshot open interest for all strikes/rights at one expiry."""
-        r = self._get(f"/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}")
+        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}")
         r.raise_for_status()
         return self._parse_rows(r)
 
@@ -528,6 +574,60 @@ class ThetaDataController:
                 if done % 50 == 0 or done == total:
                     print(f"  [option_bulk_hist_eod] {root}/{exp}: {done}/{total} done "
                           f"({empty} never traded in range, {errored} genuine errors)")
+        return all_rows
+
+    def option_bulk_hist_eod_greeks(
+        self, root: str, exp: str,
+        start_date: str, end_date: str,
+    ) -> List[Dict]:
+        """Dense whole-chain EOD OHLC + implied_vol + FULL greeks over a date
+        range — the untapped route that avoids local IV inversion.
+
+        `bulk_hist/option/eod_greeks/{root}/{exp}` returns every contract's EOD
+        bar (17:15 ET close) with implied_vol, gamma, vanna, delta, theta, and
+        the full higher-order set, in ONE request per expiry (vs the sparse
+        per-contract hist/all_greeks fan-out). Verified live 2026-08-13:
+        HTTP 200, dense rows (~8.5k/month on QQQ).
+
+        The proxy LARGE_REQUEST-limits a full-year single call (502/timeout),
+        so this chunks into <=28-day windows (the client's established safe
+        span for hist routes). Verified live 2026-08-13: HTTP 200, dense rows
+        (~8.5k/month on QQQ), strike already theta-scaled cents-int ($459.78 ->
+        459780), right already 'C'/'P', date an int YYYYMMDD — the SAME
+        convention as option_bulk_hist_oi_by_day (NOT the dollar-string/'CALL'
+        shape of option_bulk_hist_eod). Stamps a string YYYYMMDD 'date' for
+        downstream consumers. Returns [] if the expiry has no history in range.
+        """
+        fmt = "%Y%m%d"
+        start_dt = datetime.strptime(start_date, fmt)
+        end_dt = datetime.strptime(end_date, fmt)
+        all_rows: List[Dict] = []
+        chunk_start = start_dt
+        while chunk_start <= end_dt:
+            chunk_end = min(chunk_start + timedelta(days=28), end_dt)
+            params = {
+                "start_date": chunk_start.strftime(fmt),
+                "end_date": chunk_end.strftime(fmt),
+            }
+            path = f"/api/theta/bulk_hist/option/eod_greeks/{root}/{exp}"
+            r = self._get_with_retry(path, params=params)
+            if r.status_code == 404:
+                chunk_start = chunk_end + timedelta(days=1)
+                continue
+            r.raise_for_status()
+            rows = self._parse_rows(r)
+            for row in rows:
+                # strike/right come back already in suite convention; just
+                # normalize the right to single-char and stamp a string date
+                rt = str(row.get("right", ""))[:1].upper()
+                if rt not in ("C", "P"):
+                    continue
+                row["right"] = rt
+                d = self._normalize_date(row)
+                if d:
+                    row["date"] = d
+            all_rows.extend(rows)
+            chunk_start = chunk_end + timedelta(days=1)
         return all_rows
 
     def option_bulk_hist_greeks(
