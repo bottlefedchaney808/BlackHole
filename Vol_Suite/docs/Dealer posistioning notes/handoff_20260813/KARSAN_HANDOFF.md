@@ -53,10 +53,18 @@ skill's canonical claim for this tree; verify against source.
 
 `Vol_Suite/backtest_accumulation_falsifier.py` (CLI: `--cross`, `--svimag`, `--pooled`).
 
-### Sign axis = BASE (Jason's call, 2026-08-13)
-Real 12-ticker cached data: **every ticker accumulates SHORT (-1.0)** → the sign axis is degenerate
-(all points identical). The verdict is now labeled **`BASE`** — the resting regime, NOT a signal.
-Signal, if any, lives on the MAGNITUDE axis.
+### Sign axis = BASE (Jason's call, 2026-08-13) — BUT this was a SABR-sign-source artifact
+Under the OLD SABR sign source: real 12-ticker cached data gave **every ticker accumulates
+SHORT (-1.0)** → sign axis degenerate → labeled **`BASE`** (resting regime, not signal).
+
+**Under the NEW SVI sign source (2026-08-13, re-run by coder): the sign axis is NO LONGER
+degenerate.** Accumulated signs = 8 SHORT / 4 LONG (GOOGL, NFLX, SPY, TSLA flip LONG under SVI).
+So the "all-short BASE" was a SABR-reference-curve artifact, not a property of the accumulated
+book. The cross-sectional test now runs on real between-ticker variance — but is still
+**REDUNDANT / not significant**: corr(acc, rv) −0.16 (t −0.51, p 0.62), mean rv SHORT 0.368 vs
+LONG 0.321 (in the *expected* dealer-short→higher-vol direction, but not significant). Takeaway:
+the sign source changes WHICH tickers read short/long, so any cross-sectional/regime claim must be
+re-checked under the active fitter. The result-cache now persists these (outputs/falsifier_cache/).
 
 ### SVI-magnitude axis = INCONCLUSIVE (Jason's SVI-magnitude idea, tested)
 Because sign is degenerate, use SVI cheap/rich marking as a MAGNITUDE signal.
