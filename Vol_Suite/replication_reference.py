@@ -38,6 +38,7 @@ synthetic test rather than re-deriving:
     version that shows the paper's claimed "worse near expiry" direction.
 """
 import math
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -47,6 +48,7 @@ import numpy as np
 
 from thetadata_client import ThetaDataController, strike_from_theta
 import expiry_selector
+import vol_surface_reference
 
 CONTRACT_MULTIPLIER = 100
 
@@ -485,8 +487,9 @@ def compute_accumulated_position(ticker: str, expiration: Optional[str] = None,
     tested. Run from an environment with real network access; this dev
     sandbox has none (see module docstring).
     """
-    if seed_mode not in ('replication', 'oi_heuristic'):
-        raise ValueError(f"seed_mode must be 'replication' or 'oi_heuristic', got {seed_mode!r}")
+    if seed_mode not in ('replication', 'oi_heuristic', 'vanna', 'svi_rp'):
+        raise ValueError(
+            f"seed_mode must be 'replication', 'oi_heuristic', 'vanna', or 'svi_rp', got {seed_mode!r}")
 
     td = ThetaDataController()
     try:
@@ -513,8 +516,9 @@ def compute_accumulated_position_for_expiry(ticker: str, expiry: str,
     entirely. Same injection pattern as compute_replication_reference's
     _td/_spot/_chain parameters.
     """
-    if seed_mode not in ('replication', 'oi_heuristic'):
-        raise ValueError(f"seed_mode must be 'replication' or 'oi_heuristic', got {seed_mode!r}")
+    if seed_mode not in ('replication', 'oi_heuristic', 'vanna', 'svi_rp'):
+        raise ValueError(
+            f"seed_mode must be 'replication', 'oi_heuristic', 'vanna', or 'svi_rp', got {seed_mode!r}")
 
     if _hist_rows is not None:
         hist_greek_rows, hist_oi_rows, hist_spot_rows = _hist_rows
@@ -571,6 +575,21 @@ def _accumulate_from_history(ticker: str, expiry: str, lookback_days: int, seed_
         if iv > 0:
             iv_by_date[d][(k, right)] = iv
 
+    vanna_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
+    for row in hist_greek_rows:
+        d = _parse_hist_date(row)
+        if not d:
+            continue
+        try:
+            k = strike_from_theta(int(float(row['strike'])))
+            right = row['right']
+            vanna = float(row.get('vanna', row.get('Vanna', row.get('VANNA', 0))) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Key decision is presence, not magnitude -- vanna can be legitimately
+        # ~0 at the money, so store on successful parse (no >0 gate, no scale).
+        vanna_by_date[d][(k, right)] = vanna
+
     oi_by_date: Dict[str, Dict[Tuple[float, str], int]] = defaultdict(dict)
     for row in hist_oi_rows:
         d = _parse_hist_date(row)
@@ -609,13 +628,59 @@ def _accumulate_from_history(ticker: str, expiry: str, lookback_days: int, seed_
 
     seed_spot = spot_by_date[seed_date]
     seed_T = max((expiry_date - datetime.strptime(seed_date, "%Y%m%d")).days, 1) / 365.0
+    # DEALER_SEED_SIGN (Design A, quick-round CONFIRMED 2026-08-11): flips ONLY
+    # the initial book (seed) level sign -- replication seed becomes +OI instead
+    # of -OI. Per Jason's rule, ONLY the initial book state may be flipped; daily
+    # flow, SABR per-strike signs, and the NO_CALL gate are NEVER touched. This
+    # is the level-only arm: end book = flipped_seed + sum(150d flow), flow
+    # signs unchanged. Env: DEALER_SEED_SIGN=1.
+    seed_sign = -1.0 if os.environ.get("DEALER_SEED_SIGN") != "1" else 1.0
     if seed_mode == 'replication':
         seed_weights = _otm_leg_weights(iv_by_date[seed_date], seed_spot, seed_T)
         for (k, right) in seed_weights:
-            position[(k, right)] += -oi_by_date[seed_date].get((k, right), 0)
+            position[(k, right)] += seed_sign * oi_by_date[seed_date].get((k, right), 0)
+    elif seed_mode == 'vanna':
+        # Jason's brainstorming seed (LARP Round 1, 2026-08-11): mark rich
+        # vanna OI as SHORT and cheap vanna OI as LONG. sign(vanna) at the seed
+        # date picks the sign per strike. This is the "vanna-smile seed" arm.
+        seed_vanna = vanna_by_date.get(seed_date, {})
+        for (k, right), oi in oi_by_date[seed_date].items():
+            v = seed_vanna.get((k, right), 0.0)
+            if abs(v) < 1e-12:
+                continue
+            sign = seed_sign * math.copysign(1.0, v)
+            position[(k, right)] += sign * oi
+    elif seed_mode == 'svi_rp':
+        # RP-native cheap/rich seed (2026-08-11): calibrate the SSVI reference
+        # smile on the day-1 OTM chain (Gatheral-Jacquier 3-observable), then
+        # mark each strike rich/SHORT (market_IV > ref) or cheap/LONG. The seed
+        # is the OI at each strike signed by its cheap/rich marking -- scaling
+        # is intrinsic to the chain's OI, no artificial anchor.
+        try:
+            import svi_rp
+            otm_w = _otm_leg_weights(iv_by_date[seed_date], seed_spot, seed_T)
+            if otm_w:
+                chain_iv = {kv: iv_by_date[seed_date][kv] for kv in otm_w}
+                ref = svi_rp.calibrate_ssvi(chain_iv, seed_spot, seed_T,
+                                            oi_by=oi_by_date[seed_date], otm_weights=otm_w)
+                marks = ref.mark_chain(chain_iv, oi_by_date[seed_date])
+                for (k, right, sig, refv, diff, mark, oi) in marks:
+                    sign = seed_sign * (1.0 if mark == "SHORT" else -1.0)
+                    position[(k, right)] += sign * oi
+            else:
+                # fall back to replication if the SSVI calibration can't run
+                seed_weights = otm_w or _otm_leg_weights(iv_by_date[seed_date], seed_spot, seed_T)
+                for (k, right) in seed_weights:
+                    position[(k, right)] += seed_sign * oi_by_date[seed_date].get((k, right), 0)
+        except Exception as e:
+            print(f"  [acc] svi_rp seed failed for {ticker}: {type(e).__name__} {str(e)[:80]}, "
+                  f"falling back to replication seed", flush=True)
+            seed_weights = _otm_leg_weights(iv_by_date[seed_date], seed_spot, seed_T)
+            for (k, right) in seed_weights:
+                position[(k, right)] += seed_sign * oi_by_date[seed_date].get((k, right), 0)
     else:  # 'oi_heuristic'
         for (k, right), oi in oi_by_date[seed_date].items():
-            sign = 1.0 if right == 'C' else -1.0
+            sign = seed_sign * (1.0 if right == 'C' else -1.0)
             position[(k, right)] += sign * oi
 
     daily_trace = [{
@@ -627,6 +692,31 @@ def _accumulate_from_history(ticker: str, expiry: str, lookback_days: int, seed_
         spot_t = spot_by_date[d]
         T_t = max((expiry_date - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0
         weights_t = _otm_leg_weights(iv_by_date[d], spot_t, T_t)
+
+        # Build per-strike sign map for this day using the vol surface
+        # reference (SABR fit), so each strike gets its own sign based on
+        # whether its IV trades rich or cheap vs the fitted curve -- instead
+        # of the old flat -1.0. Falls back to flat -1.0 if the SABR fit
+        # fails for this day (graceful degradation per-day, not per-strike).
+        day_chain_iv = iv_by_date[d]
+        day_sign_map: Optional[Dict[Tuple[float, str], float]] = None
+        try:
+            # Forward ≈ spot for near-term equity options (r,q small);
+            # the sign-resolution logic only needs the fit shape, not a
+            # precise forward, so spot-as-forward is a safe approximation.
+            day_vs_ref = vol_surface_reference.compute_vol_surface_reference(
+                ticker, day_chain_iv, spot_t, forward=spot_t, T=T_t)
+            if day_vs_ref is not None:
+                day_sign_map = {}
+                for (k, right) in weights_t:
+                    s = vol_surface_reference.resolve_vol_surface_sign(
+                        day_vs_ref, k, right)
+                    # 0.0 means "no confident read" (inside dead-band) --
+                    # fall back to the Layer 1b default (-1.0) for those,
+                    # same as _resolve_sign does in dealer_positioning.py.
+                    day_sign_map[(k, right)] = s if s != 0.0 else -1.0
+        except Exception:
+            day_sign_map = None  # fall through to flat sign below
 
         day_change = 0.0
         n_included = 0
@@ -654,7 +744,21 @@ def _accumulate_from_history(ticker: str, expiry: str, lookback_days: int, seed_
             delta_oi = oi_today - oi_prev
             if delta_oi == 0:
                 continue
-            signed_change = -1.0 * delta_oi   # dealer is short what the strip is long
+            if day_sign_map is not None:
+                sign = day_sign_map.get((k, right), -1.0)
+            else:
+                sign = -1.0  # fallback: flat Layer 1b default
+            signed_change = sign * delta_oi
+            # Vanna-weighted flow (Jason, 2026-08-11): weight the daily OI flow
+            # by rec.vanna (× sabr_deviation sign). DEALER_VANNA_FLOW is ON by
+            # default; set DEALER_VANNA_FLOW=0 to disable (the arm comparison
+            # passes "0"/"1" explicitly). SAFETY: if a day carries no vanna data
+            # (sparse greeks route), fall back to the plain signed flow rather
+            # than multiply by 0.0 (which would silently zero the book).
+            vanna_weight = vanna_by_date.get(d, {}).get((k, right), None)
+            if os.environ.get("DEALER_VANNA_FLOW", "1") != "0":
+                if vanna_weight is not None:
+                    signed_change = sign * delta_oi * vanna_weight
             position[(k, right)] += signed_change
             day_change += signed_change
             n_included += 1

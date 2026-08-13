@@ -742,6 +742,14 @@ def _run_cross_sectional_falsifier_from_histories(
 
     if n < _MIN_CROSS_TICKERS:
         verdict = "INCONCLUSIVE"
+    # All tickers the SAME accumulated sign => the sign axis is degenerate (the
+    # cross-sectional test can't sort on sign -- every point is the same value).
+    # This is the BASE / resting regime (verified on the real 12-ticker cached
+    # dataset: every ticker accumulates SHORT), NOT evidence about magnitude.
+    # Signal, if any, lives on the MAGNITUDE axis (net exposure / SVI cheap-rich
+    # size), which the sign-only test is blind to -- see the SVI-magnitude axis.
+    elif n_short == n or n_long == n:
+        verdict = "BASE"
     elif abs(tstat_acc) > _TSTAT_THRESHOLD and perm_p < _PERM_P_THRESHOLD:
         verdict = "ACCUMULATION_CROSS_SECTIONAL_SIGNAL"
     elif delta_r2 < 0.01:
@@ -812,6 +820,228 @@ def format_cross_sectional_falsifier_report(r: CrossSectionalFalsifierResult) ->
         f"[n_short={r.n_short}, n_long={r.n_long}]",
         f"  permutation p:                 {r.permutation_pvalue:.4f}",
         f"  VERDICT:                       {r.verdict}",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# SVI-MAGNITUDE cross-sectional axis (Jason's idea, 2026-08-13).
+#
+# The sign axis is degenerate: every ticker accumulates the SAME sign (BASE,
+# verified all-SHORT on the real 12-ticker dataset), so a sign-only cross-
+# sectional test can't sort anything. The real between-ticker variation lives
+# on the MAGNITUDE axis -- HOW far each ticker's smile is from the SSVI
+# reference (cheap/rich), and how big the OI-weighted cheap/rich imbalance is.
+#
+# This axis uses the SVI cheap/rich marking (svi_rp.calibrate_ssvi ->
+# SviRpReference.mark_chain) as a MAGNITUDE signal per ticker, tested against
+# that ticker's own realized-vol level over the same window. Hypothesis:
+# tickers whose smile is more "distorted" (larger |market_iv - ref|) or whose
+# cheap/rich OI imbalance is larger carry more dealer positioning / realized
+# vol. This is exactly the "bring SVI in for testing as a magnitude sign"
+# directive -- nothing canonical, just a testable arm.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SviMagnitudeFalsifierResult:
+    tickers: List[str]
+    n_tickers: int
+    per_ticker_magnitude: Dict[str, float] = field(default_factory=dict)
+    per_ticker_net_seed: Dict[str, float] = field(default_factory=dict)
+    per_ticker_rv_level: Dict[str, float] = field(default_factory=dict)
+    rho_mag_rv: float = 0.0
+    r2_mag: float = 0.0
+    tstat_mag: float = 0.0
+    pvalue_mag: float = 1.0
+    permutation_pvalue: float = 1.0
+    verdict: str = "INCONCLUSIVE"
+    skipped: List[Tuple[str, str]] = field(default_factory=list)
+
+
+def _otm_chain_at_date(greek_rows: List[dict], oi_rows: List[dict],
+                       spot: float, expiry: str, d: str,
+                       ) -> Tuple[Dict[Tuple[float, str], float],
+                                  Dict[Tuple[float, str], int]]:
+    """Build the OTM chain_iv + oi_by dicts for ONE date from cached rows
+    (calls above spot, puts below -- same OTM restriction svi_rp expects)."""
+    expiry_date = datetime.strptime(expiry, "%Y%m%d")
+    T = max((expiry_date - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0
+    iv, oi = {}, {}
+    for row in greek_rows:
+        rd = replication_reference._parse_hist_date(row)
+        if rd != d:
+            continue
+        try:
+            k = float(row['strike']) if float(row['strike']) < 10000 else strike_from_theta(int(float(row['strike'])))
+            right = str(row['right']).upper()[:1]
+            v = float(row.get('implied_vol', 0) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if v > 0 and ((right == 'C' and k > spot) or (right == 'P' and k < spot)):
+            iv[(k, right)] = v
+    for row in oi_rows:
+        rd = replication_reference._parse_hist_date(row)
+        if rd != d:
+            continue
+        try:
+            k = strike_from_theta(int(float(row['strike'])))
+            right = str(row['right']).upper()[:1]
+            o = int(float(row.get('open_interest', 0) or 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        oi[(k, right)] = o
+    return iv, oi
+
+
+def _run_svi_magnitude_cross_sectional_from_histories(
+        ticker_histories: Dict[str, Tuple[str, List[dict], List[dict], List[dict]]],
+        n_perms: int = _N_PERMUTATIONS,
+        ) -> SviMagnitudeFalsifierResult:
+    """Per-ticker SVI cheap/rich MAGNITUDE vs realized-vol level, pooled
+    cross-sectionally. Uses the LAST available date's OTM chain in each ticker's
+    cached history (no network), calibrates the SSVI reference, and takes two
+    magnitude measures:
+      - `magnitude`: OI-weighted mean |market_iv - svi_ref| over the OTM set
+        (how far the market smile sits from the reference -- the distortion).
+      - `net_seed`: long_oi - short_oi from SviRpReference.seed (the signed
+        OI-weighted cheap/rich imbalance).
+    Tests each against the ticker's realized-vol level (Spearman + OLS t-stat
+    + permutation p)."""
+    import svi_rp
+    per_ticker_mag: Dict[str, float] = {}
+    per_ticker_net: Dict[str, float] = {}
+    per_ticker_rv: Dict[str, float] = {}
+    skipped: List[Tuple[str, str]] = []
+
+    for ticker, (expiry, greek_rows, oi_rows, spot_rows) in ticker_histories.items():
+        rv_level = _realized_vol_level(spot_rows)
+        if rv_level is None:
+            skipped.append((ticker, "insufficient spot history for rv level"))
+            continue
+        # last date present in both greeks and spot
+        g_dates = sorted({replication_reference._parse_hist_date(r) for r in greek_rows
+                          if replication_reference._parse_hist_date(r)})
+        if not g_dates:
+            skipped.append((ticker, "no greek dates"))
+            continue
+        d = g_dates[-1]
+        spot_map = {}
+        for r in spot_rows:
+            rd = replication_reference._parse_hist_date(r)
+            if rd:
+                try:
+                    c = float(r.get('close', 0) or 0)
+                except (TypeError, ValueError):
+                    c = 0.0
+                if c > 0:
+                    spot_map[rd] = c
+        if d not in spot_map:
+            skipped.append((ticker, "last greek date missing spot close"))
+            continue
+        spot = spot_map[d]
+        chain_iv, oi_by = _otm_chain_at_date(greek_rows, oi_rows, spot, expiry, d)
+        if len(chain_iv) < 6:
+            skipped.append((ticker, f"only {len(chain_iv)} OTM strikes on {d}"))
+            continue
+        try:
+            ref = svi_rp.calibrate_ssvi(chain_iv, spot,
+                                        max((datetime.strptime(expiry, "%Y%m%d")
+                                             - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0,
+                                        oi_by=oi_by)
+        except Exception as e:
+            skipped.append((ticker, f"svi calibrate failed: {type(e).__name__}: {str(e)[:60]}"))
+            continue
+        marks = ref.mark_chain(chain_iv, oi_by)
+        total_oi = sum(oi_by.get((k, r), 0) for (k, r) in chain_iv)
+        if total_oi <= 0:
+            skipped.append((ticker, "no OI on OTM chain"))
+            continue
+        mag = sum(abs(m[4]) * oi_by.get((m[0], m[1]), 0) for m in marks) / total_oi
+        _, _, net_seed = ref.seed(chain_iv, oi_by)
+        per_ticker_mag[ticker] = mag
+        per_ticker_net[ticker] = float(net_seed)
+        per_ticker_rv[ticker] = rv_level
+
+    if not per_ticker_mag:
+        raise ValueError(f"No ticker produced a usable SVI-magnitude signal (skipped: {skipped})")
+
+    tickers = sorted(per_ticker_mag)
+    n = len(tickers)
+    mags = np.array([per_ticker_mag[t] for t in tickers])
+    nets = np.array([per_ticker_net[t] for t in tickers])
+    rvs = np.array([per_ticker_rv[t] for t in tickers])
+
+    rho_mag = _safe_corr(mags, rvs)
+    rho_net = _safe_corr(nets, rvs)
+    ones = np.ones(n)
+    r2_mag, _, tstats_mag = _ols_r2_and_tstat(rvs, np.column_stack([ones, mags]))
+    tstat_mag = float(tstats_mag[1]) if len(tstats_mag) > 1 else 0.0
+    pvalue_mag = float(2 * (1 - _scipy_stats.t.cdf(abs(tstat_mag), max(n - 2, 1))))
+
+    rng = np.random.RandomState(0)
+    perm_hits = 0
+    obs_abs = max(abs(rho_mag), abs(rho_net))
+    for _ in range(n_perms):
+        pm = rng.permutation(mags)
+        pn = rng.permutation(nets)
+        if max(abs(_safe_corr(pm, rvs)), abs(_safe_corr(pn, rvs))) >= obs_abs:
+            perm_hits += 1
+    perm_p = perm_hits / n_perms
+
+    if n < _MIN_CROSS_TICKERS:
+        verdict = "INCONCLUSIVE"
+    elif abs(tstat_mag) > _TSTAT_THRESHOLD and perm_p < _PERM_P_THRESHOLD:
+        verdict = "SVI_MAGNITUDE_CROSS_SECTIONAL_SIGNAL"
+    else:
+        verdict = "INCONCLUSIVE"
+
+    return SviMagnitudeFalsifierResult(
+        tickers=tickers, n_tickers=n,
+        per_ticker_magnitude=per_ticker_mag, per_ticker_net_seed=per_ticker_net,
+        per_ticker_rv_level=per_ticker_rv,
+        rho_mag_rv=rho_mag, r2_mag=r2_mag, tstat_mag=tstat_mag, pvalue_mag=pvalue_mag,
+        permutation_pvalue=perm_p, verdict=verdict, skipped=skipped,
+    )
+
+
+def run_svi_magnitude_cross_sectional_falsifier(
+        tickers: Optional[List[str]] = None,
+        cached_dir: Optional[str] = None,
+        ) -> SviMagnitudeFalsifierResult:
+    """Orchestrator (offline, no ThetaData): loads cached tickers via
+    seed_data_loader and runs the SVI-magnitude cross-sectional axis."""
+    import os
+    search_dir = cached_dir or os.path.join(
+        os.path.dirname(__file__), "docs", "Dealer posistioning notes",
+        "_extracted", "handoff_20260812", "seed_data")
+    all_data = seed_data_loader.load_all_seed_data(search_dir)
+    if tickers:
+        all_data = {t: v for t, v in all_data.items() if t in tickers}
+    if not all_data:
+        raise ValueError(f"No cached seed_data found in {search_dir} for tickers={tickers}")
+    import glob
+    ticker_histories = {}
+    for ticker, (greeks, oi, spot) in all_data.items():
+        matches = glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
+        expiry = seed_data_loader.manifest_of(matches[0])["expiry"] if matches else "20261120"
+        ticker_histories[ticker] = (expiry, greeks, oi, spot)
+    return _run_svi_magnitude_cross_sectional_from_histories(ticker_histories)
+
+
+def format_svi_magnitude_falsifier_report(r: SviMagnitudeFalsifierResult) -> str:
+    lines = [
+        f"SVI-MAGNITUDE cross-sectional falsifier -- {r.n_tickers} tickers",
+    ]
+    if r.skipped:
+        lines.append(f"  skipped: {r.skipped}")
+    lines += [
+        f"  per-ticker SVI magnitude (OI-wtd |IV-ref|): {r.per_ticker_magnitude}",
+        f"  per-ticker SVI net seed (long-short OI):    {r.per_ticker_net_seed}",
+        f"  per-ticker realized-vol level:              {r.per_ticker_rv_level}",
+        f"  corr(SVI magnitude, rv level):              {r.rho_mag_rv:+.4f}",
+        f"  R^2(SVI magnitude): {r.r2_mag:.4f}  t-stat: {r.tstat_mag:+.3f}  (p={r.pvalue_mag:.4f})",
+        f"  permutation p:                              {r.permutation_pvalue:.4f}",
+        f"  VERDICT:                                    {r.verdict}",
     ]
     return "\n".join(lines)
 
@@ -902,6 +1132,9 @@ if __name__ == "__main__":
     elif arg == "--cross":
         cross_result = run_cross_sectional_falsifier()
         print(format_cross_sectional_falsifier_report(cross_result))
+    elif arg == "--svimag":
+        svimag_result = run_svi_magnitude_cross_sectional_falsifier()
+        print(format_svi_magnitude_falsifier_report(svimag_result))
     else:
         result = run_falsifier(arg, use_cached=True)
         print(format_falsifier_report(result))
