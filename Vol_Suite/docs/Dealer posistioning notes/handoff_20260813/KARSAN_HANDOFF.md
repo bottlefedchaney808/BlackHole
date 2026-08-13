@@ -118,25 +118,24 @@ Ported `DEALER_VANNA_FLOW` gives SPY **−128,331 SHORT** in this tree vs the WS
 
 ### What's DONE
 - `vol_surface_reference.py`: added `_VALID_FITTERS`, `_fitter()` (default 'svi'),
-  `fit_svi_reference(chain_iv, forward, T)` using robust `svi_rp.calibrate_svi`.
+  `fit_svi_reference(chain_iv, forward, T)` using robust `svi_rp.calibrate_svi`,
+  and **rewired `compute_vol_surface_reference` to dispatch on `VOL_SURFACE_FITTER`**
+  (svi → sabr → quadratic fall-through). Committed `f98dfb4`.
 - `svi_rp.py`: `calibrate_svi` + `SviRpReference.svi_params`.
+- Tests: `test_default_fitter_is_svi` (pins Option B), `test_svi_falls_back_to_sabr`,
+  SABR-path tests pin `VOL_SURFACE_FITTER=sabr` explicitly.
 
-### What's LEFT (mid-edit — the block was being replaced when interrupted)
-The `compute_vol_surface_reference` fitter-selection block (currently SABR-only, ~lines 414-436)
-still needs to be rewritten to:
-1. `fitter = _fitter()` when `forward/T` given.
-2. If `fitter == 'svi'`: `params = fit_svi_reference(...)`; if `params['_ref']` present, build the
-   reference via `ref_obj.sigma_ref(k)` (fitter='svi'), else fall through to SABR.
-3. If SVI didn't produce and fitter in ('svi','sabr'): `params = fit_sabr_reference(...)`; build
-   via `sabr_vol_hagan` (fitter='sabr').
-4. Else fall through to the existing quadratic path.
+### What's DONE (fitter toggle fully wired)
+The fitter-selection rewrite (previously the one remaining piece) is **complete and
+committed** (`f98dfb4`). `compute_vol_surface_reference` now:
+1. `fitter = _fitter()` (default 'svi') when `forward/T` given.
+2. If `fitter == 'svi'`: `params = fit_svi_reference(...)`; if `params['_ref']` present,
+   builds the reference via `ref_obj.sigma_ref(k)` (fitter='svi'), else falls through.
+3. If SVI didn't produce and fitter in ('svi','sabr'): `params = fit_sabr_reference(...)`,
+   builds via `sabr_vol_hagan` (fitter='sabr').
+4. Else falls through to the existing quadratic path.
 
-Reference implementation to copy: the 08-11 handoff's `compute_vol_surface_reference` fitter block
-(`_extracted/handoff_20260812/code/vol_surface_reference.py` ~lines 460-536), which does exactly
-this with `params['_ref']`/`ref_obj.sigma_ref(k)`.
-
-**Then:** wire vannaflow sign source to SVI, and TEST against the SABR version to measure growth
-(`VOL_SURFACE_FITTER=sabr` vs default) on the 12-ticker cached data via `seed_flip_compare_offline.py`.
+vol_surface_reference + SVI focused: 25 passed.
 
 ---
 
