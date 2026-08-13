@@ -80,7 +80,28 @@ into one persistent regime" narrative from a third angle.
 
 ---
 
-## 3. The SVI flat-smile — root cause + fix (the active work)
+## 3. Data density — the `eod_greeks` route and the "find the right expiry" lesson (2026-08-13)
+
+**Why SPY/QQQ were thin:** the cached `seed_data_*.json` for SPY/QQQ covered only ~20-60 of
+150 days because the option-chain history for the far-dated `20261120` expiry only extends as far
+back as that expiry was LISTED. The greeks route (`all_greeks`) is sparse (2 dates/40d), so we
+compute greeks ourselves. But there is an **untapped dense route that returns greeks directly**:
+
+- **`bulk_hist/option/eod_greeks/{root}/{exp}`** — whole-chain EOD **OHLC + IV + full greeks
+  (gamma, vanna, everything)** honoring the date range, ~1 request per expiry, 17:15 ET close.
+  Verified working against the proxy (200, dense rows, includes `implied_vol`/`gamma`/`vanna`).
+  NOT yet wrapped in `shared/thetadata.py` — probe-verified via `_get_with_retry` directly.
+  This REPLACES the local-IV-inversion + sparse-greeks machinery for dense historical greeks.
+- **The real constraint is EXPIRY LISTING AGE, not the greek computation.** The route cannot
+  manufacture history for an expiry that didn't exist yet. To get full 150d data, pick an expiry
+  that has been listed ≥150 trading days (a far-dated/LEAPS expiry), NOT the nearest 0.25-year one.
+  `seed_data_maker.py` currently resolves `expiry_selector(..., 0.25)` → picks a ~3-month-out
+  expiry that was only just listed → thin. **Fix: resolve to the furthest-listed / longest-history
+  expiry for the lookback window.**
+
+**Re-pull result (2026-08-13):** SPY via compute-greeks re-pull → **63 usable days** (was 55-62);
+QQQ stuck at 22 (20261120 expiry genuinely only ~23 days old). To get QQQ/SPY to 150d, re-pull with
+a far-dated expiry using the `eod_greeks` route.
 
 ### Root cause (measured on real SPY, date 20260810, spot 773.03, T 0.279)
 The exact 3-observable SSVI construction (`svi_rp.calibrate_ssvi`) is **structurally
