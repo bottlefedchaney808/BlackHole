@@ -18,6 +18,7 @@ yfinance can be reintroduced later as an explicit *backup* source, but it is
 deliberately not in this path anymore.
 """
 import logging
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Union
 
 try:
@@ -153,10 +154,22 @@ class MarketDataController:
                 td.close()
         return None
 
-    def validate_strike(self, ticker: str, strike: float) -> Dict[str, Union[bool, float]]:
-        """Validate a strike against PotatoHedge's listed strikes for the nearest
-        expiry. If listings can't be fetched, accept the strike as-is (don't block
-        a run on a validation-only lookup)."""
+    def validate_strike(
+        self, ticker: str, strike: float,
+        target_years: Optional[float] = None,
+        expiration_date: Optional[str] = None,
+    ) -> Dict[str, Union[bool, float]]:
+        """Validate a strike against PotatoHedge's listed strikes for the expiry
+        the IV solve will *actually* use -- the listed expiry nearest to the
+        requested target maturity -- not just ``exps[0]`` (the shortest-dated
+        listing, nearest to today). A strike that exists on a near-dated weekly
+        (e.g. 482.5) is frequently absent from a 3-month-out monthly chain, so
+        validating against the wrong expiry returned a "closest" strike with no
+        market price and the NO-FALLBACKS IV solve then raised. If no target
+        maturity is supplied, falls back to the nearest-to-today expiry (prior
+        behaviour) so callers that don't know the target still work. If
+        listings can't be fetched, accept the strike as-is (don't block a run
+        on a validation-only lookup)."""
         td = self._client()
         if td is None:
             return {'valid': True, 'closest': strike}
@@ -164,7 +177,7 @@ class MarketDataController:
             exps = td.list_expirations(ticker)
             if not exps:
                 return {'valid': True, 'closest': strike}
-            nearest_exp = exps[0]
+            nearest_exp = self._resolve_target_expiry(exps, target_years, expiration_date)
             strikes = td.list_strikes(ticker, nearest_exp)
             if not strikes:
                 return {'valid': True, 'closest': strike}
@@ -175,6 +188,32 @@ class MarketDataController:
             return {'valid': True, 'closest': strike}
         finally:
             td.close()
+
+    def _resolve_target_expiry(
+        self, exps, target_years: Optional[float] = None,
+        expiration_date: Optional[str] = None,
+    ) -> Optional[str]:
+        """Pick the listed expiry nearest to the requested maturity, matching
+        how ``ThetaDataController.fetch_option_iv`` resolves the contract (so
+        strike validation and the IV solve agree on one expiry). Falls back to
+        the nearest-to-today expiry when no target is given."""
+        def _days_from(target_dt):
+            return lambda e: abs((datetime.strptime(str(e), "%Y%m%d") - target_dt).days)
+        if expiration_date:
+            digits = ''.join(ch for ch in str(expiration_date) if ch.isdigit())
+            try:
+                target = datetime.strptime(digits, "%Y%m%d")
+                return min(exps, key=_days_from(target))
+            except Exception:
+                pass
+        if target_years is not None:
+            try:
+                target = datetime.now() + timedelta(days=int(target_years * 365))
+                return min(exps, key=_days_from(target))
+            except Exception:
+                pass
+        # No target: nearest-to-today expiry (matches prior exps[0] intent).
+        return min(exps, key=_days_from(datetime.now()))
 
     def get_pricing_parameters(self, ticker: str, strike: float, time_to_maturity: float,
                                proxy: str = 'long_term') -> Dict[str, Union[float, str]]:

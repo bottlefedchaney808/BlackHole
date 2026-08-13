@@ -197,7 +197,11 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
             # matches a real strike (listed in $0.50/$1 increments), which made
             # every unset-strike context-mode run fail IV solve with "no usable
             # market price" even though a nearby listed strike had one.
-            val_res = market_data.validate_strike(ticker, round(float(S), 2))
+            val_res = market_data.validate_strike(
+                ticker, round(float(S), 2),
+                target_years=target_years,
+                expiration_date=fields.get("expiration_date"),
+            )
             K = val_res["closest"]
 
         vol_manager = VolManager()
@@ -542,7 +546,7 @@ def main():
                 strike_input = input("Enter the strike price (K): ").strip()
                 if not strike_input: raise ValueError("Empty strike")
                 K = float(strike_input)
-                val_res = market_data.validate_strike(ticker, K)
+                val_res = market_data.validate_strike(ticker, K, expiration_date=resolved_exp)
                 if not val_res['valid']:
                     print(f"Invalid strike. Closest: {val_res['closest']:.2f}")
                     if input("Use closest? (y/n): ").strip().lower() == 'y':
