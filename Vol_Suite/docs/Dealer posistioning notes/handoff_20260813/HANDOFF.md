@@ -212,6 +212,31 @@ Run it with `env -u PYTHONPATH -u VIRTUAL_ENV ../.venv/Scripts/python.exe
 backtest_accumulation_falsifier.py --cross` (slow — recomputes the per-day
 accumulated book for every ticker; ~6+ min on 12 tickers).
 
+**Cross-sectional result on real data = BASE (Jason's call, 2026-08-13).** Every
+one of the 12 tickers accumulates SHORT (-1.0), so the sign axis is degenerate
+(all points identical) and the verdict is now labeled `BASE` — the resting regime,
+NOT a signal. Signal, if any, lives on the MAGNITUDE axis.
+
+**SVI-magnitude cross-sectional axis (Jason's idea, 2026-08-13):** because the
+sign axis is degenerate, use SVI cheap/rich marking as a MAGNITUDE signal.
+Added `_run_svi_magnitude_cross_sectional_from_histories` / `--svimag` —
+per-ticker OI-weighted |IV-ref| (smile distortion) + SVI net seed, tested
+against each ticker's realized-vol level. Real 12-ticker result: **INCONCLUSIVE**
+(corr +0.10, t-stat 0.32, perm p 0.27) — SVI magnitude does NOT significantly sort
+realized vol on this sample. Tests: `tests/test_svi_magnitude_falsifier.py` (5).
+
+**08-11 vanna/SVI arms brought in for testing (2026-08-13, NOT canonical):** per
+Jason's "bring these in for testing, don't make anything canon, figure out what
+we have." Ported vanna_by_date, vanna/svi_rp seed modes, DEALER_SEED_SIGN,
+DEALER_VANNA_FLOW vanna-weighted flow, per-day SABR per-strike sign map into
+`replication_reference._accumulate_from_history`; plus seed_flip_compare(_offline),
+recompute_vanna_from_eod, vanna_transform_pin, save_seed_data/seed_compare_150/
+staged_m2_pairs scripts. **Known sign-source discrepancy (flagged, not hidden):**
+the ported vannaflow gives SPY end_book -128,331 SHORT here, vs the WSL session's
+recorded +464,578 LONG — because this tree's `vol_surface_reference` is SABR-based
+while the 08-11 WSL tree used `VOL_SURFACE_FITTER=svi`. Same model label, different
+sign source => different flow. Resolve before trusting any vannaflow number.
+
 **QQQ and SPY specifically remain thin** (14-21 and 55-62 usable days respectively,
 vs. 110-163 for the other 10 tickers) because their cached `seed_data_*.json` files
 only cover the last ~20-60 calendar days of option-chain history (the underlying spot
