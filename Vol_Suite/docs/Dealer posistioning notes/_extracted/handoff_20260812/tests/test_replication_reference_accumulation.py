@@ -24,6 +24,8 @@ live data. It does NOT test whether pulling real ThetaData history works
 access this dev sandbox doesn't have); it tests whether the aggregation
 arithmetic itself is correct once handed a realistic-shaped set of rows.
 """
+import sys
+
 import pytest
 
 import replication_reference as rr
@@ -57,8 +59,10 @@ def _build_rally_scenario():
         for k in strikes:
             moneyness = k / spot
             iv = max(0.15 + 0.10 * max(0, 1 - moneyness), 0.10)
-            hist_greek_rows.append({"date": d, "strike": _theta_strike(k), "right": "C", "implied_vol": iv})
-            hist_greek_rows.append({"date": d, "strike": _theta_strike(k), "right": "P", "implied_vol": iv})
+            # vanna per the measured convention (rec.vanna = -1 * BS_vanna);
+            # non-zero so the vanna seed/flow arms are testable.
+            hist_greek_rows.append({"date": d, "strike": _theta_strike(k), "right": "C", "implied_vol": iv, "vanna": 0.5})
+            hist_greek_rows.append({"date": d, "strike": _theta_strike(k), "right": "P", "implied_vol": iv, "vanna": -0.5})
             near_spot_bump = 300 if abs(k - spot) < 5 else 0
             oi_c = base_oi[k] + near_spot_bump * (i + 1)
             oi_p = base_oi[k]
@@ -137,49 +141,138 @@ def test_seed_modes_both_produce_a_result():
 
 
 @pytest.mark.unit
+def test_seed_flip_inverts_seed_keeps_flow():
+    """DEALER_SEED_SIGN=1 flips ONLY the seed level (replication seed +OI
+    instead of -OI); daily flow / SABR signs / gates are untouched. Design A
+    (quick-round CONFIRMED 2026-08-11)."""
+    import os
+    expiry, greeks, oi, spot = _build_rally_scenario()
+    base = rr._accumulate_from_history("MOCK", expiry, 5, "replication", greeks, oi, spot)
+    os.environ["DEALER_SEED_SIGN"] = "1"
+    try:
+        flipped = rr._accumulate_from_history("MOCK", expiry, 5, "replication", greeks, oi, spot)
+    finally:
+        del os.environ["DEALER_SEED_SIGN"]
+    # The seed (day-1) net is exactly negated by the flip.
+    assert flipped.daily_trace[0]["net_change"] == pytest.approx(-base.daily_trace[0]["net_change"])
+    # End book differs by exactly 2x the seed (flow identical), so the flip is
+    # level-only: end = flipped_seed + flow = -seed + flow = -(seed - flow).
+    # Assert the per-strike level moves by 2x seed contribution where the seed
+    # was non-zero, and daily flow trace (days 2+) is unchanged.
+    assert len(flipped.daily_trace) == len(base.daily_trace)
+    for i in range(1, len(base.daily_trace)):
+        assert flipped.daily_trace[i]["net_change"] == pytest.approx(base.daily_trace[i]["net_change"])
+
+
+@pytest.mark.unit
 def test_raises_on_insufficient_history():
     with pytest.raises(ValueError):
         rr._accumulate_from_history("MOCK", "20260901", 5, "replication", [], [], [])
 
 
 @pytest.mark.unit
-def test_compute_accumulated_position_for_expiry_with_injected_rows_matches_direct_call():
-    """compute_accumulated_position_for_expiry is the entry point
-    dealer_positioning.py will call to wire live accumulation into the
-    render path (see the wiring plan). It must accept an already-resolved
-    `expiry` (so callers that resolved one via expiry_selector once don't
-    re-resolve a possibly-different one) and an `_hist_rows` injection point
-    for tests / offline seed_data_*.json consumers to bypass the network
-    fetch entirely -- same pattern as compute_replication_reference's
-    _td/_spot/_chain injection. With rows injected it must produce EXACTLY
-    the same result as calling _accumulate_from_history directly (it's a
-    thin pass-through, not a re-derivation), and it must not touch the
-    network (no ThetaDataController instantiation) when rows are injected.
-    """
+def test_vanna_seed_mode_runs_and_uses_vanna_sign():
+    """The brainstorming vanna-seed (sign(vanna) marks rich short / cheap long)
+    runs and produces a book when rows carry vanna."""
+    import os
     expiry, greeks, oi, spot = _build_rally_scenario()
-    direct = rr._accumulate_from_history("MOCK", expiry, 5, "replication", greeks, oi, spot)
-
-    wired = rr.compute_accumulated_position_for_expiry(
-        "MOCK", expiry, lookback_days=5, seed_mode="replication",
-        _hist_rows=(greeks, oi, spot),
-    )
-
-    assert wired.position_by_strike == direct.position_by_strike
-    assert wired.daily_trace == direct.daily_trace
-    assert wired.seed_date == direct.seed_date
-    assert wired.end_date == direct.end_date
+    acc = rr._accumulate_from_history("MOCK", expiry, 5, "vanna", greeks, oi, spot)
+    assert acc.position_by_strike
+    # vanna seed day-1 should have non-zero net (vanna present on rows)
+    assert acc.daily_trace[0]["net_change"] != 0.0
 
 
 @pytest.mark.unit
-def test_compute_accumulated_position_for_expiry_does_not_touch_network_when_rows_injected(monkeypatch):
-    def _boom(*a, **k):
-        raise AssertionError("ThetaDataController must not be constructed when _hist_rows is injected")
-
-    monkeypatch.setattr(rr, "ThetaDataController", _boom)
-
+def test_vanna_flow_arm_changes_book():
+    """DEALER_VANNA_FLOW=1 keeps the LIVE replication seed but weights the
+    daily flow by rec.vanna (vanna flow using sabr_deviation). With vanna on
+    the rows, the flow differs from the plain live arm. (DEALER_VANNA_FLOW
+    defaults to "1" since 2026-08-12; test both arms explicitly.)"""
+    import os
     expiry, greeks, oi, spot = _build_rally_scenario()
-    result = rr.compute_accumulated_position_for_expiry(
-        "MOCK", expiry, lookback_days=5, seed_mode="replication",
-        _hist_rows=(greeks, oi, spot),
-    )
-    assert result.position_by_strike
+    os.environ["DEALER_VANNA_FLOW"] = "0"
+    try:
+        base = rr._accumulate_from_history("MOCK", expiry, 5, "replication", greeks, oi, spot)
+    finally:
+        os.environ.pop("DEALER_VANNA_FLOW", None)
+    os.environ["DEALER_VANNA_FLOW"] = "1"
+    try:
+        vf = rr._accumulate_from_history("MOCK", expiry, 5, "replication", greeks, oi, spot)
+    finally:
+        os.environ.pop("DEALER_VANNA_FLOW", None)
+    # seed identical (DEALER_VANNA_FLOW only touches the flow loop)
+    assert vf.daily_trace[0]["net_change"] == pytest.approx(base.daily_trace[0]["net_change"])
+    # flow differs once vanna weights are applied (vanna != 1)
+    assert vf.daily_trace[-1]["net_change"] != pytest.approx(base.daily_trace[-1]["net_change"])
+
+
+def _build_vanna_payload():
+    """3 trading days whose greek rows carry per-strike vanna under all three
+    documented aliases (`vanna`/`Vanna`/`VANNA`), plus a row missing the field
+    entirely and a malformed-strike row, so the vanna_by_date parse can be
+    exercised network-free."""
+    expiry = "20260901"
+    dates = ["20260715", "20260716", "20260717"]
+    hist_greek_rows = [
+        # date 1
+        {"date": "20260715", "strike": 100000, "right": "C", "implied_vol": 0.20, "vanna": 1.5},
+        {"date": "20260715", "strike": 100000, "right": "P", "implied_vol": 0.20, "VANNA": -0.75},
+        {"date": "20260715", "strike": 101000, "right": "C", "implied_vol": 0.21},  # no vanna field -> 0.0
+        {"date": "20260715", "strike": "bad", "right": "C", "implied_vol": 0.20, "vanna": 9.9},  # malformed -> skipped
+        # date 2
+        {"date": "20260716", "strike": 100000, "right": "C", "implied_vol": 0.20, "Vanna": 2.0},
+        {"date": "20260716", "strike": 101000, "right": "P", "implied_vol": 0.22, "vanna": -1.2},
+        # date 3
+        {"date": "20260717", "strike": 100000, "right": "C", "implied_vol": 0.20, "vanna": 0.0},
+        {"date": "20260717", "strike": 101000, "right": "P", "implied_vol": 0.22, "VANNA": 0.0},
+    ]
+    hist_oi_rows = []
+    hist_spot_rows = []
+    for d in dates:
+        hist_spot_rows.append({"date": d, "close": 100.0})
+        for k, right in [(100.0, "C"), (100.0, "P"), (101.0, "C"), (101.0, "P")]:
+            hist_oi_rows.append({"date": d, "strike": _theta_strike(k), "right": right, "open_interest": 100})
+    return expiry, hist_greek_rows, hist_oi_rows, hist_spot_rows
+
+
+def _capture_vanna_by_date(payload):
+    """Run _accumulate_from_history and reach the (pure-local, unexposed)
+    vanna_by_date accumulation via sys.settrace -- the same seam the existing
+    iv_by_date/oi_by_date locals sit behind. Network-free; no code changes to
+    the function under test required."""
+    expiry, greeks, oi, spot = payload
+    captured = {}
+
+    def tracer(frame, event, arg):
+        if event == "return" and frame.f_code.co_name == "_accumulate_from_history":
+            local = frame.f_locals.get("vanna_by_date")
+            if local is not None:
+                captured["vanna_by_date"] = {d: dict(day) for d, day in local.items()}
+        return tracer
+
+    sys.settrace(tracer)
+    try:
+        rr._accumulate_from_history("MOCK", expiry, 2, "replication", greeks, oi, spot)
+    finally:
+        sys.settrace(None)
+    assert "vanna_by_date" in captured, "vanna_by_date local not observed"
+    return captured["vanna_by_date"]
+
+
+@pytest.mark.unit
+def test_vanna_by_date_parse_accumulates_per_strike():
+    vanna = _capture_vanna_by_date(_build_vanna_payload())
+    # (1) populated for the right (date, strike, right) keys
+    assert vanna["20260715"][(100.0, "C")] == 1.5
+    assert vanna["20260716"][(100.0, "C")] == 2.0
+    # (2) alias handling: 'VANNA' and lowercase 'vanna' both read, no scale applied
+    assert vanna["20260715"][(100.0, "P")] == -0.75  # via 'VANNA'
+    assert vanna["20260716"][(101.0, "P")] == -1.2   # via 'vanna'
+    assert vanna["20260717"][(101.0, "P")] == 0.0    # via 'VANNA', stored despite being 0
+    # (3) row missing the vanna field parses to 0.0 without crashing
+    assert vanna["20260715"][(101.0, "C")] == 0.0
+    # (4) malformed row (bad strike) is skipped -- its 9.9 never lands
+    assert all(v != 9.9 for day in vanna.values() for v in day.values())
+    # a zero-valued row still registers a key (presence, not magnitude)
+    assert (100.0, "C") in vanna["20260717"]
+

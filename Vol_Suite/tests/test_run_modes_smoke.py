@@ -104,7 +104,8 @@ def _install_common_stubs(monkeypatch, calls: dict):
     class FakeScanResult:
         verdict = "OK"
 
-    def fake_run_chain_scanner(ticker, target_years, expiration=None, output_dir=None):
+    def fake_run_chain_scanner(ticker, target_years, expiration=None, output_dir=None,
+                                dealer_result=None):
         calls["chain_scanner_called"] = True
         return [], "Chain scan done", FakeScanResult()
 

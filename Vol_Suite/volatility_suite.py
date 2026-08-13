@@ -1345,6 +1345,7 @@ def _run_core_analysis(
             _note_error("screener_recheck", e)
 
     print(f"\n[Running] Dealer Positioning (sign_model={sign_model})")
+    dp_result = None
     try:
         import dealer_positioning as dp
         files, interp, dp_result = dp.run_dealer_positioning(ticker, target_years, output_dir=out_root, save_csv=True,
@@ -1375,7 +1376,14 @@ def _run_core_analysis(
         print(f"\n[5/5] Running Options Chain Scanner for {ticker} @ {expiration}...")
         try:
             import options_chain_scanner as ocs
-            files, interp, scan_result = ocs.run_chain_scanner(ticker, target_years, expiration=expiration, output_dir=out_root)
+            # Share the dealer-positioning engine's own result (if step 4
+            # succeeded) so the scanner's vanna panel matches the 4-panel
+            # dealer chart exactly instead of computing a second, independent
+            # vanna series -- see options_chain_scanner.compute_vanna_positioning's
+            # docstring for the "two-vanna" bug this closes.
+            files, interp, scan_result = ocs.run_chain_scanner(
+                ticker, target_years, expiration=expiration, output_dir=out_root,
+                dealer_result=dp_result)
             produced.extend(files)
             sections.append({
                 "title": f"Options Chain Scan: {ticker} {expiration} ({scan_result.verdict})",

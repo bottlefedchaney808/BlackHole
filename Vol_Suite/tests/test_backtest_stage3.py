@@ -523,3 +523,83 @@ def test_a_day_with_no_underlying_close_yields_no_derived_greeks():
                 "open_interest": 100} for r in rows]
     records = bt3._build_day_records("SYN", expiry, rows, oi_rows, [])
     assert records == []
+
+
+@pytest.mark.unit
+def test_gamma_derived_from_an_already_solved_iv_without_bid_ask():
+    """Reproduces the real-data gap found running backtest_accumulation_falsifier
+    against the WSL handoff's cached seed_data (a 'dense EOD, IV solved,
+    vanna injected' payload -- README §8): rows carry a valid, already-solved
+    implied_vol and NO bid/ask (and close='0.00' for illiquid strikes), no
+    gamma field. The OLD code treated `iv <= 0 or gamma <= 0` as one
+    combined condition, so a row with good IV but no gamma fell into the
+    same re-solve-IV-from-price branch as a row with NO iv at all --
+    discarding the perfectly good implied_vol and trying (and failing,
+    since mid_price(None, None, '0.00') isn't a usable mark) to re-derive
+    it from bid/ask/close that don't exist in this data shape. That
+    silently dropped ~78% of rows and crushed 150 days of history down to
+    ~14-21 usable days ("front and back date only"). Fixed: iv>0 already ->
+    use it directly to derive gamma via BS; only fall back to solving IV
+    from price when iv is missing/invalid too.
+    """
+    expiry, date, spot, sigma = "20261231", "20260901", 100.0, 0.22
+    rows = []
+    for k in STRIKES:
+        right = 'C' if k >= spot else 'P'
+        # Exactly the real cached-data row shape: implied_vol present and
+        # good, no gamma, no bid/ask, close either absent or '0.00'.
+        rows.append({"date": date, "strike": float(k), "right": right,
+                      "implied_vol": sigma, "close": "0.00"})
+    oi_rows = [{"date": date, "strike": _theta(k), "right": ('C' if k >= spot else 'P'),
+                "open_interest": 500} for k in STRIKES]
+    price_rows = [{"date": date, "close": spot}]
+
+    records = bt3._build_day_records("SYN", expiry, rows, oi_rows, price_rows)
+
+    assert records, (
+        "the day must survive using its already-solved implied_vol -- it "
+        "must NOT be dropped just because bid/ask/close aren't usable for "
+        "re-solving a vol that was already known"
+    )
+    assert records[0].net_gamma_v1 != 0.0, "gamma must be derived from the existing IV, not left at 0"
+
+
+@pytest.mark.unit
+def test_gamma_map_matches_oi_map_when_greek_rows_use_theta_scaled_strikes():
+    """Reproduces a second real-data gap found running the pooled falsifier
+    against the WSL handoff's cached seed_data_*.json payloads: net_gamma_v1
+    came back EXACTLY 0.0 on every single day for all 12 tickers -- not "no
+    signal", a total aggregation miss. Root cause: _build_day_records parses
+    greek-row strikes as plain dollars (`k = float(row['strike'])`), correct
+    for the LIVE option_bulk_hist_eod route ("650.000") -- but the CACHED
+    seed_data payload (seed_data_maker.py) stores greek-row strikes
+    theta-scaled ("650000"), the same convention oi_by_date's rows already
+    use via strike_from_theta(). With unnormalized dollar parsing, gamma_map
+    keys land at (650000.0, 'C') while oi_map keys land at (650.0, 'C') --
+    they never match, every row is skipped as oi<=0, and net_gamma_v1 is
+    silently exactly 0.0 for every day, every ticker. This is the SAME
+    observable failure mode (net gamma always exactly 0.0) the module's own
+    2026-08-04 incident comment already documents for the opposite direction
+    (plain-dollar rows wrongly run through strike_from_theta) -- the fix
+    generalizes to auto-detect which convention a given row actually uses,
+    since this function now has two real producers with different
+    conventions, not one.
+    """
+    expiry, date, spot = "20261231", "20260901", 100.0
+    rows = []
+    for k in STRIKES:
+        right = 'C' if k >= spot else 'P'
+        rows.append({"date": date, "strike": str(_theta(k)), "right": right,
+                      "implied_vol": 0.22, "gamma": 0.02})
+    oi_rows = [{"date": date, "strike": _theta(k), "right": ('C' if k >= spot else 'P'),
+                "open_interest": 500} for k in STRIKES]
+    price_rows = [{"date": date, "close": spot}]
+
+    records = bt3._build_day_records("SYN", expiry, rows, oi_rows, price_rows)
+
+    assert records, "the day must survive -- theta-scaled greek-row strikes must be recognized"
+    assert records[0].net_gamma_v1 != 0.0, (
+        "net_gamma_v1 must not silently be 0.0 -- gamma_map and oi_map keys "
+        "must land on the same (strike, right) convention regardless of "
+        "which strike-scale the greek rows arrived in"
+    )

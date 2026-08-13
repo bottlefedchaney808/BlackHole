@@ -143,6 +143,21 @@ class DealerPositioningResult:
     hedge_equiv_option_strike: Optional[float] = None
     hedge_equiv_option_right: Optional[str] = None
     hedge_equiv_option_contracts: float = float('nan')
+    # Whether the ANCHOR expiry's Greek exposure was built from real
+    # multi-day accumulation (replication_reference.compute_accumulated_position_for_expiry)
+    # rather than a same-day OI snapshot -- see compute_dealer_positioning's
+    # `accumulate` param. Sourced onto the result object (not inferred from
+    # a docstring or hardcoded chart label) so every render can honestly
+    # state which model actually executed -- see sign_model_render_label().
+    accumulate: bool = False
+    # Call/put split of net vanna exposure (same CONTRACT_MULTIPLIER *
+    # VANNA_PP_SCALE scaling as vanna_shares_by_strike -- their sum equals
+    # sum(vanna_shares_by_strike) exactly). Computed here, once, so
+    # options_chain_scanner.py's vanna panel can read it verbatim instead of
+    # re-deriving its own call/put split from a second independent chain
+    # fetch (the "two-vanna" bug the CARL audit found still live).
+    vanna_call_shares: float = float('nan')
+    vanna_put_shares: float = float('nan')
 
 # ---------- Helpers ----------
 def _to_float(x):
@@ -250,6 +265,29 @@ def _dealer_sign(right: str) -> float:
 
 VALID_SIGN_MODELS = ('oi_heuristic', 'replication', 'vol_surface_replication')
 
+_SIGN_MODEL_LABELS = {
+    'oi_heuristic': "OI Heuristic (v1)",
+    'replication': "Replication (v2)",
+    'vol_surface_replication': "Vol-Surface + Replication (v2.1)",
+}
+
+
+def sign_model_render_label(result: DealerPositioningResult) -> str:
+    """The ONE place a chart/report/scanner asks "which model actually
+    produced this result" -- sourced from the DealerPositioningResult
+    object itself (result.sign_model / result.accumulate), never a
+    hardcoded string or docstring. This is the render-time model-identity
+    assertion from the CARL audit: two sign models were once rendered
+    side-by-side for the same ticker with opposite conclusions, and neither
+    was traceable back to the code that actually ran. Every place that
+    displays a sign-model label (plot_heatmap, CLI prints, JSON summaries)
+    should call this instead of re-deriving its own string.
+    """
+    base = _SIGN_MODEL_LABELS.get(result.sign_model, result.sign_model)
+    if result.accumulate:
+        return f"{base} + 150d accumulation"
+    return base
+
 
 def _resolve_sign(right: str, strike: float, sign_model: str,
                    otm_strikes: Optional[set] = None,
@@ -310,7 +348,13 @@ def _resolve_sign(right: str, strike: float, sign_model: str,
 def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
                                 max_days: Optional[int] = None,
                                 expiration: Optional[str] = None,
-                                sign_model: str = 'oi_heuristic') -> DealerPositioningResult:
+                                sign_model: str = 'oi_heuristic',
+                                accumulate: bool = False,
+                                accumulation_lookback_days: int = 150,
+                                accumulation_seed_mode: str = 'replication',
+                                _accumulation_hist_rows: Optional[
+                                    Tuple[List[dict], List[dict], List[dict]]] = None,
+                                ) -> DealerPositioningResult:
     """max_days: if given, restricts the expiry window used for the greek
     exposure comparison (Gamma/Delta/Vanna/Charm-by-strike) to expiries within
     this many calendar days, overriding the default 2-year max_tte cutoff
@@ -332,7 +376,23 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
     the exact convention and DEALER_POSITIONING_V2_DESIGN.md §3/§5 for the
     reasoning. Adding this is what lets the SAME chart type actually render
     v1 vs. v2's sign convention side by side, rather than the two only ever
-    being compared as separate numbers."""
+    being compared as separate numbers.
+
+    `accumulate`: opt-in (also forceable via the DEALER_ACCUMULATION=1 env
+    var, mirroring the DEALER_VANNA_FLOW pattern) real multi-day seed-plus-
+    accumulate positioning (replication_reference.compute_accumulated_position_for_expiry)
+    for the ANCHOR expiry only (the one `expiration`/`target_years` resolves
+    to) -- NOT every active expiry, to avoid multiplying the expensive
+    per-contract historical-greeks fetch by the expiry count. When True, the
+    anchor expiry's per-strike aggregation uses the accumulated SIGNED
+    position in place of `_resolve_sign(...) * today's OI`; the accumulated
+    position already carries its own sign, so `applied_sign` is recorded as
+    1.0 (pass-through) for those records, not a `sign_model`-derived value.
+    Every other active expiry is untouched -- still same-day snapshot via
+    `_resolve_sign`, per `sign_model`. See DealerPositioningResult.accumulate
+    and the render label in sign_model_render_label()."""
+    effective_accumulate = accumulate or os.environ.get("DEALER_ACCUMULATION", "0") == "1"
+
     td = ThetaDataController()
 
     spot = td.fetch_spot_price(ticker)
@@ -342,7 +402,8 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
 
     dividend_yield = td.fetch_dividend_yield(ticker)
 
-    _, actual_T = expiry_selector.resolve_expiration(td, ticker, expiration, target_years)
+    anchor_expiry, actual_T = expiry_selector.resolve_expiration(td, ticker, expiration, target_years)
+    anchor_expiry = anchor_expiry.strip() if anchor_expiry else anchor_expiry
     # Live risk-free rate from the yield curve (RISK_FREE_RATE=0.05 kept only as a
     # fallback). Gamma is nearly r-insensitive, but the forward and the whole
     # suite now share one live rate rather than a stale 0.05 constant.
@@ -382,10 +443,29 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
     vanna_by_strike: Dict[float, float] = defaultdict(float)
     charm_by_strike: Dict[float, float] = defaultdict(float)
     delta_seen = vanna_seen = charm_seen = 0
+    vanna_call_total = 0.0
+    vanna_put_total = 0.0
 
     if sign_model not in VALID_SIGN_MODELS:
         td.close()
         raise ValueError(f"sign_model must be one of {VALID_SIGN_MODELS}, got {sign_model!r}")
+
+    # Real multi-day accumulation for the ANCHOR expiry only (see docstring
+    # above) -- computed once, before the per-expiry loop, not per-iteration.
+    # Falls back to ordinary same-day snapshot behavior (accumulated_position
+    # stays None) rather than aborting the whole render if the historical
+    # fetch fails (thin chain, insufficient history, proxy hiccup, etc.).
+    accumulated_position: Optional[Dict[Tuple[float, str], float]] = None
+    if effective_accumulate and anchor_expiry:
+        try:
+            acc_result = replication_reference.compute_accumulated_position_for_expiry(
+                ticker, anchor_expiry, lookback_days=accumulation_lookback_days,
+                seed_mode=accumulation_seed_mode, _hist_rows=_accumulation_hist_rows,
+            )
+            accumulated_position = acc_result.position_by_strike
+        except Exception as exc:
+            print(f"  [accumulate] falling back to same-day snapshot for {ticker} "
+                  f"{anchor_expiry}: {exc}")
 
     for exp_str, tte in active_expiries:
         try:
@@ -451,6 +531,15 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
             except (ValueError, KeyError):
                 continue
 
+        # v1 scope: accumulation only ever applies to the resolved ANCHOR
+        # expiry, never to every active expiry (see the accumulate docstring
+        # above -- avoids multiplying the expensive historical-greeks fetch
+        # by the expiry count). Every other expiry keeps the ordinary
+        # same-day _resolve_sign path below unchanged.
+        use_accumulation_here = (
+            effective_accumulate and accumulated_position is not None and exp_str == anchor_expiry
+        )
+
         for row in greeks:
             try:
                 k_theta = int(row['strike'])
@@ -467,12 +556,23 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
             if math.isnan(iv) or iv <= 0:
                 continue
 
-            oi = oi_lookup.get((k_theta, right), 0)
-            if oi <= 0:
-                continue
-
             k = strike_from_theta(k_theta)
-            sign = _resolve_sign(right, k, sign_model, otm_strikes, vol_surface_ref)
+
+            if use_accumulation_here:
+                # Sign is already baked into the accumulated position (it's
+                # a signed dealer position, not raw OI) -- applied_sign is
+                # recorded as 1.0 (pass-through), NOT a _resolve_sign value,
+                # per the accumulate docstring's documented behavioral fork.
+                oi = accumulated_position.get((k, right), 0.0)
+                if oi == 0.0:
+                    continue
+                sign = 1.0
+            else:
+                oi = oi_lookup.get((k_theta, right), 0)
+                if oi <= 0:
+                    continue
+                sign = _resolve_sign(right, k, sign_model, otm_strikes, vol_surface_ref)
+
             dollar_gamma = gamma_val * spot * CONTRACT_MULTIPLIER * oi
 
             delta_val = _extract_greek_field(row, 'delta')
@@ -497,6 +597,10 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
             if not math.isnan(vanna_val):
                 vanna_by_strike[k] += sign * vanna_val * oi
                 vanna_seen += 1
+                if right == 'C':
+                    vanna_call_total += sign * vanna_val * oi
+                else:
+                    vanna_put_total += sign * vanna_val * oi
             if not math.isnan(charm_val):
                 charm_by_strike[k] += sign * charm_val * oi
                 charm_seen += 1
@@ -657,6 +761,9 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
         hedge_equiv_option_strike=hedge_equiv_option_strike,
         hedge_equiv_option_right=hedge_equiv_option_right,
         hedge_equiv_option_contracts=hedge_equiv_option_contracts,
+        accumulate=accumulated_position is not None,
+        vanna_call_shares=vanna_call_total * CONTRACT_MULTIPLIER * VANNA_PP_SCALE,
+        vanna_put_shares=vanna_put_total * CONTRACT_MULTIPLIER * VANNA_PP_SCALE,
     )
 
 # ---------- Plotting — Professional Edition ----------
@@ -735,12 +842,7 @@ def plot_heatmap(result: DealerPositioningResult, interpretation: str = None) ->
     # Row 2 (y=0.935): sign-model tag, its own row -- clear of the title
     # above, the stats row below, AND (thanks to gridspec top=0.83) the
     # subplot titles beneath.
-    _SIGN_MODEL_LABELS = {
-        'oi_heuristic': "OI Heuristic (v1)",
-        'replication': "Replication (v2)",
-        'vol_surface_replication': "Vol-Surface + Replication (v2.1)",
-    }
-    sign_model_tag = _SIGN_MODEL_LABELS.get(result.sign_model, result.sign_model)
+    sign_model_tag = sign_model_render_label(result)
     sign_model_color = ACCENT_ORANGE if result.sign_model == 'replication' else '#8b949e'
     fig.text(0.08, 0.935, f"sign model: {sign_model_tag}",
              fontsize=12, fontweight='bold', color=sign_model_color, va='center')

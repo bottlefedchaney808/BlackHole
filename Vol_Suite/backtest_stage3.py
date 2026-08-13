@@ -358,23 +358,36 @@ def _build_day_records(ticker: str, expiry: str,
         if not d:
             continue
         try:
-            # hist/option/eod (the route hist_greek_rows comes from) echoes
-            # strike in plain dollar form ("650.000"), NOT theta-scaled --
-            # unlike option_bulk_hist_oi_by_day below, which does return
-            # theta-scaled integers. Running this through strike_from_theta()
-            # silently divided every strike by another 1000 (e.g. 650 ->
-            # 0.65), which pushed every real market price wildly outside
-            # implied_vol()'s no-arbitrage bounds and made every single row
-            # "unrecoverable" -- confirmed live, 2026-08-04 (see
-            # docs/PROJECT_AUDIT_AND_SPEC.md Part 5). Also normalize `right`
-            # to a single uppercase char here: this route returns the full
-            # word ("CALL"/"PUT"), while oi_by_date below is keyed on
-            # ThetaData's normal single-char "C"/"P" -- left unnormalized,
-            # every (k, right) lookup into oi_map in _net_gamma_v1/_v2 would
-            # silently miss and read OI as 0 for every strike, making net
-            # gamma always exactly 0.0 and every day classify as "short"
-            # regardless of the real chain.
-            k = float(row['strike'])
+            # hist/option/eod (the LIVE route hist_greek_rows normally comes
+            # from) echoes strike in plain dollar form ("650.000"), NOT
+            # theta-scaled -- unlike option_bulk_hist_oi_by_day below, which
+            # does return theta-scaled integers. Running a plain-dollar
+            # strike through strike_from_theta() silently divided it by
+            # another 1000 (e.g. 650 -> 0.65), pushing every real market
+            # price outside implied_vol()'s no-arbitrage bounds and making
+            # every row "unrecoverable" -- confirmed live, 2026-08-04 (see
+            # docs/PROJECT_AUDIT_AND_SPEC.md Part 5).
+            #
+            # BUT this function has a SECOND real producer now: the cached
+            # seed_data_*.json payload (seed_data_maker.py) stores greek-row
+            # strikes THETA-SCALED ("650000"), the same convention oi_by_date
+            # already uses. Treating those as plain dollars leaves gamma_map
+            # keyed at (650000.0, 'C') while oi_map is keyed at (650.0, 'C')
+            # -- they never match, every row is skipped, and net_gamma_v1 is
+            # silently exactly 0.0 for every day, every ticker (the SAME
+            # observable failure the 08-04 incident hit, opposite direction
+            # -- found running the pooled falsifier against real cached data,
+            # see test_gamma_map_matches_oi_map_when_greek_rows_use_theta_scaled_strikes).
+            # Auto-detect instead of assuming one producer: a real listed
+            # equity/index strike is never >= 10,000 dollars, so a raw value
+            # that large can only be theta-scaled.
+            raw_k = float(row['strike'])
+            k = strike_from_theta(int(round(raw_k))) if raw_k >= 10000 else raw_k
+            # Also normalize `right` to a single uppercase char here: the
+            # live route returns the full word ("CALL"/"PUT"), while
+            # oi_by_date below is keyed on ThetaData's normal single-char
+            # "C"/"P" -- left unnormalized, every (k, right) lookup into
+            # oi_map in _net_gamma_v1/_v2 would silently miss.
             right = str(row['right']).upper()[:1]
         except (KeyError, TypeError, ValueError):
             continue
@@ -401,7 +414,21 @@ def _build_day_records(ticker: str, expiry: str,
         # we buy prices and reconstruct the rest. Vendor greeks are still
         # used verbatim when present, so a mixed source (or a future fix to
         # the greeks route) needs no change here.
-        if iv <= 0 or gamma <= 0:
+        #
+        # IMPORTANT: iv and gamma are handled as SEPARATE gates, not one
+        # combined `if iv <= 0 or gamma <= 0` condition (that was a real bug,
+        # found running the accumulation falsifier against the WSL handoff's
+        # cached "dense EOD, IV solved, vanna injected" seed_data payloads --
+        # see tests/test_backtest_stage3.py::test_gamma_derived_from_an_already_solved_iv_without_bid_ask).
+        # Those rows carry an already-solved, perfectly good `implied_vol`
+        # but no `gamma`, `bid`, or `ask` at all (`close` is legitimately
+        # '0.00' for illiquid strikes). The combined condition discarded the
+        # good IV and tried to re-derive it from bid/ask/close, which fails
+        # on that data shape -- silently dropping ~78% of rows and crushing
+        # 150 days of history down to ~14-21 usable days. Re-solving IV from
+        # price is ONLY needed when iv itself is missing/invalid; deriving
+        # gamma from an already-good iv never needs bid/ask at all.
+        if iv <= 0:
             spot = close_by_date_pre.get(d)
             if not spot:
                 n_unrecoverable += 1
@@ -419,10 +446,15 @@ def _build_day_records(ticker: str, expiry: str,
                 n_unrecoverable += 1
                 continue
             iv = solved
-            gamma = dealer_positioning.bs_gamma(spot, k, T, _BACKTEST_R, _BACKTEST_Q, iv)
             n_derived += 1
         else:
             n_vendor += 1
+
+        if gamma <= 0 and iv > 0:
+            spot = close_by_date_pre.get(d)
+            if spot:
+                T = max((expiry_date - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0
+                gamma = dealer_positioning.bs_gamma(spot, k, T, _BACKTEST_R, _BACKTEST_Q, iv)
 
         if iv > 0:
             iv_by_date[d][(k, right)] = iv

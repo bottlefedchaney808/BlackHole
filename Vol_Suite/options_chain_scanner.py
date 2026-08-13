@@ -375,36 +375,37 @@ def fit_smile_and_flag_edges(df: pd.DataFrame, forward: float) -> Tuple[pd.DataF
 
 
 # ---------- Vanna positioning read ----------
-def compute_vanna_positioning(df: pd.DataFrame, spot: float) -> dict:
-    """Net dealer vanna exposure by strike, using the same call=+/put=-
-    convention dealer_positioning.py uses for gamma (see its _dealer_sign
-    docstring for the rationale/caveats -- this is a modeling assumption
-    about which side of OI dealers sit on, not a measured fact)."""
-    d = df.copy()
-    d['sign'] = np.where(d['right'] == 'C', 1.0, -1.0)
-    has_vanna = d['vanna'].notna()
-    d['vanna_shares'] = 0.0
-    d.loc[has_vanna, 'vanna_shares'] = (
-        d.loc[has_vanna, 'sign'] * d.loc[has_vanna, 'vanna'] * d.loc[has_vanna, 'oi']
-        * CONTRACT_MULTIPLIER * VANNA_PP_SCALE
-    )
+def compute_vanna_positioning(dealer_result) -> dict:
+    """Net dealer vanna exposure by strike -- READS dealer_positioning.py's
+    already-computed numbers (dealer_result.vanna_shares_by_strike /
+    strike_grid / vanna_call_shares / vanna_put_shares) verbatim. Never
+    recomputes vanna from a second, independent chain fetch.
 
-    by_strike = d.groupby('strike')['vanna_shares'].sum().sort_index()
-    net_vanna = float(by_strike.sum())
-    call_vanna = float(d.loc[d['right'] == 'C', 'vanna_shares'].sum())
-    put_vanna = float(d.loc[d['right'] == 'P', 'vanna_shares'].sum())
+    This used to build its own vanna series from a scanner-local
+    DataFrame, using the same call=+/put=- sign convention as
+    dealer_positioning.py but an entirely separate computation -- the two
+    could (and did, per the CARL audit's screenshot evidence) silently
+    disagree for the same ticker/run even though both panels claimed the
+    same model. `scan_chain`/`run_chain_scanner` now always pass a shared
+    DealerPositioningResult in here instead.
+    """
+    strikes = np.asarray(dealer_result.strike_grid, dtype=float)
+    values = np.asarray(dealer_result.vanna_shares_by_strike, dtype=float)
+    has_vanna = bool(dealer_result.has_vanna_data)
+
+    net_vanna = float(np.sum(values)) if has_vanna else 0.0
+    call_vanna = float(dealer_result.vanna_call_shares) if has_vanna else 0.0
+    put_vanna = float(dealer_result.vanna_put_shares) if has_vanna else 0.0
 
     # Flip strike: adjacent-strike sign change in the per-strike net vanna
     # profile, nearest to spot (same "nearest crossing to the reference point"
     # logic dealer_positioning.py uses for its gamma flip level).
-    strikes = by_strike.index.values
-    values = by_strike.values
     flip_strike = None
-    if len(strikes) > 1 and has_vanna.any():
+    if len(strikes) > 1 and has_vanna:
         signs = np.sign(values)
         crossings = np.where(np.diff(signs) != 0)[0]
         if len(crossings) > 0:
-            spot_idx = int(np.argmin(np.abs(strikes - spot)))
+            spot_idx = int(np.argmin(np.abs(strikes - dealer_result.spot)))
             nearest = crossings[np.argmin(np.abs(crossings - spot_idx))]
             flip_strike = float((strikes[nearest] + strikes[nearest + 1]) / 2.0)
 
@@ -416,12 +417,20 @@ def compute_vanna_positioning(df: pd.DataFrame, spot: float) -> dict:
         'put_vanna_shares': put_vanna,
         'vanna_flip_strike': flip_strike,
         'top_vanna_strikes': top_vanna,
-        'has_vanna_data': bool(has_vanna.any()),
+        'has_vanna_data': has_vanna,
     }
 
 
 # ---------- Main scan ----------
-def scan_chain(ticker: str, expiration: str, target_years: float, td) -> ScanResult:
+def scan_chain(ticker: str, expiration: str, target_years: float, td,
+               dealer_result=None) -> ScanResult:
+    """`dealer_result`: an already-computed dealer_positioning.DealerPositioningResult
+    (e.g. from volatility_suite.py's earlier compute_dealer_positioning call)
+    to share vanna numbers with, instead of this scan computing its own. If
+    not given, one is computed here internally via
+    dealer_positioning.compute_dealer_positioning -- there is still only
+    ever ONE vanna computation, never a second independent one (see
+    compute_vanna_positioning's docstring for why that used to be a bug)."""
     spot = td.fetch_spot_price(ticker)
     if spot <= 0:
         raise ValueError(f"Could not fetch spot for {ticker}")
@@ -436,7 +445,12 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td) -> ScanRes
 
     df = build_chain_dataframe(td, ticker, expiration)
     df, smile_a, smile_b = fit_smile_and_flag_edges(df, forward)
-    vanna_info = compute_vanna_positioning(df, spot)
+
+    if dealer_result is None:
+        import dealer_positioning as _dp
+        dealer_result = _dp.compute_dealer_positioning(
+            ticker, target_years=target_years, expiration=expiration)
+    vanna_info = compute_vanna_positioning(dealer_result)
 
     # ATM IV via the OTM-side convention (put IV below forward, call IV above --
     # same convention variance_swap_screener/variance_swap_live use), taking
@@ -681,20 +695,25 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
 
 # ---------- Suite-integration entry point ----------
 def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optional[str] = None,
-                      output_dir: Optional[str] = None) -> tuple:
+                      output_dir: Optional[str] = None, dealer_result=None) -> tuple:
     """Programmatic, non-interactive runner (mirrors run_variance_swap_live /
     screen_ticker / run_dealer_positioning conventions) for volatility_suite.py.
     `expiration`, if given, pins this to the exact date the suite resolved
     interactively for the rest of the run; otherwise falls back to a plain
     nearest-expiry lookup (no prompting -- this is meant to be called from
-    inside an already-orchestrated run)."""
+    inside an already-orchestrated run).
+
+    `dealer_result`: pass volatility_suite.py's already-computed
+    DealerPositioningResult so the scanner's vanna panel matches the 4-panel
+    dealer chart exactly (see scan_chain/compute_vanna_positioning docstrings
+    -- this is the fix for the "two-vanna" bug)."""
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     files = []
     td = ThetaDataController()
     try:
         exp, actual_T = expiry_selector.resolve_expiration(td, ticker, expiration, target_years)
-        result = scan_chain(ticker, exp, actual_T, td)
+        result = scan_chain(ticker, exp, actual_T, td, dealer_result=dealer_result)
     finally:
         td.close()
     print_report(result)
