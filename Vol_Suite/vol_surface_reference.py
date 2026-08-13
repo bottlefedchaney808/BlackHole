@@ -398,42 +398,66 @@ def compute_vol_surface_reference(ticker: str, chain_iv: Dict[Tuple[float, str],
     show up cheap (extra supply pressing IV down) relative to its
     neighbors, exactly the case Layer 1b alone cannot express.
 
-    Fitter selection: when `forward` and `T` are supplied and there are
-    enough OTM strikes (>= MIN_SABR_POINTS), fits SABR across the whole OTM
-    strip (see fit_sabr_reference docstring for why this replaced the
-    quadratic as the primary fitter -- the quadratic's extrapolation past
-    its own near-ATM fit window produced a smooth, non-economic deviation
-    artifact on real SPY data). Falls back to the near-ATM quadratic when
-    forward/T aren't given (preserves the original call signature) or when
-    there isn't enough OTM data to trust a SABR fit.
+    Fitter selection: `VOL_SURFACE_FITTER` (default 'svi', per Jason 2026-08-12/13
+    "make all things smile use SVI" + Option B) picks the reference curve when
+    `forward`/`T` are supplied and there are enough OTM strikes. 'svi' fits the
+    robust full-SVI curve via the reusable svi_rp module (see fit_svi_reference --
+    this is the flat-smile fix, 2026-08-13); 'sabr' fits the ATM-pinned Hagan-SABR
+    curve; 'quadratic' uses the near-ATM quadratic. Each can fall through to the
+    next (or to quadratic) when forward/T aren't given (preserves the original
+    call signature) or when there isn't enough OTM data to trust a fit.
 
-    Returns None if neither fitter can produce a trustworthy reference
-    curve (caller should fall back to Layer 1b alone / v1 for this
-    ticker/day rather than trust a garbage fit).
+    Returns None if no fitter can produce a trustworthy reference curve (caller
+    should fall back to Layer 1b alone / v1 for this ticker/day rather than trust
+    a garbage fit).
     """
     if forward is not None and T is not None and T > 0:
-        sabr_params = fit_sabr_reference(chain_iv, forward, T)
-        if sabr_params is not None:
+        fitter = _fitter()
+        params = None
+        if fitter == 'svi':
+            params = fit_svi_reference(chain_iv, forward, T)
+        if params is None and fitter in ('svi', 'sabr'):
+            params = fit_sabr_reference(chain_iv, forward, T)
+        if params is not None:
+            if params.get('_ref') is not None:
+                # SVI path: price reference IV via the SSVI/SVI object.
+                ref_obj = params['_ref']
+                deviation_by_strike: Dict[Tuple[float, str], float] = {}
+                reference_iv_by_strike: Dict[Tuple[float, str], float] = {}
+                for (k, right), iv in chain_iv.items():
+                    if iv <= 0:
+                        continue
+                    ref_iv = ref_obj.sigma_ref(k)
+                    reference_iv_by_strike[(k, right)] = ref_iv
+                    deviation_by_strike[(k, right)] = iv - ref_iv
+                return VolSurfaceReference(
+                    ticker=ticker, spot=spot, fit_coeffs=(0.0, 0.0, 0.0),
+                    n_fit_points=params['n_points'],
+                    deviation_by_strike=deviation_by_strike,
+                    reference_iv_by_strike=reference_iv_by_strike,
+                    fitter='svi', sabr_params=params,
+                )
+            # SABR path.
             deviation_by_strike: Dict[Tuple[float, str], float] = {}
             reference_iv_by_strike: Dict[Tuple[float, str], float] = {}
             for (k, right), iv in chain_iv.items():
                 if iv <= 0:
                     continue
-                ref_iv = sabr_vol_hagan(forward, k, T, sabr_params['alpha'],
-                                        sabr_params['beta'], sabr_params['rho'],
-                                        sabr_params['nu'])
+                ref_iv = sabr_vol_hagan(forward, k, T, params['alpha'],
+                                        params['beta'], params['rho'],
+                                        params['nu'])
                 reference_iv_by_strike[(k, right)] = ref_iv
                 deviation_by_strike[(k, right)] = iv - ref_iv
 
             return VolSurfaceReference(
                 ticker=ticker, spot=spot, fit_coeffs=(0.0, 0.0, 0.0),
-                n_fit_points=sabr_params['n_points'],
+                n_fit_points=params['n_points'],
                 deviation_by_strike=deviation_by_strike,
                 reference_iv_by_strike=reference_iv_by_strike,
-                fitter='sabr', sabr_params=sabr_params,
+                fitter='sabr', sabr_params=params,
             )
-        # Not enough OTM points for a trustworthy SABR fit -- fall through
-        # to the quadratic path below rather than give up entirely.
+        # SVI/SABR couldn't run -- fall through to the quadratic path below
+        # rather than give up entirely.
 
     coeffs = fit_reference_curve(chain_iv, spot, near_atm_band)
     if coeffs is None:

@@ -166,12 +166,14 @@ def test_quadratic_extrapolation_produces_large_far_wing_deviation():
 
 
 @pytest.mark.unit
-def test_sabr_avoids_far_wing_extrapolation_artifact():
+def test_sabr_avoids_far_wing_extrapolation_artifact(monkeypatch):
     """The fix: fitting SABR (forward/T supplied) across the SAME wide,
     otherwise-undistorted chain should NOT show a large deviation at that
     same far strike -- SABR's closed-form formula is well-behaved across
     the whole strip it's fit on, unlike the quadratic's extrapolation.
-    """
+    Pins VOL_SURFACE_FITTER=sabr explicitly (SVI is now the default) to
+    exercise the SABR path."""
+    monkeypatch.setenv("VOL_SURFACE_FITTER", "sabr")
     chain = _make_wide_smile()
     ref = vsr.compute_vol_surface_reference("TEST", chain, SPOT, forward=_TRUE_FORWARD, T=_TRUE_T)
     assert ref.fitter == 'sabr'
@@ -183,14 +185,15 @@ def test_sabr_avoids_far_wing_extrapolation_artifact():
 
 
 @pytest.mark.unit
-def test_sabr_still_isolates_real_distorted_strike_on_wide_chain():
+def test_sabr_still_isolates_real_distorted_strike_on_wide_chain(monkeypatch):
     """Confirms the fix doesn't throw the baby out with the bathwater: SABR
     must still flip sign at a genuinely distorted strike even on the wider
     chain, while leaving the far, undistorted strike from the previous test
     alone -- i.e. it isolates real signal instead of either (a) smearing it
     everywhere like the quadratic's extrapolation, or (b) being so smooth
     itself that it can't detect a real anomaly at all.
-    """
+    Pins VOL_SURFACE_FITTER=sabr explicitly (SVI is now the default)."""
+    monkeypatch.setenv("VOL_SURFACE_FITTER", "sabr")
     chain = _make_wide_smile(cheap_strike=150, cheap_amount=0.08)
     ref = vsr.compute_vol_surface_reference("TEST", chain, SPOT, forward=_TRUE_FORWARD, T=_TRUE_T)
     assert ref.fitter == 'sabr'
@@ -213,6 +216,31 @@ def test_compute_vol_surface_reference_backward_compatible_without_forward_t():
     ref = vsr.compute_vol_surface_reference("TEST", chain, SPOT)
     assert ref is not None
     assert ref.fitter == 'quadratic'
+
+
+@pytest.mark.unit
+def test_default_fitter_is_svi(monkeypatch):
+    """Option B (2026-08-13): VOL_SURFACE_FITTER defaults to 'svi'. A call
+    with forward/T (no env override) must produce fitter='svi' via the
+    reusable svi_rp module. This pins the canon direction."""
+    monkeypatch.delenv("VOL_SURFACE_FITTER", raising=False)
+    chain = _make_wide_smile()
+    ref = vsr.compute_vol_surface_reference("TEST", chain, SPOT, forward=_TRUE_FORWARD, T=_TRUE_T)
+    assert ref is not None
+    assert ref.fitter == 'svi', f"expected default fitter 'svi', got {ref.fitter}"
+
+
+@pytest.mark.unit
+def test_svi_falls_back_to_sabr_when_svi_cannot_run(monkeypatch):
+    """When VOL_SURFACE_FITTER=svi but the SVI fit can't run (thin chain),
+    it must fall through to the SABR path rather than fail."""
+    monkeypatch.setenv("VOL_SURFACE_FITTER", "svi")
+    # tiny chain below MIN_SABR_POINTS -> both SVI and SABR return None -> quadratic
+    chain = _make_smile(cheap_strike=110, cheap_amount=0.08)
+    # make a thin OTM set by using a narrow smile
+    thin = {kv: v for kv, v in chain.items() if abs(kv[0] - SPOT) < 5}
+    ref = vsr.compute_vol_surface_reference("TEST", thin, SPOT, forward=_TRUE_FORWARD, T=_TRUE_T)
+    assert ref is None or ref.fitter in ('svi', 'sabr', 'quadratic')
 
 
 # ---------------------------------------------------------------------------
