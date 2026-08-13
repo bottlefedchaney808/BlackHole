@@ -11,7 +11,7 @@ Everything below is pure calendar arithmetic with `today` injected, so none of
 it touches the network or the clock. The only functions needing a client take
 a fake exposing just `list_expirations`.
 """
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -203,7 +203,7 @@ def test_resolve_expiration_honors_an_explicitly_requested_expiry():
     pin must be respected exactly, not re-derived."""
     exp, T = es.resolve_expiration(FakeTD(), "SPY", "20261016", 0.25)
     assert exp == "20261016"
-    assert T == pytest.approx(max((date(2026, 10, 16) - date.today()).days, 0) / 365)
+    assert T == pytest.approx(max((date(2026, 10, 16) - datetime.now(timezone.utc).date()).days, 0) / 365)
 
 
 @pytest.mark.unit
