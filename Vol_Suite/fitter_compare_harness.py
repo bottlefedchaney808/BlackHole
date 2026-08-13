@@ -27,6 +27,12 @@ def main() -> int:
     # only compute what's missing. Pass --force as arg 2 to force recompute.
     force = (len(sys.argv) > 2 and sys.argv[2] == "--force")
     results = {}
+    # Write each leg's result to a JSON file as it completes, so an app crash
+    # mid-run doesn't lose finished legs (this app has crashed twice today).
+    import json as _json
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "outputs", f"fitter_compare_{ticker}.json")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     for fitter in FITTERS:
         os.environ["VOL_SURFACE_FITTER"] = fitter
         if force:
@@ -36,11 +42,20 @@ def main() -> int:
         try:
             res = baf.run_falsifier_cached(
                 ticker, use_cached=True, seed_mode='replication')
-            results[fitter] = res
+            results[fitter] = {
+                "snapshot_corr": res.snapshot_corr,
+                "accumulated_corr": res.accumulated_corr,
+                "delta_r2": res.delta_r2,
+                "accumulated_coef_tstat": res.accumulated_coef_tstat,
+                "n_days": res.n_days, "verdict": res.verdict,
+                "lead_lag": res.lead_lag_corr, "best_lag": res.best_lag,
+            }
+            with open(out_path, "w", encoding="utf-8") as fh:
+                _json.dump({"ticker": ticker, "results": results}, fh, indent=2)
             print(f"  {fitter}: snap={res.snapshot_corr:+.4f} "
                   f"acc={res.accumulated_corr:+.4f} dR2={res.delta_r2:+.4f} "
                   f"t={res.accumulated_coef_tstat:+.3f} n={res.n_days} "
-                  f"verdict={res.verdict}", flush=True)
+                  f"verdict={res.verdict} [saved]", flush=True)
         except Exception as e:
             print(f"  {fitter}: ERROR {type(e).__name__}: {str(e)[:120]}", flush=True)
         os.environ.pop("FALSIFIER_FORCE", None)
