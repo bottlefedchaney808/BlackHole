@@ -1196,8 +1196,11 @@ def run_falsifier(ticker: str, expiry: Optional[str] = None,
             greeks, oi, spot = all_data[ticker]
             if expiry is None:
                 import glob
-                matches = glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
-                expiry = seed_data_loader.manifest_of(matches[0])["expiry"] if matches else "20261120"
+                # match the file load_all_seed_data actually used (it globs sorted
+                # and overwrites by ticker -> last sorted match wins), so the
+                # expiry label agrees with the loaded data.
+                matches = sorted(glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json")))
+                expiry = seed_data_loader.manifest_of(matches[-1])["expiry"] if matches else "20261120"
         return _run_falsifier_from_history(
             ticker, expiry, greeks, oi, spot,
             lookback_days=lookback_days, forward_window_days=forward_window_days,
