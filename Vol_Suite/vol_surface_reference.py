@@ -112,7 +112,7 @@ _NU_STARTS = (0.3, 0.6, 0.9)
 # 'quadratic' = near-ATM quadratic -- both kept reachable via this env toggle
 # so we can flip back without code changes if SVI misbehaves on a chain.
 #   VOL_SURFACE_FITTER=svi|sabr|quadratic
-_VALID_FITTERS = ("svi", "sabr", "quadratic")
+_VALID_FITTERS = ("svi", "sabr", "sabr_market", "quadratic")
 
 
 def _fitter() -> str:
@@ -418,6 +418,19 @@ def compute_vol_surface_reference(ticker: str, chain_iv: Dict[Tuple[float, str],
             params = fit_svi_reference(chain_iv, forward, T)
         if params is None and fitter in ('svi', 'sabr'):
             params = fit_sabr_reference(chain_iv, forward, T)
+        if params is None and fitter == 'sabr_market':
+            # The FIXED market-grade SABR (Options_Suite/sabr_market_calib):
+            # vega-weighted, 5x5 grid, free-beta pass. This is the one Jason
+            # had fixed from the ATM-pinned fit_sabr_reference. Returns the
+            # same {alpha,beta,rho,nu,rmse,n_points} shape as fit_sabr_reference.
+            try:
+                from Options_Suite import sabr_market_calib
+                params = sabr_market_calib.fit_sabr_market(
+                    chain_iv, forward, T, calibrate_beta=True)
+            except Exception:
+                params = fit_sabr_reference(chain_iv, forward, T)
+            if params is None:
+                params = fit_sabr_reference(chain_iv, forward, T)
         if params is not None:
             if params.get('_ref') is not None:
                 # SVI path: price reference IV via the SSVI/SVI object.
@@ -454,7 +467,7 @@ def compute_vol_surface_reference(ticker: str, chain_iv: Dict[Tuple[float, str],
                 n_fit_points=params['n_points'],
                 deviation_by_strike=deviation_by_strike,
                 reference_iv_by_strike=reference_iv_by_strike,
-                fitter='sabr', sabr_params=params,
+                fitter=fitter, sabr_params=params,
             )
         # SVI/SABR couldn't run -- fall through to the quadratic path below
         # rather than give up entirely.
