@@ -244,6 +244,7 @@ class ScanResult:
     verdict: str
     insight: str
     strategies: List[dict] = field(default_factory=list)  # Recommended strategies from chain scan
+    svi_params: Optional[dict] = None  # fitter + SVI observables when SVI smile fit ran
 
 
 # ---------- Data pull / merge ----------
@@ -374,6 +375,96 @@ def fit_smile_and_flag_edges(df: pd.DataFrame, forward: float) -> Tuple[pd.DataF
     return df, float(a), float(b)
 
 
+# ---------- SVI smile fit (reuses the reusable svi_rp module) ----------
+def fit_svi_smile(df: pd.DataFrame, forward: float, T_years: float,
+                  oi_by=None, use_svi: bool = True,
+                  ) -> Tuple[pd.DataFrame, float, float, Optional[dict]]:
+    """Fit the reference smile (SVI via the reusable svi_rp module) and flag
+    cheap/rich edges. Keeps the SAME contract as fit_smile_and_flag_edges
+    (fit_iv / iv_residual_pts / is_edge / edge_kind) so existing consumers are
+    unaffected. smile_a/b are the quadratic coefficients (kept for back-compat,
+    set to the SVI ATM-skew-ish proxies when SVI runs); svi_params is None when
+    SVI is off or fails (caller falls back to quadratic).
+
+    Uses the ROBUST full-SVI fit (svi_rp.calibrate_svi, the 2026-08-13 flat-smile
+    fix), NOT the exact 3-observable SSVI construction (calibrate_ssvi) which
+    saturates flat on a steep equity put skew and would misprice the wings.
+    """
+    df = df.copy()
+    df['moneyness'] = np.log(df['strike'] / forward)
+    df['is_otm'] = np.where(df['strike'] <= forward, df['right'] == 'P', df['right'] == 'C')
+    otm = df[df['is_otm'] & df['iv'].notna() & (df['iv'] > 0)]
+    df['fit_iv'] = np.nan
+    df['iv_residual_pts'] = np.nan
+    df['is_edge'] = False
+    df['edge_kind'] = ''
+
+    svi_params = None
+    if use_svi and len(otm) >= 5 and forward > 0 and T_years > 0:
+        try:
+            import svi_rp
+            chain_iv = {}
+            oi_map = {}
+            for _, r in otm.iterrows():
+                k = float(r['strike'])
+                rt = str(r['right']).strip().upper()[:1]
+                chain_iv[(k, rt)] = float(r['iv'])
+                oi_map[(k, rt)] = int(r.get('oi', 0) or 0)
+            ref = svi_rp.calibrate_svi(chain_iv, float(forward), float(T_years),
+                                       oi_by=oi_map)
+            for idx in df.index:
+                k = float(df.at[idx, 'strike'])
+                df.at[idx, 'fit_iv'] = ref.sigma_ref(k)
+            df.loc[df['is_otm'] & df['iv'].notna(), 'iv_residual_pts'] = (
+                (df.loc[df['is_otm'] & df['iv'].notna(), 'iv'] -
+                 df.loc[df['is_otm'] & df['iv'].notna(), 'fit_iv']) * 100.0)
+            otm_resid = df.loc[df['is_otm'] & df['iv_residual_pts'].notna(), 'iv_residual_pts']
+            if len(otm_resid) >= 5:
+                mad = float(np.median(np.abs(otm_resid - np.median(otm_resid)))) * 1.4826
+                threshold = max(MIN_RESIDUAL_VOL_PTS, 1.5 * mad)
+            else:
+                threshold = MIN_RESIDUAL_VOL_PTS
+            edge_mask = df['is_otm'] & (df['iv_residual_pts'].abs() >= threshold) & (df['oi'] >= MIN_OI_FOR_EDGE)
+            df.loc[edge_mask, 'is_edge'] = True
+            df.loc[edge_mask & (df['iv_residual_pts'] > 0), 'edge_kind'] = 'rich'
+            df.loc[edge_mask & (df['iv_residual_pts'] < 0), 'edge_kind'] = 'cheap'
+            svi_params = {
+                'theta_t': ref.theta_t, 'sigma_atm': ref.sigma_atm,
+                'psi_t': ref.psi_t, 'p_t': ref.p_t,
+                'phi': ref.phi, 'rho': ref.rho,
+                'sigma_swap': ref.sigma_swap, 'K_var': ref.K_var,
+            }
+        except Exception:
+            svi_params = None  # fall through to quadratic below
+
+    if svi_params is not None:
+        # SVI reference produced the fit; expose fitter + cheap/rich proxies.
+        return df, float(ref.phi), float(ref.rho), svi_params
+
+    # SVI off / failed -> quadratic fallback (same as fit_smile_and_flag_edges).
+    if len(otm) < 5:
+        return df, float('nan'), float('nan'), None
+    x = otm['moneyness'].values
+    y = otm['iv'].values
+    coeffs = np.polyfit(x, y, 2)
+    a, b, c = coeffs
+    df['fit_iv'] = np.polyval(coeffs, df['moneyness'].values)
+    df.loc[df['is_otm'] & df['iv'].notna(), 'iv_residual_pts'] = (
+        (df.loc[df['is_otm'] & df['iv'].notna(), 'iv'] -
+         df.loc[df['is_otm'] & df['iv'].notna(), 'fit_iv']) * 100.0)
+    otm_resid = df.loc[df['is_otm'] & df['iv_residual_pts'].notna(), 'iv_residual_pts']
+    if len(otm_resid) >= 5:
+        mad = float(np.median(np.abs(otm_resid - np.median(otm_resid)))) * 1.4826
+        threshold = max(MIN_RESIDUAL_VOL_PTS, 1.5 * mad)
+    else:
+        threshold = MIN_RESIDUAL_VOL_PTS
+    edge_mask = df['is_otm'] & (df['iv_residual_pts'].abs() >= threshold) & (df['oi'] >= MIN_OI_FOR_EDGE)
+    df.loc[edge_mask, 'is_edge'] = True
+    df.loc[edge_mask & (df['iv_residual_pts'] > 0), 'edge_kind'] = 'rich'
+    df.loc[edge_mask & (df['iv_residual_pts'] < 0), 'edge_kind'] = 'cheap'
+    return df, float(a), float(b), None
+
+
 # ---------- Vanna positioning read ----------
 def compute_vanna_positioning(dealer_result) -> dict:
     """Net dealer vanna exposure by strike -- READS dealer_positioning.py's
@@ -444,7 +535,7 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
     forward = compute_forward_price(spot, r_use, dividend_yield, actual_T)
 
     df = build_chain_dataframe(td, ticker, expiration)
-    df, smile_a, smile_b = fit_smile_and_flag_edges(df, forward)
+    df, smile_a, smile_b, svi_params = fit_svi_smile(df, forward, actual_T)
 
     if dealer_result is None:
         import dealer_positioning as _dp
@@ -511,6 +602,7 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
         vanna_flip_strike=vanna_info['vanna_flip_strike'],
         top_vanna_strikes=vanna_info['top_vanna_strikes'],
         edge_candidates=edge_candidates, regime=regime, verdict=verdict, insight=insight,
+        svi_params=svi_params,
     )
 
 

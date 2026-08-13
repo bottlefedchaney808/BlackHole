@@ -251,5 +251,47 @@ def test_json_safe_handles_nan_infinity():
     assert parsed['nested']['inf_field'] is None
 
 
+def _steep_chain_df():
+    """A steep equity put-skew chain DataFrame (realistic SPY-like shape) with
+    OTM puts/calls -- exercises the SVI fit's flat-smile fix."""
+    import math
+    import pandas as pd
+    rows = []
+    spot = 100.0
+    for k in range(55, 100):  # OTM puts
+        iv = 0.20 + (-0.9) * math.log(k / spot) + 0.15 * (1 - k / 100.0)
+        rows.append({'strike': float(k), 'right': 'P', 'iv': max(iv, 0.05), 'oi': 1000})
+    for k in range(101, 130):  # OTM calls
+        iv = 0.20 + 0.08 * math.log(k / spot)
+        rows.append({'strike': float(k), 'right': 'C', 'iv': max(iv, 0.05), 'oi': 1000})
+    return pd.DataFrame(rows)
+
+
+def test_fit_svi_smile_produces_nonflat_fit_and_params():
+    """The scanner's SVI smile fit must produce a non-flat reference (the
+    flat-smile fix) and carry svi_params, not silently fall back to quadratic."""
+    from options_chain_scanner import fit_svi_smile
+    df = _steep_chain_df()
+    df2, a, b, svi_params = fit_svi_smile(df, forward=100.0, T_years=0.28, use_svi=True)
+    assert svi_params is not None, "SVI fit should have run and set svi_params"
+    assert 'sigma_atm' in svi_params and 'rho' in svi_params
+    # Non-flat: far-OTM put reference must be meaningfully above near-ATM.
+    far_put_fit = df2.loc[(df2['strike'] == 60.0) & (df2['right'] == 'P'), 'fit_iv'].iloc[0]
+    atm_fit = df2.loc[(df2['strike'] == 101.0) & (df2['right'] == 'C'), 'fit_iv'].iloc[0]
+    assert far_put_fit > atm_fit + 0.03, f"SVI fit flattened: far-put {far_put_fit:.3f} vs ATM {atm_fit:.3f}"
+    # Contract columns present
+    assert 'is_edge' in df2.columns and 'iv_residual_pts' in df2.columns
+
+
+def test_fit_svi_smile_falls_back_to_quadratic_when_off():
+    """use_svi=False must return svi_params=None and still produce a fit_iv
+    via the quadratic path (back-compat with fit_smile_and_flag_edges)."""
+    from options_chain_scanner import fit_svi_smile
+    df = _steep_chain_df()
+    df2, a, b, svi_params = fit_svi_smile(df, forward=100.0, T_years=0.28, use_svi=False)
+    assert svi_params is None
+    assert df2['fit_iv'].notna().sum() > 0, "quadratic fallback should still fill fit_iv"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
