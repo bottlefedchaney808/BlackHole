@@ -145,6 +145,15 @@ committed** (`f98dfb4`). `compute_vol_surface_reference` now:
 
 vol_surface_reference + SVI focused: 25 passed.
 
+### Scanner wired to SVI (2026-08-13, `2ea6f70`) — scanner and 4-panel now agree
+`options_chain_scanner.fit_svi_smile` (robust `svi_rp.calibrate_svi`) replaced the
+quadratic smile fit in `scan_chain`, keeping the SAME `fit_iv`/`iv_residual_pts`/
+`is_edge`/`edge_kind` contract; quadratic is the fallback. `ScanResult` gained
+`svi_params`. Demonstrated real effect: on a steep-skew chain with one deliberately
+cheapened strike, the SVI fit correctly isolates the cheap strike (−8.8 pts) AND
+surfaces a rich band (83-88) the quadratic flattened over entirely. Full suite
+now 464 passed / 5 skipped.
+
 ---
 
 ## 5. Commits already landed (all safe, full suite green)
