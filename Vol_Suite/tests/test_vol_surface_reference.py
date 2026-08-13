@@ -85,10 +85,38 @@ def test_cheapened_strike_gets_negative_deviation_and_positive_sign():
 
 @pytest.mark.unit
 def test_normal_strike_keeps_default_short_sign():
-    chain = _make_smile(cheap_strike=110, cheap_amount=0.08)
-    ref = vsr.compute_vol_surface_reference("TEST", chain, SPOT)
+    """A strike trading clearly RICH vs. the reference (deviation well outside
+    the IV dead-band, IV_DEADBAND_VOL) keeps the rich/short default of -1.0.
+
+    Uses a directly-constructed VolSurfaceReference with a clearly-positive
+    deviation (0.02 = 2 vol points, > the 0.01 dead-band) rather than the
+    fitted smile, because under the dead-band an undistorted near-ATM strike's
+    tiny deviation (a few basis points, e.g. ~0.004 at $105 in _make_smile)
+    is now *inside* the dead-band and correctly resolves to 0.0. This test
+    pins the intentional contrast: a genuinely-rich deviation still resolves
+    to -1.0.
+    """
+    ref = vsr.VolSurfaceReference(
+        ticker="TEST", spot=SPOT, fit_coeffs=(0.0, 0.0, 0.0), n_fit_points=1,
+        deviation_by_strike={(105.0, 'C'): 0.02},
+        reference_iv_by_strike={(105.0, 'C'): 0.20}, fitter='sabr',
+    )
     sign = vsr.resolve_vol_surface_sign(ref, 105.0, 'C')
     assert sign == -1.0, "expected an undistorted strike to keep the rich/short default"
+
+
+@pytest.mark.unit
+def test_in_deadband_strike_resolves_zero():
+    """A near-ATM strike whose deviation is inside the IV dead-band (<=0.01 vol
+    point) resolves to 0.0 -- no confident directional read; the caller applies
+    the Layer 1b default. This is the hardening 19a behavior (matches MIGRATED)."""
+    ref = vsr.VolSurfaceReference(
+        ticker="TEST", spot=SPOT, fit_coeffs=(0.0, 0.0, 0.0), n_fit_points=1,
+        deviation_by_strike={(105.0, 'C'): 0.005},
+        reference_iv_by_strike={(105.0, 'C'): 0.20}, fitter='sabr',
+    )
+    assert vsr.resolve_vol_surface_sign(ref, 105.0, 'C') == 0.0
+    assert vsr.resolve_vol_surface_sign(ref, 105.0, 'C') == 0.0
 
 
 @pytest.mark.unit

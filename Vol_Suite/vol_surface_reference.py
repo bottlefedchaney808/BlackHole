@@ -114,6 +114,24 @@ _NU_STARTS = (0.3, 0.6, 0.9)
 #   VOL_SURFACE_FITTER=svi|sabr|quadratic
 _VALID_FITTERS = ("svi", "sabr", "sabr_market", "quadratic")
 
+# IV dead-band (in volatility POINTS, e.g. 0.01 == 1.0 vol point) applied when
+# resolving a strike's dealer-direction sign from its deviation. The pre-hardening
+# binary rule mapped dev>0 -> -1.0 (dealer short / rich) and dev<0 -> +1.0 (dealer
+# long / cheap) with a ZERO threshold. That is fragile: a strike whose IV crosses
+# the reference by a few basis points -- well below the bid/ask spread and
+# cent-rounding noise floor of a real IV quote -- would flip its ENTIRE
+# dealer-gamma contribution sign, which can swing net_gamma and the gamma-flip
+# level. Any |dev| <= IV_DEADBAND_VOL is therefore treated as NO confident
+# directional-flow read: resolve_vol_surface_sign returns 0.0 for it (downstream
+# falls back to the Layer 1b default -1.0), so noise cannot flip a strike's sign.
+# Only |dev| strictly greater than the dead-band asserts a direction.
+#
+# NOTE (2026-08-13): this dead-band EXISTS in the MIGRATED reference tree and is
+# required to reproduce the reference vannaflow read (SPY live+vannaflow -> +254K
+# LONG, the 08-11 flip). The current tree had dropped it, which silently destroyed
+# the vannaflow accumulation signal (SPY -> -128K SHORT). Restored.
+IV_DEADBAND_VOL = 0.01
+
 
 def _fitter() -> str:
     """Lazily read VOL_SURFACE_FITTER (per-call, not import-time) so the env
@@ -507,7 +525,11 @@ def resolve_vol_surface_sign(ref: VolSurfaceReference, strike: float, right: str
     dev = ref.deviation_by_strike.get((strike, right))
     if dev is None:
         return 0.0
-    return -1.0 if dev > 0 else (1.0 if dev < 0 else 0.0)
+    if dev > IV_DEADBAND_VOL:
+        return -1.0
+    if dev < -IV_DEADBAND_VOL:
+        return 1.0
+    return 0.0
 
 
 if __name__ == "__main__":

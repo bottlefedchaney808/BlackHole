@@ -30,6 +30,50 @@ The handoff was made by Claude; session `20260811` is the run prior to the one t
 
 ---
 
+## 0.5 ⚠️ CRITICAL — the IV dead-band was DROPPED in the Windows tree (2026-08-13, FOUND + FIXED)
+
+**This is the #1 thing a continuation agent must know: the dealer sign resolver
+`resolve_vol_surface_sign` MUST apply an `IV_DEADBAND_VOL` dead-band, or the entire
+vannaflow accumulation signal silently destroys itself.**
+
+### The bug (root cause of "vannaflow lost vs snapshot")
+- **MIGRATED reference tree** (`C:\Users\bottl\Financial_Development_MIGRATED\Vol_Suite\vol_surface_reference.py`)
+  has `IV_DEADBAND_VOL = 0.01`: any deviation `|dev| <= 0.01` (1 vol point) resolves to
+  `0.0` = "no confident directional read", and the caller (`_accumulate_from_history`)
+  falls back to the Layer-1b default **−1.0**.
+- **Windows FinancialDevelopment tree** had **DROPPED the dead-band**: `resolve_vol_surface_sign`
+  flipped sign on ANY non-zero deviation (`dev>0→−1, dev<0→+1`). So a ±basis-point noise
+  deviation flipped a strike's entire contribution sign every day → the accumulated
+  vannaflow book became noise → SPY read SHORT (−128K) and the falsifier "lost."
+
+### Verification (reproduced exactly)
+| Code path | SPY live+vannaflow end-book |
+|---|---|
+| Reference 08-11 (SABR, dead-band) | **+254,031 LONG** (table said +275,735) |
+| Windows current, **no dead-band** | −128,331 SHORT |
+| Windows current + **restored dead-band** | **+254,031 LONG** ✓ (matches reference) |
+
+The dead-band is the SOLE cause of the vannaflow discrepancy. Restoring it reproduces
+the reference flip exactly. **Do NOT remove it again.**
+
+### Fix (committed)
+- `Vol_Suite/vol_surface_reference.py`: restored `IV_DEADBAND_VOL = 0.01` +
+  dead-band logic in `resolve_vol_surface_sign` (was dropped during migration).
+- `Vol_Suite/tests/test_vol_surface_reference.py`: updated
+  `test_normal_strike_keeps_default_short_sign` to use a direct-construction reference
+  with deviation 0.02 (> band) + added `test_in_deadband_strike_resolves_zero`.
+- Full Vol_Suite suite: 465 passed / 5 skipped.
+
+### The general lesson (third recurrence of the same class)
+This is the same failure mode as the accumulation wiring and the two-vanna bug:
+**a piece of the canonical sign/accumulation machinery was silently dropped when the
+tree was recreated, and no test caught it because the green tests asserted the BROKEN
+(no-deadband) contract.** Before trusting any dealer sign/vannaflow number, verify the
+dead-band exists in `resolve_vol_surface_sign` AND that the falsifier reproduces SPY
+vannaflow ≈ +254K on the original data. The MIGRATED tree is the reference; diff against it.
+
+---
+
 ## 1. Canon decision status (2026-08-13) — NOTHING CANONICAL YET
 
 Jason's explicit directive (2026-08-13): **"bring these in for testing don't make anything canon,
