@@ -70,6 +70,16 @@ names run higher vol" story is not robust even at full power. Lead-lag: SPY best
 k=2 (weak, negative trend), QQQ all 0 (accumulated is flat there). This is a
 clean negative result at full power: the accumulation model does not beat the
 plain snapshot.
+
+### Cross-sectional at FULL POWER (2026-08-13, after SPY/QQQ 171d re-pull)
+Re-running `--cross` with SPY/QQQ at full 171-day windows changed the read: the
+sign axis is now **9 SHORT / 3 LONG** (SPY and QQQ flipped back to SHORT under the
+full window; GOOGL/NFLX/TSLA stay LONG) — non-degenerate, so the test has real
+power. corr(accum sign, rv) = **+0.12**, t +0.39 (p 0.70), permutation p 0.69 →
+**INCONCLUSIVE** (was REDUNDANT at 8S/4L on the thin data). Takeaway: with SPY/QQQ
+at full power the cross-sectional relation is still not significant, and its sign
+is fragile to which window/expiry feeds SPY/QQQ — the same tickers read SHORT on
+the 150d window here but LONG on the earlier 63d/22d cut.
 Under the OLD SABR sign source: real 12-ticker cached data gave **every ticker accumulates
 SHORT (-1.0)** → sign axis degenerate → labeled **`BASE`** (resting regime, not signal).
 
