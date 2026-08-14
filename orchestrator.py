@@ -787,6 +787,21 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
     except Exception as e:
         return _fail(f"Could not write context file {ctx_path}: {e}")
 
+    # Canonical copy: bridge latest_run()/_module_latest() and the dashboard's
+    # run discovery key on the canonical suite_context.json inside the run dir
+    # (run_unified writes it explicitly at the end). A single-suite run must
+    # publish it too, or the plugin/dashboard cannot see the run and fall back
+    # to an older one. Written with the same context dict, so content is
+    # identical to the unified path's canonical file.
+    canonical_path = os.path.join(output_dir, 'suite_context.json')
+    try:
+        with open(canonical_path, 'w', encoding='utf-8') as f:
+            json.dump(context, f, indent=2)
+            f.write('\n')
+    except Exception as e:
+        print(f"  [{name}] WARNING: could not write canonical suite_context.json: {e}",
+              file=sys.stderr)
+
     # Stale result from an earlier run must not be mistaken for this run's
     # output if the child dies before writing.
     if os.path.exists(out_path):
