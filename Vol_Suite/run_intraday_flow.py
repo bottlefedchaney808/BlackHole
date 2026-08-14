@@ -222,10 +222,11 @@ def main():
                 if nxt:
                     fwd = (nxt - spot_now) / spot_now if spot_now else 0.0
                 if div != 0.0 and burst != 0.0:
-                    # live-model-equivalent ΔIV-signed vannaflow on the SAME bucket:
+                    # Channel (b) vannaflow — NEW-MODEL re-derivation, NOT production
+                    # dealer_positioning output. It never calls the live pipeline
+                    # (run_intraday_flow imports only expiry_book_exposure + thetadata).
                     # vanna_flow(ne, d_iv) = Σ signed_vanna·OI·100·VANNA_PP_SCALE·(dIV/0.01),
-                    # the exact term the live model's vanna_call+put shares reduce to on
-                    # identical rows in the same dealer frame (rec.vanna = −1×BS).
+                    # signed by this module's locked rec.vanna = −1×BS convention.
                     try:
                         ne_bucket = ebe.build_net_exposure(rows_at, spot_now, ticker=tk)
                         vf = ebe.vanna_flow(ne_bucket, div)
@@ -299,19 +300,73 @@ def main():
                      f"n={idx_n} eff-n={n_eff_idx}")
         lines.append(f"      verdict: {v_a}")
 
-        # --- channel (b): LIVE-equivalent ΔIV-signed vannaflow (R2-2: the one object never measured intraday) ---
+        # --- channel (b): NEW-model ΔIV-signed vannaflow (ebe.vanna_flow, −1×BS).
+        #     Honest label: this is a re-derivation from the new engine on the same
+        #     rows that feed the burst — NOT the production dealer_positioning vanna
+        #     output (run_intraday_flow never calls the live pipeline). ---
         cl_b = [(vf, resp) for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items()
                 if tk in ("SPY", "QQQ")]
         n_vf_nonzero = 0
         for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items():
             if tk in ("SPY", "QQQ"):
                 n_vf_nonzero += sum(1 for v_ in vf if v_ != 0.0)
-        lines.append(f"\n  (b) LIVE ΔIV-signed vannaflow — nonzero-vf buckets: {n_vf_nonzero}/{idx_n} "
+        lines.append(f"\n  (b) NEW-model ΔIV-signed vannaflow (ebe.vanna_flow, −1×BS) — "
+                     f"nonzero-vf buckets: {n_vf_nonzero}/{idx_n} "
                      f"(0 would mean the vanna call silently failed)")
         lo_b, hi_b, r_b = _pooled_corr_cis([x for x, _ in cl_b], [y for _, y in cl_b])
         v_b, md_b = _verdict(r_b, lo_b, hi_b, n_eff_idx, idx_n)
-        lines.append(f"  (b) LIVE ΔIV-signed vannaflow corr (EXPECT POSITIVE) = {r_b:+.4f}  90% CI [{lo_b:+.4f}, {hi_b:+.4f}]")
+        lines.append(f"  (b) NEW-model vannaflow corr (EXPECT POSITIVE) = {r_b:+.4f}  90% CI [{lo_b:+.4f}, {hi_b:+.4f}]")
         lines.append(f"      verdict: {v_b}")
+        lines.append(f"      NOTE: single-engine quantity linear in ΔIV — positive sign is consistent with, "
+                     f"not probative of, the dealer mechanism (convention × vol-return reflexivity). "
+                     f"QQQ-only, not an index result.")
+
+        # --- R2-3b: per-day (per-cluster) sign-consistency — the PRIMARY statistic at
+        #     eff-n=3. Report corr(vf, fwd) per (ticker, day). All-3-positive ⇒ genuine
+        #     directional whisper powered by the 3 independent units; mixed ⇒ mean artifact. ---
+        lines.append(f"\n  (b2) PER-DAY sign-consistency (primary statistic at eff-n={n_eff_idx}):")
+        for (tk, d), (sf, div, resp, b, vf, ndiv) in sorted(clusters.items()):
+            if tk not in ("SPY", "QQQ"):
+                continue
+            rc = _corr(vf, resp)
+            lines.append(f"      {tk} {d}: corr(vf, fwd) = {rc:+.4f}  (n={len(vf)})")
+
+        # --- R2-3c: exposure-response terciles (F3) — split by |net vanna| magnitude.
+        #     Mechanism ⇒ corr monotonizes UP with exposure; reflexivity ⇒ flat. ---
+        mag = [abs(v_) for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items()
+               if tk in ("SPY", "QQQ") for v_ in vf]
+        if len(mag) >= 6:
+            mag_sorted = sorted(mag)
+            t_lo = mag_sorted[len(mag) // 3]
+            t_hi = mag_sorted[2 * len(mag) // 3]
+            lines.append(f"\n  (b3) EXPOSURE-RESPONSE terciles by |net vanna| (F3):")
+            for label, lo, hi in (("low", 0.0, t_lo), ("mid", t_lo, t_hi), ("high", t_hi, 1e18)):
+                xs, ys = [], []
+                for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items():
+                    if tk not in ("SPY", "QQQ"):
+                        continue
+                    for v_, y_ in zip(vf, resp):
+                        if lo <= abs(v_) < hi:
+                            xs.append(v_); ys.append(y_)
+                if len(xs) >= 4:
+                    lines.append(f"      {label}-|vanna| tercile: corr = {_corr(xs, ys):+.4f}  (n={len(xs)})")
+                else:
+                    lines.append(f"      {label}-|vanna| tercile: n={len(xs)} — insufficient")
+        else:
+            lines.append(f"\n  (b3) EXPOSURE-RESPONSE terciles: n={len(mag)} — insufficient")
+
+        # --- R2-3d: opposite-convention sensitivity falsifier (F3) — re-sign vf with
+        #     +1×BS (opposite of the locked −1×BS). Sign flip ⇒ convention-bound;
+        #     collapse to ~0 ⇒ the exposure weighting, not the sign prior, does the work. ---
+        cl_b_opp = []
+        for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items():
+            if tk in ("SPY", "QQQ"):
+                cl_b_opp.append(([-1.0 * v_ for v_ in vf], resp))
+        if cl_b_opp:
+            lo_o, hi_o, r_o = _pooled_corr_cis([x for x, _ in cl_b_opp], [y for _, y in cl_b_opp])
+            lines.append(f"\n  (b4) OPPOSITE-CONVENTION rerun (signed_vanna=+1×BS, sensitivity falsifier): "
+                         f"corr = {r_o:+.4f}  90% CI [{lo_o:+.4f}, {hi_o:+.4f}]")
+            lines.append(f"      read: sign flip (~−0.23) ⇒ convention-bound; collapse (~0) ⇒ exposure weighting does the work")
 
         # --- channel (c): pairwise sign-agreement per firing bucket (R2-3) ---
         tot_agree = 0; tot_buckets = 0
@@ -323,11 +378,17 @@ def main():
                     tot_buckets += 1
                     tot_agree += int((s_ > 0) == (v_ > 0))
         if tot_buckets:
-            lines.append(f"\n  (c) PAIRED two-model sign-agreement on firing buckets: {tot_agree}/{tot_buckets} "
-                         f"= {tot_agree/tot_buckets:.1%}  (coherence, NOT predictiveness)")
+            lines.append(f"\n  (c) WITHIN-ENGINE sign-agreement on firing buckets: {tot_agree}/{tot_buckets} "
+                         f"= {tot_agree/tot_buckets:.1%}")
+            lines.append(f"      NOTE: dIV cancels — sign(sf)==sign(vf) reduces to sign(burst)==−sign(net_vanna), "
+                         f"a within-engine self-consistency of the NEW model's burst vs its own net-vanna sign. "
+                         f"NOT an independent two-model coherence; no null/CI reported (descriptive only).")
 
         # --- channel (d): shadow-leak sub-sample (R2-4) — buckets whose intraday ΔIV
-        #     is OPPOSITE the day's net ΔIV direction ---
+        #     is OPPOSITE the day's net ΔIV direction. HONEST LABEL: post-hoc
+        #     exploratory split — it conditions on a function of the same ΔIV that
+        #     defines the x-variable (data snooping correlated with the response), so
+        #     it is NOT a confirmatory arm. ---
         leak_x, leak_y, leak_n = [], [], 0
         for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items():
             if tk not in ("SPY", "QQQ"):
@@ -342,15 +403,20 @@ def main():
         if leak_n >= 4:
             r_l = _corr(leak_x, leak_y)
             md_l = math.tanh(2.8016 / math.sqrt(max(leak_n - 3, 1)))
-            lines.append(f"\n  (d) SHADOW-LEAK SUB-SAMPLE (intraday ΔIV opposite day's net ΔIV): n={leak_n}")
-            lines.append(f"      live vannaflow corr vs fwd = {r_l:+.4f}  (EXPECT POSITIVE if the −0.088 was daily-shadow leak)")
+            lines.append(f"\n  (d) SHADOW-LEAK SPLIT (post-hoc EXPLORATORY — conditions on the same ΔIV that defines x): n={leak_n}")
+            lines.append(f"      new-model vannaflow corr vs fwd = {r_l:+.4f}  (EXPECT POSITIVE if the −0.088 was daily-shadow leak)")
             lines.append(f"      md@n={leak_n} = {md_l:.4f} → "
                          f"{'SUPPORTED (leak hypothesis CONFIRMED — mechanism alive)' if r_l > 0 and r_l >= md_l else 'BOUNDED/negative'}")
+            lines.append(f"      [integrity] {r_l:+.4f} < md {md_l:.4f} → code verdict is BOUNDED/negative, NOT 'strongly POSITIVE'")
         else:
-            lines.append(f"\n  (d) SHADOW-LEAK SUB-SAMPLE: only {leak_n} buckets — insufficient")
+            lines.append(f"\n  (d) SHADOW-LEAK SPLIT: only {leak_n} buckets — insufficient")
 
         lines.append(f"\n  R2-5 note: md computed at effective-n ({n_eff_idx} clusters), not pooled n.")
         lines.append(f"  R2-7 note: firing clusters = {n_eff_idx} (20260803 is an expiry, not a day anchor).")
+        lines.append(f"  R2-8 note (bootstrap limitation): K={n_eff_idx} cluster bootstrap draws with replacement "
+                     f"over {n_eff_idx} clusters → only C({n_eff_idx}+{n_eff_idx}-1,{n_eff_idx}) distinct resampled "
+                     f"multisets (e.g. 10 for K=3) → the reported 90% CI is a coarse discrete-quantile, demoted to "
+                     f"exploratory. It is NOT a valid narrow inferential interval at this effective-n.")
     else:
         lines.append("  insufficient firing buckets — BOUNDED")
 

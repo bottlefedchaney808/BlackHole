@@ -18,19 +18,36 @@ firing buckets (from-breach): 28  effective clusters: 3
   (a) NEW gamma-burst signed flow corr = -0.0884  90% CI [-0.1431, -0.0399]  n=28 eff-n=3
       verdict: underpowered (CI excludes 0 but |r|=0.0884 < md=0.993 at eff-n=3)
 
-  (b) LIVE ΔIV-signed vannaflow — nonzero-vf buckets: 28/28 (0 would mean the vanna call silently failed)
-  (b) LIVE ΔIV-signed vannaflow corr (EXPECT POSITIVE) = +0.2327  90% CI [+0.2052, +0.3051]
+  (b) NEW-model ΔIV-signed vannaflow (ebe.vanna_flow, −1×BS) — nonzero-vf buckets: 28/28 (0 would mean the vanna call silently failed)
+  (b) NEW-model vannaflow corr (EXPECT POSITIVE) = +0.2327  90% CI [+0.2050, +0.3051]
       verdict: underpowered (CI excludes 0 but |r|=0.2327 < md=0.993 at eff-n=3)
+      NOTE: single-engine quantity linear in ΔIV — positive sign is consistent with, not probative of, the dealer mechanism (convention × vol-return reflexivity). QQQ-only, not an index result.
 
-  (c) PAIRED two-model sign-agreement on firing buckets: 19/28 = 67.9%  (coherence, NOT predictiveness)
+  (b2) PER-DAY sign-consistency (primary statistic at eff-n=3):
+      QQQ 20260716: corr(vf, fwd) = +0.3051  (n=6)
+      QQQ 20260717: corr(vf, fwd) = +0.2939  (n=9)
+      QQQ 20260731: corr(vf, fwd) = +0.4434  (n=13)
 
-  (d) SHADOW-LEAK SUB-SAMPLE (intraday ΔIV opposite day's net ΔIV): n=14
-      live vannaflow corr vs fwd = +0.4343  (EXPECT POSITIVE if the −0.088 was daily-shadow leak)
+  (b3) EXPOSURE-RESPONSE terciles by |net vanna| (F3):
+      low-|vanna| tercile: corr = +0.4867  (n=9)
+      mid-|vanna| tercile: corr = +0.5917  (n=9)
+      high-|vanna| tercile: corr = +0.4053  (n=10)
+
+  (b4) OPPOSITE-CONVENTION rerun (signed_vanna=+1×BS, sensitivity falsifier): corr = -0.2327  90% CI [-0.3051, -0.2050]
+      read: sign flip (~−0.23) ⇒ convention-bound; collapse (~0) ⇒ exposure weighting does the work
+
+  (c) WITHIN-ENGINE sign-agreement on firing buckets: 19/28 = 67.9%
+      NOTE: dIV cancels — sign(sf)==sign(vf) reduces to sign(burst)==−sign(net_vanna), a within-engine self-consistency of the NEW model's burst vs its own net-vanna sign. NOT an independent two-model coherence; no null/CI reported (descriptive only).
+
+  (d) SHADOW-LEAK SPLIT (post-hoc EXPLORATORY — conditions on the same ΔIV that defines x): n=14
+      new-model vannaflow corr vs fwd = +0.4346  (EXPECT POSITIVE if the −0.088 was daily-shadow leak)
       md@n=14 = 0.6883 → BOUNDED/negative
+      [integrity] +0.4346 < md 0.6883 → code verdict is BOUNDED/negative, NOT 'strongly POSITIVE'
 
   R2-5 note: md computed at effective-n (3 clusters), not pooled n.
   R2-7 note: firing clusters = 3 (20260803 is an expiry, not a day anchor).
+  R2-8 note (bootstrap limitation): K=3 cluster bootstrap draws with replacement over 3 clusters → only C(3+3-1,3) distinct resampled multisets (e.g. 10 for K=3) → the reported 90% CI is a coarse discrete-quantile, demoted to exploratory. It is NOT a valid narrow inferential interval at this effective-n.
 
 ### SINGLES screen (n=0)
 
-[t3b] total 24.3s
+[t3b] total 54.8s

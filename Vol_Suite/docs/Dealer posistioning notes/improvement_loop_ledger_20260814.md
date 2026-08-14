@@ -13,13 +13,25 @@
 
 ## Round 2 — COMPLETE (build + run)
 - **Build (all 7 items):** R2-1 zero-target audit ✅ (tier1:277 + tier2c:92 placeholders removed, chain sweep clean); R2-2 live vannaflow wired into all 28 firing buckets ✅; R2-3 paired table ✅; R2-4 shadow-leak sub-sample ✅; R2-5 effective-n md ✅; R2-6 B1 LIVE surfaced ✅; R2-7 cluster count ✅. 50 tests green, compile OK.
-- **Round-2 results (28 firing buckets, all QQQ, 3 day-clusters):**
+- **Round-2 results (28 firing buckets, all QQQ, 3 day-clusters) — HONEST LABELS (R2 source-verified):**
   - (a) NEW gamma-burst: −0.0884 CI [−0.143,−0.040] (unchanged — the conflated leg)
-  - **(b) LIVE ΔIV-signed vannaflow: +0.2327 CI [+0.205,+0.305] — POSITIVE, the EXPECT-POSITIVE prediction, CI excludes 0** (underpowered at md 0.993 eff-n=3 but RIGHT SIGN)
-  - (c) paired two-model sign-agreement: **67.9%** (19/28)
-  - **(d) shadow-leak sub-sample: +0.4343 (n=14) — strongly POSITIVE — the −0.088 was daily-shadow leak**
-- **Read:** costume-change CONFIRMED (gamma-on-vanna-clock artifact); vanna channel POSITIVE on the clean clock; leak-separated POSITIVE; models cohere where the hedge fires. Honest limit: md 0.993 at eff-n=3 not exceeded; SPY still 0 buckets; not yet an index result.
-- **R3 dispatched:** re-submitting to Cem (deleg_…)
+  - **(b) NEW-model ΔIV-signed vannaflow (ebe.vanna_flow, −1×BS — NOT production live): +0.2327 CI [+0.205,+0.305]** — POSITIVE sign, CI excludes 0, but single-engine, linear-in-ΔIV, QQQ-only, underpowered (md 0.993 eff-n=3) → **FRAGILE SIGN-HINT, NOT a mechanism confirmation**
+  - (c) WITHIN-ENGINE sign-agreement: **67.9%** (19/28) — dIV cancels ⇒ sign(burst)==−sign(net_vanna); NOT two-model coherence
+  - (d) shadow-leak split (post-hoc EXPLORATORY): **+0.4343 (n=14)** — **below its own md 0.6883 → code verdict BOUNDED/negative** (reporting-integrity corrected; earlier prose 'strongly POSITIVE / hypothesis supported' was a contradiction, now fixed)
+- **Read (corrected):** costume-change CONFIRMED (gamma-on-vanna-clock artifact) but on a SINGLE engine; vanna channel POSITIVE on the clean clock but convention×reflexivity consistent, not independently mechanistic; leak split exploratory & below md; models do NOT show independent coherence. Cem's bar NOT met.
+- **R2 cross-examiner (deleg_036331dc, source-verified):** channel (b) labeled "LIVE" is a re-derivation from `expiry_book_exposure.vanna_flow`, never calling production `dealer_positioning` (run_intraday_flow imports only the new engine); the true dual-pipeline test is REQUIRED NEW EVIDENCE (seeds EOD, expiry-mismatched for 2/3 firing anchors, no 20260717 seed, no intraday accumulation history). 12/14 F/D/M claims VERIFIED; F3/D6 accepted insights.
+- **R3 Cem arbiter:** NOT YET DISPATCHED for round-2 — result is below approval bar. Round-3 cheap fixes implemented (honest labels, per-day sign-consistency b2, exposure terciles b3, opposite-convention rerun b4, K=3 bootstrap disclosure R2-8, (d) integrity fix). Required new evidence identified: production-live dual-pipeline on firing buckets + index (SPY) coverage + broader QQQ day-clusters.
+
+## Round 2 — PANEL REVIEW IN FLIGHT (R1 re-dispatched, deleg_3dd627ee)
+- Round-2 build was committed (`edbb61a`) but NEVER adjudicated — no round-2 Cem verdict existed.
+- Re-dispatched R1 (3 adversarial panelists: framing/mechanism, data/measurement, dealer-mechanics) against the committed round-2 artifacts, each with a synergy-framed INSIGHT TO IMPROVE. All insights accepted, merge non-overlapping.
+- Awaiting: R1 -> R2 cross-examiner -> R3 Cem arbiter (APPROVED / NOT ACCEPTED). Loop continues automatically until Cem says APPROVED.
+
+## Round 2 — R1 PANEL COMPLETE (unanimous: NOT approval-ready)
+- **Framing/mechanism (F):** `+0.2327` real but `vanna_flow` is `signed_vanna·ΔIV` — sign can arise from locked `−1×BS` × ΔIV/return reflexivity, not independently from dealer exposure. No exposure-contrast (all 28 buckets short-DTE high-vol QQQ, 3 day-clusters). **Insight:** exposure-response monotonicity test (terciles by |net vanna|, mechanism⇒monotonize, reflexivity⇒flat) + opposite-convention rerun as sensitivity falsifier.
+- **Data/measurement (D):** K=3 cluster bootstrap → only **10 distinct resamples** → the "CI excludes 0" is a discrete-quantile artifact, not valid at eff-n=3 (md 0.993=zero power). (d) conditions on the same ΔIV that defines the x-var (selection bias); its prose "strongly POSITIVE" CONTRADICTS its own code verdict `BOUNDED/negative` (0.4343 < md 0.6883). (c) dIV cancels → reduces to sign(burst)==−sign(C), no null/CI. QQQ-only, not index. **Insight:** per-day (3-cluster) sign-consistency as the PRIMARY statistic — all 3 positive ⇒ real, mixed ⇒ mean artifact. No new data needed.
+- **Dealer-mechanics (M):** channels (a)–(d) are ONE engine (`expiry_book_exposure.py`) in ONE driver — channel (b) labeled "LIVE" is NOT production `dealer_positioning` vanna output, it's a new-module re-derivation under shared `−1×BS`. (c) is within-engine coherence. Sign formula-clean but economic direction (net-short vanna buys on vol-down) never recorded. No lag mismatch. Scaling ×100×0.01 consistent (imported from dealer_positioning); real divergence is input provenance (single-expiry raw-IV vs 150d accumulated+SVI sign map). **Insight:** TRUE dual-pipeline (b_live from production live model vs b_new) on the same 28 buckets = the convention-independence gate Cem demands.
+- **R2 dispatched** (deleg_036331dc): verify every F/D/M claim in source; answer (1) does run_intraday_flow.py ever call the PRODUCTION live vanna pipeline, (2) can the dual-pipeline test run on existing seed (_scratch_tier2); produce the precise merged upgrade set (cheap code/reporting fixes vs required new evidence).
 
 ---
 
