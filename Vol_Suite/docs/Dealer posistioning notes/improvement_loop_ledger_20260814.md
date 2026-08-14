@@ -22,6 +22,17 @@
 - **R2 cross-examiner (deleg_036331dc, source-verified):** channel (b) labeled "LIVE" is a re-derivation from `expiry_book_exposure.vanna_flow`, never calling production `dealer_positioning` (run_intraday_flow imports only the new engine); the true dual-pipeline test is REQUIRED NEW EVIDENCE (seeds EOD, expiry-mismatched for 2/3 firing anchors, no 20260717 seed, no intraday accumulation history). 12/14 F/D/M claims VERIFIED; F3/D6 accepted insights.
 - **R3 Cem arbiter:** NOT YET DISPATCHED for round-2 — result is below approval bar. Round-3 cheap fixes implemented (honest labels, per-day sign-consistency b2, exposure terciles b3, opposite-convention rerun b4, K=3 bootstrap disclosure R2-8, (d) integrity fix). Required new evidence identified: production-live dual-pipeline on firing buckets + index (SPY) coverage + broader QQQ day-clusters.
 
+## Round 3 — COMPLETE (cheap-fix build + run, committed 04691e1)
+- **R2 verdict accepted (source-verified):** round-2 NOT approval-ready. Built all (A) cheap fixes in `run_intraday_flow.py` + corrected result docs + 7 new locking tests (57 green).
+- **Round-3 run (28 buckets, all QQQ, 3 day-clusters, SPY 0):**
+  - (b) NEW-model vannaflow (ebe.vanna_flow, −1×BS): **+0.2327** CI [+0.205,+0.305] — CI excludes 0 but |r|<<md 0.993 ⇒ fragile sign-hint
+  - **(b2) PER-DAY sign-consistency: QQQ 0716 +0.3051, 0717 +0.2939, 0731 +0.4434 — ALL 3 QQQ days POSITIVE** (the genuine directional whisper)
+  - (b3) exposure-response terciles: +0.4867 / +0.5917 / +0.4053 — **NON-MONOTONIC** (no mechanism signature)
+  - **(b4) opposite-convention rerun (+1×BS): EXACT sign flip to −0.2327 ⇒ CONVENTION-BOUND**, not mechanism-proven
+  - (c) within-engine 67.9% (dIV cancels); (d) leak split +0.4346 < md 0.6883 ⇒ BOUNDED/negative (integrity fixed)
+- **Honest read:** b2 gives one genuine directional whisper (all 3 QQQ days positive on 3 independent units), BUT b4 proves the headline is convention-bound (locked −1×BS × reflexivity) and b3 is non-monotonic. **Cem's bar NOT met** — still single-engine, convention-bound, QQQ-only, eff-n=3 (md 0.993 = zero power).
+- **R3 Cem arbiter dispatched** (deleg_5ca3bd76): adjudicating APPROVED / NOT ACCEPTED on the honest round-3 packet, with mandate to produce the round-4 merged upgrade set (A cheap / B new evidence) without relaxing his stop condition.
+
 ## Round 2 — PANEL REVIEW IN FLIGHT (R1 re-dispatched, deleg_3dd627ee)
 - Round-2 build was committed (`edbb61a`) but NEVER adjudicated — no round-2 Cem verdict existed.
 - Re-dispatched R1 (3 adversarial panelists: framing/mechanism, data/measurement, dealer-mechanics) against the committed round-2 artifacts, each with a synergy-framed INSIGHT TO IMPROVE. All insights accepted, merge non-overlapping.
