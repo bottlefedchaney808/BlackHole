@@ -368,6 +368,53 @@ def main():
                          f"corr = {r_o:+.4f}  90% CI [{lo_o:+.4f}, {hi_o:+.4f}]")
             lines.append(f"      read: sign flip (~−0.23) ⇒ convention-bound; collapse (~0) ⇒ exposure weighting does the work")
 
+        # --- ROUND-4 (A) CEM cheap fixes ---
+        # (A6) REFLEXIVITY BASELINE — the decisive cheap diagnostic. corr(ΔIV, fwd-return)
+        # on the SAME buckets. If this is also positive, the +0.23 is ΔIV/return reflexivity
+        # and the vanna sign is downstream of it (vanna_flow = signed_vanna·ΔIV).
+        div_resp = [(dv, y_) for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items()
+                    if tk in ("SPY", "QQQ") for dv, y_ in zip(div, resp)]
+        if len(div_resp) >= 4:
+            r_ref = _corr([x for x, _ in div_resp], [y for _, y in div_resp])
+            lines.append(f"\n  (A6) REFLEXIVITY BASELINE corr(ΔIV, fwd-return) on same buckets = {r_ref:+.4f}  (n={len(div_resp)})")
+            lines.append(f"      if positive ⇒ the +0.23 vanna corr is ΔIV/return reflexivity; the vanna sign is downstream of it")
+
+        # (A1) CONVENTION-DEPENDENCE SWEEP — corr(vf, fwd) as a function of the sign prior
+        # factor (alpha * −1×BS for alpha in [+1, 0, −1]). Show the whole dependence curve.
+        if cl_b:
+            xall0, yall0 = [], []
+            for x, y in cl_b:
+                xall0.extend(_de_mean(x)); yall0.extend(_de_mean(y))
+            r0 = _corr(xall0, yall0)
+            lines.append(f"\n  (A1) CONVENTION-DEPENDENCE SWEEP (corr vs sign prior α):")
+            for alpha in (1.0, 0.5, 0.0, -0.5, -1.0):
+                xs = [alpha * v_ for v_ in xall0]
+                lines.append(f"      α={alpha:+.1f}×(−1×BS): corr = {_corr(xs, yall0):+.4f}")
+            lines.append(f"      linear in the prior ⇒ convention-bound; report so in the same breath")
+
+        # (A2) MAGNITUDE DECOUPLING — corr(|vf|, |fwd|) separately from sign, so the
+        # exposure-response doesn't ride on the convention.
+        mag_resp = [(abs(v_), abs(y_)) for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items()
+                    if tk in ("SPY", "QQQ") for v_, y_ in zip(vf, resp)]
+        if len(mag_resp) >= 4:
+            r_mag = _corr([x for x, _ in mag_resp], [y for _, y in mag_resp])
+            lines.append(f"\n  (A2) MAGNITUDE RESPONSE corr(|vf|, |fwd|) = {r_mag:+.4f}  (n={len(mag_resp)}, convention-free)")
+
+        # (A4) SIGN-STABILITY vs binomial null — 3/3 per-day positive
+        idx_days = [(tk, d) for (tk, d) in clusters if tk in ("SPY", "QQQ")]
+        npos = sum(1 for (tk, d) in idx_days if _corr(
+            clusters[(tk, d)][4], clusters[(tk, d)][2]) > 0)
+        nd_ = len(idx_days)
+        # binomial P(all positive | p=0.5) = 0.5^nd_
+        binom_p = 0.5 ** nd_ if nd_ else float("nan")
+        lines.append(f"\n  (A4) SIGN-STABILITY vs binomial null: {npos}/{nd_} per-day corr(vf,fwd) positive; "
+                     f"P(all positive | null) = {binom_p:.4f}")
+
+        # (A3) header-demote the K=3 CI (already disclosed in R2-8); reinforce at the top
+        # of the index block.
+        lines.append(f"  [A3] effective-n = {n_eff_idx}: no valid inferential CI exists at this power; "
+                     f"the K=3 bootstrap CI is exploratory-only.")
+
         # --- channel (c): pairwise sign-agreement per firing bucket (R2-3) ---
         tot_agree = 0; tot_buckets = 0
         for (tk, d), (sf, div, resp, b, vf, ndiv) in clusters.items():

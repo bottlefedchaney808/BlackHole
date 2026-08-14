@@ -43,6 +43,16 @@
   - **(B) Required new evidence (priority):** **P0-1 dual-pipeline convention-independence gate** — production `dealer_positioning` vanna (150d accumulated, SVI sign map, vanna_call+put_shares) on the same intraday firing buckets vs new engine; requires NEW intraday chain acquisition via ThetaData at IVL=600000 over a 150d accumulation window (existing seeds EOD/expiry-mismatched/missing 20260717). **P0-2 index (SPY) firing coverage** (FOMC/earnings or justified 0.5% band). **P0-3 independent day-clusters to lift eff-n past md.** P1-4 zero-target audit gate; P1-5 component ablation; P1-6 regime robustness.
 - **Final:** new model ships descriptive/conditional only. Loop continues until APPROVED.
 
+## Round 4 — (A) CEM CHEAP FIXES COMPLETE (committed)
+- **A6 REFLEXIVITY BASELINE corr(ΔIV, fwd) = +0.4254** — DECISIVE: positive and LARGER than the +0.2327 vanna corr ⇒ the vanna signal is ΔIV/return reflexivity, vanna sign downstream. **Confirms Cem's verdict on data.**
+- **A1 convention-dependence sweep (α × −1×BS):** +0.2327 / +0.2327 / 0.0000 / −0.2327 / −0.2327 (α=+1/+0.5/0/−0.5/−1) — linear in the prior ⇒ convention-bound, confirmed.
+- **A2 magnitude response corr(|vf|,|fwd|) = +0.1153** — weak, no mechanism signal on magnitude alone (convention-free).
+- **A4 sign-stability:** 3/3 per-day positive, **P(all positive | null) = 0.125** — not significant even at 0.10.
+- **A3** CI demoted (eff-n=3, no valid inferential CI).
+- **A5 pre-registration:** estimand/bucket-inclusion/exposure-strata/event-days/sign-convention to be pre-specified before any new-data run.
+- **Round-3 +0.2327 is DEAD as a mechanism claim.** Only surviving directional hint = b2 3/3 per-day positivity (P=0.125, not significant).
+- **Round-4 (B) required new evidence next:** **P0-1 dual-pipeline convention-independence gate** (production `dealer_positioning` vanna on the same firing buckets — the single item that changes Cem's verdict; needs NEW intraday chain acquisition at IVL=600000 over a 150d accumulation window); P0-2 index (SPY) firing coverage; P0-3 independent day-clusters to lift eff-n past md.
+
 ## Round 2 — PANEL REVIEW IN FLIGHT (R1 re-dispatched, deleg_3dd627ee)
 - Round-2 build was committed (`edbb61a`) but NEVER adjudicated — no round-2 Cem verdict existed.
 - Re-dispatched R1 (3 adversarial panelists: framing/mechanism, data/measurement, dealer-mechanics) against the committed round-2 artifacts, each with a synergy-framed INSIGHT TO IMPROVE. All insights accepted, merge non-overlapping.

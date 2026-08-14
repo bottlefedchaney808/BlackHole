@@ -36,6 +36,22 @@ firing buckets (from-breach): 28  effective clusters: 3
   (b4) OPPOSITE-CONVENTION rerun (signed_vanna=+1×BS, sensitivity falsifier): corr = -0.2327  90% CI [-0.3051, -0.2050]
       read: sign flip (~−0.23) ⇒ convention-bound; collapse (~0) ⇒ exposure weighting does the work
 
+  (A6) REFLEXIVITY BASELINE corr(ΔIV, fwd-return) on same buckets = +0.4254  (n=28)
+      if positive ⇒ the +0.23 vanna corr is ΔIV/return reflexivity; the vanna sign is downstream of it
+
+  (A1) CONVENTION-DEPENDENCE SWEEP (corr vs sign prior α):
+      α=+1.0×(−1×BS): corr = +0.2327
+      α=+0.5×(−1×BS): corr = +0.2327
+      α=+0.0×(−1×BS): corr = +0.0000
+      α=-0.5×(−1×BS): corr = -0.2327
+      α=-1.0×(−1×BS): corr = -0.2327
+      linear in the prior ⇒ convention-bound; report so in the same breath
+
+  (A2) MAGNITUDE RESPONSE corr(|vf|, |fwd|) = +0.1153  (n=28, convention-free)
+
+  (A4) SIGN-STABILITY vs binomial null: 3/3 per-day corr(vf,fwd) positive; P(all positive | null) = 0.1250
+  [A3] effective-n = 3: no valid inferential CI exists at this power; the K=3 bootstrap CI is exploratory-only.
+
   (c) WITHIN-ENGINE sign-agreement on firing buckets: 19/28 = 67.9%
       NOTE: dIV cancels — sign(sf)==sign(vf) reduces to sign(burst)==−sign(net_vanna), a within-engine self-consistency of the NEW model's burst vs its own net-vanna sign. NOT an independent two-model coherence; no null/CI reported (descriptive only).
 
@@ -50,4 +66,4 @@ firing buckets (from-breach): 28  effective clusters: 3
 
 ### SINGLES screen (n=0)
 
-[t3b] total 54.8s
+[t3b] total 24.7s
