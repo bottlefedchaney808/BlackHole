@@ -64,4 +64,25 @@ NOTE on 20260717: the production same-day book returned 0 records because the fi
 
 ### GATE VERDICT: **FAIL** — sign-agreement 0/2 < 2/2
 
+## IMPLEMENTATION AUDIT — level-vs-flow artifact (MANDATORY, done before Cem)
+
+**Audit result: the raw 0/2 was PARTLY a level-vs-flow comparison artifact.** Correcting it, the gate is really **1/2, still FAIL**:
+
+- Production `vanna_call+put_shares` (`dealer_positioning.py:765`) = vanna **LEVEL** = `vanna_total × CONTRACT_MULTIPLIER × VANNA_PP_SCALE` — no ΔIV factor.
+- New `ebe.vanna_flow(ne, dIV)` (`expiry_book_exposure.py:374`) = **FLOW** = `Σ signed_vanna·OI·100·0.01·(dIV/0.01)` = level × (dIV/0.01).
+- The driver compared sign(level) vs sign(level×ΔIV) — a level-vs-flow mismatch where the ΔIV factor mechanically flips the sign.
+- **Corrected level-vs-level** (undo the dIV/0.01 on the new side, from cached obs, no re-fetch):
+
+| Day | prod_level (sign) | new_day_LEVEL (sign) | agree |
+|---|---|---|---|
+| 20260716 | −4.89e4 (−1) | +3.82e4 (+1) | **NO** |
+| 20260717 | NA (zero-DTE drop, 0) | +9.59e4 (+1) | n/a |
+| 20260731 | −2.11e4 (−1) | −3.55e3 (−1) | **YES** |
+
+- **20260731 flips to AGREE once compared level-vs-level.** The raw 0/2 was therefore overstated by the flow/level mismatch on that day.
+- **20260716 genuinely disagrees** (−1 vs +1) — so even corrected, the gate is **1/2 < 2/2 → FAIL**.
+- Remaining audit checks: zero-DTE 20260717 is a production-pipeline convention (expiry filter 0<tte drops the expiring weekly), handled explicitly (sign=0, not counted) — correct. Both engines use the same $5 grid, same day, same OI. Production SVI sign map vs new −1×BS are genuinely different conventions — the sign disagreement on 20260716 is real (not just the flow/level artifact).
+
+**Status:** P0-1 gate FAILS on corrected 1/2 (20260716 genuine disagreement) AND the correlational arm is subsumed by reflexivity (A6 +0.6549 > vanna +0.5135, placebo p=0.095). **Cem is NOT dispatched** — the gate does not cross his bar. Model remains descriptive/conditional only.
+
 Ran in 13.3s. Raw observations: `dual_pipeline_gate_obs.json`.
