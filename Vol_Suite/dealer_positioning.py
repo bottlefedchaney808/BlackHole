@@ -1314,7 +1314,12 @@ def run_dealer_positioning(ticker: str, target_years: float = 0.25,
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     files: List[str] = []
-    result = compute_dealer_positioning(ticker, target_years, expiration=expiration, sign_model=sign_model)
+    # Accumulation ON by default for the live runner: the accumulated seed-plus-
+    # flow book (replication_reference) is the intended live model per Jason's
+    # directive ("if accumulation isn't turned on turn it on"). DEALER_ACCUMULATION=0 disables.
+    accumulate_live = os.environ.get("DEALER_ACCUMULATION", "1") == "1"
+    result = compute_dealer_positioning(ticker, target_years, expiration=expiration,
+                                        sign_model=sign_model, accumulate=accumulate_live)
     print_report(result)
     try:
         interp = None
