@@ -175,6 +175,43 @@ def test_transport_error_then_status_error_returns_the_response():
 
 
 # ---------------------------------------------------------------------------
+# Snapshot / bulk-snapshot / list endpoints must retry like hist_* does
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_option_bulk_oi_retries_a_transient_404():
+    """Regression: option_bulk_oi (and the other snapshot/list/bulk_snapshot
+    methods) used to call self._get() directly instead of
+    self._get_with_retry(), so a single false-negative 404 from the proxy
+    (see test_transient_statuses_are_retried_and_recover) blew up the whole
+    scan instead of recovering on retry like hist_* calls do."""
+    payload = [["strike", "right", "open_interest"], [745000, "C", 100]]
+    calls = {"n": 0}
+
+    def _get(path, params=None):
+        calls["n"] += 1
+        return FakeResponse(404) if calls["n"] == 1 else FakeResponse(200, payload)
+
+    td = make_controller(_get)
+    rows = td.option_bulk_oi("SMCI", "20261112")
+    assert rows == [{"strike": 745000, "right": "C", "open_interest": 100}]
+    assert calls["n"] == 2
+
+
+@pytest.mark.unit
+def test_list_expirations_retries_a_transient_404():
+    calls = {"n": 0}
+
+    def _get(path, params=None):
+        calls["n"] += 1
+        return FakeResponse(404) if calls["n"] == 1 else FakeResponse(200, ["20261016", "20261112"])
+
+    td = make_controller(_get)
+    assert td.list_expirations("SMCI") == ["20261016", "20261112"]
+    assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
 # Contract identity stamping -- the silent row-drop bug
 # ---------------------------------------------------------------------------
 

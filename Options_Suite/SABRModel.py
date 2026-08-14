@@ -6,11 +6,10 @@ try:
 except ImportError:
     import data_source_config
 try:
-    from thetadata_controller import ThetaDataController, strike_from_theta
+    from thetadata_controller import ThetaDataController
     _THETADATA_AVAILABLE = True
 except Exception:
     _THETADATA_AVAILABLE = False
-from scipy.optimize import minimize
 
 
 class SABRModel:
@@ -74,8 +73,9 @@ def bs_vega_sabr(F, K, T, sigma):
 
 
 def _sabr_vol_hagan_vec(F, K, T, alpha, beta, rho, nu):
-    """Vectorized Hagan SABR vol over an array of strikes K -- used only
-    inside SABRCalibrator's optimization objective (_weighted_error).
+    """Vectorized Hagan SABR vol over an array of strikes K -- shared by
+    SABRCalibrator's fitting objective and Options_Suite.sabr_market_calib
+    (the market-grade pure calibrator), via sabr_market_calib._weighted_error.
 
     Since smile_utils.fetch_market_smile stopped capping the chain at 15
     near-the-money strikes (see its docstring), calibration now typically
@@ -209,100 +209,6 @@ class SABRCalibrator:
               f"({len(strikes) - n_solved} vendor IV, {n_solved} solved from price)")
         return strikes, vols, forward
 
-    def _atm_market_vol(self):
-        """
-        True ATM market vol: the market vol at the strike nearest the forward.
-        (Previously this used median(market_vols) across the whole ~9-strike
-        window as an ATM proxy, which is not the same thing and was part of
-        why calibration missed the ATM point.)
-        """
-        idx = int(np.argmin(np.abs(self.strikes - self.forward)))
-        return float(self.market_vols[idx])
-
-    def _solve_alpha_for_atm(self, target_atm_vol, beta, rho, nu):
-        """
-        Solve alpha so the Hagan SABR formula's ATM value (F == K) matches
-        target_atm_vol exactly, via bounded bisection. The ATM formula is
-        monotonically increasing in alpha for realistic parameter ranges, so
-        this converges reliably and cheaply (closed-form eval, no simulation).
-
-        alpha has units of vol * F^(1-beta), so its natural scale shifts a lot
-        with beta and the forward level (e.g. beta=0.3 on a $100 forward needs
-        alpha an order of magnitude larger than beta=1.0 does for the same
-        vol). Bounds are scaled off a linear estimate rather than a fixed
-        constant so low-beta / high-forward combinations don't get clipped.
-        """
-        F, T = self.forward, self.T
-
-        def atm_vol(a):
-            return sabr_vol_hagan(F, F, T, a, beta, rho, nu)
-
-        alpha_scale = max(target_atm_vol * (F ** (1 - beta)), 1e-6)
-        lo, hi = alpha_scale * 1e-4, alpha_scale * 50.0
-        v_lo, v_hi = atm_vol(lo), atm_vol(hi)
-        if v_hi <= v_lo:
-            # non-monotonic edge case (extreme rho/nu/beta combo) -- fall back to a grid scan
-            grid = np.linspace(lo, hi, 400)
-            vals = np.array([atm_vol(a) for a in grid])
-            return float(grid[int(np.argmin(np.abs(vals - target_atm_vol)))])
-        if target_atm_vol <= v_lo:
-            return lo
-        if target_atm_vol >= v_hi:
-            return hi
-        for _ in range(60):
-            mid = 0.5 * (lo + hi)
-            v_mid = atm_vol(mid)
-            if abs(v_mid - target_atm_vol) < 1e-7:
-                return mid
-            if v_mid > target_atm_vol:
-                hi = mid
-            else:
-                lo = mid
-        return 0.5 * (lo + hi)
-
-    def _weighted_error(self, alpha, beta, rho, nu):
-        # Vectorized (see _sabr_vol_hagan_vec's docstring) -- this is called
-        # once per optimizer iteration per multi-start restart, and the chain
-        # is now the FULL observed strip (often 50-150+ strikes, not a
-        # 15-strike cap), so a Python-level per-strike loop here was the
-        # difference between a calibrate() call taking seconds vs minutes.
-        strikes = np.asarray(self.strikes, dtype=float)
-        vols = np.asarray(self.market_vols, dtype=float)
-        valid = (strikes > 0) & (vols > 0)
-        if not np.any(valid) or self.T <= 0:
-            return 1e9
-        K = strikes[valid]
-        mv = vols[valid]
-        try:
-            sv = _sabr_vol_hagan_vec(self.forward, K, self.T, alpha, beta, rho, nu)
-            if np.any(np.isnan(sv)) or np.any(np.isinf(sv)):
-                return 1e9
-            d1 = (np.log(self.forward / K) + 0.5 * mv ** 2 * self.T) / (mv * np.sqrt(self.T))
-            vega = self.forward * np.sqrt(self.T) * norm.pdf(d1)
-        except Exception:
-            return 1e9
-        w_mask = vega >= 1e-6
-        if not np.any(w_mask):
-            return 1e9
-        err = float(np.sum(vega[w_mask] * (sv[w_mask] - mv[w_mask]) ** 2))
-        w_sum = float(np.sum(vega[w_mask]))
-        return err / w_sum if w_sum > 1e-6 else 1e9
-
-    def _objective_fixed_beta(self, params, beta, target_atm_vol):
-        rho, nu = params
-        if not (-0.99 <= rho <= 0.99): return 1e9
-        if not (0.01 <= nu <= 5.0): return 1e9
-        alpha = self._solve_alpha_for_atm(target_atm_vol, beta, rho, nu)
-        return self._weighted_error(alpha, beta, rho, nu)
-
-    def _objective_free_beta(self, params, target_atm_vol):
-        beta, rho, nu = params
-        if not (0.1 <= beta <= 1.0): return 1e9
-        if not (-0.99 <= rho <= 0.99): return 1e9
-        if not (0.01 <= nu <= 5.0): return 1e9
-        alpha = self._solve_alpha_for_atm(target_atm_vol, beta, rho, nu)
-        return self._weighted_error(alpha, beta, rho, nu)
-
     def calibrate(self, calibrate_beta=True):
         """
         Two-stage calibration:
@@ -322,80 +228,12 @@ class SABRCalibrator:
         if len(self.strikes) < 3:
             raise RuntimeError(f"[SABR] Only {len(self.strikes)} strikes available -- cannot calibrate. No fallback.")
 
-        target_atm_vol = self._atm_market_vol()
-        print(f"[SABR Debug] True ATM market vol (nearest strike to forward) = {target_atm_vol:.4f}")
-
-        # Pass 1: fixed beta, alpha ATM-pinned, calibrate (rho, nu)
-        best_fixed, best_fixed_err = None, float('inf')
-        for rho0 in [-0.6, -0.3, 0.0, 0.3, 0.6]:
-            for nu0 in [0.2, 0.4, 0.6, 0.8, 1.0]:
-                res = minimize(self._objective_fixed_beta, [rho0, nu0], args=(self.beta, target_atm_vol),
-                               method='L-BFGS-B', bounds=[(-0.99, 0.99), (0.01, 5.0)],
-                               options={'maxiter': 2000, 'ftol': 1e-12})
-                if res.success and res.fun < best_fixed_err:
-                    best_fixed_err, best_fixed = res.fun, res
-
-        fixed_result = None
-        if best_fixed is not None:
-            rho_f, nu_f = best_fixed.x
-            alpha_f = self._solve_alpha_for_atm(target_atm_vol, self.beta, rho_f, nu_f)
-            fixed_result = {'alpha': float(alpha_f), 'beta': float(self.beta), 'rho': float(rho_f),
-                             'nu': float(nu_f), 'rmse': float(np.sqrt(best_fixed_err))}
-            print(f"[SABR Debug] Fixed-beta ({self.beta}) calibration: RMSE={fixed_result['rmse']:.6f}")
-
-        best_result = fixed_result
-
-        if calibrate_beta:
-            # Pass 2: free beta, alpha ATM-pinned, calibrate (beta, rho, nu)
-            best_free, best_free_err = None, float('inf')
-            for beta0 in [0.3, 0.5, 0.7, 1.0]:
-                for rho0 in [-0.5, 0.0, 0.5]:
-                    for nu0 in [0.3, 0.6, 0.9]:
-                        res = minimize(self._objective_free_beta, [beta0, rho0, nu0], args=(target_atm_vol,),
-                                       method='L-BFGS-B', bounds=[(0.1, 1.0), (-0.99, 0.99), (0.01, 5.0)],
-                                       options={'maxiter': 2000, 'ftol': 1e-12})
-                        if res.success and res.fun < best_free_err:
-                            best_free_err, best_free = res.fun, res
-
-            if best_free is not None:
-                beta_v, rho_v, nu_v = best_free.x
-                alpha_v = self._solve_alpha_for_atm(target_atm_vol, beta_v, rho_v, nu_v)
-                free_result = {'alpha': float(alpha_v), 'beta': float(beta_v), 'rho': float(rho_v),
-                                'nu': float(nu_v), 'rmse': float(np.sqrt(best_free_err))}
-                print(f"[SABR Debug] Free-beta calibration: beta={beta_v:.4f} RMSE={free_result['rmse']:.6f}")
-
-                # Require a MEANINGFUL RMSE improvement (>=8% relative) before trusting
-                # the free-beta result, not just any improvement no matter how tiny.
-                # beta is poorly identified against rho from a single smile snapshot --
-                # without this guard, the optimizer would happily walk beta all the way
-                # to its bound (observed: beta 0.5 -> 0.12) chasing a near-zero RMSE
-                # gain (observed: 0.039001 -> 0.038927, a 0.02% relative "improvement"),
-                # which is curve-fitting noise, not a genuinely better-calibrated model.
-                IMPROVEMENT_THRESHOLD = 0.92  # free-beta RMSE must be <= 92% of fixed-beta RMSE
-                if fixed_result is None:
-                    print(f"[SABR Debug] No fixed-beta baseline available; using free-beta result: beta={beta_v:.4f}")
-                    best_result = free_result
-                elif free_result['rmse'] < fixed_result['rmse'] * IMPROVEMENT_THRESHOLD:
-                    print(f"[SABR Debug] Selecting free-beta result (meaningful improvement: "
-                          f"{fixed_result['rmse']:.6f} -> {free_result['rmse']:.6f}): beta={beta_v:.4f} vs fixed beta={self.beta}")
-                    best_result = free_result
-                else:
-                    print(f"[SABR Debug] Keeping fixed beta={self.beta} (free-beta RMSE "
-                          f"{free_result['rmse']:.6f} vs fixed {fixed_result['rmse']:.6f} -- "
-                          f"not a large enough improvement to trust an unidentified beta)")
-
-        if best_result is None:
-            # NO FALLBACK: both the fixed-beta and free-beta multi-start
-            # optimizer passes failed to converge on ANY restart. That's a
-            # genuine calibration failure worth seeing, not something to
-            # paper over with a degenerate alpha/rho/nu=default guess.
-            raise RuntimeError(
-                f"[SABR] Calibration failed to converge on any multi-start restart for "
-                f"{self.ticker} (target_atm_vol={target_atm_vol:.4f}, {len(self.strikes)} strikes). No fallback."
-            )
-
-        print(f"[SABR Debug] Calibration converged! Final beta={best_result['beta']:.4f} RMSE={best_result['rmse']:.6f}")
-        return best_result
+        from sabr_market_calib import _fit_sabr_series
+        return _fit_sabr_series(
+            self.strikes, self.market_vols, self.forward, self.T,
+            beta=self.beta, calibrate_beta=calibrate_beta,
+            verbose=True, label=self.ticker,
+        )
 
 
 def sabr_all_greeks(S, K, T, r, q, cp, calibration, steps=401):

@@ -408,7 +408,10 @@ def _iso_utc_now() -> str:
 
 
 def _run_id_now() -> str:
-    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    now = datetime.now(timezone.utc)
+    # Microsecond suffix: concurrent unified runs launched in the same second
+    # previously collided on one run_id and clobbered each other's output dir.
+    return now.strftime('%Y%m%dT%H%M%SZ') + f'{now.microsecond:06d}'
 
 
 def _default_manifest_path() -> str:

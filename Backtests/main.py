@@ -5,6 +5,8 @@ Three harnesses, one report:
   H2 greeks      -- two levels: first-order (delta/gamma/theta/vega/rho) and
                     second-order (vanna/charm/vomma/speed/color) vs market
   H3 signals     -- sentiment packs vs forward returns (head-to-head)
+  H4 own-iv      -- each model solves ITS OWN implied vol; market IV as
+                    reference (the honest end-to-end head-to-head)
 
 `run_tournament(...)` is the reusable engine (also called by the Tools
 registry's strategy_pnl mode). Output: <out>/backtest_tournament_<ts>.txt
@@ -30,6 +32,7 @@ from shared.thetadata import ThetaDataController
 from Backtests.backtest_greeks import render_greeks_report, run_greeks
 from Backtests.backtest_pricing import render_pricing_report, run_pricing
 from Backtests.backtest_signals import render_signals_report, run_signal_tournament
+from Backtests.backtest_owniv import render_owniv_report, run_owniv
 from Backtests.core import write_json, write_txt
 from Backtests.data import fetch_chain_days, pick_expiry, recent_calendar_dates
 
@@ -43,6 +46,7 @@ def _import_harnesses():
         "pricing": (run_pricing, render_pricing_report),
         "greeks": (run_greeks, render_greeks_report),
         "signals": (run_signal_tournament, render_signals_report),
+        "owniv": (run_owniv, render_owniv_report),
     }
 
 
@@ -74,12 +78,13 @@ def run_tournament(
     A ThetaDataController is created/closed internally unless `td` is given.
     """
     tickers = [t.strip().upper() for t in tickers if t.strip()]
-    harnesses = [h for h in harnesses if h in {"pricing", "greeks", "signals"}]
+    harnesses = [h for h in harnesses if h in {"pricing", "greeks", "signals", "owniv"}]
     if not harnesses:
         raise ValueError("run_tournament: harnesses must be non-empty")
     want_pricing = "pricing" in harnesses
     want_greeks = "greeks" in harnesses
     want_signals = "signals" in harnesses
+    want_owniv = "owniv" in harnesses
 
     _own = td is None
     if _own:
@@ -106,13 +111,13 @@ def run_tournament(
                 continue
             expiries[ticker] = exp
             log(f"ticker {ticker}: expiry {exp}, lookback {lookback_days}d")
-            if want_pricing or want_greeks:
+            if want_pricing or want_greeks or want_owniv:
                 dates = recent_calendar_dates(lookback_days)
                 chains = fetch_chain_days(td, ticker, exp, dates, ctx["r"], ctx["q"])
                 log(f"ticker {ticker}: {len(chains)} chain day(s) fetched")
                 chains_by_ticker[ticker] = chains
 
-        if want_pricing or want_greeks:
+        if want_pricing or want_greeks or want_owniv:
             header = (f"Chains: {', '.join(f'{t}@{expiries.get(t)}' for t in tickers if t in expiries)}")
             report_lines.append(header)
             report_lines.append("")
@@ -136,6 +141,15 @@ def run_tournament(
             summary["greeks"] = gres
             report_lines += har["greeks"][1](gres)
 
+        if want_owniv:
+            all_chains = []
+            for t in tickers:
+                all_chains.extend(chains_by_ticker.get(t, []))
+            log("running H4 own-IV (model-implied vol vs market IV)")
+            ores = har["owniv"][0](all_chains)
+            summary["owniv"] = ores
+            report_lines += har["owniv"][1](ores)
+
         if want_signals:
             log(f"running H3 signal tournament (packs: {packs_dir})")
             sres = har["signals"][0](td, packs_dir, forward_days=forward_days)
@@ -155,7 +169,7 @@ def run_tournament(
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Backtest Tournament (pricing / greeks / signals)")
     ap.add_argument("--harness", default="all",
-                    help="comma-separated: pricing,greeks,signals (default all)")
+                    help="comma-separated: pricing,greeks,signals,owniv (default all)")
     ap.add_argument("--ticker", default="SPY,QQQ",
                     help="comma-separated tickers (default SPY,QQQ)")
     ap.add_argument("--expiry", default="",
@@ -173,13 +187,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     tickers = [t.strip().upper() for t in args.ticker.split(",") if t.strip()]
-    _valid = {"pricing", "greeks", "signals"}
+    _valid = {"pricing", "greeks", "signals", "owniv"}
     harnesses = [h.strip() for h in args.harness.split(",") if h.strip()]
     if "all" in harnesses:
         harnesses = list(_valid)
     harnesses = [h for h in harnesses if h in _valid]
     if not harnesses:
-        ap.error("--harness must include one of pricing,greeks,signals,all")
+        ap.error("--harness must include one of pricing,greeks,signals,owniv,all")
 
     summary = run_tournament(
         tickers=tickers,

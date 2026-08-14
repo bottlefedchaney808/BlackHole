@@ -61,18 +61,12 @@ def compute_forward_price(S0: float, r: float, q: float, T: float) -> float:
     return S0 * math.exp((r - q) * T)
 
 
-def compute_vega_notional(spot: float, base_notional: float = 100_000.0,
-                          reference_spot: float = 100.0) -> float:
-    """Target dollar-vega exposure, scaled so a $2000 stock and a $20 stock
-    aren't sized identically (the code previously hardcoded 100000 for every
-    ticker on every run). `base_notional` is both the value at
-    `reference_spot` and the floor for very cheap underlyings -- vega notional
-    is a trade-size choice (see the variance-swap payoff convention
-    N_var = N_vol / (2*sigma_strike)), not something that should shrink toward
-    zero just because spot is small."""
-    if not math.isfinite(spot) or spot <= 0:
-        return base_notional
-    return max(base_notional, base_notional * (spot / reference_spot))
+def compute_vega_notional(base_notional: float = 100_000.0) -> float:
+    """Target dollar-vega exposure -- a flat trade-size CHOICE, not a quantity
+    derived from spot. Per Bossu/Strasser/Guichard Exhibit 1.1.1, "Vega Amount:
+    100,000" is a fixed term-sheet input; the earlier spot-scaling of this was
+    reverted. Only `base_notional` matters."""
+    return base_notional
 
 
 def compute_variance_notional(vega_notional: float, strike_vol: float | None) -> float | None:
@@ -318,10 +312,10 @@ def export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match
     vrp_str = f"{result['fair_variance_swap_strike_vol_pct'] - rv_match*100:.2f}" if not math.isnan(rv_match) else "N/A"
     atm_iv_str = f"{result['atm_implied_vol_pct']:.2f}" if not math.isnan(result['atm_implied_vol_pct']) else "N/A"
     convexity_str = f"{result['convexity_premium_vol_pct']:.2f}" if not math.isnan(result['convexity_premium_vol_pct']) else "N/A"
-    # Same spot-scaled sizing as the two callers -- writing the old flat
-    # 100000 here would have made the exported CSV disagree with the result
-    # dict and the console print.
-    vega_notional = compute_vega_notional(result["S0"])
+    # Same sizing convention as the two other callers -- calling
+    # compute_vega_notional() here (rather than a hardcoded number) keeps the
+    # exported CSV in agreement with the result dict and the console print.
+    vega_notional = compute_vega_notional()
     variance_notional = compute_variance_notional(vega_notional, result["fair_variance_swap_strike_vol"])
     # Numeric on the happy path (like the other raw-number cells such as
     # Vega_Notional / S0), "N/A" only when the fair strike vol was unusable.
@@ -335,7 +329,7 @@ def export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match
             "Num_Strikes_Used", "K_min", "K_max",
             "RV_30d_%", "RV_60d_%", "RV_90d_%",
             f"RV_{match_lookback}d_%", "VRP_vol_pts",
-            "Vega_Notional", "Variance_Notional"
+            "Vega_Notional/Initial_Seed", "Variance_Notional"
         ],
         "Value": [
             ticker, expiration, result["S0"], result["F"], result["T_years"],
@@ -444,13 +438,13 @@ def main():
         print(f"Fair vol: {fair_vol_pct:.2f}% | RV: {rv_match*100:.2f}% | VRP: {vrp:+.2f} vol pts")
         print("---")
 
-    vega_notional = compute_vega_notional(S0)
+    vega_notional = compute_vega_notional()
     variance_notional = compute_variance_notional(vega_notional, result["fair_variance_swap_strike_vol"])
     if variance_notional is None:
-        print(f"\nVega notional: ${vega_notional:,.0f} -> Variance notional: N/A "
+        print(f"\nVega notional/initial seed: ${vega_notional:,.0f} -> Variance notional: N/A "
               f"(fair strike vol is {result['fair_variance_swap_strike_vol']}, not usable)")
     else:
-        print(f"\nVega notional: ${vega_notional:,.0f} -> Variance notional: ${variance_notional:,.2f}")
+        print(f"\nVega notional/initial seed: ${vega_notional:,.0f} -> Variance notional: ${variance_notional:,.2f}")
 
     print("\n--- Generating plots...")
     try:
@@ -571,7 +565,7 @@ def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: 
     # (a non-positive fair strike vol from a degraded chain) is handled
     # explicitly by compute_variance_notional returning None, so there is
     # nothing here worth wrapping in a blanket except.
-    result['vega_notional'] = compute_vega_notional(S0)
+    result['vega_notional'] = compute_vega_notional()
     result['variance_notional'] = compute_variance_notional(
         result['vega_notional'], result.get('fair_variance_swap_strike_vol'))
     if result['variance_notional'] is None:

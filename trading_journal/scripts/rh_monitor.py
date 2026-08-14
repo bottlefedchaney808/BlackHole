@@ -94,7 +94,7 @@ async def main():
     stamp = now.strftime("%H:%M")
     date = now.strftime("%Y%m%d")
     try:
-        async with streamable_http_client(URL, http_client=http_client) as (rs, ws):
+        async with streamable_http_client(URL, http_client=http_client) as (rs, ws, _sid):
             async with ClientSession(rs, ws) as sess:
                 await sess.initialize()
                 q = await call(sess, "get_equity_quotes", {"symbols": [p[0] for p in POSITIONS]})

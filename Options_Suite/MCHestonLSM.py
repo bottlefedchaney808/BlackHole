@@ -680,122 +680,10 @@ class HestonCalibrator:
         # for the sake of exhaustiveness -- the batched
         # heston_call_prices_batch keeps each objective evaluation cheap,
         # but 30 iterations x 5D gradient probes x N restarts still adds up.
-        if v0 is None:
-            v0 = (self.market_vols.mean())**2
-        v0_seed = v0
-        # BUG FIX: this used to hard-cap at the first 15 strikes (self.strikes
-        # is sorted ascending, so "first 15" meant the 15 LOWEST strikes in
-        # the chain -- not even nearest-to-forward, just whatever the sort
-        # order happened to put first). That was independent of, and on top
-        # of, smile_utils.fetch_market_smile's own now-removed 15-strike cap
-        # -- see that module's docstring. Calibrating against the FULL chain
-        # (confirmed live: 137 real strikes for a TSLA case, vs. 15 before)
-        # only became tractable once the per-strike pricer below was batched
-        # (see heston_call_prices_batch/_bs_iv_batch) -- the old per-strike
-        # Python loop, each iteration re-running two adaptive `quad`
-        # integrals plus a Newton IV solve, made calibrating against more
-        # than a handful of strikes take minutes.
-        strikes = self.strikes
-        market_vols = self.market_vols
-
-        # Vega-weight the objective, matching SABRCalibrator._weighted_error
-        # in SABRModel.py -- computed ONCE here (it only depends on the
-        # market data, not the trial kappa/theta/xi/rho) rather than inside
-        # obj(). Without this, an unweighted sum-of-squares objective treats
-        # a deep-OTM strike with a numerically-inflated "implied vol" (see
-        # smile_utils.py's moneyness-filter docstring -- inverting a
-        # near-worthless, minimum-tick price is ill-conditioned and can spit
-        # out an absurd IV) exactly as importantly as a liquid near-ATM
-        # point. Confirmed live on MU: unweighted, this landed on rho=0.98
-        # (pinned essentially at its bound) and xi=0.016 (essentially
-        # deterministic variance) -- a degenerate corner solution chasing
-        # noise, not a genuine fit. SABR's own calibration on the same data
-        # converges far more sensibly precisely because it already
-        # vega-weights; this brings Heston's objective to the same standard.
-        F, T = self.forward, self.T
-        mv = np.asarray(market_vols, dtype=float)
-        Karr = np.asarray(strikes, dtype=float)
-        d1 = (np.log(F / Karr) + 0.5 * mv ** 2 * T) / (mv * np.sqrt(T))
-        weights = F * np.sqrt(T) * norm.pdf(d1)
-        w_mask = weights >= 1e-6
-        if not np.any(w_mask):
-            raise RuntimeError("[HestonCalib] No strike has usable vega for weighting -- cannot calibrate. No fallback.")
-        w_sum = float(np.sum(weights[w_mask]))
-
-        def obj(x):
-            kappa, theta, xi, rho, v0_trial = x
-            if not (0.01<=kappa<=10 and 1e-6<=theta<=2 and 0.001<=xi<=5 and -0.99<=rho<=0.99 and 1e-6<=v0_trial<=4.0):
-                return 1e6
-            try:
-                prices = heston_call_prices_batch(self.S, strikes, self.T, self.r, self.q, v0_trial, kappa, theta, xi, rho)
-                ivs = _bs_iv_batch(prices, self.S, strikes, self.T, self.r, self.q, seed_vols=market_vols)
-                err = float(np.sum(weights[w_mask] * (ivs[w_mask] - mv[w_mask]) ** 2))
-                return err / w_sum
-            except Exception:
-                return 1e6
-
-        # Multi-start grid. The (initial, v0_seed) caller-supplied point is
-        # always kept as one of the seeds so behaviour is a superset of the
-        # previous single-start (any tuning that used to work still gets
-        # tried) -- the remaining seeds span the 3D corner of parameter
-        # space (kappa, xi, rho) where local optima most commonly hide.
-        # theta_seed stays at v0_seed at all seeds (session notes explain
-        # why hardcoding it to 0.04 systematically underprices high-vol
-        # names -- v0_seed is the correct anchor); v0's own seed is fixed at
-        # v0_seed too. All 5 parameters remain fully free during the
-        # minimize() call itself -- the grid only controls WHERE each
-        # restart begins searching from, not what it's allowed to search.
-        seed_grid = []
-        # The caller's own suggestion, first (preserves prior behaviour
-        # exactly when this seed happens to be the winner).
-        seed_grid.append((*initial, v0_seed))
-        for kappa0 in (0.5, 1.5, 3.0):
-            for xi0 in (0.2, 0.5, 1.0):
-                for rho0 in (-0.7, -0.3, 0.0, 0.3):
-                    seed_grid.append((kappa0, v0_seed, xi0, rho0, v0_seed))
-        # Dedup on rounded tuple to avoid running the caller's suggestion twice
-        # if it happens to coincide with a grid point.
-        seen = set(); uniq = []
-        for s in seed_grid:
-            key = tuple(round(x, 4) for x in s)
-            if key in seen: continue
-            seen.add(key); uniq.append(s)
-        seed_grid = uniq
-
-        bounds = [(0.01,10),(1e-6,2),(0.001,5),(-0.99,0.99),(1e-6,4.0)]
-        print(f"[HestonCalib] Multi-start calibration: {len(seed_grid)} restarts, "
-              f"{len(strikes)} strikes ({int(np.sum(w_mask))} usable for vega-weighting)")
-
-        best_res = None
-        best_fun = float('inf')
-        n_ok = 0
-        for x0 in seed_grid:
-            try:
-                res = minimize(obj, x0=x0, bounds=bounds, options={'maxiter': maxiter})
-            except Exception:
-                continue
-            if not res.success:
-                continue
-            n_ok += 1
-            if res.fun < best_fun:
-                best_fun = res.fun
-                best_res = res
-
-        if best_res is None:
-            # NO FALLBACK: every one of ~N multi-start restarts failed to
-            # converge. That's a genuine calibration failure worth seeing --
-            # something about the smile itself is broken (bad data, insufficient
-            # strikes, degenerate wing behavior) -- not something to paper over
-            # with a degenerate default guess.
-            raise RuntimeError(
-                f"[HestonCalib] Optimization failed on ALL {len(seed_grid)} multi-start restarts. "
-                f"No fallback -- inspect the market smile inputs (strike count, IV range, moneyness filter)."
-            )
-        kappa, theta, xi, rho, v0_fit = best_res.x
-        rmse = float(np.sqrt(best_res.fun))  # obj is already vega-weighted MEAN squared error
-        print(f"[HestonCalib] Done ({n_ok}/{len(seed_grid)} restarts converged): "
-              f"kappa={kappa:.4f}, theta={theta:.4f}, xi={xi:.4f}, rho={rho:.4f}, v0={v0_fit:.6f}, rmse={rmse:.4f}")
-        return {'kappa':kappa, 'theta':theta, 'xi':xi, 'rho':rho, 'v0':v0_fit, 'rmse':rmse}
+        return _fit_heston_multi_start(
+            self.S, self.strikes, self.market_vols, self.T, self.r, self.q,
+            initial=initial, v0=v0, maxiter=maxiter, verbose=True,
+        )
 
 
 def heston_european_call_price(S, K, T, r, q, v0, kappa, theta, xi, rho):
@@ -1042,6 +930,126 @@ def run_heston_full(ticker: str, S: float, K: float, T: float, r: float, q: floa
     # heston_all_greeks() on the returned calib (CRN bump-and-revalue on the
     # actual Heston LSM); see main.py's Heston branches.
     return {'calib': calib, 'price': price}
+
+
+def _fit_heston_multi_start(S, strikes, market_vols, T, r, q,
+                            initial=(1.5, 0.04, 0.3, -0.3), v0=None,
+                            maxiter=30, verbose=False):
+    """Shared pure multi-start Heston fit over a (strikes, market_vols) smile.
+
+    The vega-weighted objective, multi-start seed grid, and minimize() sweep
+    are shared by HestonCalibrator.calibrate (which fetches its own smile and
+    reports via verbose=True) and calibrate_heston_chain (which is called with
+    an already-fetched chain). Fits all five parameters (kappa, theta,
+    xi=vol_sigma, rho, v0). verbose=True reproduces HestonCalibrator's
+    diagnostic prints and raises on total failure; verbose=False returns None.
+
+    Returns {'v0','kappa','theta','xi','rho','rmse'} or None (no restart
+    converged / no usable vega).
+    """
+    import numpy as np
+    from scipy.stats import norm
+    from scipy.optimize import minimize
+
+    mv = np.asarray(market_vols, dtype=float)
+    Karr = np.asarray(strikes, dtype=float)
+    if v0 is None:
+        v0 = float(mv.mean() ** 2)
+    v0_seed = v0
+
+    F = S * np.exp((r - q) * T)
+    d1 = (np.log(F / Karr) + 0.5 * mv ** 2 * T) / (mv * np.sqrt(T))
+    weights = F * np.sqrt(T) * norm.pdf(d1)
+    w_mask = weights >= 1e-6
+    if not np.any(w_mask):
+        if verbose:
+            raise RuntimeError(
+                "[HestonCalib] No strike has usable vega for weighting -- cannot calibrate. No fallback.")
+        return None
+    w_sum = float(np.sum(weights[w_mask]))
+
+    def obj(x):
+        kappa, theta, xi, rho, vt = x
+        if not (0.01 <= kappa <= 10 and 1e-6 <= theta <= 2 and 0.001 <= xi <= 5
+                and -0.99 <= rho <= 0.99 and 1e-6 <= vt <= 4.0):
+            return 1e6
+        try:
+            prices = heston_call_prices_batch(S, Karr, T, r, q, vt, kappa, theta, xi, rho)
+            ivs = _bs_iv_batch(prices, S, Karr, T, r, q, seed_vols=mv)
+            err = float(np.sum(weights[w_mask] * (ivs[w_mask] - mv[w_mask]) ** 2))
+            return err / w_sum
+        except Exception:
+            return 1e6
+
+    seed_grid = [(*initial, v0_seed)]
+    for kappa0 in (0.5, 1.5, 3.0):
+        for xi0 in (0.2, 0.5, 1.0):
+            for rho0 in (-0.7, -0.3, 0.0, 0.3):
+                seed_grid.append((kappa0, v0_seed, xi0, rho0, v0_seed))
+    seen = set(); uniq = []
+    for s in seed_grid:
+        key = tuple(round(x, 4) for x in s)
+        if key in seen:
+            continue
+        seen.add(key); uniq.append(s)
+    seed_grid = uniq
+
+    bounds = [(0.01, 10), (1e-6, 2), (0.001, 5), (-0.99, 0.99), (1e-6, 4.0)]
+    if verbose:
+        print(f"[HestonCalib] Multi-start calibration: {len(seed_grid)} restarts, "
+              f"{len(Karr)} strikes ({int(np.sum(w_mask))} usable for vega-weighting)")
+    best = None
+    best_fun = float('inf')
+    n_ok = 0
+    for x0 in seed_grid:
+        try:
+            res = minimize(obj, x0=x0, bounds=bounds, options={'maxiter': maxiter})
+        except Exception:
+            continue
+        if not res.success:
+            continue
+        n_ok += 1
+        if res.fun < best_fun:
+            best_fun = res.fun
+            best = res
+    if best is None:
+        if verbose:
+            raise RuntimeError(
+                f"[HestonCalib] Optimization failed on ALL {len(seed_grid)} multi-start restarts. "
+                f"No fallback -- inspect the market smile inputs (strike count, IV range, moneyness filter).")
+        return None
+    kappa, theta, xi, rho, vt = best.x
+    rmse = float(np.sqrt(best_fun))
+    if verbose:
+        print(f"[HestonCalib] Done ({n_ok}/{len(seed_grid)} restarts converged): "
+              f"kappa={kappa:.4f}, theta={theta:.4f}, xi={xi:.4f}, rho={rho:.4f}, "
+              f"v0={vt:.6f}, rmse={rmse:.4f}")
+    return {'v0': float(vt), 'kappa': float(kappa), 'theta': float(theta),
+            'xi': float(xi), 'rho': float(rho), 'rmse': rmse}
+
+
+def calibrate_heston_chain(S, strikes, market_vols, T, r, q,
+                           initial=(1.5, 0.04, 0.3, -0.3), v0=None, maxiter=30):
+    """Pure, network-free Heston calibration to a given (strikes, market_vols)
+    smile. Same vega-weighted multi-start objective as HestonCalibrator.calibrate
+    (see that method's docstring for the rationale), but takes the smile data as
+    arguments instead of fetching it -- so the Backtests tournament
+    (build_heston_context) can calibrate Heston to an already-fetched chain
+    offline. Fits all five parameters (kappa, theta, xi=vol_sigma, rho, v0).
+    Delegates to the shared _fit_heston_multi_start.
+
+    Returns {'v0','kappa','theta','xi','rho','rmse'} or None if no restart
+    converges (caller should fall back to fixed-params rather than raise).
+    """
+    import numpy as np
+    strikes = np.asarray(strikes, dtype=float)
+    mv = np.asarray(market_vols, dtype=float)
+    valid = (strikes > 0) & (mv > 0)
+    if int(valid.sum()) < 3 or T <= 0 or S <= 0:
+        return None
+    return _fit_heston_multi_start(S, strikes[valid], mv[valid], T, r, q,
+                                   initial=initial, v0=v0, maxiter=maxiter,
+                                   verbose=False)
 
 
 if __name__ == '__main__':

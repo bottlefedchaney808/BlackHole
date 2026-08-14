@@ -32,9 +32,12 @@ from Options_Suite.MC import AmericanLSMPricer, mc_all_greeks  # type: ignore
 from Options_Suite.barone_adesi_whaley import baw_american_price, baw_all_greeks  # type: ignore
 from Options_Suite.VannaVolga import get_vol, vv_all_greeks  # type: ignore
 from Options_Suite.SABRModel import sabr_all_greeks, sabr_vol_hagan  # type: ignore
-from Options_Suite.MCHestonLSM import heston_all_greeks, heston_european_call_price  # type: ignore
-# --- network-free SABR fitter (Vol_Suite) ---------------------------------
-from Vol_Suite.vol_surface_reference import fit_sabr_reference  # type: ignore
+from Options_Suite.MCHestonLSM import (  # type: ignore
+    calibrate_heston_chain,
+    heston_all_greeks,
+    heston_european_call_price,
+)
+from Options_Suite.sabr_market_calib import fit_sabr_market  # type: ignore
 
 from Backtests.core import (
     ALL_GREEK_FIELDS,
@@ -136,7 +139,14 @@ def build_vv_context(
 
 
 def build_sabr_context(rows: List[Dict[str, Any]], forward: float, T: float) -> Optional[Dict[str, Any]]:
-    """SABR calibration dict {alpha, beta, rho, nu, rmse} from the chain."""
+    """SABR calibration dict {alpha, beta, rho, nu, rmse} from the chain.
+
+    Uses the MARKET-grade calibrator (Options_Suite/sabr_market_calib:
+    vega-weighted, 5x5 multi-start, optional free-beta), NOT the dealer-facing
+    fitter (Vol_Suite/sabr_dealer_calib) -- the dealer fitter is a coarse,
+    equal-weight, fixed-beta curve for deep-OTM sign reads and is deliberately
+    left untouched for the sign model. Pricing/backtests use the market one.
+    """
     chain_iv: Dict[Tuple[float, str], float] = {}
     for row in rows:
         iv = _row_iv(row)
@@ -145,17 +155,59 @@ def build_sabr_context(rows: List[Dict[str, Any]], forward: float, T: float) -> 
     if not chain_iv:
         return None
     try:
-        return fit_sabr_reference(chain_iv, forward, T)
+        return fit_sabr_market(chain_iv, forward, T)
     except Exception:
         return None
 
 
-def build_heston_context(atm_iv: Optional[float]) -> Dict[str, Any]:
-    """Heston variance-level params: V0 pinned to ATM IV^2, structural
-    params fixed (documented in the report; no per-expiry Heston calibration
-    in tournament mode)."""
+def _otm_strikes_and_vols(
+    rows: List[Dict[str, Any]], forward: float,
+) -> Tuple[List[float], List[float]]:
+    """Collapse the chain to one (strike, OTM-side IV) per strike for Heston."""
+    strikes: List[float] = []
+    vols: List[float] = []
+    for row in rows:
+        iv = _row_iv(row)
+        if iv is None or iv <= 0:
+            continue
+        k = row["strike"]
+        wants_call = k > forward
+        if wants_call and row["right"] != "C":
+            continue
+        if not wants_call and row["right"] != "P":
+            continue
+        strikes.append(k)
+        vols.append(iv)
+    return strikes, vols
+
+
+def build_heston_context(rows: List[Dict[str, Any]], spot: float, forward: float,
+                         T: float, r: float, q: float) -> Dict[str, Any]:
+    """Heston context calibrated to the chain (canonical).
+
+    Runs the network-free multi-start Heston calibrator (calibrate_heston_chain)
+    against the chain's OTM smile -- fits kappa/theta/xi/rho/v0 -- so the
+    tournament's Heston engine uses Heston's OWN fit to the market, not the
+    fixed structural params that were the old default. Falls back to the
+    V0=ATM^2 fixed-params context only when calibration cannot run (too few
+    OTM strikes / no restart converged).
+    """
+    strikes, vols = _otm_strikes_and_vols(rows, forward)
+    cal = calibrate_heston_chain(spot, strikes, vols, T, r, q) if strikes else None
+    if cal is not None:
+        return {
+            "V0": cal["v0"],
+            "kappa": cal["kappa"],
+            "theta": cal["theta"],
+            "vol_sigma": cal["xi"],
+            "rho": cal["rho"],
+            "rmse": cal["rmse"],
+            "calibrated": True,
+        }
+    # Fallback: V0 pinned to ATM IV^2 (from the OTM vols), structural fixed.
+    atm_iv = max(vols) if vols else None
     v0 = (atm_iv ** 2) if atm_iv and atm_iv > 0 else 0.04
-    return {"V0": v0, "theta": v0, **HESTON_FIXED}
+    return {"V0": v0, "theta": v0, **HESTON_FIXED, "calibrated": False}
 
 
 def sample_slow_rows(rows: List[Dict[str, Any]], spot: float) -> List[Dict[str, Any]]:

@@ -246,37 +246,28 @@ def test_corrugation_absolute_and_relative_directions_are_opposite(wide_sparse_s
 
 
 # ---------------------------------------------------------------------------
-# Trade sizing: vega notional must scale with spot, not be a flat constant
+# Trade sizing: vega notional is a flat term-sheet choice, not spot-derived.
+# Per Bossu/Strasser/Guichard "Just What You Need to Know About Variance
+# Swaps" (docs/bossu-strasser-guichard-varswap.pdf), Exhibit 1.1.1, "Vega
+# Amount: 100,000" is a fixed input the counterparties agree on -- the paper
+# gives no formula deriving it from spot. An earlier version of this function
+# scaled by spot, which made an index leg (e.g. SPY) and a focus-ticker leg
+# use different-sized hypothetical trades; that has been reverted.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
-def test_compute_vega_notional_scales_with_spot():
-    """A $2000 stock and a $20 stock must not be sized identically -- the old
-    code hardcoded vega_notional = 100000 for every ticker on every run."""
+def test_compute_vega_notional_is_flat_regardless_of_spot():
+    """Vega notional is a trade-size choice, not a function of price level."""
     from variance_swap_live import compute_vega_notional
-    low = compute_vega_notional(spot=20.0)
-    high = compute_vega_notional(spot=2000.0)
-    assert high > low
+    assert compute_vega_notional() == pytest.approx(100_000.0)
 
 
 @pytest.mark.unit
-def test_compute_vega_notional_at_reference_spot_matches_base():
+def test_compute_vega_notional_honors_explicit_base_notional_override():
+    """base_notional is the one legitimate lever -- a caller choosing a
+    different trade size gets that value back, flat."""
     from variance_swap_live import compute_vega_notional
-    assert compute_vega_notional(spot=100.0) == pytest.approx(100_000.0)
-
-
-@pytest.mark.unit
-def test_compute_vega_notional_floors_at_base_for_cheap_tickers():
-    """Cheap underlyings must not collapse toward a near-zero vega notional."""
-    from variance_swap_live import compute_vega_notional
-    assert compute_vega_notional(spot=1.0) >= 100_000.0
-
-
-@pytest.mark.unit
-def test_compute_vega_notional_handles_nonpositive_spot():
-    from variance_swap_live import compute_vega_notional
-    assert compute_vega_notional(spot=0.0) == pytest.approx(100_000.0)
-    assert compute_vega_notional(spot=-5.0) == pytest.approx(100_000.0)
+    assert compute_vega_notional(base_notional=200_000.0) == pytest.approx(200_000.0)
 
 
 # ---------------------------------------------------------------------------

@@ -179,8 +179,7 @@ def build_chain_day(
     forward = spot * __exp((r - q) * T)
     vv_ctx = build_vv_context(rows, forward, T, r, q)
     sabr_cal = build_sabr_context(rows, forward, T)
-    atm_iv = vv_ctx.get("atm_vol")
-    heston_ctx = build_heston_context(atm_iv)
+    heston_ctx = build_heston_context(rows, spot, forward, T, r, q)
     return ChainDay(
         ticker=ticker, expiry=expiry, date=date, rows=rows, spot=spot, T=T,
         r=r, q=q, forward=forward, vv_ctx=vv_ctx, sabr_cal=sabr_cal,

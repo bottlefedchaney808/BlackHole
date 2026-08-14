@@ -6,7 +6,7 @@ from Backtests.models import (
     greeks_model,
     price_model,
 )
-from Backtests.core import make_contract_row
+from Backtests.core import make_contract_row, normalize_rows
 
 
 _STRIKES = [80, 85, 90, 95, 100, 105, 110, 115, 120]
@@ -58,13 +58,16 @@ def test_greeks_known_answer_lr():
 
 
 def test_greeks_smiles_finite():
-    rows = _chain_rows()
+    rows = normalize_rows(_chain_rows())
     vv = build_vv_context(rows, 100.0 * __exp(0.05), 1.0, 0.05, 0.0)
     assert vv["atm_vol"] is not None
     cal = build_sabr_context(rows, 100.0 * __exp(0.05), 1.0)
     assert cal is not None and "alpha" in cal
-    h = build_heston_context(0.20)
-    assert abs(h["V0"] - 0.04) < 1e-9
+    h = build_heston_context(rows, 100.0, 100.0 * __exp(0.05), 1.0, 0.05, 0.0)
+    # Canonical Heston now CALIBRATES to the chain (fits V0 freely); assert it
+    # ran and produced a sane calibrated variance level, not a fixed 0.04.
+    assert h["calibrated"] is True
+    assert h["V0"] > 0 and h["kappa"] > 0 and "vol_sigma" in h and "rho" in h
     # SABR + VV greeks run without exception at ATM
     gs = greeks_model("SABR", 100, 100, 1.0, 0.05, 0.0, 0.20, True, sabr_cal=cal)
     assert gs["delta"] is not None
