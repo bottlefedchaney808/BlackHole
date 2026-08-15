@@ -444,6 +444,38 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
             present_fams.add(str(f).upper())
     fam_cols = [f"family_interaction_{f.lower()}" for f in sorted(present_fams)]
 
+    # ---- ΔIV provenance gate (Cem's fail-closed causal gate) — computed FIRST,
+    #      before any design is built. A corpus is CAUSAL-ELIGIBLE only if EVERY
+    #      deduped unit explicitly carries delta_iv_provenance=="PRE_WINDOW", a
+    #      valid iv_source_ts STRICTLY before breach_window_start_prov, AND a
+    #      non-null delta_iv_pre_window. Any missing/equal/later/mixed/invalid unit
+    #      vetoes the whole corpus -> causal β unavailable (associational only).
+    all_pass = True
+    _reasons = set()
+    for r in day_records:
+        l2 = r.get("l2", {})
+        prov = str(l2.get("delta_iv_provenance", "")).upper()
+        src_ts = l2.get("iv_source_ts")
+        b_ts = l2.get("breach_window_start_prov")
+        div_pw = l2.get("delta_iv_pre_window")
+        if prov != "PRE_WINDOW":
+            all_pass = False
+            _reasons.add("missing/associational provenance")
+            continue
+        if src_ts is None or b_ts is None or not (float(src_ts) < float(b_ts)):
+            all_pass = False
+            _reasons.add("timestamp not strictly before breach")
+            continue
+        if div_pw is None:
+            all_pass = False
+            _reasons.add("missing delta_iv_pre_window")
+    if all_pass:
+        delta_iv_provenance = "PRE_WINDOW"
+        associational_label = "CAUSAL-ELIGIBLE"
+    else:
+        delta_iv_provenance = "DAY_LEVEL-UNVERIFIED" if _reasons else "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
+        associational_label = "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
+
     # constituents of the interaction: per-family pre_vanna levels + ΔIV main effect
     constituent_cols = list(fam_cols) + ["delta_iv"]
 
@@ -454,15 +486,24 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
     for r in day_records:
         l2 = r.get("l2", {})
         pre_v = l2.get("pre_vanna_exposure", 0.0)
-        div = l2.get("delta_iv", 0.0)
-        interaction = pre_v * div
+        div_day = l2.get("delta_iv", 0.0)   # day-level net_div — associational/descriptive only
+        # R10.6.1: the causal target uses delta_iv_pre_window ONLY when the whole
+        # corpus passed the causal gate. Otherwise it uses the day-level ΔIV and is
+        # explicitly labeled ASSOCIATIONAL. Never introduce NaN (would crash lstsq).
+        if all_pass:
+            div_for_target = float(l2.get("delta_iv_pre_window"))
+        else:
+            div_for_target = div_day
+        interaction = pre_v * div_for_target
         # residualization regressors
         zrow = []
         for c in constituent_cols:
             zrow.append(l2.get(c, 0.0))
         rows_Z.append([1.0] + zrow)          # + intercept
-        # outcome design: Vanna⊥ in the target slot (filled after residualization)
-        rows_X.append([1.0, 0.0, l2.get("gamma_burst", 0.0), div,
+        # outcome design: Vanna⊥ in the target slot (filled after residualization).
+        # The ΔIV main-effect column stays the day-level ΔIV (the associational
+        # contemporaneous control); the residualized TARGET is what switches source.
+        rows_X.append([1.0, 0.0, l2.get("gamma_burst", 0.0), div_day,
                        l2.get("delta_s", 0.0), l2.get("market", 0.0),
                        float(l2.get("event", 0) or 0), l2.get("a6_reflexivity", 0.0),
                        l2.get("cross_family_spillover", 0.0)])
@@ -474,8 +515,9 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
 
     Z = np.asarray(rows_Z, dtype=float)          # n x (1 + len(constituents))
     target = np.asarray([r.get("l2", {}).get("pre_vanna_exposure", 0.0)
-                         * r.get("l2", {}).get("delta_iv", 0.0) for r in day_records],
-                        dtype=float)
+                         * (float(r.get("l2", {}).get("delta_iv_pre_window"))
+                            if all_pass else r.get("l2", {}).get("delta_iv", 0.0))
+                         for r in day_records], dtype=float)
     # residualize target on constituents + intercept (FWL step)
     coef_z, *_ = np.linalg.lstsq(Z, target, rcond=None)
     resid = target - Z @ coef_z
@@ -489,37 +531,6 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
              "cross_family_spillover"])
     if family_l2:
         cols += fam_cols
-
-    # ---- ΔIV provenance disclosure (R1-mandated; prevents causal overclaim) ----
-    # The `delta_iv` covariate and the residualizer constituent both come from the
-    # record's l2['delta_iv']. A record is causal-eligible ONLY if it explicitly
-    # carries delta_iv_provenance=="PRE_WINDOW" AND iv_source_ts is STRICTLY before
-    # breach_window_start_prov. Any record that is missing provenance, has an equal/
-    # later timestamp, or declares ASSOCIATIONAL VETOES the whole corpus (causal β
-    # unavailable unless ALL included units pass — Cem's fail-closed gate). This
-    # prevents a day-level net_div (which the old 62-day corpus uses) from ever being
-    # relabeled as pre-window, and prevents a mixed corpus from leaking a causal label.
-    all_pass = True
-    _reasons = set()
-    for r in day_records:
-        l2 = r.get("l2", {})
-        prov = str(l2.get("delta_iv_provenance", "")).upper()
-        src_ts = l2.get("iv_source_ts")
-        b_ts = l2.get("breach_window_start_prov")
-        if prov != "PRE_WINDOW":
-            all_pass = False
-            _reasons.add("missing/associational provenance")
-            continue
-        # PRE_WINDOW declared -> verify the timestamp is STRICTLY before the breach
-        if src_ts is None or b_ts is None or not (float(src_ts) < float(b_ts)):
-            all_pass = False
-            _reasons.add("timestamp not strictly before breach")
-    if all_pass:
-        delta_iv_provenance = "PRE_WINDOW"
-        associational_label = "CAUSAL-ELIGIBLE"
-    else:
-        delta_iv_provenance = "DAY_LEVEL-UNVERIFIED" if _reasons else "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
-        associational_label = "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
 
     # report the residualization diagnostics
     return {"X": X, "y": y, "col_names": cols, "days": days,

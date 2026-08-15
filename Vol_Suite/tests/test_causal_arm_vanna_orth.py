@@ -159,6 +159,7 @@ def test_delta_iv_provenance_assertion():
     # (iv_source_ts strictly before breach_window_start) -> CAUSAL-ELIGIBLE
     for r in recs:
         r["l2"]["delta_iv_provenance"] = "PRE_WINDOW"
+        r["l2"]["delta_iv_pre_window"] = r["l2"].get("delta_iv", 0.02)
         r["l2"]["iv_source_ts"] = 300000
         r["l2"]["iv_cutoff_ts"] = 300000
         r["l2"]["breach_window_start_prov"] = 600000

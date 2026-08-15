@@ -43,6 +43,9 @@ def _record(day, ticker, prov=None, pre_ts=None, breach_ts=None, div=None):
     }
     if prov is not None:
         l2["delta_iv_provenance"] = prov
+        # a PRE_WINDOW record must carry a non-null pre-window ΔIV (R10.6.1 gate)
+        if str(prov).upper() == "PRE_WINDOW":
+            l2["delta_iv_pre_window"] = div if div is not None else 0.02
     if pre_ts is not None:
         l2["iv_source_ts"] = pre_ts
         l2["iv_cutoff_ts"] = pre_ts
@@ -138,3 +141,41 @@ def test_vanna_orth_uses_only_pre_window_and_pre_event():
     body = src.split("def orthogonalize_vanna_design")[1]
     resid_part = body.split("# residualize target")[1] if "# residualize target" in body else ""
     assert "forward_return" not in resid_part
+
+
+def test_interaction_responds_to_delta_iv_pre_window():
+    """Regression test for the R10.6.1 consumption fix: the driver's Vanna⊥ target must
+    be built from delta_iv_pre_window (not the day-level net_div) when the causal gate
+    passes. Holding net_div (l2['delta_iv']) FIXED but changing delta_iv_pre_window must
+    change the interaction/target, proving the estimator consumes the pre-window ΔIV.
+
+    NOTE: the change must be NON-collinear with the family_interaction (pre_v) column —
+    a constant shift in delta_iv_pre_window is absorbed by the FWL residualization (it
+    is a scalar multiple of pre_v), so it would leave the residual unchanged even though
+    the driver consumes the field. We use a REVERSED ordering to guarantee the change is
+    genuinely informative."""
+    # two identical corpora, differing ONLY in delta_iv_pre_window (net_div fixed);
+    # corpus_b is the REVERSED pattern so the change is non-collinear with pre_v.
+    def corpus(pre_vals):
+        recs = []
+        for i, pv in enumerate(pre_vals):
+            r = _record(f"2026{100+i:03d}", "SPY", prov="PRE_WINDOW",
+                        pre_ts=300000, breach_ts=600000)
+            r["l2"]["delta_iv"] = 0.27            # net_div FIXED (day-level)
+            r["l2"]["delta_iv_pre_window"] = pv    # ONLY this changes
+            recs.append(r)
+        return recs
+
+    ascending = [0.01 * (i + 1) for i in range(10)]          # .01,.02,... .10
+    recs_a = corpus(ascending)
+    recs_b = corpus(list(reversed(ascending)))                # .10,.09,... .01 (reversed)
+
+    # both must be causal-eligible (all units carry valid PRE_WINDOW provenance)
+    orth_a = ca.orthogonalize_vanna_design(ca.deduplicate_family_day(recs_a), family_l2=True)
+    orth_b = ca.orthogonalize_vanna_design(ca.deduplicate_family_day(recs_b), family_l2=True)
+    assert orth_a["associational_label"] == "CAUSAL-ELIGIBLE"
+    assert orth_b["associational_label"] == "CAUSAL-ELIGIBLE"
+
+    # the residualized target (Vanna⊥) MUST differ — proving it consumes delta_iv_pre_window
+    assert not np.allclose(orth_a["resid_target"], orth_b["resid_target"]), \
+        "interaction did not respond to delta_iv_pre_window (consumption bug)"
