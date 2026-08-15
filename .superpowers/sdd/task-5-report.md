@@ -121,3 +121,27 @@ git diff --check
 ```
 
 No network acquisition, live/master, secrets, or unrelated files were changed.
+
+## Review-fix closure (2026-08-15, structural PRE_WINDOW and canonical config identities)
+
+- Replaced the length-only PRE_WINDOW admission check with structural validation: every observation must be a mapping with explicit `role=PRE_WINDOW`, timezone-qualified timestamp, finite IV, non-empty source identity, valid SHA-256 source hash, and timestamp strictly before the breach/cutoff in the declared timezone and calendar day. Observations must be distinct and ordered; when delta fields are supplied, the registered aggregation is recomputed and must bind the ordered values.
+- Added separate canonical live/new configuration identities to `CanonicalInput`, derived from explicit locked configuration fields. Per-strike `config_hash` must match the exact engine-specific canonical hash; arbitrary non-empty labels now block.
+- Added regressions for `None`, scalar, malformed, post-cutoff, and arbitrary config evidence without monkeypatch bypass of the structural gate.
+
+## Verification (structural evidence-contract closure)
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+126 passed in 0.14s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
+# exit 0
+
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
+All checks passed!
+
+git diff --check
+# exit 0 (Git emitted only LF/CRLF conversion warnings)
+```
+
+No acquisition, network, live/master, secrets, or unrelated files were changed.

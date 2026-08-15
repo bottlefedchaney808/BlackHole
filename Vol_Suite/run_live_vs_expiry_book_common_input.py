@@ -53,6 +53,27 @@ class CanonicalRow:
         return {"strike": self.strike, "right": self.right, "iv": self.iv, "oi": self.oi}
 
 
+# These are the only configuration identities admitted by the common-input
+# contract.  They are deliberately explicit and hashed independently for each
+# engine; a caller cannot choose an arbitrary non-empty per-strike label.
+LIVE_CONFIG_FIELDS = {
+    "sign_model": "vol_surface_replication",
+    "accumulate": True,
+    "route": "SVI",
+    "deadband": 0.01,
+    "dealer_vanna_flow": 1,
+}
+NEW_CONFIG_FIELDS = {
+    "engine": "expiry_book_exposure",
+    "vanna_formula": "-1xBS",
+    "time_basis": "dte/365",
+}
+
+
+def canonical_config_hash(fields: Mapping[str, Any]) -> str:
+    return canonical_sha256(dict(fields))
+
+
 @dataclass(frozen=True)
 class CanonicalInput:
     ticker: str
@@ -64,8 +85,18 @@ class CanonicalInput:
     rows: tuple[CanonicalRow, ...]
     source_hashes: tuple[str, ...]
     chain_source: str = "offline-canonical"
+    live_config_hash: str | None = None
+    new_config_hash: str | None = None
 
     def __post_init__(self) -> None:
+        expected_live = canonical_config_hash(LIVE_CONFIG_FIELDS)
+        expected_new = canonical_config_hash(NEW_CONFIG_FIELDS)
+        if self.live_config_hash is None:
+            object.__setattr__(self, "live_config_hash", expected_live)
+        if self.new_config_hash is None:
+            object.__setattr__(self, "new_config_hash", expected_new)
+        if self.live_config_hash != expected_live or self.new_config_hash != expected_new:
+            raise ValueError("canonical live/new configuration identity is invalid")
         if not self.ticker or not self.expiry or not self.calendar_day:
             raise ValueError("ticker, calendar_day, and expiry are required")
         if self.dte <= 0 or not math.isfinite(float(self.spot)) or self.spot <= 0 or not self.rows:

@@ -10,7 +10,9 @@ from Vol_Suite.dealer_exposure_expansion import (
     run_expansion_plan,
 )
 from Vol_Suite.run_live_vs_expiry_book_common_input import (
+    NEW_CONFIG_FIELDS,
     ComparisonInvalid,
+    canonical_config_hash,
     make_canonical_input,
 )
 
@@ -151,9 +153,19 @@ def test_held_reference_paths_compose_task_one(tmp_path):
 
 def _gated_evidence(result):
     keys = [u["candidate_key"] for u in result["units"]]
+    units = []
+    for unit in result["units"]:
+        day = unit["calendar_day"]
+        units.append({"candidate_key": unit["candidate_key"], "calendar_day": day,
+                      "declared_timezone": "UTC", "breach_window_start_prov": f"{day}T15:00:00Z",
+                      "pre_window_observations": [
+                          {"role": "PRE_WINDOW", "timestamp": f"{day}T13:00:00Z", "iv": 0.20,
+                           "source_identity": "theta:iv:before", "source_hash": "a" * 64},
+                          {"role": "PRE_WINDOW", "timestamp": f"{day}T14:00:00Z", "iv": 0.21,
+                           "source_identity": "theta:iv:source", "source_hash": "b" * 64},
+                      ]})
     return {"probes": [{"candidate_key": key, "status": "PASS", "validated": True, "invoked": True} for key in keys],
-            "units": [{"candidate_key": key, "pre_window_observations": [1, 2]} for key in keys],
-            "artifact_registry": {}}
+            "units": units, "artifact_registry": {}}
 
 
 @pytest.mark.parametrize("evidence", [None, {"probes": []}, {"probes": [], "units": [], "artifact_registry": {}}])
@@ -263,7 +275,7 @@ def test_structured_executor_failure_is_hard_gap(monkeypatch):
 def _identity_row(**overrides):
     values = {"strike": 100.0, "right": "C", "expiry": "2026-08-19", "spot": 100.0,
               "dte": 2, "T": 2 / 365.0, "iv": 0.2, "oi": 10,
-              "source_hash": "a" * 64, "config_hash": "config-1", "sign_provenance": "attested"}
+              "source_hash": "a" * 64, "config_hash": canonical_config_hash(NEW_CONFIG_FIELDS), "sign_provenance": "attested"}
     values.update(overrides)
     return SimpleNamespace(**values)
 
@@ -364,6 +376,41 @@ def test_execution_gate_blocks_unhashable_candidate_identity(monkeypatch):
     assert output["network_fetch_allowed"] is False
     assert output["mode"] == "blocked"
     assert any(item["reason"] == "malformed evidence candidate identity" for item in output["execution_audit"]["blocked"])
+
+
+@pytest.mark.parametrize("bad_observations", [
+    [None, None],
+    [1, 2],
+    [{"role": "PRE_WINDOW"}, {"role": "PRE_WINDOW"}],
+    [{"role": "PRE_WINDOW", "timestamp": "2026-08-17T15:00:00Z", "iv": 0.2,
+      "source_identity": "x", "source_hash": "a" * 64}] * 2,
+])
+def test_structurally_fake_pre_window_observations_block_before_executor(bad_observations, monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    evidence["units"][0]["pre_window_observations"] = bad_observations
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    calls = []
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
+                                executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
+    assert calls == []
+    assert result["network_fetch_allowed"] is False
+    assert any("observation" in str(item) or "PRE_WINDOW" in str(item) for item in result["execution_audit"]["blocked"])
+
+
+def test_arbitrary_nonempty_config_hash_is_rejected():
+    inp = _canonical()
+    row = _identity_row(config_hash="arbitrary-config")
+    result = SimpleNamespace(spot=100.0, expiry=inp.expiry, dte=inp.dte, T=inp.dte / 365.0, rows=[row])
+    with pytest.raises(ComparisonInvalid, match="config identity"):
+        expansion._require_result_identity(result, inp, "new")
+
+
+def test_canonical_input_exposes_distinct_live_and_new_config_hashes():
+    inp = _canonical()
+    assert inp.live_config_hash and inp.new_config_hash
+    assert inp.live_config_hash != inp.new_config_hash
 
 
 def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):

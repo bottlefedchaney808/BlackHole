@@ -8,13 +8,16 @@ invoke a caller-supplied executor.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import math
 import os
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 EXPECTED_DEADBAND = 0.01
 LIVE_CONFIG = {
@@ -203,8 +206,8 @@ def _require_result_identity(result: Any, inp: CanonicalInput, engine: str) -> l
         config_hash = _field(row, "config_hash", "per_strike_config_hash", "config_identity")
         if not isinstance(source_hash, str) or source_hash not in inp.source_hashes or not isinstance(config_hash, str) or not config_hash.strip():
             raise ComparisonInvalid(f"{engine} per-strike source/config identity is missing or mismatched", structured_invalid=True)
-        expected_config_hash = getattr(inp, "config_hash", None)
-        if expected_config_hash is not None and config_hash != expected_config_hash:
+        expected_config_hash = getattr(inp, f"{engine}_config_hash")
+        if config_hash != expected_config_hash:
             raise ComparisonInvalid(f"{engine} per-strike config identity is missing or mismatched", structured_invalid=True)
         actual.add(key)
     return list(rows)
@@ -299,6 +302,82 @@ def compare_expansion_common_input(
     return comparison
 
 
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _validate_pre_window_observations(unit: Mapping[str, Any]) -> list[str]:
+    observations = unit.get("pre_window_observations")
+    if not isinstance(observations, list) or len(observations) < 2:
+        return ["two PRE_WINDOW observations are required"]
+    timezone = unit.get("declared_timezone")
+    try:
+        zone = ZoneInfo(timezone) if isinstance(timezone, str) and timezone else None
+        if zone is None:
+            raise ValueError("declared_timezone is required")
+        cutoff_value = unit.get("breach_window_start_prov", unit.get("cutoff_timestamp"))
+        if not isinstance(cutoff_value, str):
+            raise TypeError("PRE_WINDOW breach/cutoff timestamp is required")
+        cutoff_text = cutoff_value[:-1] + "+00:00" if cutoff_value.endswith(("Z", "z")) else cutoff_value
+        cutoff = dt.datetime.fromisoformat(cutoff_text)
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            raise ValueError("PRE_WINDOW cutoff must be timezone-qualified")
+        cutoff = cutoff.astimezone(dt.UTC)
+        parsed: list[tuple[dt.datetime, float]] = []
+        errors: list[str] = []
+        for index, observation in enumerate(observations):
+            if not isinstance(observation, Mapping):
+                errors.append(f"observation {index} must be a mapping")
+                continue
+            if observation.get("role") != "PRE_WINDOW":
+                errors.append(f"observation {index} must declare role PRE_WINDOW")
+            timestamp_value = observation.get("timestamp", observation.get("ts"))
+            value = observation.get("iv", observation.get("iv_value", observation.get("value")))
+            source_hash = observation.get("source_hash", observation.get("source_sha256"))
+            source_identity = observation.get("source_identity", observation.get("source"))
+            try:
+                text = timestamp_value[:-1] + "+00:00" if isinstance(timestamp_value, str) and timestamp_value.endswith(("Z", "z")) else timestamp_value
+                timestamp = dt.datetime.fromisoformat(text)
+                if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                    raise ValueError("timestamp must be timezone-qualified")
+                timestamp = timestamp.astimezone(dt.UTC)
+                number = float(value)
+                if isinstance(value, bool) or not math.isfinite(number):
+                    raise ValueError("IV value must be finite")
+                if not isinstance(source_identity, str) or not source_identity.strip():
+                    raise ValueError("source identity is required")
+                if not isinstance(source_hash, str) or not _SHA256.fullmatch(source_hash):
+                    raise ValueError("source hash must be a SHA-256 identity")
+                if timestamp >= cutoff:
+                    raise ValueError("observation timestamp must strictly precede breach/cutoff")
+                if timestamp.astimezone(zone).date().isoformat() != str(unit.get("calendar_day")):
+                    raise ValueError("observation timestamp is wrong-day in declared timezone")
+                parsed.append((timestamp, number))
+            except (TypeError, ValueError, OverflowError) as exc:
+                errors.append(f"observation {index}: {exc}")
+        if errors:
+            return errors
+        if len({timestamp for timestamp, _ in parsed}) != len(parsed):
+            return ["PRE_WINDOW observations must have distinct timestamps"]
+        if len(parsed) < 2:
+            return ["two PRE_WINDOW observations are required"]
+        if parsed != sorted(parsed, key=lambda item: item[0]):
+            return ["PRE_WINDOW observations must be ordered"]
+        aggregation = unit.get("delta_iv_aggregation")
+        version = unit.get("delta_iv_aggregation_version")
+        delta = unit.get("delta_iv_pre_window")
+        if delta is not None or aggregation is not None or version is not None:
+            if aggregation != "iv_source_minus_iv_before" or str(version) != "1":
+                return ["unsupported PRE_WINDOW IV aggregation"]
+            if delta is None or not math.isfinite(float(delta)):
+                return ["delta_iv_pre_window must be finite"]
+            expected = parsed[-1][1] - parsed[0][1]
+            if not math.isclose(float(delta), expected, rel_tol=1e-12, abs_tol=1e-12):
+                return ["delta_iv_pre_window does not bind ordered observations"]
+    except (TypeError, ValueError, OSError) as exc:
+        return [str(exc)]
+    return []
+
+
 def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return admitted units and auditable reasons; approval alone never admits."""
     reasons: list[dict[str, Any]] = []
@@ -350,9 +429,8 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
     if set(by_identity) != schedule_keys:
         reasons.append({"reason": "evidence coverage is not 100% of primary schedule"})
     for key, unit in by_identity.items():
-        observations = unit.get("pre_window_observations")
-        if not isinstance(observations, list) or len(observations) < 2:
-            reasons.append({"candidate_key": key, "reason": "two PRE_WINDOW observations are required"})
+        for observation_reason in _validate_pre_window_observations(unit):
+            reasons.append({"candidate_key": key, "reason": observation_reason})
     causal = validate_causal_eligibility(by_identity.values(), intended_units=len(schedule),
                                          intended_corpus_manifest={"units": schedule},
                                          artifact_registry=registry)
