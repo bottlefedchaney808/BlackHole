@@ -93,3 +93,25 @@ python -c "from Vol_Suite.dealer_exposure_universe import held_pairs_from_paths;
 ```
 
 Remaining concern: this remains a network-free contract layer; real acquisition probes must populate the evidence fields from approved data sources before any unit is admitted.
+
+## Important finding fixes (2026-08-15)
+
+- Replaced truthy-placeholder probe acceptance with semantic PASS validation: probe identity (when supplied), expiry/DTE arithmetic, real timestamped spot/OHLC rows for all required windows, same-expiry non-empty positive OI/IV arrays with equal strike-grid lengths, numeric strike-side/moneyness coverage within the declared band, derived PRE_WINDOW ordering (the caller `strictly_before` boolean is not proof), distinct positive daily/from-breach clocks, and explicit clean imputation/zero-DTE markers.
+- Removed the missing-expiry manifest fallback. Candidate admission now requires an exact `(ticker, day, expiry, DTE)` match to exactly one validated probe; missing expiry is recorded as `missing_probe`.
+- Added regressions for contradictory timestamps, mismatched probe/evidence expiry and identity, invalid grid/clock/moneyness evidence, and missing candidate expiry.
+
+### Fix verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
+.................                                                        [100%]
+17 passed in 0.07s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
+exit 0
+
+git diff --check
+exit 0
+```
+
+Only the Task 1 implementation, its tests, and this report were modified; unrelated untracked corpora were preserved.

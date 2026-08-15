@@ -10,19 +10,30 @@ from Vol_Suite.dealer_exposure_universe import (
 
 
 def evidence():
+    row = lambda stamp: {"timestamp": stamp, "spot": 100.0, "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0}
     return {
-        "spot_ohlc_coverage": {"pre_window": "2026-08-17T14:00", "firing_window": "2026-08-17T15:00", "response_window": "2026-08-17T16:00", "return_clocks": "1d/5d"},
-        "same_expiry_grid_oi_iv": {"expiry": "2026-08-21", "grid": "locked", "oi": 10, "iv": 10},
-        "strike_side_moneyness": {"call_side": 3, "put_side": 3, "moneyness_band": "0.9-1.1"},
+        "probe_identity": {"ticker": "AAPL", "day": "2026-08-17", "expiry": "2026-08-21", "dte": 4},
+        "spot_ohlc_coverage": {"pre_window": [row("2026-08-17T14:00:00")], "firing_window": [row("2026-08-17T15:00:00")], "response_window": [row("2026-08-17T16:00:00")], "return_clocks": "daily/from_breach"},
+        "same_expiry_grid_oi_iv": {"expiry": "2026-08-21", "grid": [95.0, 100.0, 105.0], "oi": [10, 20, 10], "iv": [0.25, 0.20, 0.23]},
+        "strike_side_moneyness": {"call_side": [1.02, 1.05], "put_side": [0.95, 0.98], "moneyness_band": [0.9, 1.1]},
         "strict_pre_window_ordering": {"pre_window_last": "2026-08-17T14:59:00", "breach_first": "2026-08-17T15:00:00", "strictly_before": True},
-        "return_clocks": {"clock_1": "1d", "clock_2": "5d"},
+        "return_clocks": {"daily": "1d", "from_breach": "5d"},
         "no_imputation": True,
         "zero_dte": False,
     }
 
 
 def probe(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, status="PASS", reasons=()):
-    return ProbeResult(ticker, day, expiry, dte, status, {name: status for name in PROBE_CHECKS}, list(reasons), False, evidence() if status == "PASS" else {})
+    data = evidence() if status == "PASS" else {}
+    if data:
+        data["probe_identity"] = {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte}
+        data["same_expiry_grid_oi_iv"]["expiry"] = expiry
+        day_prefix = day + "T"
+        for window in ("pre_window", "firing_window", "response_window"):
+            data["spot_ohlc_coverage"][window][0]["timestamp"] = day_prefix + data["spot_ohlc_coverage"][window][0]["timestamp"].split("T", 1)[1]
+        data["strict_pre_window_ordering"]["pre_window_last"] = day_prefix + "14:59:00"
+        data["strict_pre_window_ordering"]["breach_first"] = day_prefix + "15:00:00"
+    return ProbeResult(ticker, day, expiry, dte, status, {name: status for name in PROBE_CHECKS}, list(reasons), False, data)
 
 
 def candidate(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tech"):
@@ -62,9 +73,30 @@ def test_probe_requires_all_eligibility_evidence_and_rejects_zero_dte():
 def test_probe_enforces_strict_ordering_distinct_return_clocks_and_no_imputation():
     data = evidence(); data["strict_pre_window_ordering"]["strictly_before"] = False
     with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
-    data = evidence(); data["return_clocks"]["clock_2"] = "1d"
+    data = evidence(); data["return_clocks"]["from_breach"] = "1d"
     with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
     with pytest.raises(ValueError): validate_probe_result(probe(status="INELIGIBLE", reasons=("missing OI",)).__class__(**{**probe(status="INELIGIBLE", reasons=("missing OI",)).__dict__, "imputed_zero": True}))
+
+
+def test_probe_rejects_contradictory_timestamp_and_truthy_placeholders():
+    data = evidence(); data["strict_pre_window_ordering"]["pre_window_last"] = "2026-08-17T15:01:00"
+    with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
+    data = evidence(); data["same_expiry_grid_oi_iv"]["grid"] = "locked"
+    with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
+    data = evidence(); data["return_clocks"]["daily"] = "daily"
+    with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
+
+
+def test_probe_rejects_mismatched_probe_identity():
+    data = evidence(); data["probe_identity"]["ticker"] = "MSFT"
+    with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
+
+
+def test_probe_rejects_mismatched_expiry_and_bad_moneyness_coverage():
+    data = evidence(); data["same_expiry_grid_oi_iv"]["expiry"] = "2026-08-22"
+    with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
+    data = evidence(); data["strike_side_moneyness"]["put_side"] = [0.5]
+    with pytest.raises(ValueError): validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
 
 
 def test_manifest_requires_exactly_one_pass_probe_and_records_exclusions():
@@ -79,7 +111,15 @@ def test_manifest_requires_exactly_one_pass_probe_and_records_exclusions():
 def test_missing_probe_is_explicit_and_nonmatching_expiry_is_not_admitted():
     manifest = build_manifest([candidate("AAPL")], probe_results=[], selection_date="2026-08-15")
     assert manifest.units == () and manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
-    manifest = build_manifest([candidate("AAPL")], probe_results=[probe(expiry="2026-08-22")], selection_date="2026-08-15")
+    manifest = build_manifest([candidate("AAPL")], probe_results=[probe(expiry="2026-08-22", dte=5)], selection_date="2026-08-15")
+    assert manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
+
+
+def test_manifest_rejects_missing_candidate_expiry_without_fallback_match():
+    raw = candidate("AAPL")
+    raw.pop("expiry")
+    manifest = build_manifest([raw], probe_results=[probe()], selection_date="2026-08-15")
+    assert manifest.units == ()
     assert manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
 
 

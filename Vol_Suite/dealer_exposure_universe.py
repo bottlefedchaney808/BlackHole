@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import datetime as dt
+import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
@@ -23,11 +25,12 @@ _REQUIRED_EVIDENCE = {
     "same_expiry_grid_oi_iv": ("expiry", "grid", "oi", "iv"),
     "strike_side_moneyness": ("call_side", "put_side", "moneyness_band"),
     "strict_pre_window_ordering": ("pre_window_last", "breach_first", "strictly_before"),
-    "return_clocks": ("clock_1", "clock_2"),
+    "return_clocks": ("daily", "from_breach"),
 }
 _REFERENCE_FAMILIES = {"SPY", "QQQ"}
 _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 _DATE_RE = re.compile(r"^\d{4}[-]?\d{2}[-]?\d{2}$")
+_CLOCK_RE = re.compile(r"^(?:[1-9]\d*)(?:d|h|m)$", re.IGNORECASE)
 
 
 def _date(value: Any) -> str:
@@ -207,11 +210,118 @@ def held_pairs_from_paths(paths: Iterable[str | Path]) -> set[tuple[str, str]]:
     return pairs
 
 
+def _timestamp(value: Any) -> dt.datetime:
+    """Parse an evidence timestamp, rejecting dates and non-finite placeholders."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("evidence timestamp is required")
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"invalid evidence timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(dt.timezone.utc).replace(tzinfo=None)
+
+
+def _number(value: Any, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("evidence value must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or (positive and result <= 0):
+        raise ValueError("evidence value must be finite and positive")
+    return result
+
+
+def _rows(value: Any, label: str) -> list[Any]:
+    if isinstance(value, Mapping):
+        value = list(value.values())
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError(f"{label} evidence must be non-empty")
+    return list(value)
+
+
+def _validate_probe_evidence(result: ProbeResult) -> None:
+    evidence = result.evidence
+    identity = evidence.get("probe_identity")
+    if identity is not None:
+        if not isinstance(identity, Mapping):
+            raise ValueError("probe identity evidence must be a mapping")
+        expected = {"ticker": result.ticker.upper(), "day": _date(result.day),
+                    "expiry": _date(result.expiry), "dte": result.dte}
+        actual = {"ticker": str(identity.get("ticker", "")).strip().upper(),
+                  "day": _date(identity.get("day")),
+                  "expiry": _date(identity.get("expiry")), "dte": identity.get("dte")}
+        if actual != expected:
+            raise ValueError("probe evidence identity does not match probe")
+    spot = evidence["spot_ohlc_coverage"]
+    # Coverage is evidence, not a set of truthy labels: every required window
+    # must contain a timestamp and real positive spot/OHLC values.
+    for window in ("pre_window", "firing_window", "response_window"):
+        rows = _rows(spot[window], window)
+        for row in rows:
+            if isinstance(row, Mapping):
+                stamp = row.get("timestamp", row.get("ts"))
+                _timestamp(stamp)
+                _number(row.get("spot"), positive=True)
+                ohlc = row.get("ohlc", row)
+                for field in ("open", "high", "low", "close"):
+                    _number(ohlc.get(field), positive=True)
+            else:
+                _timestamp(row)
+    if spot.get("return_clocks") != "daily/from_breach":
+        raise ValueError("spot/OHLC coverage must identify daily/from_breach clocks")
+
+    grid = evidence["same_expiry_grid_oi_iv"]
+    if _date(grid.get("expiry")) != _date(result.expiry):
+        raise ValueError("same-expiry evidence does not match probe expiry")
+    strikes = [_number(v, positive=True) for v in _rows(grid.get("grid"), "strike grid")]
+    oi = [_number(v, positive=True) for v in _rows(grid.get("oi"), "OI")]
+    iv = [_number(v, positive=True) for v in _rows(grid.get("iv"), "IV")]
+    if not (len(strikes) == len(oi) == len(iv)):
+        raise ValueError("same-expiry OI/IV evidence is not grid-consistent")
+
+    sides = evidence["strike_side_moneyness"]
+    band = sides.get("moneyness_band")
+    if not isinstance(band, (list, tuple)) or len(band) != 2:
+        raise ValueError("moneyness band must declare numeric lower and upper bounds")
+    low, high = (_number(v, positive=True) for v in band)
+    if low >= high:
+        raise ValueError("moneyness band is invalid")
+    for side in ("call_side", "put_side"):
+        values = [_number(v, positive=True) for v in _rows(sides.get(side), side)]
+        if not all(low <= value <= high for value in values):
+            raise ValueError(f"{side} coverage falls outside declared moneyness band")
+
+    ordering = evidence["strict_pre_window_ordering"]
+    pre = _timestamp(ordering.get("pre_window_last"))
+    breach = _timestamp(ordering.get("breach_first"))
+    if pre >= breach:
+        raise ValueError("PRE_WINDOW source timestamp must precede breach")
+    if "strictly_before" in ordering and ordering["strictly_before"] is not True:
+        raise ValueError("contradictory strictly_before marker")
+    if pre.date().isoformat() != _date(result.day) or breach.date().isoformat() != _date(result.day):
+        raise ValueError("PRE_WINDOW/breach timestamps must be on probe day")
+
+    clocks = evidence["return_clocks"]
+    daily, from_breach = clocks.get("daily"), clocks.get("from_breach")
+    if not (isinstance(daily, str) and isinstance(from_breach, str)
+            and _CLOCK_RE.fullmatch(daily.strip()) and _CLOCK_RE.fullmatch(from_breach.strip())):
+        raise ValueError("daily and from-breach clocks must be valid positive durations")
+    if daily.strip().lower() == from_breach.strip().lower():
+        raise ValueError("daily and from-breach clocks must be distinct")
+
+    if evidence.get("no_imputation") is not True or evidence.get("zero_dte") is not False:
+        raise ValueError("imputation markers and zero-DTE evidence must be explicitly clean")
+
+
 def validate_probe_result(result: ProbeResult) -> ProbeResult:
     if result.status not in PROBE_STATUSES: raise ValueError(f"invalid probe status: {result.status}")
     if not _TICKER_RE.fullmatch(result.ticker.upper()): raise ValueError("invalid probe ticker")
     if result.dte <= 0 or _stratum(result.dte) is None: raise ValueError("probe DTE must be in the locked 1-10 strata")
     day, expiry = _date(result.day), _date(result.expiry)
+    if (dt.date.fromisoformat(expiry) - dt.date.fromisoformat(day)).days != result.dte:
+        raise ValueError("probe expiry and DTE do not match probe identity")
     if set(result.checks) != set(PROBE_CHECKS): raise ValueError("probe checks must contain exactly the locked checks")
     if any(v not in CHECK_STATUSES for v in result.checks.values()): raise ValueError("invalid check status")
     if result.status == "PASS" and any(v != "PASS" for v in result.checks.values()): raise ValueError("PASS probe requires every check to PASS")
@@ -225,8 +335,7 @@ def validate_probe_result(result: ProbeResult) -> ProbeResult:
         if result.evidence.get("zero_dte") is True: missing.append("zero_dte_rejection")
         if missing: raise ValueError("PASS probe lacks eligibility evidence: " + ", ".join(missing))
         if result.evidence.get("no_imputation") is not True: raise ValueError("PASS probe requires no_imputation=true")
-        if result.evidence.get("strict_pre_window_ordering", {}).get("strictly_before") is not True: raise ValueError("PRE_WINDOW must precede breach")
-        if result.evidence.get("return_clocks", {}).get("clock_1") == result.evidence.get("return_clocks", {}).get("clock_2"): raise ValueError("return clocks must be distinct")
+        _validate_probe_evidence(result)
     return ProbeResult(result.ticker.upper(), day, expiry, result.dte, result.status, result.checks, tuple(result.reasons), result.imputed_zero, result.evidence)
 
 
@@ -259,7 +368,9 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
         expiry = raw.get("expiry")
         try: expiry = _date(expiry) if expiry is not None else None
         except ValueError: exclusions[key] = "invalid_expiry"; continue
-        matches = by_key.get((ticker, day, expiry, dte), []) if expiry is not None else [p for p in validated_probes if p.ticker == ticker and p.day == day and p.dte == dte]
+        # Expiry is part of probe identity.  Never admit a candidate by a
+        # weaker ticker/day/DTE fallback when the candidate omitted expiry.
+        matches = by_key.get((ticker, day, expiry, dte), []) if expiry is not None else []
         if len(matches) != 1: exclusions[key] = "missing_probe" if not matches else "ambiguous_probe"; continue
         if matches[0].status != "PASS": exclusions[key] = f"probe_{matches[0].status.lower()}"; continue
         try: candidate = normalize_candidate(raw, selection_date=selection_date or None, source_list=source_list)
