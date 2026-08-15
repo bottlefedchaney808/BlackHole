@@ -201,3 +201,20 @@ No acquisition, live-model/master, or secrets files were changed.
 - `git diff --check` — passed
 
 No acquisition, live-model/master, or secrets files were changed.
+
+## Critical/Important integrity closure (2026-08-15 follow-up)
+
+- Added `ticker`, `calendar_day`, and `canonical_input_hash` to the strict provenance field set, acquisition manifests, and persisted registry entries. Comparison identity validation binds the supplied unit and registry manifest to the exact canonical input identity; post-registration mutations and cross-input use block causally.
+- `execute_sequential_acquisition` now returns and writes the complete `artifact_registry`; registry entries retain manifest, artifact/raw hashes, source hashes, payload, and identity fields. JSON persistence round-trips the same registry.
+- New-engine result and every returned row must carry the canonical expiry and `T == dte / 365` under explicit `1e-12` relative / `1e-15` absolute tolerance. Violations become structured comparison-invalid exclusions.
+- Causal comparison now requires explicit `intended_units` or an intended corpus manifest. It never derives the coverage denominator from supplied units; duplicate units and exact intended candidate identities are checked, so partial corpora are `CAUSAL_BLOCKED` / `COMPARISON_INVALID`.
+- Acquisition and comparison now use shared strict `canonical_json_bytes`/`canonical_sha256`; no `default=str` fallback remains in the touched boundary code. Representation/hash mutation regressions were added.
+
+## Follow-up verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **101 passed**
+- `python -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `uvx ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **All checks passed**
+- `git diff --check` — passed
+
+No network, acquisition endpoint, live model, master, or secrets path was invoked.

@@ -1,6 +1,7 @@
 """Shared validation primitives for acquisition provenance boundaries."""
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -25,9 +26,14 @@ def canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
+def canonical_sha256(value: Any) -> str:
+    """Hash the one strict canonical JSON representation used at every boundary."""
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
 def normalize_hashes(value: Iterable[str]) -> tuple[str, ...]:
     """Normalize an iterable after validating each source hash."""
     return validate_source_hashes(tuple(value))
 
 
-__all__ = ["SHA256_RE", "canonical_json_bytes", "normalize_hashes", "validate_source_hashes"]
+__all__ = ["SHA256_RE", "canonical_json_bytes", "canonical_sha256", "normalize_hashes", "validate_source_hashes"]

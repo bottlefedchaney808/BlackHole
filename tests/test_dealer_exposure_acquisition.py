@@ -256,3 +256,7 @@ def test_output_dir_writes_auditable_artifact(tmp_path):
     assert saved["artifact_path"] == str(artifact)
     assert saved["no_imputation"] is True
     assert saved["mode"] == "probe-only"
+    assert saved["artifact_registry"] == result["artifact_registry"]
+    assert saved["artifact_registry"]
+    for entry in saved["artifact_registry"].values():
+        assert {"artifact_hash", "raw_payload_hash", "artifact_manifest", "payload_bytes"} <= set(entry)

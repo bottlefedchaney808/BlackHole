@@ -8,7 +8,6 @@ fail-closed at one.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import math
 import os
@@ -19,7 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from .dealer_exposure_universe import DTE_STRATA, EVENT_HABITATS, held_pairs_from_paths
-from .provenance_contract import canonical_json_bytes, validate_source_hashes
+from .provenance_contract import (
+    canonical_json_bytes,
+    canonical_sha256,
+    validate_source_hashes,
+)
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -41,8 +44,8 @@ def _date(value: Any) -> str:
 
 
 def _hash(value: Any) -> str:
-    blob = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False).encode()
-    return hashlib.sha256(blob).hexdigest()
+    """Use the shared strict canonical representation for every artifact hash."""
+    return canonical_sha256(value)
 
 
 def _held_references(paths: Iterable[str | Path]) -> dict[tuple[str, str], str]:
@@ -110,7 +113,7 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
         excluded = pair in held
         item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair)}
         previous = result_by_key.get(key)
-        if previous is None or json.dumps(item, sort_keys=True, default=str) < json.dumps(previous, sort_keys=True, default=str):
+        if previous is None or canonical_json_bytes(item) < canonical_json_bytes(previous):
             result_by_key[key] = item
     return sorted(result_by_key.values(), key=lambda x: tuple(x[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")))
 
@@ -190,8 +193,10 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
             timestamp_reason = str(exc)
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
     artifact = dict(unit)
-    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
-    manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": raw_hash, "status": status,
+    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"),
+                "calendar_day": unit.get("calendar_day"), "canonical_input_hash": unit.get("canonical_input_hash"),
+                "raw_payload_hash": raw_hash, "status": status,
                 "expiry": unit.get("expiry"), "dte": unit.get("dte"),
                 "imputed": False, "no_imputation": True}
     artifact["artifact_manifest"] = manifest
@@ -328,7 +333,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             item["same_day_cluster"] = cluster
             if item.get("status") == "PASS":
                 manifest = {key: item[key] for key in (
-                    "candidate_key", "status", "raw_payload_hash", "endpoint", "request_parameters",
+                    "candidate_key", "ticker", "calendar_day", "canonical_input_hash", "status", "raw_payload_hash", "endpoint", "request_parameters",
                     "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
                     "breach_window_start_prov", "source_hashes", "same_day_cluster", "iv_before_ts",
                     "iv_before_value", "iv_source_value", "delta_iv_aggregation",
@@ -344,17 +349,20 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             "artifact_manifest": item["artifact_manifest"],
             "source_hashes": item.get("source_hashes"),
             "payload_bytes": payloads.get(item["candidate_key"]),
+            "ticker": item.get("ticker"),
+            "calendar_day": item.get("calendar_day"),
+            "canonical_input_hash": item.get("canonical_input_hash"),
         }
         for item in units
     }
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / "dealer_exposure_acquisition.json"
         result["artifact_path"] = str(artifact_path)
-        artifact_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str, allow_nan=False) + "\n", encoding="utf-8")
+        artifact_path.write_text(json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     return result
 
 

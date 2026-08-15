@@ -3,6 +3,7 @@ import math
 from types import SimpleNamespace
 
 import pytest
+from provenance_contract import canonical_json_bytes, canonical_sha256
 from run_live_vs_expiry_book_common_input import (
     CanonicalPayload,
     ComparisonInvalid,
@@ -52,6 +53,7 @@ def _engines(live_accumulate=True, *, live_rows=None, new_rows=None):
     def new(payload):
         consumed = payload.read()
         return SimpleNamespace(attestation=__import__("hashlib").sha256(consumed).hexdigest(),
+                               expiry=EXPIRY, T=35 / 365,
                                rows=new_rows or [_row(210, "P", -20.0), _row(220, "C", 12.0)])
     return live, new
 
@@ -198,7 +200,7 @@ def _registry(unit, payload=b"verified canonical payload"):
     import hashlib
     unit["raw_payload_hash"] = hashlib.sha256(payload).hexdigest()
     manifest = {key: unit[key] for key in (
-        "candidate_key", "status", "raw_payload_hash", "endpoint", "request_parameters",
+        "candidate_key", "ticker", "calendar_day", "canonical_input_hash", "status", "raw_payload_hash", "endpoint", "request_parameters",
         "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
         "breach_window_start_prov", "source_hashes", "same_day_cluster",
         "iv_before_ts", "iv_before_value", "iv_source_value", "delta_iv_aggregation",
@@ -426,7 +428,7 @@ def test_runner_exception_is_structured_comparison_invalid():
 def test_compare_accepts_fully_bound_provenance_unit():
     live, new = _engines()
     unit = _causal_unit()
-    assert compare_common_input(_input(), live, new, provenance_units=[unit], artifact_registry=_registry(unit))["status"] == "VALID"
+    assert compare_common_input(_input(), live, new, provenance_units=[unit], artifact_registry=_registry(unit), intended_units=1)["status"] == "VALID"
 
 
 @pytest.mark.parametrize("field,value", [
@@ -469,3 +471,50 @@ def test_registry_rejects_post_registration_expiry_or_dte_mutation():
         unit[field] = value
         result = validate_causal_eligibility([unit], artifact_registry=registry)
         assert result["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_compare_requires_explicit_intended_units_for_causal_mode():
+    unit = _causal_unit()
+    with pytest.raises(ComparisonInvalid, match="intended_units or intended_corpus_manifest") as exc:
+        compare_common_input(_input(), *_engines(), provenance_units=[unit], artifact_registry=_registry(unit))
+    assert exc.value.invalid_result["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_compare_blocks_partial_supplied_corpus_against_intended_count():
+    unit = _causal_unit()
+    with pytest.raises(ComparisonInvalid, match="incomplete"):
+        compare_common_input(_input(), *_engines(), provenance_units=[unit], artifact_registry=_registry(unit), intended_units=2)
+
+
+def test_compare_requires_exact_intended_corpus_identities():
+    unit = _causal_unit()
+    with pytest.raises(ComparisonInvalid, match="incomplete") as exc:
+        compare_common_input(_input(), *_engines(), provenance_units=[unit], artifact_registry=_registry(unit),
+                             intended_corpus_manifest=["OTHER|2026-08-14"])
+    assert any("exactly match intended" in item["reason"] for item in exc.value.invalid_result["exclusions"])
+
+
+@pytest.mark.parametrize("mutation,needle", [
+    (lambda result: setattr(result, "T", 34 / 365), "result T"),
+    (lambda result: setattr(result, "expiry", "20261016"), "result expiry"),
+    (lambda result: setattr(result.rows[0], "T", 34 / 365), "row T"),
+    (lambda result: setattr(result.rows[0], "expiry", "20261016"), "row expiry"),
+])
+def test_new_engine_expiry_and_t_are_bound_to_canonical_input(mutation, needle):
+    live, base_new = _engines()
+    def bad_new(payload):
+        result = base_new(payload)
+        mutation(result)
+        return result
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, bad_new)
+    assert any(needle in item["reason"] for item in exc.value.invalid_result["exclusions"])
+
+
+def test_shared_canonical_hash_is_strict_and_representation_sensitive():
+    assert canonical_sha256({"value": 1}) != canonical_sha256({"value": "1"})
+    with pytest.raises(TypeError):
+        canonical_json_bytes({"value": object()})
+    changed = make_canonical_input("IWM", "20260814", EXPIRY, 35, 220.0, "2026-08-14T13:00:00Z",
+                                   [{"strike": 210, "right": "P", "iv": 0.24, "oi": 1001}], ["a" * 64])
+    assert changed.input_hash != _input().input_hash

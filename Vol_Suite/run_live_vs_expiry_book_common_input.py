@@ -25,12 +25,14 @@ try:
     from .provenance_contract import (
         SHA256_RE,
         canonical_json_bytes,
+        canonical_sha256,
         validate_source_hashes,
     )
 except ImportError:
     from provenance_contract import (
         SHA256_RE,
         canonical_json_bytes,
+        canonical_sha256,
         validate_source_hashes,
     )
 
@@ -94,7 +96,7 @@ class CanonicalInput:
 
     @property
     def input_hash(self) -> str:
-        return hashlib.sha256(self.canonical_bytes()).hexdigest()
+        return canonical_sha256(self.as_dict())
 
 
 class CanonicalPayload:
@@ -261,9 +263,49 @@ def _new_vanna_level(row: Any, inp: CanonicalInput) -> float:
     return _finite_number(row.exposure_of("vanna"), "new vanna level")
 
 
+_NEW_T_REL_TOL = 1e-12
+_NEW_T_ABS_TOL = 1e-15
+
+
+def _new_identity_exclusions(engine_result: Any, inp: CanonicalInput) -> list[dict[str, Any]]:
+    """Require result and every new-engine row to preserve expiry and T identity."""
+    exclusions: list[dict[str, Any]] = []
+    expected_t = inp.dte / 365.0
+    if getattr(engine_result, "expiry", None) != inp.expiry:
+        exclusions.append({"engine": "new", "reason": "result expiry does not match canonical input",
+                           "expiry": getattr(engine_result, "expiry", None)})
+    try:
+        result_t = _finite_number(engine_result.T, "new result T")
+        if not math.isclose(result_t, expected_t, rel_tol=_NEW_T_REL_TOL, abs_tol=_NEW_T_ABS_TOL):
+            exclusions.append({"engine": "new", "reason": "result T does not match canonical dte/365",
+                               "T": result_t, "expected_T": expected_t})
+    except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+        exclusions.append({"engine": "new", "reason": f"invalid result T: {exc}"})
+    rows = getattr(engine_result, "rows", None)
+    if not isinstance(rows, (list, tuple)):
+        return exclusions
+    for index, row in enumerate(rows):
+        if getattr(row, "expiry", None) != inp.expiry:
+            exclusions.append({"engine": "new", "index": index, "reason": "row expiry does not match canonical input",
+                               "expiry": getattr(row, "expiry", None)})
+        try:
+            row_t = _finite_number(row.T, "new row T")
+            if not math.isclose(row_t, expected_t, rel_tol=_NEW_T_REL_TOL, abs_tol=_NEW_T_ABS_TOL):
+                exclusions.append({"engine": "new", "index": index, "reason": "row T does not match canonical dte/365",
+                                   "T": row_t, "expected_T": expected_t})
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            exclusions.append({"engine": "new", "index": index, "reason": f"invalid row T: {exc}"})
+    return exclusions
+
+
 def _new_levels(engine_result: Any, inp: CanonicalInput) -> tuple[dict[tuple[float, str], float], list[dict[str, Any]]]:
-    return _coverage(engine_result.rows, inp, "new", lambda row: _new_vanna_level(row, inp),
-                     parent_expiry=getattr(engine_result, "expiry", None))
+    rows = getattr(engine_result, "rows", None)
+    if not isinstance(rows, (list, tuple)):
+        return {}, [{"engine": "new", "reason": "new result container is missing or malformed"}]
+    exclusions = _new_identity_exclusions(engine_result, inp)
+    levels, row_exclusions = _coverage(rows, inp, "new", lambda row: _new_vanna_level(row, inp),
+                                       parent_expiry=getattr(engine_result, "expiry", None))
+    return levels, exclusions + row_exclusions
 
 
 def _live_levels(engine_result: Any, inp: CanonicalInput) -> tuple[dict[tuple[float, str], float], list[dict[str, Any]]]:
@@ -362,13 +404,12 @@ def _manifest_payload_digest(entry: Mapping[str, Any]) -> str:
     elif isinstance(payload, str):
         raw = payload.encode("utf-8")
     else:
-        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                         allow_nan=False).encode("utf-8")
+        raw = canonical_json_bytes(payload)
     return hashlib.sha256(raw).hexdigest()
 
 
 _PROVENANCE_FIELDS = (
-    "candidate_key", "status", "endpoint", "request_parameters", "declared_timezone",
+    "candidate_key", "ticker", "calendar_day", "canonical_input_hash", "status", "endpoint", "request_parameters", "declared_timezone",
     "spot_timestamp", "chain_timestamp", "iv_source_ts", "breach_window_start_prov",
     "source_hashes", "raw_payload_hash", "same_day_cluster", "iv_before_ts",
     "iv_before_value", "iv_source_value", "delta_iv_aggregation", "delta_iv_aggregation_version",
@@ -404,7 +445,7 @@ def _validate_provenance_identity(unit: Mapping[str, Any], inp: CanonicalInput) 
         if unit.get(field) != value:
             raise ValueError(f"provenance {field} does not match canonical input")
     if _identity_day(unit.get("calendar_day")) != _identity_day(inp.calendar_day):
-        raise ValueError("provenance calendar_day does not match canonical input")
+        raise ValueError("provenance calendar_day does not match canonical input identity")
     cluster = unit.get("same_day_cluster")
     if not isinstance(cluster, Mapping):
         raise TypeError("provenance same_day_cluster is required")
@@ -475,7 +516,7 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
     manifest = entry.get("artifact_manifest", entry.get("manifest"))
     if not isinstance(manifest, Mapping):
         raise TypeError("registry entry lacks canonical artifact manifest")
-    if hashlib.sha256(canonical_json_bytes(manifest)).hexdigest() != artifact_hash.lower():
+    if canonical_sha256(manifest) != artifact_hash.lower():
         raise ValueError("artifact_hash does not match canonical registry manifest")
     declared = validate_source_hashes(unit.get("source_hashes"))
     registered = validate_source_hashes(entry.get("source_hashes"))
@@ -565,8 +606,25 @@ def _validate_cluster_groups(units: Sequence[Mapping[str, Any]]) -> None:
                 raise ValueError("same-day cluster metadata is inconsistent across unit set")
 
 
+def _intended_identity_set(manifest: Any) -> set[str]:
+    """Normalize an explicit intended corpus manifest to exact candidate identities."""
+    entries = manifest.get("units", manifest.get("intended_units")) if isinstance(manifest, Mapping) else manifest
+    if not isinstance(entries, (list, tuple, set)):
+        raise TypeError("intended corpus manifest must contain a units sequence")
+    identities: set[str] = set()
+    for entry in entries:
+        identity = entry.get("candidate_key") if isinstance(entry, Mapping) else entry
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValueError("intended corpus manifest contains an invalid candidate identity")
+        if identity in identities:
+            raise ValueError("intended corpus manifest contains duplicate candidate identities")
+        identities.add(identity)
+    return identities
+
+
 def validate_causal_eligibility(
     units: Iterable[Mapping[str, Any]], *, intended_units: int | None = None,
+    intended_corpus_manifest: Any = None,
     artifact_registry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fail closed unless complete registered acquisition and derivation evidence exists."""
@@ -577,10 +635,24 @@ def validate_causal_eligibility(
                 "n": 0, "N": intended_units if intended_units is not None else 0,
                 "coverage": 0.0,
                 "reasons": [{"reason": f"invalid causal unit collection: {exc}"}]}
-    expected = len(rows) if intended_units is None else intended_units
     reasons: list[dict[str, Any]] = _duplicate_provenance_reasons(rows)
+    intended_ids: set[str] | None = None
+    if intended_corpus_manifest is not None:
+        try:
+            intended_ids = _intended_identity_set(intended_corpus_manifest)
+        except (TypeError, ValueError, AttributeError) as exc:
+            reasons.append({"reason": str(exc)})
+    expected = len(intended_ids) if intended_ids is not None else (len(rows) if intended_units is None else intended_units)
+    if intended_units is not None and (not isinstance(intended_units, int) or isinstance(intended_units, bool) or intended_units < 0):
+        reasons.append({"reason": "intended_units must be a non-negative integer"})
     if expected < 0 or len(rows) != expected:
         reasons.append({"reason": "unit coverage is not complete", "n": len(rows), "N": expected})
+    if intended_ids is not None:
+        supplied_ids = {unit.get("candidate_key") for unit in rows}
+        if supplied_ids != intended_ids:
+            reasons.append({"reason": "supplied units do not exactly match intended corpus identities",
+                            "missing": sorted(intended_ids - supplied_ids),
+                            "extra": sorted(supplied_ids - intended_ids)})
     for unit in rows:
         try:
             if unit.get("status") != "PASS":
@@ -629,9 +701,14 @@ def compare_common_input(
     deadband: float = 1e-12,
     provenance_units: Iterable[Mapping[str, Any]] | None = None,
     artifact_registry: Mapping[str, Any] | None = None,
+    intended_units: int | None = None,
+    intended_corpus_manifest: Any = None,
 ) -> dict[str, Any]:
     """Run both adapters with one immutable serialization and return diagnostics."""
     if provenance_units is not None:
+        if intended_units is None and intended_corpus_manifest is None:
+            raise ComparisonInvalid("explicit intended_units or intended_corpus_manifest is required for causal comparison",
+                                    causal_blocked=True)
         supplied_units = [dict(unit) for unit in provenance_units]
         identity_reasons: list[dict[str, Any]] = []
         for unit in supplied_units:
@@ -644,7 +721,12 @@ def compare_common_input(
         if identity_reasons:
             raise ComparisonInvalid("causal provenance is detached from canonical input",
                                     exclusions=identity_reasons, causal_blocked=True)
-        causal = validate_causal_eligibility(supplied_units, artifact_registry=artifact_registry)
+        causal = validate_causal_eligibility(
+            supplied_units,
+            intended_units=intended_units,
+            intended_corpus_manifest=intended_corpus_manifest,
+            artifact_registry=artifact_registry,
+        )
         if causal["causal_status"] != "CAUSAL_ELIGIBLE":
             raise ComparisonInvalid("causal provenance is incomplete", exclusions=causal["reasons"], causal_blocked=True)
     live_runner = live_runner or _default_live_runner
@@ -685,6 +767,8 @@ def compare_common_input(
     except Exception as exc:
         raise ComparisonInvalid("new result container is malformed: " + str(exc), structured_invalid=True) from exc
     exclusions = live_exclusions + new_exclusions
+    if any(item.get("reason") == "new result container is missing or malformed" for item in new_exclusions):
+        raise ComparisonInvalid("new result container is malformed", exclusions=exclusions)
     if exclusions:
         raise ComparisonInvalid("common-input coverage is not exactly the canonical key set",
                                 exclusions=exclusions)
