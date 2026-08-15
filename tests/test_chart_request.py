@@ -46,6 +46,12 @@ def test_build_spot_chart_request_rejects_invalid_ticker():
         build_spot_chart_request("   ")
 
 
+@pytest.mark.parametrize("lookback", [None, "0d", -1, 1.5])
+def test_build_spot_chart_request_rejects_invalid_lookback(lookback):
+    with pytest.raises(ChartDataError, match="lookback"):
+        build_spot_chart_request("SPY", lookback=lookback)
+
+
 def test_unsupported_interval_is_rejected_before_provider_invocation(tmp_path):
     called = False
 
@@ -93,7 +99,7 @@ def test_render_spot_chart_composes_provider_and_real_renderer_with_metadata(tmp
     )
     assert artifact.row_count == 2
     assert artifact.warnings == ()
-    assert artifact.as_of is None
+    assert artifact.as_of == datetime(2026, 8, 2)
     assert provider_calls == [("SPY", "2m")]
     rendered = artifact.path.read_bytes()
     assert rendered.startswith(b"\x89PNG\r\n\x1a\n")
@@ -138,5 +144,19 @@ def test_render_spot_chart_rejects_invalid_ticker_before_provider(tmp_path):
 
     with pytest.raises(ChartDataError, match="ticker"):
         render_spot_chart("", output_path=tmp_path / "chart.png", provider=provider)
+
+    assert called is False
+
+
+def test_render_spot_chart_rejects_unsafe_ticker_before_provider(tmp_path):
+    called = False
+
+    def provider(ticker, lookback):
+        nonlocal called
+        called = True
+        return _ROWS
+
+    with pytest.raises(ChartDataError, match="ticker"):
+        render_spot_chart("BRK.B?x=1", output_path=tmp_path / "chart.png", provider=provider)
 
     assert called is False

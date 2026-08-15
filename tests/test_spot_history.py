@@ -119,6 +119,50 @@ def test_fetch_daily_candles_rejects_empty_ticker_before_provider_call():
     assert called is False
 
 
+@pytest.mark.parametrize("ticker", ["SPY/../QQQ", "SPY?x=1", "SPY\n", "../SPY"])
+def test_fetch_daily_candles_rejects_unsafe_ticker_before_provider_call(ticker):
+    called = False
+
+    def provider(ticker, lookback):
+        nonlocal called
+        called = True
+        return _ROWS
+
+    with pytest.raises(ChartDataError, match="ticker"):
+        fetch_daily_candles(ticker, provider=provider)
+
+    assert called is False
+
+
+@pytest.mark.parametrize("ticker", ["SPY", "BRK.B", "BTC-USD"])
+def test_fetch_daily_candles_accepts_normal_symbol_forms(ticker):
+    calls = []
+
+    def provider(ticker, lookback):
+        calls.append((ticker, lookback))
+        return _ROWS
+
+    payload = fetch_daily_candles(ticker, provider=provider)
+
+    assert payload.ticker == ticker
+    assert calls == [(ticker, "6m")]
+
+
+@pytest.mark.parametrize("lookback", [None, "", "0d", "-1d", 0, -1, 1.5, object()])
+def test_fetch_daily_candles_rejects_invalid_lookback_before_injected_provider(lookback):
+    called = False
+
+    def provider(ticker, lookback):
+        nonlocal called
+        called = True
+        return _ROWS
+
+    with pytest.raises(ChartDataError, match="lookback"):
+        fetch_daily_candles("SPY", lookback=lookback, provider=provider)
+
+    assert called is False
+
+
 def test_default_provider_adapts_created_rows_and_converts_dates(monkeypatch):
     calls = []
 
@@ -154,6 +198,18 @@ def test_default_provider_adapts_created_rows_and_converts_dates(monkeypatch):
     assert payload.source == "thetadata"
     assert payload.observations[0].timestamp.isoformat() == "2026-08-15T12:00:00"
     assert payload.observations[0].close == 103.0
+    assert payload.as_of.isoformat() == "2026-08-15T12:00:00"
+
+
+def test_injected_timestamp_rows_provide_latest_as_of():
+    rows = [
+        {**_ROWS[0], "timestamp": "2026-08-01T09:30:00"},
+        {**_ROWS[0], "timestamp": "2026-08-02T15:45:00"},
+    ]
+
+    payload = fetch_daily_candles("SPY", provider=lambda ticker, lookback: rows)
+
+    assert payload.as_of.isoformat() == "2026-08-02T15:45:00"
 
 
 def test_default_provider_converts_public_six_month_lookback_deterministically(monkeypatch):

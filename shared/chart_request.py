@@ -11,7 +11,7 @@ from typing import Any
 
 from shared.candlestick_chart import render_candlestick
 from shared.chart_data import CandlePayload, ChartDataError
-from shared.spot_history import fetch_daily_candles
+from shared.spot_history import fetch_daily_candles, validate_lookback, validate_ticker
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +52,8 @@ Renderer = Callable[[CandlePayload, str | PathLike[str]], Path]
 
 
 def _validate_request(ticker: str, *, lookback: Any, interval: str) -> ChartRequest:
-    normalized_ticker = ticker.strip().upper() if isinstance(ticker, str) else ""
-    if not normalized_ticker:
-        raise ChartDataError("ticker must be a non-empty string")
+    normalized_ticker = validate_ticker(ticker)
+    validate_lookback(lookback)
     if interval != "1d":
         raise ChartDataError("interval must be '1d'")
     return ChartRequest(
