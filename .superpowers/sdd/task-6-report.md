@@ -37,3 +37,30 @@ No acquisition or network call was performed. Existing unrelated worktree change
 
 Implementation/tests/report-only commit created on branch `Dealer-Exposure-Dev`.
 
+## Review-fix closure (2026-08-15)
+
+- Captured mapping now binds every selected IV observation to the producing successful call's endpoint and exact `payload_sha256`; spot and chain timestamps carry the producing endpoint/hash too. The mapped `source_hashes` registry identity is the exact selected-call set, and the existing registry validator checks unit/manifest/registry equality.
+- Spot, chain, and IV candidates are filtered strictly before `metrics.breach_window_start_prov` after conversion through the candidate's declared timezone. Latest post-breach rows cannot be selected.
+- Successful required spot/chain table payloads and every required IV row are decoded strictly. Malformed mixed rows are HARD_GAPs; absent optional/non-captured rows are not invented.
+- Mapping requires explicit raw `metrics.breach_eligible is True` and rejects raw `decision=HARD_GAP`/`status=HARD_GAP`; missing or false eligibility is HARD_GAP and cannot be promoted to PASS. Eligibility/decision are persisted in the unit artifact.
+
+## Review-fix regression coverage
+
+Using the captured XLE artifact (without network or acquisition):
+
+- raw `breach_eligible=false` remains HARD_GAP;
+- eligible valid-row mapping preserves exact per-call endpoint/hash bindings;
+- post-breach-only selection is rejected and produces no mapped observations;
+- malformed mixed IV rows fail closed;
+- existing valid strict aggregation, timezone, census, and no-imputation tests remain covered.
+
+## Review-fix verification
+
+- `python -m pytest tests/test_dealer_exposure_acquisition.py -q -p no:plugins` — **36 passed**
+- `python -m pytest tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_expansion.py -q -p no:plugins` — **114 passed**
+- `python -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py` — **passed**
+- `git diff --check` — **passed**
+- Ruff unavailable (`ruff` and `python -m ruff` not installed).
+
+No network call or acquisition was performed. Unrelated worktree artifacts remain untouched.
+

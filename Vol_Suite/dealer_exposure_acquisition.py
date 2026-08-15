@@ -147,12 +147,41 @@ def _captured_row_timestamp(day: Any, ms_of_day: Any, timezone: Any) -> str:
     return local.replace(tzinfo=ZoneInfo(timezone.strip())).astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
-def _captured_table_rows(call: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _captured_table_rows(call: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """Decode a successful table call without hiding malformed required rows."""
     payload = call.get("payload")
     if not isinstance(payload, list) or not payload or not isinstance(payload[0], list):
-        return []
+        return None
     headers = [str(header) for header in payload[0]]
-    return [dict(zip(headers, row, strict=False)) for row in payload[1:] if isinstance(row, list) and len(row) >= len(headers)]
+    if len(headers) != len(set(headers)) or not headers:
+        return None
+    rows: list[dict[str, Any]] = []
+    for row in payload[1:]:
+        if not isinstance(row, list) or len(row) != len(headers):
+            return None
+        rows.append(dict(zip(headers, row, strict=True)))
+    return rows
+
+
+def _captured_call_hash(call: Mapping[str, Any]) -> str:
+    value = call.get("payload_sha256")
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise ValueError("successful captured call lacks a valid payload_sha256")
+    return value.lower()
+
+
+def _captured_call_rows(calls: Iterable[Mapping[str, Any]], required: str) -> list[tuple[Mapping[str, Any], dict[str, Any]]]:
+    """Return rows with their producing call; any malformed successful call blocks."""
+    selected: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
+    for call in calls:
+        rows = _captured_table_rows(call)
+        if rows is None:
+            raise ValueError(f"malformed required {required} endpoint payload")
+        _captured_call_hash(call)
+        selected.extend((call, row) for row in rows)
+    if not selected:
+        raise ValueError(f"required {required} endpoint data is absent")
+    return selected
 
 
 def _map_captured_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
@@ -164,68 +193,82 @@ def _map_captured_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, An
     if not isinstance(payload, Mapping) or not isinstance(payload.get("calls"), list):
         return {}
     timezone = unit.get("declared_timezone")
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), Mapping) else {}
+    # Acquisition-side eligibility is an attestation, not something mapping may infer.
+    decision = str(payload.get("decision", metrics.get("decision", ""))).upper()
+    if metrics.get("breach_eligible") is not True or decision == "HARD_GAP" or str(payload.get("status", "")).upper() == "HARD_GAP":
+        return {"_mapping_status": "HARD_GAP", "_mapping_reason": "raw acquisition is not breach eligible"}
     calls = [call for call in payload["calls"] if isinstance(call, Mapping) and call.get("response_status") == 200]
-    spot_rows = [row for call in calls if "/stock/ohlc/" in str(call.get("endpoint", "")) for row in _captured_table_rows(call)]
+    spot_calls = [call for call in calls if "/stock/ohlc/" in str(call.get("endpoint", ""))]
     chain_calls = [call for call in calls if "/option/all_greeks/" in str(call.get("endpoint", ""))]
-    chain_rows = [row for call in chain_calls for row in _captured_table_rows(call)]
     try:
-        spot = sorted(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone) for row in spot_rows)
-        chain = sorted(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone) for row in chain_rows)
-        if not spot or not chain:
-            return {}
-        breach_ms = payload.get("metrics", {}).get("breach_window_start_prov")
+        spot_rows = _captured_call_rows(spot_calls, "spot")
+        chain_rows = _captured_call_rows(chain_calls, "chain")
+        breach_ms = metrics.get("breach_window_start_prov")
         breach = _captured_row_timestamp(unit.get("calendar_day"), breach_ms, timezone)
         breach_dt = _timestamp(breach)
-        iv_rows: list[tuple[dt.datetime, float, Mapping[str, Any], str]] = []
-        for call in chain_calls:
+        spot_observed = sorted(((_timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)), call) for call, row in spot_rows if _timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)) < breach_dt), key=lambda item: item[0])
+        chain_observed = sorted(((_timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)), call) for call, row in chain_rows if _timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)) < breach_dt), key=lambda item: item[0])
+        if not spot_observed or not chain_observed:
+            return {}
+        spot_ts, spot_call = spot_observed[-1]
+        chain_ts, chain_call = chain_observed[-1]
+        iv_rows: list[tuple[dt.datetime, float, Mapping[str, Any], str, str]] = []
+        for call, row in chain_rows:
             endpoint = str(call.get("endpoint", ""))
-            for row in _captured_table_rows(call):
-                try:
-                    timestamp = _captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)
-                    iv = float(row.get("implied_vol"))
-                    if math.isfinite(iv) and _timestamp(timestamp) < breach_dt:
-                        iv_rows.append((_timestamp(timestamp), iv, row, endpoint))
-                except (TypeError, ValueError, OSError):
-                    continue
+            # Every row in required successful chain data must be well formed;
+            # valid rows must not hide a malformed mixed response.
+            timestamp = _captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)
+            iv = float(row.get("implied_vol"))
+            if not math.isfinite(iv):
+                raise ValueError("malformed required IV row")
+            row_ts = _timestamp(timestamp)
+            if row_ts < breach_dt:
+                iv_rows.append((row_ts, iv, row, endpoint, _captured_call_hash(call)))
         # Keep one observed IV per timestamp, preferring the row closest to
         # its attested underlying price rather than averaging strikes.
-        by_timestamp: dict[dt.datetime, tuple[float, Mapping[str, Any], str]] = {}
-        for timestamp, iv, row, endpoint in iv_rows:
+        by_timestamp: dict[dt.datetime, tuple[float, Mapping[str, Any], str, str]] = {}
+        for timestamp, iv, row, endpoint, call_hash in iv_rows:
             try:
                 distance = abs(float(row.get("strike")) / 1000.0 - float(row.get("underlying_price")))
             except (TypeError, ValueError):
                 distance = math.inf
             previous = by_timestamp.get(timestamp)
             if previous is None or distance < previous[0]:
-                by_timestamp[timestamp] = (distance, {"iv": iv, **row}, endpoint)
-        observed = sorted((timestamp, value[1], value[2]) for timestamp, value in by_timestamp.items())
+                by_timestamp[timestamp] = (distance, {"iv": iv, **row}, endpoint, call_hash)
+        observed = sorted((timestamp, value[1], value[2], value[3]) for timestamp, value in by_timestamp.items())
         if len(observed) < 2:
             return {}
-        before_ts, before_row, before_endpoint = observed[-2]
-        source_ts, source_row, source_endpoint = observed[-1]
-        source_hashes = sorted({str(call.get("payload_sha256")) for call in calls if isinstance(call.get("payload_sha256"), str) and re.fullmatch(r"[0-9a-fA-F]{64}", str(call.get("payload_sha256")))})
+        before_ts, before_row, before_endpoint, before_hash = observed[-2]
+        source_ts, source_row, source_endpoint, source_hash = observed[-1]
+        observations = [
+            {"role": _PREWINDOW, "timestamp": before_ts.isoformat().replace("+00:00", "Z"), "iv": float(before_row["iv"]), "source_identity": before_endpoint, "source_hash": before_hash},
+            {"role": _PREWINDOW, "timestamp": source_ts.isoformat().replace("+00:00", "Z"), "iv": float(source_row["iv"]), "source_identity": source_endpoint, "source_hash": source_hash},
+        ]
+        source_hashes = sorted({before_hash, source_hash, _captured_call_hash(spot_call), _captured_call_hash(chain_call)})
         if len(source_hashes) < 2:
             return {}
-        observations = [
-            {"role": _PREWINDOW, "timestamp": before_ts.isoformat().replace("+00:00", "Z"), "iv": float(before_row["iv"]), "source_identity": before_endpoint, "source_hash": source_hashes[0]},
-            {"role": _PREWINDOW, "timestamp": source_ts.isoformat().replace("+00:00", "Z"), "iv": float(source_row["iv"]), "source_identity": source_endpoint, "source_hash": source_hashes[1]},
-        ]
         return {"delta_iv_provenance": _PREWINDOW, "delta_iv_pre_window": observations[1]["iv"] - observations[0]["iv"],
                 "iv_before_ts": observations[0]["timestamp"], "iv_before_value": observations[0]["iv"],
                 "iv_source_ts": observations[1]["timestamp"], "iv_source_value": observations[1]["iv"],
                 "breach_window_start_prov": breach, "declared_timezone": timezone,
-                "spot_timestamp": spot[-1], "chain_timestamp": chain[-1],
+                "spot_timestamp": spot_ts.isoformat().replace("+00:00", "Z"), "chain_timestamp": chain_ts.isoformat().replace("+00:00", "Z"),
+                "spot_source_identity": str(spot_call.get("endpoint")), "spot_source_hash": _captured_call_hash(spot_call),
+                "chain_source_identity": str(chain_call.get("endpoint")), "chain_source_hash": _captured_call_hash(chain_call),
                 "endpoint": source_endpoint, "request_parameters": {"captured_calls": len(calls)},
                 "source_hashes": source_hashes, "pre_window_observations": observations,
                 "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1"}
-    except (TypeError, ValueError, OSError):
-        return {}
+    except (TypeError, ValueError, OSError) as exc:
+        return {"_mapping_status": "HARD_GAP", "_mapping_reason": str(exc)[:200]}
 
 
 def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     raw_hash = _hash(payload)
     l2 = dict(_extract_l2(payload)) if isinstance(payload, Mapping) else {}
-    l2.update({key: value for key, value in _map_captured_payload(unit, payload).items() if key not in l2 or l2[key] is None})
+    mapped = _map_captured_payload(unit, payload)
+    mapping_status = mapped.get("_mapping_status") if isinstance(mapped, Mapping) else None
+    mapping_reason = mapped.get("_mapping_reason") if isinstance(mapped, Mapping) else None
+    l2.update({key: value for key, value in mapped.items() if not key.startswith("_") and (key not in l2 or l2[key] is None)})
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")
     source_ts, breach_ts = l2.get("iv_source_ts"), l2.get("breach_window_start_prov")
@@ -244,8 +287,14 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     cluster = l2.get("same_day_cluster", root.get("same_day_cluster"))
     request_parameters = dict(parameters) if isinstance(parameters, Mapping) else parameters
     valid = False
-    timestamp_reason = None
-    if prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
+    timestamp_reason = mapping_reason
+    eligibility = payload.get("metrics", {}).get("breach_eligible") if isinstance(payload, Mapping) and isinstance(payload.get("metrics"), Mapping) else None
+    raw_decision = str(payload.get("decision", payload.get("metrics", {}).get("decision", ""))).upper() if isinstance(payload, Mapping) else ""
+    if mapping_status == "HARD_GAP":
+        timestamp_reason = mapping_reason or "raw acquisition is not breach eligible"
+    elif eligibility is not True or raw_decision == "HARD_GAP":
+        timestamp_reason = "explicit breach eligibility is required"
+    elif prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
         try:
             validate_source_hashes(supplied_hashes)
             source = _timestamp(source_ts)
@@ -281,9 +330,9 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
                     valid = True
         except (TypeError, ValueError, OSError) as exc:
             timestamp_reason = str(exc)
-    status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
+    status = "PASS" if valid else ("HARD_GAP" if mapping_status == "HARD_GAP" or payload is None or eligibility is not True or raw_decision == "HARD_GAP" else "ASSOCIATIONAL")
     artifact = dict(unit)
-    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "pre_window_observations": l2.get("pre_window_observations", []), "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    artifact.update({"status": status, "breach_eligible": eligibility, "acquisition_decision": raw_decision or None, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "pre_window_observations": l2.get("pre_window_observations", []), "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "spot_source_identity": l2.get("spot_source_identity"), "spot_source_hash": l2.get("spot_source_hash"), "chain_source_identity": l2.get("chain_source_identity"), "chain_source_hash": l2.get("chain_source_hash"), "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
     manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"),
                 "calendar_day": unit.get("calendar_day"), "canonical_input_hash": unit.get("canonical_input_hash"),
                 "raw_payload_hash": raw_hash, "status": status,
@@ -424,8 +473,9 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             if item.get("status") == "PASS":
                 manifest = {key: item[key] for key in (
                     "candidate_key", "ticker", "calendar_day", "canonical_input_hash", "status", "raw_payload_hash", "endpoint", "request_parameters",
-                    "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
-                    "breach_window_start_prov", "source_hashes", "same_day_cluster", "iv_before_ts",
+                    "declared_timezone", "spot_timestamp", "chain_timestamp", "spot_source_identity", "spot_source_hash",
+                    "chain_source_identity", "chain_source_hash", "iv_source_ts",
+                    "breach_window_start_prov", "source_hashes", "pre_window_observations", "same_day_cluster", "iv_before_ts",
                     "iv_before_value", "iv_source_value", "delta_iv_aggregation",
                     "delta_iv_aggregation_version", "expiry", "dte", "imputed", "no_imputation")}
                 item["artifact_manifest"] = manifest

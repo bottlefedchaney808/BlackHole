@@ -19,7 +19,7 @@ def row(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tec
     return {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte, "habitat": "NONE", "sector": sector, "candidate_source": "approved-list"}
 
 def valid_payload(prov="PRE_WINDOW", value=0.1):
-    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_before_ts": "2026-08-17T13:00:00Z", "iv_before_value": 0.0, "iv_source_value": value, "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1", "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "declared_timezone": "UTC", "spot_timestamp": "2026-08-17T13:00:00Z", "chain_timestamp": "2026-08-17T14:00:00Z", "endpoint": "https://example.invalid/chain", "request_parameters": {"ticker": "AAPL"}, "source_hashes": ["a" * 64]}}}
+    return {"status": "PASS", "metrics": {"breach_eligible": True, "decision": "PASS"}, "record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_before_ts": "2026-08-17T13:00:00Z", "iv_before_value": 0.0, "iv_source_value": value, "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1", "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "declared_timezone": "UTC", "spot_timestamp": "2026-08-17T13:00:00Z", "chain_timestamp": "2026-08-17T14:00:00Z", "endpoint": "https://example.invalid/chain", "request_parameters": {"ticker": "AAPL"}, "source_hashes": ["a" * 64]}}}
 
 def valid_probe(_):
     return {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}
@@ -87,15 +87,63 @@ def test_raw_capture_maps_timestamped_spot_chain_and_two_iv_observations():
         dry_run=False, approval=True,
     )
     unit = result["units"][0]
+    assert unit["status"] == "HARD_GAP"
+    assert "not breach eligible" in unit["reason"]
+    assert unit["delta_iv_pre_window"] is None
+
+
+def test_captured_xle_valid_rows_preserve_exact_call_hash_binding():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["metrics"]["breach_eligible"] = True
+    payload["metrics"]["decision"] = "PASS"
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    unit = execute_sequential_acquisition(schedule, probe_fetcher=valid_probe,
+                                          fetcher=lambda _: payload, dry_run=False,
+                                          approval=True)["units"][0]
     assert unit["status"] == "PASS"
-    assert unit["spot_timestamp"].startswith("2026-07-06T")
-    assert unit["chain_timestamp"].startswith("2026-07-06T")
-    assert len(unit["pre_window_observations"]) == 2
+    calls = {call["endpoint"]: call["payload_sha256"].lower() for call in payload["calls"]
+             if call.get("response_status") == 200}
     before, source = unit["pre_window_observations"]
-    assert before["timestamp"] < source["timestamp"] < unit["breach_window_start_prov"]
-    assert unit["delta_iv_pre_window"] == source["iv"] - before["iv"]
-    assert unit["iv_before_ts"] == before["timestamp"]
-    assert unit["iv_source_ts"] == source["timestamp"]
+    assert before["source_hash"] in calls.values()
+    assert source["source_hash"] in calls.values()
+    assert unit["spot_source_hash"] == calls[unit["spot_source_identity"]]
+    assert unit["chain_source_hash"] == calls[unit["chain_source_identity"]]
+    assert set(unit["source_hashes"]).issuperset({before["source_hash"], source["source_hash"], unit["spot_source_hash"], unit["chain_source_hash"]})
+
+
+def test_captured_xle_malformed_mixed_iv_rows_fail_closed():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["metrics"]["breach_eligible"] = True
+    payload["metrics"]["decision"] = "PASS"
+    chain = next(call for call in payload["calls"] if "/option/all_greeks/" in call["endpoint"] and call.get("response_status") == 200)
+    chain["payload"].append(list(chain["payload"][1]))
+    chain["payload"][-1][chain["payload"][0].index("implied_vol")] = "not-a-number"
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    unit = execute_sequential_acquisition(schedule, probe_fetcher=valid_probe,
+                                          fetcher=lambda _: payload, dry_run=False,
+                                          approval=True)["units"][0]
+    assert unit["status"] == "HARD_GAP"
+    assert unit["pre_window_observations"] == []
+
+
+def test_captured_xle_post_breach_rows_are_never_selected():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["metrics"]["breach_eligible"] = True
+    payload["metrics"]["decision"] = "PASS"
+    payload["metrics"]["breach_window_start_prov"] = 34200000
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    unit = execute_sequential_acquisition(schedule, probe_fetcher=valid_probe,
+                                          fetcher=lambda _: payload, dry_run=False,
+                                          approval=True)["units"][0]
+    assert unit["status"] != "PASS"
+    assert unit["pre_window_observations"] == []
+    assert unit["spot_timestamp"] is None and unit["chain_timestamp"] is None
 
 
 def test_raw_mapping_fails_closed_without_timezone_or_timestamp_fields():
@@ -106,7 +154,7 @@ def test_raw_mapping_fails_closed_without_timezone_or_timestamp_fields():
         dry_run=False, approval=True,
     )
     unit = result["units"][0]
-    assert unit["status"] == "ASSOCIATIONAL"
+    assert unit["status"] == "HARD_GAP"
     assert unit["delta_iv_pre_window"] is None
     assert unit["pre_window_observations"] == []
 
@@ -120,14 +168,14 @@ def test_malformed_raw_rows_fail_closed():
         dry_run=False, approval=True,
     )
     unit = result["units"][0]
-    assert unit["status"] == "ASSOCIATIONAL"
+    assert unit["status"] == "HARD_GAP"
     assert unit["spot_timestamp"] is None
     assert unit["pre_window_observations"] == []
 
 
 def test_no_imputation_and_associational_status():
     result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: {"record": {}}, dry_run=False, approval=True)
-    assert result["units"][0]["status"] == "ASSOCIATIONAL" and result["units"][0]["pre_window_value"] is None
+    assert result["units"][0]["status"] == "HARD_GAP" and result["units"][0]["pre_window_value"] is None
 
 def test_hard_gap_retained_without_imputation():
     result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: (_ for _ in ()).throw(RuntimeError("down")), dry_run=False, approval=True)
