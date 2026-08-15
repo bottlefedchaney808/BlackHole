@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,6 +8,10 @@ from Vol_Suite.dealer_exposure_expansion import (
     ExpansionApprovalError,
     build_expansion_manifest,
     run_expansion_plan,
+)
+from Vol_Suite.run_live_vs_expiry_book_common_input import (
+    ComparisonInvalid,
+    make_canonical_input,
 )
 
 
@@ -182,3 +187,48 @@ def test_network_executor_only_receives_validated_primary_units(monkeypatch):
     assert calls == [u["candidate_key"] for u in plan["units"]]
     assert result["execution_audit"]["invoked"] == calls
     assert result["network_fetch_allowed"] is True
+
+
+def _canonical():
+    return make_canonical_input(
+        "AAPL", "2026-08-17", "2026-08-19", 2, 100.0,
+        "2026-08-17T12:00:00+00:00",
+        [{"strike": 100.0, "right": "C", "iv": 0.2, "oi": 10}],
+        ["a" * 64],
+    )
+
+
+def test_wrong_deadband_is_rejected_exactly():
+    with pytest.raises(ComparisonInvalid, match="exactly 0.01"):
+        expansion.compare_expansion_common_input(_canonical(), live_runner=lambda *_args, **_kwargs: None, new_runner=lambda *_args: None, deadband=0.0100001)
+
+
+@pytest.mark.parametrize("missing", ["spot", "expiry", "dte", "T", "rows"])
+def test_result_identity_omissions_are_structured_invalid(missing):
+    inp = _canonical()
+    row = SimpleNamespace(strike=100.0, right="C")
+    result = SimpleNamespace(spot=100.0, expiry=inp.expiry, dte=inp.dte, T=inp.dte / 365.0, rows=[row], gamma_records=[row])
+    setattr(result, missing, None)
+    with pytest.raises(ComparisonInvalid, match="identity|record count"):
+        expansion._require_result_identity(result, inp, "new")
+
+
+def test_missing_live_config_attestation_is_structured_invalid():
+    with pytest.raises(ComparisonInvalid, match="attestation"):
+        expansion._require_live_attestation(SimpleNamespace())
+
+
+def test_missing_per_strike_provenance_is_structured_invalid():
+    with pytest.raises(ComparisonInvalid, match="provenance"):
+        expansion._require_strike_provenance(SimpleNamespace(), "live")
+
+
+def test_structured_executor_failure_is_hard_gap(monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "FAILED", "reason": "adapter unavailable"}, acquisition_evidence=evidence)
+    assert result["mode"] == "failed-execution"
+    assert result["network_fetch_allowed"] is False
+    assert result["execution_audit"]["blocked"][0]["classification"] == "HARD_GAP"

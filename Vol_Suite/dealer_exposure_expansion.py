@@ -15,6 +15,15 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+EXPECTED_DEADBAND = 0.01
+LIVE_CONFIG = {
+    "sign_model": "vol_surface_replication",
+    "accumulate": True,
+    "route": "SVI",
+    "deadband": EXPECTED_DEADBAND,
+    "dealer_vanna_flow": 1,
+}
+
 from .dealer_exposure_acquisition import (
     build_candidate_schedule,
     select_primary_schedule,
@@ -123,41 +132,116 @@ def build_expansion_manifest(
     return {"schema_version": 1, "mode": "dry-run", "network_fetch_allowed": False, "approval_required": True, "approval_command": "python -m Vol_Suite.dealer_exposure_expansion --approve-network", "selection_provenance": {"candidate_source": sources[0] if len(sources) == 1 else sources, "candidate_count": len(raw_rows)}, "planned_candidates": [row["candidate_key"] for row in units], "units": units, "exclusions": sorted(exclusions, key=lambda row: (row["calendar_day"], row["ticker"], row["reason"])), "expected_ticker_day_units": len(units), "intended_unique_day_denominator": len({row["calendar_day"] for row in units}), "counts": {"event": event_n, "control": control_n, "event_unique_days": len(event_days), "control_unique_days": len(control_days), "dte_strata": dict(sorted(strata.items()))}, "quota": quota, "balance_gate": balance_gate, "registry_path": registry_path, "gates": {"THETADATA_HIST_CONCURRENCY": 1, "pre_window_observations_required": 2, "imputation_policy": "reject_missing", "no_imputation": True, "balanced_panel": True, "approval_required": True}, "stop_conditions": stops, "no_imputation": True}
 
 
+def _field(obj: Any, *names: str) -> Any:
+    """Read an attested field without inventing a default."""
+    for name in names:
+        value = obj.get(name) if isinstance(obj, Mapping) else getattr(obj, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _require_result_identity(result: Any, inp: CanonicalInput, engine: str) -> list[Any]:
+    spot = _field(result, "spot", "result_spot")
+    expiry = _field(result, "expiry", "selected_expiry", "result_expiry")
+    dte = _field(result, "dte", "DTE", "result_dte")
+    T = _field(result, "T", "t", "result_T")
+    if spot is None or float(spot) != inp.spot:
+        raise ComparisonInvalid(f"{engine} result spot identity is missing or mismatched", structured_invalid=True)
+    if expiry != inp.expiry:
+        raise ComparisonInvalid(f"{engine} selected expiry identity is missing or mismatched", structured_invalid=True)
+    if dte is None or int(dte) != inp.dte:
+        raise ComparisonInvalid(f"{engine} DTE identity is missing or mismatched", structured_invalid=True)
+    if T is None or abs(float(T) - inp.dte / 365.0) > 1e-12:
+        raise ComparisonInvalid(f"{engine} T identity is missing or mismatched", structured_invalid=True)
+    rows = _field(result, "gamma_records" if engine == "live" else "rows")
+    if not isinstance(rows, (list, tuple)) or len(rows) != len(inp.rows):
+        raise ComparisonInvalid(f"{engine} result record count is not exactly canonical", structured_invalid=True)
+    expected = {(r.strike, r.right) for r in inp.rows}
+    actual = {(_field(row, "strike"), _field(row, "right")) for row in rows}
+    if actual != expected:
+        raise ComparisonInvalid(f"{engine} result strike/right coverage is not exact", structured_invalid=True)
+    return list(rows)
+
+
+def _require_live_attestation(result: Any) -> Mapping[str, Any]:
+    attestation = _field(result, "config_attestation", "adapter_attestation", "live_attestation")
+    if not isinstance(attestation, Mapping):
+        raise ComparisonInvalid("live adapter/result configuration attestation is unavailable", structured_invalid=True)
+    aliases = {"sign_model": ("sign_model",), "accumulate": ("accumulate",),
+               "route": ("route", "svi_route"), "deadband": ("deadband", "iv_deadband"),
+               "dealer_vanna_flow": ("dealer_vanna_flow",)}
+    for expected, names in aliases.items():
+        actual = next((attestation.get(name) for name in names if name in attestation), None)
+        if actual != LIVE_CONFIG[expected]:
+            raise ComparisonInvalid(f"live attestation does not verify {expected}={LIVE_CONFIG[expected]!r}", structured_invalid=True)
+    return attestation
+
+
+def _require_strike_provenance(row: Any, engine: str) -> None:
+    source_hash = _field(row, "source_hash", "source_sha256", "per_strike_source_hash")
+    config_hash = _field(row, "config_hash", "per_strike_config_hash")
+    provenance = _field(row, "sign_provenance", "resolved_sign_provenance", "sign_source")
+    if not isinstance(source_hash, str) or not source_hash.strip() or not isinstance(config_hash, str) or not config_hash.strip() or not isinstance(provenance, str) or not provenance.strip():
+        raise ComparisonInvalid(f"{engine} per-strike source/config/sign provenance is missing", structured_invalid=True)
+
+
 def compare_expansion_common_input(
     canonical_input: CanonicalInput, *, live_runner: Callable[[Any], Any],
-    new_runner: Callable[[Any], Any], deadband: float = 0.01,
+    new_runner: Callable[[Any], Any], deadband: float = EXPECTED_DEADBAND,
     provenance_units: Iterable[Mapping[str, Any]] | None = None,
     artifact_registry: Mapping[str, Any] | None = None,
     intended_units: int | None = None,
     intended_corpus_manifest: Any = None,
 ) -> dict[str, Any]:
-    """Compose the Task 3 harness; never emit headline metrics on a gap."""
+    """Compose Task 3 with explicit live configuration and fail-closed identity."""
+    if isinstance(deadband, bool) or deadband != EXPECTED_DEADBAND:
+        raise ComparisonInvalid("deadband must be exactly 0.01", structured_invalid=True)
     captured: dict[str, Any] = {}
 
     def capture(name: str, runner: Callable[[Any], Any]) -> Callable[[Any], Any]:
         def invoke(payload: Any) -> Any:
-            result = runner(payload)
+            try:
+                if name == "live":
+                    result = runner(payload, **LIVE_CONFIG)
+                else:
+                    result = runner(payload)
+            except TypeError as exc:
+                raise ComparisonInvalid("live adapter invocation cannot attest explicit configuration", structured_invalid=True) from exc
             captured[name] = result
+            rows = _require_result_identity(result, canonical_input, name)
+            for row in rows:
+                _require_strike_provenance(row, name)
+            if name == "live":
+                _require_live_attestation(result)
             return result
         return invoke
 
     comparison = compare_common_input(
         canonical_input, capture("live", live_runner), capture("new", new_runner),
-        deadband=deadband, provenance_units=provenance_units,
+        deadband=EXPECTED_DEADBAND, provenance_units=provenance_units,
         artifact_registry=artifact_registry, intended_units=intended_units,
         intended_corpus_manifest=intended_corpus_manifest,
     )
-    live = captured["live"]
-    required = {"sign_model": "vol_surface_replication", "accumulate": True,
-                "iv_deadband": 0.01, "dealer_vanna_flow": 1}
-    for attr, expected in required.items():
-        actual = getattr(live, attr, None)
-        if actual != expected:
-            raise ComparisonInvalid(f"live configuration identity is not explicit: {attr}={actual!r}")
-    if getattr(live, "spot", canonical_input.spot) != canonical_input.spot:
-        raise ComparisonInvalid("live spot does not match canonical input")
-    comparison["config"].update({"IV_DEADBAND": 0.01, "DEALER_VANNA_FLOW": 1,
-                                  "accumulation": "ON"})
+    live, new = captured["live"], captured["new"]
+    live_rows, new_rows = _require_result_identity(live, canonical_input, "live"), _require_result_identity(new, canonical_input, "new")
+    live_by_key = {(_field(r, "strike"), _field(r, "right")): r for r in live_rows}
+    new_by_key = {(_field(r, "strike"), _field(r, "right")): r for r in new_rows}
+    for pair in comparison["pairs"]:
+        key = (pair["strike"], pair["right"])
+        lr, nr = live_by_key[key], new_by_key[key]
+        pair.pop("live_sign_source", None)
+        pair.pop("new_sign_source", None)
+        pair.update({"oi": _field(lr, "oi", "open_interest"), "iv": _field(lr, "iv", "implied_vol"),
+                     "spot": canonical_input.spot, "T": canonical_input.dte / 365.0, "dte": canonical_input.dte,
+                     "live_source_hash": _field(lr, "source_hash", "source_sha256", "per_strike_source_hash"),
+                     "new_source_hash": _field(nr, "source_hash", "source_sha256", "per_strike_source_hash"),
+                     "live_config_hash": _field(lr, "config_hash", "per_strike_config_hash"),
+                     "new_config_hash": _field(nr, "config_hash", "per_strike_config_hash"),
+                     "live_sign_provenance": _field(lr, "sign_provenance", "resolved_sign_provenance", "sign_source"),
+                     "new_sign_provenance": _field(nr, "sign_provenance", "resolved_sign_provenance", "sign_source")})
+    comparison["config"].update({"route": "SVI", "deadband": EXPECTED_DEADBAND, "dealer_vanna_flow": 1,
+                                  "attested": True})
     comparison["headline_eligible"] = comparison["coverage"]["common"] == comparison["coverage"]["total"]
     return comparison
 
@@ -227,10 +311,26 @@ def run_expansion_plan(
         else:
             for unit in admitted:
                 try:
-                    executor(unit)  # type: ignore[misc]
+                    execution = executor(unit)  # type: ignore[misc]
+                    if isinstance(execution, Mapping) and (
+                        str(execution.get("status", "")).upper() in {"FAILED", "FAIL", "ERROR"}
+                        or execution.get("success") is False
+                        or execution.get("ok") is False
+                    ):
+                        result["execution_audit"]["blocked"].append({
+                            "candidate_key": unit["candidate_key"],
+                            "classification": "HARD_GAP",
+                            "status": "FAILED_EXECUTION",
+                            "reason": str(execution.get("reason", execution))[:200],
+                        })
+                        result["mode"] = "failed-execution"
+                        result["network_fetch_allowed"] = False
+                        break
                     result["execution_audit"]["invoked"].append(unit["candidate_key"])
                 except Exception as exc:  # noqa: BLE001 - executor failures are audit evidence
-                    result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "reason": str(exc)[:200]})
+                    result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(exc)[:200]})
+                    result["mode"] = "failed-execution"
+                    result["network_fetch_allowed"] = False
                     break
     if write_manifest:
         path = Path(output_root) / "expansion_manifest.json"

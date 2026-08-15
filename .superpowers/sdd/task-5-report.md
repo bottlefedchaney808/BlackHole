@@ -44,5 +44,12 @@ Only the Task 5 implementation, tests, and report are to be committed. Existing 
 
 The package still requires caller-supplied canonical acquisition evidence and an injected executor. The manifest alone can never authorize network execution or produce headline comparison eligibility.
 
+## Review-blocker closure
+
+- Enforced an exact `deadband=0.01` input contract; live invocation now receives explicit `sign_model=vol_surface_replication`, `accumulate=True`, `route=SVI`, `deadband=0.01`, and `dealer_vanna_flow=1`.
+- Live results must attest every requested configuration; missing or mismatched attestation is structured invalid rather than a hardcoded report label.
+- Both engine results must attest spot, selected expiry, DTE/T, exact record count, and exact canonical strike/right coverage. Every pair carries OI, IV, spot, T/DTE, per-strike source/config hashes, and resolved sign provenance.
+- Structured executor failure returns are classified as auditable `HARD_GAP` / `FAILED_EXECUTION` and cannot produce a successful execution status.
+- Added regressions for wrong deadband, missing configuration attestation, omitted result identity/rows, missing per-strike provenance, and structured executor failure.
 
 <!-- report ends with a newline -->
