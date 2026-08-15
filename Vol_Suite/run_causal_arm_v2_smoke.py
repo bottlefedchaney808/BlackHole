@@ -20,6 +20,11 @@ import run_causal_arm_v2 as ca  # noqa: E402
 
 def build_day(day, fam, pre_vanna, div, resp, pre_ts, breach_ts, **kw):
     fam_key = f"family_interaction_{fam.lower()}"
+    # propagate surprise + event_habitat into l2 (R10.3 fix: R1 mechanism panel
+    # confirmed build_day previously dropped these, so the smoke never exercised
+    # the OPERATIONAL-surprise path and the READY L5 reconciliation was wrong)
+    surprise = kw.pop("surprise", None)
+    event_habitat = kw.pop("event_habitat", "NONE")
     return {
         "day": day, "date": day, "ticker": fam, "families": [fam],
         "pre_window": {
@@ -37,6 +42,8 @@ def build_day(day, fam, pre_vanna, div, resp, pre_ts, breach_ts, **kw):
             "event": kw.get("event", 0),
             "a6_reflexivity": kw.get("a6", 0.0),
             "cross_family_spillover": kw.get("spill", 0.0),
+            "surprise": surprise,
+            "event_habitat": event_habitat,
             fam_key: pre_vanna,
             "forward_return_h": resp,
         },
