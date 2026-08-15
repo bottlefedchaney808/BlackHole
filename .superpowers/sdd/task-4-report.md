@@ -84,3 +84,17 @@ Final verification:
 - `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
 - `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — **All checks passed**
 - `git diff --check` — passed (Git emitted only the normal LF→CRLF working-copy warning)
+
+## Task 4 specification-gap closure (2026-08-15)
+
+- `_fit()` now publishes same-day clustered finite-sample diagnostics: `ci_low`, `ci_high`, `ci_level`, `cluster_count`, `ci_status`, `ci_method`, and an explicit reason. The method is a CR1 clustered sandwich correction with finite-sample correction; intervals are unavailable/INDETERMINATE when the fit or same-day cluster count is insufficient. No pooled-observation interval is fabricated.
+- Primary, event/control/pooled stratum, and balanced-panel fits carry the same CI fields; top-level primary diagnostics expose the CI fields as well.
+- Added a deterministic event/control acceptance gate: minimum 2 unique days per arm, minimum 20% coverage per arm, and maximum 2:1 arm-size imbalance. Event-only, control-only, and pooled strata remain descriptive/reportable, but missing or materially imbalanced mix forces `INDETERMINATE` and cannot produce a winner.
+- Added regressions for known clustered data with published CI, insufficient same-day clusters, balanced mix, missing event, missing control, and imbalanced mix.
+
+Verification for this closure:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **32 passed**
+- Python 3.12 `py_compile` — passed
+- Python 3.12 Ruff check — passed
+- `git diff --check` — passed

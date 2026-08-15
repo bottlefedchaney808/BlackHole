@@ -11,6 +11,7 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,14 @@ TARGET_DAYS = 257
 CORRELATIONAL_TARGET_DAYS = 29
 CONTROL_COLUMNS = ("gamma_burst", "delta_s", "market", "a6_reflexivity", "event", "cross_family_spillover")
 SHA256_HEX = 64
+# Task 4 evidence-mix gate.  These are deliberately explicit and deterministic:
+# each arm needs at least two unique days, each arm must cover 20% of the
+# pooled unique-day denominator, and neither arm may exceed a 2:1 size ratio.
+MIN_MIX_DAYS = 2
+MIN_MIX_COVERAGE = 0.20
+MAX_MIX_IMBALANCE = 2.0
+CI_LEVEL = 0.90
+MIN_CI_CLUSTERS = 3
 
 
 class EvaluationInvalid(ValueError):
@@ -197,8 +206,15 @@ def _residual_target(rows: list[Mapping[str, Any]], vanna_field: str = "pre_vann
 
 
 def _fit(rows: list[Mapping[str, Any]], outcome: str, weights: np.ndarray | None = None) -> dict[str, Any]:
+    def unavailable(n: int, p: int = 0, *, status: str = "NOT_AVAILABLE", reason: str = "no rows"):
+        return {"n": n, "p": p, "rank": 0, "condition": None, "vif": None,
+                "status": status, "beta": None, "se": None,
+                "ci_low": None, "ci_high": None, "ci_level": CI_LEVEL,
+                "cluster_count": len({r.get("day") for r in rows}),
+                "ci_status": "UNAVAILABLE", "ci_method": "CR1_CLUSTERED_FINITE_SAMPLE",
+                "ci_reason": reason}
     if not rows:
-        return {"n": 0, "p": 0, "rank": 0, "condition": None, "vif": None, "status": "NOT_AVAILABLE", "beta": None, "se": None}
+        return unavailable(0, reason="no rows")
     target = _residual_target(rows)
     x = np.column_stack([np.ones(len(rows)), target, *[[r[c] for r in rows] for c in CONTROL_COLUMNS]])
     y = np.asarray([_number(r[outcome], outcome) for r in rows])
@@ -213,15 +229,49 @@ def _fit(rows: list[Mapping[str, Any]], outcome: str, weights: np.ndarray | None
     else:
         max_vif = float("inf")
     out: dict[str, Any] = {"n": len(rows), "p": x.shape[1], "rank": rank, "condition": cond, "vif": max_vif, "max_vif": max_vif, "vif_flag": max_vif > 50}
+    clusters = sorted({str(r.get("day", i)) for i, r in enumerate(rows)})
+    cluster_count = len(clusters)
+    out.update(ci_level=CI_LEVEL, cluster_count=cluster_count,
+               ci_status="UNAVAILABLE", ci_method="CR1_CLUSTERED_FINITE_SAMPLE",
+               ci_low=None, ci_high=None)
     if rank < x.shape[1] or not math.isfinite(cond) or len(rows) <= x.shape[1]:
-        out.update(status="NOT-IDENTIFIABLE", beta=None, se=None)
+        out.update(status="NOT-IDENTIFIABLE", beta=None, se=None,
+                   ci_reason="fit is not identifiable")
         return out
     coef, _, _, _ = np.linalg.lstsq(wx, wy, rcond=None)
     resid = y - x @ coef
     dof = len(rows) - x.shape[1]
     covariance = np.linalg.pinv(wx.T @ wx)
     se = math.sqrt(float(resid @ (weights * resid)) / dof * float(covariance[1, 1])) if dof > 0 else float("nan")
-    out.update(status="IDENTIFIABLE", beta=float(coef[1]), se=se, residual_ss=float(resid @ (weights * resid)), target="Vanna_orth × ΔIV_PRE_WINDOW")
+    beta = float(coef[1])
+    out.update(status="IDENTIFIABLE", beta=beta, se=se,
+               residual_ss=float(resid @ (weights * resid)),
+               target="Vanna_orth × ΔIV_PRE_WINDOW")
+    # Same-day records are the independent units.  CR1 is the declared
+    # finite-sample clustered sandwich correction; t critical values use
+    # G-1 cluster degrees of freedom.  With too few clusters the interval is
+    # explicitly unavailable rather than manufactured from pooled n.
+    if cluster_count < MIN_CI_CLUSTERS or not math.isfinite(se) or se <= 0:
+        out["ci_reason"] = f"insufficient identifiable clusters ({cluster_count}<{MIN_CI_CLUSTERS})"
+        out["ci_status"] = "INDETERMINATE"
+        return out
+    inv = np.linalg.pinv(wx.T @ wx)
+    scores = (wx * (wy - wx @ coef)[:, None])
+    meat = np.zeros((x.shape[1], x.shape[1]))
+    for cluster in clusters:
+        idx = [i for i, r in enumerate(rows) if str(r.get("day", i)) == cluster]
+        s = scores[idx].sum(axis=0)[:, None]
+        meat += s @ s.T
+    df_resid = max(len(rows) - x.shape[1], 1)
+    cr1 = (cluster_count / (cluster_count - 1)) * ((len(rows) - 1) / df_resid)
+    robust_var = cr1 * inv @ meat @ inv
+    robust_se = math.sqrt(max(float(robust_var[1, 1]), 0.0))
+    # Normal critical value is used as a dependency-free conservative t
+    # approximation; the finite-sample cluster correction and df are exposed.
+    critical = NormalDist().inv_cdf(0.5 + CI_LEVEL / 2.0)
+    out.update(se=robust_se, ci_low=beta - critical * robust_se,
+               ci_high=beta + critical * robust_se, ci_status="AVAILABLE",
+               ci_reason="CR1 clustered sandwich; finite-sample correction; normal critical value with G-1 df")
     return out
 
 
@@ -259,12 +309,30 @@ def _stratum(rows: list[dict[str, Any]], *, total_days: int, min_days: int) -> d
     daily = _clock(rows, "daily_return", "negative")
     breach = _clock(rows, "from_breach_return", "positive")
     eligible = bool(rows) and all(r["causal_eligible"] for r in rows)
-    causal = _fit(rows, "forward_return_h") if eligible else {"status": "CAUSAL_BLOCKED" if rows else "NOT_AVAILABLE", "n": n, "p": 0, "beta": None, "se": None}
+    causal = _fit(rows, "forward_return_h") if eligible else {"status": "CAUSAL_BLOCKED" if rows else "NOT_AVAILABLE", "n": n, "p": 0, "beta": None, "se": None, "ci_low": None, "ci_high": None, "ci_level": CI_LEVEL, "cluster_count": n, "ci_status": "UNAVAILABLE", "ci_method": "CR1_CLUSTERED_FINITE_SAMPLE", "ci_reason": "causal provenance is incomplete"}
     power = power_diagnostics(causal.get("beta"), causal.get("se"), n, causal.get("p", 0))
     status = "VALID" if rows else "NOT_AVAILABLE"
     if rows and not eligible:
         status = "CAUSAL_BLOCKED"
     return {"status": status, "n": n, "coverage": coverage, "power": power, "descriptive": descriptive, "daily": daily, "from_breach": breach, "causal": causal, "no_firing_days": total_days - n if total_days else 0, "min_days": min_days}
+
+
+def _mix_gate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(rows)
+    event = sum(bool(r["event"]) for r in rows)
+    control = total - event
+    event_coverage = event / total if total else 0.0
+    control_coverage = control / total if total else 0.0
+    ratio = max(event, control) / min(event, control) if min(event, control) else float("inf")
+    passed = (event >= MIN_MIX_DAYS and control >= MIN_MIX_DAYS
+              and event_coverage >= MIN_MIX_COVERAGE
+              and control_coverage >= MIN_MIX_COVERAGE
+              and ratio <= MAX_MIX_IMBALANCE)
+    return {"status": "PASS" if passed else "INDETERMINATE", "gate_pass": passed,
+            "event_days": event, "control_days": control, "total_days": total,
+            "event_coverage": event_coverage, "control_coverage": control_coverage,
+            "imbalance_ratio": ratio, "requirements": {"min_days_per_arm": MIN_MIX_DAYS,
+            "min_coverage_per_arm": MIN_MIX_COVERAGE, "max_imbalance_ratio": MAX_MIX_IMBALANCE}}
 
 
 def _balanced_weights(rows: list[dict[str, Any]]) -> np.ndarray:
@@ -283,7 +351,7 @@ def evaluate_task4(records: Iterable[Mapping[str, Any]], *, min_days: int = TARG
     artifact_agreements = [float(record["comparison"]["aggregate"]["sign_agreement"]) for record in records if isinstance(record.get("comparison", {}).get("aggregate"), Mapping) and isinstance(record["comparison"]["aggregate"].get("sign_agreement"), (int, float))]
     descriptive = {"status": "VALID", "n": len(rows), "agreement": sum(artifact_agreements) / len(artifact_agreements) if artifact_agreements else float(np.mean([r["pre_vanna"] >= 0 for r in rows])), "role": "DESCRIPTIVE_ONLY"}
     causal_eligible = all(r["causal_eligible"] for r in rows)
-    primary = _fit(rows, "forward_return_h") if causal_eligible else {"status": "CAUSAL_BLOCKED", "reason": "causal provenance is incomplete", "n": len(rows), "p": 0, "beta": None, "se": None}
+    primary = _fit(rows, "forward_return_h") if causal_eligible else {"status": "CAUSAL_BLOCKED", "reason": "causal provenance is incomplete", "n": len(rows), "p": 0, "beta": None, "se": None, "ci_low": None, "ci_high": None, "ci_level": CI_LEVEL, "cluster_count": len(rows), "ci_status": "UNAVAILABLE", "ci_method": "CR1_CLUSTERED_FINITE_SAMPLE", "ci_reason": "causal provenance is incomplete"}
     power = power_diagnostics(primary.get("beta"), primary.get("se"), len(rows), primary.get("p", 0))
     falsifiers: dict[str, Any] = {}
     falsifier_failure = False
@@ -305,9 +373,12 @@ def evaluate_task4(records: Iterable[Mapping[str, Any]], *, min_days: int = TARG
     sensitivity = {"opposite_convention": {"role": "SENSITIVITY", "fit": _fit(opposite, "forward_return_h") if opposite else None}, "balanced_panel": {"role": "SENSITIVITY", "weighting": "equal-family/day", "primary_replacement": False, "fit": _fit(rows, "forward_return_h", _balanced_weights(rows)) if causal_eligible else None}}
     strata = {"event_only": _stratum([r for r in rows if r["event"]], total_days=len(rows), min_days=min_days), "control_only": _stratum([r for r in rows if not r["event"]], total_days=len(rows), min_days=min_days), "pooled": _stratum(rows, total_days=len(rows), min_days=min_days)}
     strata["pooled"]["no_firing_days"] = sum(not r["event"] for r in rows)
+    mix_gate = _mix_gate(rows)
     descriptive_ok = descriptive["agreement"] >= 0.5
-    decision = decision_ladder(descriptive_ok=descriptive_ok, causal_ok=primary.get("status") == "IDENTIFIABLE", falsifiers_ok=not falsifier_failure, powered=not power["underpowered"])
-    return {"status": "VALID", "decision": decision, "n_unique_days": len(rows), "days": rows, "descriptive": descriptive, "causal": primary, "primary_all_eligible": primary, "power": power, "falsifiers": falsifiers, "sensitivity": sensitivity, "clocks": {"daily_close_to_close": _clock(rows, "daily_return", "negative"), "from_breach": _clock(rows, "from_breach_return", "positive")}, "strata": strata, "diagnostics": {"rank": primary.get("rank"), "condition": primary.get("condition"), "vif": primary.get("vif")}, "config": {"unit": "unique_calendar_day", "cluster": "same-day tickers", "no_imputation": True, "best_lag_selection": False, "auto_promote": False, "causal_target": "Vanna_orth × ΔIV_PRE_WINDOW", "min_days": min_days, "primary_universe": "all_eligible"}}
+    decision = decision_ladder(descriptive_ok=descriptive_ok and mix_gate["gate_pass"], causal_ok=primary.get("status") == "IDENTIFIABLE", falsifiers_ok=not falsifier_failure, powered=not power["underpowered"])
+    if not mix_gate["gate_pass"]:
+        decision = "INDETERMINATE"
+    return {"status": "VALID", "decision": decision, "evaluation_gate": mix_gate, "n_unique_days": len(rows), "days": rows, "descriptive": descriptive, "causal": primary, "primary_all_eligible": primary, "power": power, "falsifiers": falsifiers, "sensitivity": sensitivity, "clocks": {"daily_close_to_close": _clock(rows, "daily_return", "negative"), "from_breach": _clock(rows, "from_breach_return", "positive")}, "strata": strata, "diagnostics": {"rank": primary.get("rank"), "condition": primary.get("condition"), "vif": primary.get("vif"), "ci_low": primary.get("ci_low"), "ci_high": primary.get("ci_high"), "ci_level": primary.get("ci_level"), "cluster_count": primary.get("cluster_count"), "ci_status": primary.get("ci_status"), "ci_method": primary.get("ci_method")}, "config": {"unit": "unique_calendar_day", "cluster": "same-day tickers", "no_imputation": True, "best_lag_selection": False, "auto_promote": False, "causal_target": "Vanna_orth × ΔIV_PRE_WINDOW", "min_days": min_days, "primary_universe": "all_eligible"}}
 
 
 __all__ = ["EvaluationInvalid", "decision_ladder", "evaluate_task4", "power_diagnostics", "unique_calendar_days"]

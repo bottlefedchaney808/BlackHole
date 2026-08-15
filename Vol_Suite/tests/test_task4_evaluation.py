@@ -4,6 +4,7 @@ import json
 import pytest
 from run_task4_evaluation import (
     EvaluationInvalid,
+    _fit,
     decision_ladder,
     evaluate_task4,
     power_diagnostics,
@@ -212,3 +213,62 @@ def test_underpowered_is_indeterminate_even_with_positive_estimate():
     result = evaluate_task4([row("2026-01-01", "SPY"), row("2026-01-02", "SPY")], min_days=1)
     assert result["power"]["underpowered"] is True
     assert result["decision"] == "INDETERMINATE"
+
+
+def test_clustered_ci_is_published_for_identifiable_known_clustered_data():
+    records = []
+    for i in range(16):
+        r = row(f"2026-02-{i + 1:02d}", "SPY", y=0.1 + 0.02 * i + 0.003 * (i % 3))
+        r["families"] = ["SPY"]
+        r["pre_vanna"] = 1.0 + 0.1 * i
+        r["delta_iv_pre_window"] = 0.2 + 0.01 * (i % 4)
+        for j, field in enumerate(("gamma_burst", "delta_s", "market", "a6_reflexivity", "cross_family_spillover")):
+            r[field] = (((i + 1) ** (j + 2)) % 29) / 29.0 + (i % 3) * 0.001
+        r["event"] = i % 2
+        records.append(r)
+    fit = _fit(records, "forward_return_h")
+    assert fit["status"] == "IDENTIFIABLE"
+    assert fit["ci_status"] == "AVAILABLE"
+    assert fit["cluster_count"] == 16
+    assert fit["ci_level"] == 0.90
+    assert fit["ci_low"] < fit["beta"] < fit["ci_high"]
+
+
+def test_clustered_ci_is_indeterminate_when_same_day_clusters_are_insufficient():
+    records = []
+    for i in range(16):
+        r = row("2026-02-01", f"T{i}", y=0.1 + 0.02 * i + 0.003 * (i % 3))
+        r["families"] = [r["ticker"]]
+        r["pre_vanna"] = 1.0 + 0.1 * i
+        r["delta_iv_pre_window"] = 0.2 + 0.01 * (i % 4)
+        for j, field in enumerate(("gamma_burst", "delta_s", "market", "a6_reflexivity", "cross_family_spillover")):
+            r[field] = (((i + 1) ** (j + 2)) % 29) / 29.0 + (i % 3) * 0.001
+        r["event"] = i % 2
+        records.append(r)
+    fit = _fit(records, "forward_return_h")
+    assert fit["cluster_count"] == 1
+    assert fit["ci_low"] is None and fit["ci_high"] is None
+    assert fit["ci_status"] in {"UNAVAILABLE", "INDETERMINATE"}
+
+
+def _mix_records(event_days, control_days):
+    records = []
+    for i in range(event_days + control_days):
+        r = row(f"2026-03-{i + 1:02d}", "SPY")
+        r["event"] = int(i < event_days)
+        records.append(r)
+    return records
+
+
+def test_balanced_event_control_mix_passes_gate():
+    result = evaluate_task4(_mix_records(4, 4), min_days=1)
+    assert result["evaluation_gate"]["gate_pass"] is True
+    assert result["decision"] != "INDETERMINATE" or result["causal"]["status"] != "IDENTIFIABLE"
+
+
+@pytest.mark.parametrize("event_days,control_days", [(0, 4), (4, 0), (1, 5), (2, 8)])
+def test_missing_or_imbalanced_event_control_mix_is_indeterminate(event_days, control_days):
+    result = evaluate_task4(_mix_records(event_days, control_days), min_days=1)
+    assert result["evaluation_gate"]["status"] == "INDETERMINATE"
+    assert result["decision"] == "INDETERMINATE"
+    assert set(result["strata"]) == {"event_only", "control_only", "pooled"}
