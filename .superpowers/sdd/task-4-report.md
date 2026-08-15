@@ -98,3 +98,19 @@ Verification for this closure:
 - Python 3.12 `py_compile` — passed
 - Python 3.12 Ruff check — passed
 - `git diff --check` — passed
+
+## Statistical review closure (2026-08-15)
+
+- Primary fit gates now run before every decision comparison: identifiability, finite beta/SE, available robust CI, and the declared primary power target are required before either `BETTER` or `WORSE`. Falsifier prerequisites also require a finite, identifiable, powered primary; underpowered-primary plus powered-falsifier regression remains `INDETERMINATE` and cannot drive `WORSE`.
+- Replaced the Normal critical value with a dependency-free finite-sample Student-t inverse based on the regularized beta function. CI output exposes `ci_df=cluster_count-1`, `ci_critical_value`, and `ci_method=CR1_CLUSTERED_STUDENT_T_FINITE_SAMPLE`.
+- Robust variance is validated as finite and strictly positive before deriving SE/CI. Non-finite, negative, zero, or insufficient variance returns `status=INDETERMINATE`, `ci_status=UNAVAILABLE`, and null interval bounds; no NaN CI is emitted.
+- Fixed the balanced-mix regression's tautological assertion to require `INDETERMINATE` because the primary target remains 257 days.
+
+Verification:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **35 passed**
+- Python 3.12 `py_compile` — passed
+- Python 3.12 Ruff check — **All checks passed**
+- `git diff --check` — passed
+
+Only the Task 4 evaluator, focused tests, and this report were changed for this closure; acquisition/live/master/secrets files were not touched.

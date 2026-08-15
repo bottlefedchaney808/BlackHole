@@ -2,9 +2,11 @@ import hashlib
 import json
 
 import pytest
+import run_task4_evaluation as evaluation
 from run_task4_evaluation import (
     EvaluationInvalid,
     _fit,
+    _student_t_critical,
     decision_ladder,
     evaluate_task4,
     power_diagnostics,
@@ -230,6 +232,9 @@ def test_clustered_ci_is_published_for_identifiable_known_clustered_data():
     assert fit["status"] == "IDENTIFIABLE"
     assert fit["ci_status"] == "AVAILABLE"
     assert fit["cluster_count"] == 16
+    assert fit["ci_df"] == 15
+    assert fit["ci_critical_value"] == pytest.approx(1.7530503557, rel=1e-9)
+    assert fit["ci_method"] == "CR1_CLUSTERED_STUDENT_T_FINITE_SAMPLE"
     assert fit["ci_level"] == 0.90
     assert fit["ci_low"] < fit["beta"] < fit["ci_high"]
 
@@ -263,7 +268,68 @@ def _mix_records(event_days, control_days):
 def test_balanced_event_control_mix_passes_gate():
     result = evaluate_task4(_mix_records(4, 4), min_days=1)
     assert result["evaluation_gate"]["gate_pass"] is True
-    assert result["decision"] != "INDETERMINATE" or result["causal"]["status"] != "IDENTIFIABLE"
+    assert result["decision"] == "INDETERMINATE"  # primary target is 257 days
+
+
+def test_underpowered_primary_blocks_worse_even_when_falsifier_is_powered():
+    records = []
+    for i in range(16):
+        r = row(f"2026-05-{i + 1:02d}", "SPY", y=0.1 + 0.02 * i + 0.003 * (i % 3))
+        r["families"] = ["SPY"]
+        r["pre_vanna"] = 1.0 + 0.1 * i
+        r["delta_iv_pre_window"] = 0.2 + 0.01 * (i % 4)
+        for j, field in enumerate(("gamma_burst", "delta_s", "market", "a6_reflexivity", "cross_family_spillover")):
+            r[field] = (((i + 1) ** (j + 2)) % 29) / 29.0 + (i % 3) * 0.001
+        r["event"] = i % 2
+        records.append(r)
+    target = evaluation._residual_target(records)
+    for i, record in enumerate(records):
+        record["placebo_return"] = float(target[i])
+        record["reverse_return"] = float(target[i])
+    result = evaluate_task4(records, min_days=1)
+    assert result["power"]["underpowered"] is True
+    assert result["falsifiers"]["placebo"]["power"]["reach_80"] is True
+    assert result["falsifiers"]["placebo"]["interpretation"] == "INDETERMINATE"
+    assert result["falsifiers"]["placebo"]["drives_decision"] is False
+    assert result["decision"] == "INDETERMINATE"
+
+    # The direct ladder is also ordered so primary gates precede WORSE.
+    assert decision_ladder(
+        descriptive_ok=False, causal_ok=False, falsifiers_ok=False, powered=False
+    ) == "INDETERMINATE"
+
+
+def test_student_t_critical_value_uses_cluster_degrees_of_freedom():
+    assert _student_t_critical(0.90, 15) == pytest.approx(1.7530503557, rel=1e-9)
+
+
+def test_nonfinite_robust_variance_has_no_nan_interval(monkeypatch):
+    original_pinv = evaluation.np.linalg.pinv
+    calls = 0
+
+    def poisoned_pinv(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = original_pinv(*args, **kwargs)
+        if calls == 3:
+            result = result.copy()
+            result[1, 1] = float("nan")
+        return result
+
+    monkeypatch.setattr(evaluation.np.linalg, "pinv", poisoned_pinv)
+    records = []
+    for i in range(16):
+        r = row(f"2026-04-{i + 1:02d}", "SPY", y=0.1 + 0.02 * i + 0.003 * (i % 3))
+        r["families"] = ["SPY"]
+        r["pre_vanna"] = 1.0 + 0.1 * i
+        r["delta_iv_pre_window"] = 0.2 + 0.01 * (i % 4)
+        for j, field in enumerate(("gamma_burst", "delta_s", "market", "a6_reflexivity", "cross_family_spillover")):
+            r[field] = (((i + 1) ** (j + 2)) % 29) / 29.0 + (i % 3) * 0.001
+        records.append(r)
+    fit = _fit(records, "forward_return_h")
+    assert fit["ci_status"] == "UNAVAILABLE"
+    assert fit["ci_low"] is None and fit["ci_high"] is None
+    assert fit["se"] is None
 
 
 @pytest.mark.parametrize("event_days,control_days", [(0, 4), (4, 0), (1, 5), (2, 8)])

@@ -11,7 +11,6 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -205,14 +204,82 @@ def _residual_target(rows: list[Mapping[str, Any]], vanna_field: str = "pre_vann
     return target - z @ np.linalg.lstsq(z, target, rcond=None)[0]
 
 
+def _beta_continued_fraction(a: float, b: float, x: float) -> float:
+    """Evaluate the continued fraction used by the regularized beta function."""
+    max_iterations = 200
+    epsilon = 3.0e-14
+    tiny = 1.0e-300
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    d = max(abs(d), tiny) if d == 0.0 else d
+    d = 1.0 / d
+    h = d
+    for iteration in range(1, max_iterations + 1):
+        m2 = 2 * iteration
+        aa = iteration * (b - iteration) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        d = max(abs(d), tiny) if d == 0.0 else d
+        c = 1.0 + aa / c
+        c = max(abs(c), tiny) if c == 0.0 else c
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + iteration) * (qab + iteration) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        d = max(abs(d), tiny) if d == 0.0 else d
+        c = 1.0 + aa / c
+        c = max(abs(c), tiny) if c == 0.0 else c
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < epsilon:
+            break
+    return h
+
+
+def _regularized_beta(x: float, a: float, b: float) -> float:
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    log_front = (a * math.log(x) + b * math.log1p(-x)
+                 - math.lgamma(a) - math.lgamma(b) + math.lgamma(a + b))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return math.exp(log_front) * _beta_continued_fraction(a, b, x) / a
+    return 1.0 - math.exp(log_front) * _beta_continued_fraction(b, a, 1.0 - x) / b
+
+
+def _student_t_cdf_positive(value: float, df: int) -> float:
+    x = df / (df + value * value)
+    return 1.0 - 0.5 * _regularized_beta(x, df / 2.0, 0.5)
+
+
+def _student_t_critical(confidence: float, df: int) -> float:
+    """Return the two-sided finite-sample Student-t critical value."""
+    if df < 1 or not 0.0 < confidence < 1.0:
+        raise ValueError("Student-t critical value requires positive df and a confidence in (0, 1)")
+    target = 0.5 + confidence / 2.0
+    low, high = 0.0, 100.0
+    for _ in range(80):
+        midpoint = (low + high) / 2.0
+        if _student_t_cdf_positive(midpoint, df) < target:
+            low = midpoint
+        else:
+            high = midpoint
+    return (low + high) / 2.0
+
+
 def _fit(rows: list[Mapping[str, Any]], outcome: str, weights: np.ndarray | None = None) -> dict[str, Any]:
     def unavailable(n: int, p: int = 0, *, status: str = "NOT_AVAILABLE", reason: str = "no rows"):
         return {"n": n, "p": p, "rank": 0, "condition": None, "vif": None,
                 "status": status, "beta": None, "se": None,
                 "ci_low": None, "ci_high": None, "ci_level": CI_LEVEL,
                 "cluster_count": len({r.get("day") for r in rows}),
-                "ci_status": "UNAVAILABLE", "ci_method": "CR1_CLUSTERED_FINITE_SAMPLE",
-                "ci_reason": reason}
+                "ci_status": "UNAVAILABLE", "ci_method": "CR1_CLUSTERED_STUDENT_T_FINITE_SAMPLE",
+                "ci_df": max(len({r.get("day") for r in rows}) - 1, 0),
+                "ci_critical_value": None, "ci_reason": reason}
     if not rows:
         return unavailable(0, reason="no rows")
     target = _residual_target(rows)
@@ -232,7 +299,8 @@ def _fit(rows: list[Mapping[str, Any]], outcome: str, weights: np.ndarray | None
     clusters = sorted({str(r.get("day", i)) for i, r in enumerate(rows)})
     cluster_count = len(clusters)
     out.update(ci_level=CI_LEVEL, cluster_count=cluster_count,
-               ci_status="UNAVAILABLE", ci_method="CR1_CLUSTERED_FINITE_SAMPLE",
+               ci_df=max(cluster_count - 1, 0), ci_critical_value=None,
+               ci_status="UNAVAILABLE", ci_method="CR1_CLUSTERED_STUDENT_T_FINITE_SAMPLE",
                ci_low=None, ci_high=None)
     if rank < x.shape[1] or not math.isfinite(cond) or len(rows) <= x.shape[1]:
         out.update(status="NOT-IDENTIFIABLE", beta=None, se=None,
@@ -252,8 +320,8 @@ def _fit(rows: list[Mapping[str, Any]], outcome: str, weights: np.ndarray | None
     # G-1 cluster degrees of freedom.  With too few clusters the interval is
     # explicitly unavailable rather than manufactured from pooled n.
     if cluster_count < MIN_CI_CLUSTERS or not math.isfinite(se) or se <= 0:
-        out["ci_reason"] = f"insufficient identifiable clusters ({cluster_count}<{MIN_CI_CLUSTERS})"
-        out["ci_status"] = "INDETERMINATE"
+        out.update(status="INDETERMINATE", se=None, ci_status="UNAVAILABLE",
+                   ci_reason=f"insufficient identifiable clusters ({cluster_count}<{MIN_CI_CLUSTERS})")
         return out
     inv = np.linalg.pinv(wx.T @ wx)
     scores = (wx * (wy - wx @ coef)[:, None])
@@ -265,13 +333,21 @@ def _fit(rows: list[Mapping[str, Any]], outcome: str, weights: np.ndarray | None
     df_resid = max(len(rows) - x.shape[1], 1)
     cr1 = (cluster_count / (cluster_count - 1)) * ((len(rows) - 1) / df_resid)
     robust_var = cr1 * inv @ meat @ inv
-    robust_se = math.sqrt(max(float(robust_var[1, 1]), 0.0))
-    # Normal critical value is used as a dependency-free conservative t
-    # approximation; the finite-sample cluster correction and df are exposed.
-    critical = NormalDist().inv_cdf(0.5 + CI_LEVEL / 2.0)
-    out.update(se=robust_se, ci_low=beta - critical * robust_se,
+    robust_variance = float(robust_var[1, 1])
+    out.update(ci_df=cluster_count - 1, ci_critical_value=None,
+               ci_method="CR1_CLUSTERED_STUDENT_T_FINITE_SAMPLE")
+    if not math.isfinite(robust_variance) or robust_variance <= 0.0:
+        out.update(status="INDETERMINATE", se=None, ci_low=None, ci_high=None,
+                   ci_status="UNAVAILABLE",
+                   ci_reason="robust variance is non-finite, negative, or insufficient")
+        return out
+    robust_se = math.sqrt(robust_variance)
+    ci_df = cluster_count - 1
+    critical = _student_t_critical(CI_LEVEL, ci_df)
+    out.update(se=robust_se, ci_critical_value=critical,
+               ci_low=beta - critical * robust_se,
                ci_high=beta + critical * robust_se, ci_status="AVAILABLE",
-               ci_reason="CR1 clustered sandwich; finite-sample correction; normal critical value with G-1 df")
+               ci_reason="CR1 clustered sandwich; Student-t critical value with cluster_count-1 df")
     return out
 
 
@@ -287,10 +363,11 @@ def power_diagnostics(beta: float | None, se: float | None, n: int, p: int, targ
 
 
 def decision_ladder(*, descriptive_ok: bool, causal_ok: bool, falsifiers_ok: bool, powered: bool) -> str:
-    if not descriptive_ok or not falsifiers_ok:
-        return "WORSE"
+    # The primary fit is a prerequisite for every comparison, including WORSE.
     if not causal_ok or not powered:
         return "INDETERMINATE"
+    if not descriptive_ok or not falsifiers_ok:
+        return "WORSE"
     return "BETTER"
 
 
@@ -359,9 +436,15 @@ def evaluate_task4(records: Iterable[Mapping[str, Any]], *, min_days: int = TARG
         available = all(r[field] is not None for r in rows)
         fit = _fit(rows, field) if available else None
         fit_power = power_diagnostics(fit.get("beta"), fit.get("se"), fit.get("n", 0), fit.get("p", 0), target_days=min_days) if fit else None
+        primary_finite = all(primary.get(field) is not None
+                             and math.isfinite(float(primary[field]))
+                             for field in ("beta", "se"))
+        primary_powered = bool(power.get("reach_80"))
         prerequisites = (available and fit is not None and primary.get("status") == "IDENTIFIABLE"
+                         and primary_finite and primary_powered
                          and fit.get("status") == "IDENTIFIABLE" and fit_power is not None
-                         and fit_power["reach_80"] and primary.get("beta") is not None)
+                         and fit_power["reach_80"] and fit.get("ci_status") == "AVAILABLE"
+                         and primary.get("ci_status") == "AVAILABLE")
         observed_failure = bool(prerequisites and abs(float(fit["beta"])) >= abs(float(primary["beta"]))
                                 and math.isfinite(float(fit["beta"])) and math.isfinite(float(primary["beta"])))
         falsifier_failure = falsifier_failure or observed_failure
@@ -375,10 +458,15 @@ def evaluate_task4(records: Iterable[Mapping[str, Any]], *, min_days: int = TARG
     strata["pooled"]["no_firing_days"] = sum(not r["event"] for r in rows)
     mix_gate = _mix_gate(rows)
     descriptive_ok = descriptive["agreement"] >= 0.5
-    decision = decision_ladder(descriptive_ok=descriptive_ok and mix_gate["gate_pass"], causal_ok=primary.get("status") == "IDENTIFIABLE", falsifiers_ok=not falsifier_failure, powered=not power["underpowered"])
+    primary_finite = all(primary.get(field) is not None
+                         and math.isfinite(float(primary[field]))
+                         for field in ("beta", "se"))
+    primary_usable = (primary.get("status") == "IDENTIFIABLE" and primary_finite
+                      and primary.get("ci_status") == "AVAILABLE")
+    decision = decision_ladder(descriptive_ok=descriptive_ok and mix_gate["gate_pass"], causal_ok=primary_usable, falsifiers_ok=not falsifier_failure, powered=bool(power.get("reach_80")))
     if not mix_gate["gate_pass"]:
         decision = "INDETERMINATE"
-    return {"status": "VALID", "decision": decision, "evaluation_gate": mix_gate, "n_unique_days": len(rows), "days": rows, "descriptive": descriptive, "causal": primary, "primary_all_eligible": primary, "power": power, "falsifiers": falsifiers, "sensitivity": sensitivity, "clocks": {"daily_close_to_close": _clock(rows, "daily_return", "negative"), "from_breach": _clock(rows, "from_breach_return", "positive")}, "strata": strata, "diagnostics": {"rank": primary.get("rank"), "condition": primary.get("condition"), "vif": primary.get("vif"), "ci_low": primary.get("ci_low"), "ci_high": primary.get("ci_high"), "ci_level": primary.get("ci_level"), "cluster_count": primary.get("cluster_count"), "ci_status": primary.get("ci_status"), "ci_method": primary.get("ci_method")}, "config": {"unit": "unique_calendar_day", "cluster": "same-day tickers", "no_imputation": True, "best_lag_selection": False, "auto_promote": False, "causal_target": "Vanna_orth × ΔIV_PRE_WINDOW", "min_days": min_days, "primary_universe": "all_eligible"}}
+    return {"status": "VALID", "decision": decision, "evaluation_gate": mix_gate, "n_unique_days": len(rows), "days": rows, "descriptive": descriptive, "causal": primary, "primary_all_eligible": primary, "power": power, "falsifiers": falsifiers, "sensitivity": sensitivity, "clocks": {"daily_close_to_close": _clock(rows, "daily_return", "negative"), "from_breach": _clock(rows, "from_breach_return", "positive")}, "strata": strata, "diagnostics": {"rank": primary.get("rank"), "condition": primary.get("condition"), "vif": primary.get("vif"), "ci_low": primary.get("ci_low"), "ci_high": primary.get("ci_high"), "ci_level": primary.get("ci_level"), "cluster_count": primary.get("cluster_count"), "ci_df": primary.get("ci_df"), "ci_critical_value": primary.get("ci_critical_value"), "ci_status": primary.get("ci_status"), "ci_method": primary.get("ci_method")}, "config": {"unit": "unique_calendar_day", "cluster": "same-day tickers", "no_imputation": True, "best_lag_selection": False, "auto_promote": False, "causal_target": "Vanna_orth × ΔIV_PRE_WINDOW", "min_days": min_days, "primary_universe": "all_eligible"}}
 
 
 __all__ = ["EvaluationInvalid", "decision_ladder", "evaluate_task4", "power_diagnostics", "unique_calendar_days"]
