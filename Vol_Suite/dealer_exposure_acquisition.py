@@ -55,15 +55,17 @@ def _held_references(paths: Iterable[str | Path]) -> dict[tuple[str, str], str]:
             except (OSError, ValueError, UnicodeDecodeError):
                 continue
             objects: list[Mapping[str, Any]] = []
-            def visit(value: Any) -> None:
+
+            def visit(value: Any, collected: list[Mapping[str, Any]]) -> None:
                 if isinstance(value, Mapping):
-                    objects.append(value)
+                    collected.append(value)
                     for child in value.values():
-                        visit(child)
+                        visit(child, collected)
                 elif isinstance(value, list):
                     for child in value:
-                        visit(child)
-            visit(payload)
+                        visit(child, collected)
+
+            visit(payload, objects)
             for obj in objects:
                 ticker = str(obj.get("ticker", "")).strip().lstrip("$").upper()
                 day = next((obj.get(k) for k in ("calendar_day", "day", "date", "trade_date", "as_of", "acquired_on") if obj.get(k) is not None), None)
@@ -125,8 +127,8 @@ def _timestamp(value: Any) -> dt.datetime:
     text = value[:-1] + "+00:00" if value.endswith("Z") else value
     parsed = dt.datetime.fromisoformat(text)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
 
 
 def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
@@ -200,7 +202,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
         try:
             response = probe_fetcher(request)
             if not isinstance(response, Mapping):
-                raise ValueError("probe response must be a mapping")
+                raise TypeError("probe response must be a mapping")
             status = str(response.get("status", "HARD_GAP")).upper()
             if status not in {"PASS", "INELIGIBLE", "HARD_GAP"}:
                 status = "HARD_GAP"
@@ -217,7 +219,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
 def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Admit candidates only when their corresponding validated probe is PASS."""
     by_key = {p.get("candidate_key"): p for p in probes if p.get("status") == "PASS" and p.get("validated") is True and p.get("invoked") is True}
-    return [dict(u) for u in sorted(schedule, key=lambda x: x["candidate_key"]) if u.get("candidate_key") in by_key]
+    return [dict(u) for u in sorted(schedule, key=lambda x: x["candidate_key"]) if u.get("candidate_key") in by_key and not u.get("held_pair_exclusion")]
 
 
 def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None) -> dict[str, Any]:
@@ -225,6 +227,9 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     if not dry_run and not approval: raise AcquisitionGateError("explicit approval is required")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash)
+    primary_schedule = select_primary_schedule(ordered, probes)
+    primary_keys = {u["candidate_key"] for u in primary_schedule}
+    probe_by_key = {p["candidate_key"]: p for p in probes}
     units = []
     network_executed = False
     for unit in ordered:
@@ -234,14 +239,22 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         elif dry_run or probe_only:
             payload, status, reason = {"mode": "probe-only", "candidate_key": unit["candidate_key"], "network": False}, "INELIGIBLE", "dry_run_probe_only"
             item = _unit_from_payload(unit, None)
+        elif unit["candidate_key"] not in primary_keys:
+            probe = probe_by_key.get(unit["candidate_key"], {})
+            status = probe.get("status") if probe.get("status") in {"INELIGIBLE", "HARD_GAP"} else "HARD_GAP"
+            reason = probe.get("reason") or ("validated PASS probe required" if status == "HARD_GAP" else "probe_ineligible")
+            payload = {"mode": "not-primary", "candidate_key": unit["candidate_key"], "network": False}
+            item = _unit_from_payload(unit, None)
         elif fetcher is None:
             payload, status, reason = {"mode": "acquisition", "candidate_key": unit["candidate_key"], "network": False}, "HARD_GAP", "heavy acquisition requires an injected fetcher"
             item = _unit_from_payload(unit, None)
         else:
             try:
+                # This is deliberately immediately before the injected call: a
+                # raised fetcher still proves that acquisition was attempted.
+                network_executed = True
                 payload = fetcher(unit)
                 item = _unit_from_payload(unit, payload)
-                network_executed = True
                 status, reason = item["status"], item["reason"]
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 payload, status, reason = {"error": str(exc)}, "HARD_GAP", str(exc)[:200]
@@ -252,7 +265,14 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         units.append(item)
     generated_at = generated_at or dt.datetime.now(dt.UTC).isoformat()
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at)
-    return {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": select_primary_schedule(ordered, probes), "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "generated_at": generated_at}
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "generated_at": generated_at}
+    if output_dir is not None:
+        artifact_dir = Path(output_dir)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / "dealer_exposure_acquisition.json"
+        artifact_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str, allow_nan=False) + "\n", encoding="utf-8")
+        result["artifact_path"] = str(artifact_path)
+    return result
 
 
-__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "run_availability_probes", "select_primary_schedule", "execute_sequential_acquisition"]
+__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "execute_sequential_acquisition", "run_availability_probes", "select_primary_schedule"]

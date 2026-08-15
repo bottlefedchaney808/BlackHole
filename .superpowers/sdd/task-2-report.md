@@ -59,3 +59,27 @@ exit 0
 ```
 
 No acquisition was executed; live model/config and unrelated untracked corpora were not modified.
+
+## Critical finding fixes (2026-08-15)
+- `execute_sequential_acquisition` now computes the validated PASS-only `primary_schedule` from probe evidence first and invokes the injected heavy fetcher only for those keys. INELIGIBLE, HARD_GAP, held exclusions, and missing-probe units are retained in the census without heavy fetch calls.
+- `network_heavy_acquisition_executed` is now a local execution flag set immediately before the fetcher call, so a fetcher exception is reported as an attempted/failed execution rather than as `False`. The immutable import sentinel remains untouched and is not used as runtime evidence.
+- `output_dir` now has explicit behavior: when supplied, the result is persisted as `dealer_exposure_acquisition.json` and the returned result includes `artifact_path`. The artifact retains probe, schedule, unit, hash, no-imputation, and census provenance fields.
+- Added focused regressions for PASS-only fetch-call lists, raising fetchers, and output artifacts. Existing dry-run/probe-only, no-fetcher HARD_GAP, concurrency=1, no-imputation, and provenance gates remain covered.
+- Ruff/compile sequencing was rerun as compile first, then Ruff, then pytest, followed by `git diff --check`; Ruff findings in the touched module were cleaned up rather than reported as an unverified pass.
+
+### Fix verification
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
+exit 0
+
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
+All checks passed!
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+48 passed in 0.10s
+
+git diff --check
+exit 0
+```
+
+No heavy or live acquisition was executed; no dealer_positioning.py, live config, master, secrets, or unrelated untracked corpora were modified.

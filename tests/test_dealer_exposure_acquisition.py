@@ -18,6 +18,9 @@ def row(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tec
 def valid_payload(prov="PRE_WINDOW", value=0.1):
     return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_source_ts": "2026-08-17T14:00:00", "breach_window_start_prov": "2026-08-17T15:00:00"}}}
 
+def valid_probe(_):
+    return {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}
+
 def test_schedule_sort_and_held_exclusion(tmp_path):
     p = tmp_path / "held.json"; p.write_text(json.dumps({"as_of":"2026-08-17", "ticker":"AAPL"}), encoding="utf-8")
     s = build_candidate_schedule([row("MSFT"), row("AAPL")], held_paths=[p])
@@ -47,18 +50,18 @@ def test_approval_and_strict_concurrency_gates(monkeypatch):
 def test_sequential_pass_hashes_and_same_day_cluster():
     seen = []
     s = build_candidate_schedule([row("MSFT"), row("AAPL")])
-    result = execute_sequential_acquisition(s, fetcher=lambda u: seen.append(u["ticker"]) or valid_payload(), dry_run=False, approval=True)
+    result = execute_sequential_acquisition(s, probe_fetcher=valid_probe, fetcher=lambda u: seen.append(u["ticker"]) or valid_payload(), dry_run=False, approval=True)
     assert seen == ["AAPL", "MSFT"]
     assert all(u["status"] == "PASS" and u["raw_payload_hash"] and u["artifact_hash"] and not u["imputed"] for u in result["units"])
     assert result["same_day_clusters"]["2026-08-17"]["tickers"] == ["AAPL", "MSFT"]
     assert result["census"]["pre_window_n"] == result["census"]["pre_window_N"] == 2
 
 def test_no_imputation_and_associational_status():
-    result = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: {"record": {}}, dry_run=False, approval=True)
+    result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: {"record": {}}, dry_run=False, approval=True)
     assert result["units"][0]["status"] == "ASSOCIATIONAL" and result["units"][0]["pre_window_value"] is None
 
 def test_hard_gap_retained_without_imputation():
-    result = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: (_ for _ in ()).throw(RuntimeError("down")), dry_run=False, approval=True)
+    result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: (_ for _ in ()).throw(RuntimeError("down")), dry_run=False, approval=True)
     assert result["units"][0]["status"] == "HARD_GAP" and result["units"][0]["imputed"] is False
 
 def test_fail_loud_census_below_100_percent():
@@ -87,11 +90,11 @@ def test_same_day_cluster_status_precedence():
 
 def test_timestamp_or_missing_delta_downgrades():
     payload = valid_payload(); payload["record"]["l2"]["iv_source_ts"] = "bad"
-    r = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: payload, dry_run=False, approval=True)
+    r = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: payload, dry_run=False, approval=True)
     assert r["units"][0]["status"] == "ASSOCIATIONAL"
 
 def test_zero_delta_is_valid_not_imputation():
-    r = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: valid_payload(value=0.0), dry_run=False, approval=True)
+    r = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: valid_payload(value=0.0), dry_run=False, approval=True)
     assert r["units"][0]["status"] == "PASS" and r["units"][0]["imputed"] is False
 
 def test_output_is_json_serializable_and_no_import_execution():
@@ -115,8 +118,8 @@ def test_schedule_dte_stratum():
 
 def test_artifact_hash_changes_with_payload():
     s = build_candidate_schedule([row()])
-    a = execute_sequential_acquisition(s, fetcher=lambda _: {"x": 1}, dry_run=False, approval=True)
-    b = execute_sequential_acquisition(s, fetcher=lambda _: {"x": 2}, dry_run=False, approval=True)
+    a = execute_sequential_acquisition(s, probe_fetcher=valid_probe, fetcher=lambda _: {"x": 1}, dry_run=False, approval=True)
+    b = execute_sequential_acquisition(s, probe_fetcher=valid_probe, fetcher=lambda _: {"x": 2}, dry_run=False, approval=True)
     assert a["units"][0]["artifact_hash"] != b["units"][0]["artifact_hash"]
 
 
@@ -125,14 +128,14 @@ def test_prewindow_rejects_malformed_equal_later_and_cross_day_timestamps():
     for source, breach in (("0000", "2026-08-17T15:00:00"), ("2026-08-17T15:00:00", "2026-08-17T15:00:00"), ("2026-08-17T16:00:00", "2026-08-17T15:00:00"), ("2026-08-16T14:00:00", "2026-08-17T15:00:00")):
         payload = valid_payload()
         payload["record"]["l2"].update(iv_source_ts=source, breach_window_start_prov=breach)
-        result = execute_sequential_acquisition(schedule, fetcher=lambda _, p=payload: p, dry_run=False, approval=True)
+        result = execute_sequential_acquisition(schedule, probe_fetcher=valid_probe, fetcher=lambda _, p=payload: p, dry_run=False, approval=True)
         assert result["units"][0]["status"] == "ASSOCIATIONAL"
 
 
 def test_timezone_normalization_accepts_equivalent_ordering():
     payload = valid_payload()
     payload["record"]["l2"].update(iv_source_ts="2026-08-17T10:00:00-04:00", breach_window_start_prov="2026-08-17T19:00:00Z")
-    result = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: payload, dry_run=False, approval=True)
+    result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: payload, dry_run=False, approval=True)
     assert result["units"][0]["status"] == "PASS"
 
 
@@ -147,5 +150,56 @@ def test_probe_schema_and_pass_only_primary_schedule():
     schedule = build_candidate_schedule([row("AAPL"), row("MSFT")])
     probes = run_availability_probes(schedule, probe_fetcher=lambda request: {"status": "PASS" if request["ticker"] == "AAPL" else "INELIGIBLE", "response_status": 200, "counts": {"rows": 2}, "source_counts": {"theta": 2}}, approval=True, dry_run=False)
     assert {"request_parameters", "response_status", "response_counts", "source_counts", "probe_code_version", "probe_code_hash"} <= set(probes[0])
-    result = execute_sequential_acquisition(schedule, probe_fetcher=lambda request: {"status": "PASS" if request["ticker"] == "AAPL" else "INELIGIBLE", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}, fetcher=lambda _: valid_payload(), dry_run=False, approval=True)
+    result = execute_sequential_acquisition(schedule, probe_fetcher=lambda request: {"status": "PASS" if request["ticker"] == "AAPL" else "INELIGIBLE" , "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}, fetcher=lambda _: valid_payload(), dry_run=False, approval=True)
     assert [u["ticker"] for u in result["primary_schedule"]] == ["AAPL"]
+
+
+def test_heavy_fetcher_is_called_only_for_validated_pass_schedule():
+    schedule = build_candidate_schedule([row("AAPL"), row("MSFT"), row("TSLA")])
+    fetched = []
+
+    def probe(request):
+        status = {"AAPL": "PASS", "MSFT": "INELIGIBLE", "TSLA": "HARD_GAP"}[request["ticker"]]
+        return {"status": status, "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}
+
+    result = execute_sequential_acquisition(
+        schedule,
+        probe_fetcher=probe,
+        fetcher=lambda unit: fetched.append(unit["ticker"]) or valid_payload(),
+        dry_run=False,
+        approval=True,
+    )
+    assert fetched == [unit["ticker"] for unit in result["primary_schedule"]] == ["AAPL"]
+    assert {unit["ticker"] for unit in result["units"] if unit["ticker"] != "AAPL"} == {"MSFT", "TSLA"}
+    assert result["network_heavy_acquisition_executed"] is True
+
+
+def test_raising_fetcher_records_invocation_and_hard_gap():
+    schedule = build_candidate_schedule([row()])
+
+    def raising_fetcher(_):
+        raise RuntimeError("upstream unavailable")
+
+    result = execute_sequential_acquisition(
+        schedule,
+        probe_fetcher=lambda _: {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}},
+        fetcher=raising_fetcher,
+        dry_run=False,
+        approval=True,
+    )
+    assert result["network_heavy_acquisition_executed"] is True
+    assert result["units"][0]["status"] == "HARD_GAP"
+    assert "upstream unavailable" in result["units"][0]["reason"]
+
+
+def test_output_dir_writes_auditable_artifact(tmp_path):
+    result = execute_sequential_acquisition(
+        build_candidate_schedule([row()]),
+        output_dir=tmp_path,
+        dry_run=True,
+    )
+    artifact = tmp_path / "dealer_exposure_acquisition.json"
+    assert result["artifact_path"] == str(artifact)
+    saved = json.loads(artifact.read_text(encoding="utf-8"))
+    assert saved["no_imputation"] is True
+    assert saved["mode"] == "probe-only"
