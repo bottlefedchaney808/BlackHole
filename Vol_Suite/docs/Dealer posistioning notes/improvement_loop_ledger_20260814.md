@@ -79,7 +79,12 @@
 - **Primary (level-vs-level sign agreement):** SPY **1/1=100%**, QQQ **2/4=50%**, **combined 3/5=60% < 2/3 → FAIL**. P0-2 correction (undo dIV/0.01 on the new side) applied: QQQ 20260605 (+1/+1 AGREE), QQQ 20260731 (−1/−1 AGREE, matches P0-1 audit), QQQ 20260508 (+1/−1 NO), QQQ 20260716 (−1/+1 NO, the P0-1 genuine disagreement persists). QQQ 20260522 (new_LEVEL=0, excluded).
 - **Correlational arms (all negative):** corr(new_LEVEL, fwd) = **−0.0482** (n=23, eff-n=5, CI [−0.451,+0.371]); A6 reflexivity **+0.3823** > vanna −0.0482 → convention-bound; lead/lag NULL/weak (lag0 −0.0482, lag1 +0.0594, lag2 +0.6248, prior −0.2354); **placebo p=0.558 NOT < 0.05**.
 - **Data gaps:** QQQ/SPY 20260619 and 20260703 stock/ohlc empty (proxy no intraday stock rows — not a valid firing day); SPY 0508/0522/0716/0731 new_LEVEL=0 (no firing buckets); QQQ 0522 new_LEVEL=0; QQQ/SPY 20260717 zero-DTE production drop (production-pipeline convention, excluded).
-- **Status:** P0-2/P0-3 gate **FAILS** — combined level-level sign agreement 60% < 2/3, effective-n=5 not past the 8-cluster target (md=0.963), correlational arm negative and subsumed by reflexivity (A6 +0.382 > −0.048, placebo p=0.558). SPY index coverage is now demonstrated (1 resolvable cluster agrees) but the index sample is too thin to carry the claim. **Cem is NOT dispatched** — bar NOT crossed. Model remains descriptive/conditional only.
+- **Status:** P0-2/P0-3 gate **FAILS** (combined level-level sign agreement 60% < 2/3, effective-n=5 not past the 8-cluster target (md=0.963), correlational arm negative and subsumed by reflexivity (A6 +0.382 > −0.048, placebo p=0.558). SPY index coverage is now demonstrated (1 resolvable cluster agrees) but the index sample is too thin to carry the claim. **Cem is NOT dispatched** — bar NOT crossed. Model remains descriptive/conditional only.
+
+## Round 4 — P0-2/P0-3 R1 PANEL DISPATCHED (deleg_ef915de9)
+- Gate FAILS (3/5=60% level-vs-level; eff-n=5, md 0.963; corr −0.048; A6 +0.382 subsumes; placebo p=0.558). SPY now fires but only 1 resolvable cluster.
+- R1 (3 adversarial panelists: framing/mechanism, data/power/index-coverage, dealer-mechanics/convention) dispatched against the committed v2 artifacts. Mandate: whether 3/5 is genuinely below the gate vs ticker/day weighting; whether SPY 1-cluster constitutes an index claim; whether the negative corr + reflexivity is robust; whether more clusters are required before arbitration; whether any level/flow, expiry, or sign-map mismatch remains.
+- Awaiting R1 -> R2 source cross-examiner -> acquire enough resolvable clusters to reach eff-n 8-12 if power still needed -> Cem. Loop runs automatically until APPROVED.
 
 ---
 
