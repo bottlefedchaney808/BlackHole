@@ -41,12 +41,19 @@ def test_build_spot_chart_request_normalizes_ticker_and_defaults():
     assert request.interval == "1d"
 
 
+@pytest.mark.parametrize("interval", ["3m", "5m", "10m", "15m", "30m", "1h", "4h"])
+def test_build_spot_chart_request_intraday_defaults_to_one_day(interval):
+    request = build_spot_chart_request("SPY", interval=interval)
+    assert request.interval == interval
+    assert request.lookback == "1d"
+
+
 def test_build_spot_chart_request_rejects_invalid_ticker():
     with pytest.raises(ChartDataError, match="ticker"):
         build_spot_chart_request("   ")
 
 
-@pytest.mark.parametrize("lookback", [None, "0d", -1, 1.5])
+@pytest.mark.parametrize("lookback", ["0d", -1, 1.5])
 def test_build_spot_chart_request_rejects_invalid_lookback(lookback):
     with pytest.raises(ChartDataError, match="lookback"):
         build_spot_chart_request("SPY", lookback=lookback)
@@ -63,7 +70,7 @@ def test_unsupported_interval_is_rejected_before_provider_invocation(tmp_path):
     with pytest.raises(ChartDataError, match="interval"):
         render_spot_chart(
             "SPY",
-            interval="1h",
+            interval="2h",
             output_path=tmp_path / "chart.png",
             provider=provider,
         )

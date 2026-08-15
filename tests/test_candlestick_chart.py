@@ -7,9 +7,21 @@ from pathlib import Path
 import matplotlib
 import pytest
 
-from shared.chart_data import CandlePayload
-from shared.chart_data import CandleRecord, ChartDataError
-from shared.candlestick_chart import render_candlestick
+from shared.candlestick_chart import (
+    _BACKGROUND_GRADIENT,
+    _DOWN,
+    _GRID,
+    _PANEL,
+    _PANEL_VOLUME,
+    _TEXT,
+    _UP,
+    _candle_width,
+    _configure_date_axis,
+    _format_volume,
+    _title,
+    render_candlestick,
+)
+from shared.chart_data import CandlePayload, CandleRecord, ChartDataError
 
 
 def _payload(*, with_volume: bool = True) -> CandlePayload:
@@ -49,6 +61,36 @@ def test_render_does_not_mutate_payload(tmp_path: Path):
     assert payload.observations == before.observations
 
 
+@pytest.mark.parametrize(("lookback", "display"), [("1m", "1mo"), ("3m", "3mo"), ("6m", "6mo")])
+def test_title_displays_month_lookback_without_changing_payload(lookback, display):
+    payload = replace(_payload(), lookback=lookback)
+    title = _title(payload, payload.observations)
+    assert f"SPY · 1d · {display}" in title
+    assert f"· {lookback} ·" not in title
+
+
+def test_short_window_date_formatter_includes_month_context():
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    figure, axis = plt.subplots()
+    try:
+        dates = [mdates.date2num(datetime(2026, 7, 21)), mdates.date2num(datetime(2026, 8, 14))]
+        _configure_date_axis(axis, dates)
+        formatter = axis.xaxis.get_major_formatter()
+        assert formatter(dates[0], 0) == "21-Jul"
+        assert formatter(dates[1], 0) == "14-Aug"
+    finally:
+        plt.close(figure)
+
+
+def test_volume_formatter_uses_human_readable_units():
+    assert _format_volume(1_250) == "1.2K"
+    assert _format_volume(12_500_000) == "12.5M"
+    assert _format_volume(2_500_000_000) == "2.5B"
+    assert _format_volume(500) == "500"
+
+
 def test_render_includes_volume_subplot_and_metadata(tmp_path: Path, monkeypatch):
     from PIL import Image
 
@@ -65,10 +107,13 @@ def test_render_includes_volume_subplot_and_metadata(tmp_path: Path, monkeypatch
         assert image.format == "PNG"
         assert image.width >= 800
         assert image.height >= 500
-    assert titles == [
-        "SPY · 1d · lookback 1m · source fixture · as of 2026-08-04 "
-        "· observations 2026-08-01 to 2026-08-03"
-    ]
+    assert titles == ["SPY · 1d · 1mo · fixture · 3 bars · 2026-08-01—2026-08-03 · as of 2026-08-04"]
+
+
+def test_short_windows_use_daily_spacing_and_readable_candle_widths():
+    assert _candle_width([float(index) for index in range(21)]) == pytest.approx(0.7)
+    assert _candle_width([float(index) for index in range(64)]) == pytest.approx(0.7)
+    assert _candle_width([100.0]) == pytest.approx(0.55)
 
 
 def test_render_without_volume_still_writes_chart(tmp_path: Path):
@@ -78,8 +123,18 @@ def test_render_without_volume_still_writes_chart(tmp_path: Path):
     assert output.stat().st_size > 0
 
 
+def test_dark_blue_purple_theme_contract():
+    assert _BACKGROUND_GRADIENT == ("#081326", "#21113d")
+    assert _PANEL == "#101d34"
+    assert _PANEL_VOLUME == "#171a35"
+    assert _TEXT == "#F4F7FF"
+    assert _GRID == "#64748B"
+    assert _UP == "#38BDF8"
+    assert _DOWN == "#C084FC"
+
+
 def test_render_rejects_non_daily_interval_before_plotting(tmp_path: Path, monkeypatch):
-    payload = replace(_payload(), interval="5m")
+    payload = replace(_payload(), interval="2h")
     monkeypatch.setattr(
         "shared.candlestick_chart.plt.subplots",
         lambda *args, **kwargs: pytest.fail("plotting must not start for a non-daily payload"),

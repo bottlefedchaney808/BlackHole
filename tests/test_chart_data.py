@@ -115,7 +115,7 @@ def test_normalize_candles_accepts_date_like_timestamp_and_none_volume():
 def test_normalize_candles_rejects_invalid_interval():
     row = {"timestamp": "2026-08-01", "open": 1, "high": 2, "low": 0, "close": 1}
     with pytest.raises(ChartDataError, match="interval"):
-        normalize_candles([row], ticker="SPY", interval="5m")
+        normalize_candles([row], ticker="SPY", interval="2h")
 
 
 def test_quality_metadata_is_immutable_enough_for_payload_consumers():

@@ -52,6 +52,7 @@ class CandlePayload:
 
 
 _REQUIRED_FIELDS = ("timestamp", "open", "high", "low", "close")
+SUPPORTED_INTERVALS = ("3m", "5m", "10m", "15m", "30m", "1h", "4h", "1d")
 
 
 def _parse_timestamp(value: Any, *, field_name: str = "timestamp") -> datetime:
@@ -105,8 +106,8 @@ def normalize_candles(
     normalized_ticker = ticker.strip().upper() if isinstance(ticker, str) else ""
     if not normalized_ticker:
         raise ChartDataError("ticker must be a non-empty string")
-    if interval != "1d":
-        raise ChartDataError("interval must be '1d'")
+    if interval not in SUPPORTED_INTERVALS:
+        raise ChartDataError("interval must be one of the supported chart intervals")
 
     if rows is None:
         raise ChartDataError("no candle rows")
@@ -167,4 +168,5 @@ __all__ = [
     "CandleRecord",
     "ChartDataError",
     "normalize_candles",
+    "SUPPORTED_INTERVALS",
 ]

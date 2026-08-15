@@ -6,7 +6,7 @@ import pytest
 
 from shared.chart_data import CandlePayload, ChartDataError
 import shared.spot_history as spot_history
-from shared.spot_history import fetch_daily_candles
+from shared.spot_history import fetch_daily_candles, fetch_intraday_candles
 
 
 _ROWS = [
@@ -163,6 +163,33 @@ def test_fetch_daily_candles_rejects_invalid_lookback_before_injected_provider(l
     assert called is False
 
 
+@pytest.mark.parametrize(
+    ("frozen_today", "expected_end"),
+    [
+        ((2026, 8, 15), "20260814"),  # Saturday -> Friday
+        ((2026, 8, 16), "20260814"),  # Sunday -> Friday
+    ],
+)
+def test_lookback_without_explicit_end_anchors_to_latest_weekday(
+    monkeypatch, frozen_today, expected_end
+):
+    class FixedDate(date_type):
+        @classmethod
+        def today(cls):
+            return cls(*frozen_today)
+
+    monkeypatch.setattr(spot_history, "date", FixedDate)
+
+    assert spot_history._lookback_start_end("1m") == ("20260716", expected_end)
+
+
+def test_lookback_with_explicit_end_preserves_requested_date():
+    assert spot_history._lookback_start_end("1m", end=date_type(2026, 8, 15)) == (
+        "20260717",
+        "20260815",
+    )
+
+
 def test_default_provider_adapts_created_rows_and_converts_dates(monkeypatch):
     calls = []
 
@@ -191,7 +218,7 @@ def test_default_provider_adapts_created_rows_and_converts_dates(monkeypatch):
 
     payload = fetch_daily_candles(" spy ", lookback="30d")
 
-    assert calls == [("SPY", "20260717", "20260815")]
+    assert calls == [("SPY", "20260716", "20260814")]
     assert isinstance(payload, CandlePayload)
     assert payload.ticker == "SPY"
     assert payload.interval == "1d"
@@ -199,6 +226,26 @@ def test_default_provider_adapts_created_rows_and_converts_dates(monkeypatch):
     assert payload.observations[0].timestamp.isoformat() == "2026-08-15T12:00:00"
     assert payload.observations[0].close == 103.0
     assert payload.as_of.isoformat() == "2026-08-15T12:00:00"
+
+
+def test_default_provider_skips_empty_theta_pagination_rows(monkeypatch):
+    class FixedDate(date_type):
+        @classmethod
+        def today(cls):
+            return cls(2026, 8, 15)
+
+    class FakeThetaDataController:
+        def hist_stock_eod(self, ticker, start_date, end_date):
+            return [None, {}, [], {"date": "2026-08-15", "open": 101, "high": 105,
+                                   "low": 99, "close": 103, "volume": 40}]
+
+    monkeypatch.setattr(spot_history, "date", FixedDate)
+    monkeypatch.setattr(spot_history, "ThetaDataController", FakeThetaDataController)
+
+    payload = fetch_daily_candles("SPY", lookback="1m")
+
+    assert len(payload.observations) == 1
+    assert payload.observations[0].timestamp.isoformat() == "2026-08-15T00:00:00"
 
 
 def test_injected_timestamp_rows_provide_latest_as_of():
@@ -238,4 +285,46 @@ def test_default_provider_converts_public_six_month_lookback_deterministically(m
 
     fetch_daily_candles("SPY")
 
-    assert calls == [("SPY", "20260217", "20260815")]
+    assert calls == [("SPY", "20260216", "20260814")]
+
+
+def _intraday_rows():
+    return [
+        {"date": "20260814", "ms_of_day": 34200000, "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 10},
+        {"date": "20260814", "ms_of_day": 34260000, "open": 100.5, "high": 102, "low": 100, "close": 101.5, "volume": 20},
+        {"date": "20260814", "ms_of_day": 35100000, "open": 101.5, "high": 103, "low": 101, "close": 102, "volume": 30},
+    ]
+
+
+def test_fetch_intraday_aggregates_interval_boundaries_and_metadata():
+    payload = fetch_intraday_candles("SPY", interval="15m", provider=lambda ticker, lookback: _intraday_rows())
+    assert payload.interval == "15m"
+    assert len(payload.observations) == 2
+    first, second = payload.observations
+    assert first.timestamp.isoformat() == "2026-08-14T09:30:00"
+    assert (first.open, first.high, first.low, first.close, first.volume) == (100.0, 102.0, 99.0, 101.5, 30.0)
+    assert second.timestamp.isoformat() == "2026-08-14T09:45:00"
+    assert second.close == 102.0
+    assert payload.as_of.isoformat() == "2026-08-14T09:45:00"
+
+
+@pytest.mark.parametrize("interval", ["3m", "5m", "10m", "15m", "30m", "1h", "4h"])
+def test_fetch_intraday_supports_requested_intervals(interval):
+    payload = fetch_intraday_candles("SPY", interval=interval, provider=lambda ticker, lookback: _intraday_rows())
+    assert payload.interval == interval
+
+
+def test_fetch_intraday_rejects_malformed_source_rows():
+    with pytest.raises(ChartDataError, match="intraday"):
+        fetch_intraday_candles("SPY", interval="15m", provider=lambda ticker, lookback: [{"date": "20260814", "ms_of_day": 1}])
+
+
+def test_fetch_intraday_defaults_to_one_day_and_validates_lookback():
+    calls = []
+    def provider(ticker, lookback):
+        calls.append(lookback)
+        return _intraday_rows()
+    fetch_intraday_candles("SPY", provider=provider)
+    assert calls == ["1d"]
+    with pytest.raises(ChartDataError, match="intraday lookback"):
+        fetch_intraday_candles("SPY", lookback="6m", provider=provider)
