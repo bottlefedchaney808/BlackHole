@@ -37,3 +37,22 @@ This task provides the evaluation boundary only; no model-selection or promotion
 ## Commit
 
 Task 4 commit was created on branch `Dealer-Exposure-Dev`; its final hash is reported in the handback.
+
+## Review-fix retry (2026-08-15)
+
+- Primary remains the all-eligible unique-calendar-day analysis; same-day ticker records are deterministically sorted/collapsed and never counted as independent observations.
+- Added deterministic `equal-family/day` balanced-panel weighting as a separately labeled sensitivity; it cannot replace or auto-promote the all-eligible primary.
+- Added event-only, control-only, and pooled strata with the same descriptive, daily-clock, from-breach-clock, causal, power, coverage, `n`, and status diagnostics. Pooled explicitly retains no-firing days in its denominator.
+- Added strict Task 3 artifact validation: `VALID` requires complete coverage (`live/new/common/total`), SHA-256 input/artifact/source identities, and record/provenance/artifact identity agreement. Minimal `{"status":"VALID"}`, incomplete coverage, source/hash mismatches, and record-artifact mismatches fail closed.
+- Missing placebo or reverse lead-lag evidence is `NOT_AVAILABLE` with `INDETERMINATE` interpretation and `drives_decision=False`; only observed falsifier failures can drive `WORSE`.
+- Preserved fixed clocks, controls, unique-day unit/cluster, `n_for_80` power interpretation, no auto-promotion, and no acquisition/live/master/secrets changes.
+- Added focused regressions covering balanced sensitivity determinism, all strata/no-firing denominator, strict schema/provenance identity, missing-falsifier handling, and observed falsifier failure.
+
+Verification for this retry:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **18 passed**
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
+- `git diff --check` — passed
+
+Only `Vol_Suite/run_task4_evaluation.py`, `Vol_Suite/tests/test_task4_evaluation.py`, and this report were changed for the retry.

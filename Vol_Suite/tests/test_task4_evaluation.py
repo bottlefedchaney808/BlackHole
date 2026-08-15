@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 from run_task4_evaluation import (
     EvaluationInvalid,
@@ -9,10 +11,18 @@ from run_task4_evaluation import (
 
 
 def row(day, ticker, y=0.02, v=2.0, div=0.1, *, daily=-0.01, breach=0.02):
+    input_hash = hashlib.sha256(f"input:{day}:{ticker}".encode()).hexdigest()
+    source_hash = hashlib.sha256(f"source:{day}:{ticker}".encode()).hexdigest()
+    artifact_hash = hashlib.sha256(f"artifact:{day}:{ticker}".encode()).hexdigest()
     return {
         "day": day, "ticker": ticker, "family": ticker,
-        "comparison": {"status": "VALID", "input_hash": f"{day}{ticker}"},
-        "provenance": {"causal_status": "CAUSAL_ELIGIBLE", "no_imputation": True},
+        "comparison": {"status": "VALID", "input_hash": input_hash,
+                       "coverage": {"live": 1, "new": 1, "common": 1, "total": 1},
+                       "artifact_hash": artifact_hash,
+                       "source_hashes": [source_hash]},
+        "provenance": {"causal_status": "CAUSAL_ELIGIBLE", "no_imputation": True,
+                       "artifact_hash": artifact_hash, "input_hash": input_hash,
+                       "source_hashes": [source_hash], "record_artifact_hash": artifact_hash},
         "pre_vanna": v, "delta_iv_pre_window": div, "gamma_burst": 1.0,
         "delta_s": 0.01, "market": 0.005, "a6_reflexivity": 0.2,
         "cross_family_spillover": 0.1, "event": int(day == "2026-01-02"),
@@ -78,6 +88,68 @@ def test_opposite_convention_is_sensitivity_not_primary():
     result = evaluate_task4([row(f"2026-01-{i:02d}", "SPY") for i in range(1, 8)], min_days=1)
     assert result["sensitivity"]["opposite_convention"]["role"] == "SENSITIVITY"
     assert result["config"]["auto_promote"] is False
+
+
+def test_task3_minimal_valid_status_is_rejected():
+    bad = row("2026-01-01", "SPY")
+    bad["comparison"] = {"status": "VALID"}
+    with pytest.raises(EvaluationInvalid, match="schema|coverage|hash"):
+        evaluate_task4([bad], min_days=1)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda r: r["comparison"]["coverage"].update(common=0),
+    lambda r: r["comparison"].update(source_hashes=["0" * 64]),
+    lambda r: r["provenance"].update(artifact_hash="f" * 64),
+    lambda r: r["provenance"].update(record_artifact_hash="e" * 64),
+])
+def test_task3_provenance_identity_mismatches_are_rejected(mutation):
+    bad = row("2026-01-01", "SPY")
+    mutation(bad)
+    with pytest.raises(EvaluationInvalid):
+        evaluate_task4([bad], min_days=1)
+
+
+def test_balanced_sensitivity_is_deterministic_and_separate_from_primary():
+    records = [row("2026-01-01", "SPY"), row("2026-01-01", "QQQ"),
+               row("2026-01-02", "SPY"), row("2026-01-03", "QQQ")]
+    first = evaluate_task4(records, min_days=1)
+    second = evaluate_task4(list(reversed(records)), min_days=1)
+    assert first["sensitivity"]["balanced_panel"]["role"] == "SENSITIVITY"
+    assert first["sensitivity"]["balanced_panel"] == second["sensitivity"]["balanced_panel"]
+    assert first["causal"] == first["primary_all_eligible"]
+
+
+def test_all_strata_run_same_diagnostics_and_pooled_keeps_no_firing_days():
+    records = [row("2026-01-01", "SPY"), row("2026-01-02", "QQQ"),
+               row("2026-01-03", "IWM")]
+    result = evaluate_task4(records, min_days=1)
+    assert result["strata"]["pooled"]["n"] == 3
+    assert result["strata"]["pooled"]["coverage"] == 1.0
+    assert result["strata"]["pooled"]["no_firing_days"] == 2
+    for name in ("event_only", "control_only", "pooled"):
+        assert set(result["strata"][name]) >= {"descriptive", "daily", "from_breach", "causal", "power", "status", "n", "coverage"}
+
+
+def test_missing_falsifiers_are_indeterminate_and_cannot_make_worse():
+    records = [row(f"2026-01-{i:02d}", "SPY") for i in range(1, 8)]
+    for record in records:
+        record.pop("placebo_return")
+        record.pop("reverse_return")
+    result = evaluate_task4(records, min_days=1)
+    assert result["falsifiers"]["placebo"]["status"] == "NOT_AVAILABLE"
+    assert result["falsifiers"]["reverse_lead_lag"]["interpretation"] == "INDETERMINATE"
+    assert result["falsifiers"]["placebo"]["drives_decision"] is False
+    assert result["decision"] != "WORSE"
+
+
+def test_observed_falsifier_failure_can_make_worse():
+    records = [row(f"2026-01-{i:02d}", "SPY", y=0.01) for i in range(1, 15)]
+    for record in records:
+        record["placebo_return"] = 0.02
+    result = evaluate_task4(records, min_days=1)
+    assert result["falsifiers"]["placebo"]["drives_decision"] is True
+    assert result["decision"] == "WORSE"
 
 
 def test_underpowered_is_indeterminate_even_with_positive_estimate():
