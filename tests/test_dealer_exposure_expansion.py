@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import Vol_Suite.dealer_exposure_expansion as expansion
 from Vol_Suite.dealer_exposure_expansion import (
     ExpansionApprovalError,
     build_expansion_manifest,
@@ -141,3 +142,43 @@ def test_held_reference_paths_compose_task_one(tmp_path):
     result = build_expansion_manifest([candidate("AAPL", "2026-08-17", 2)], held_paths=[held])
     assert result["exclusions"][0]["held_reference"] == "held.json"
     assert result["expected_ticker_day_units"] == 0
+
+
+def _gated_evidence(result):
+    keys = [u["candidate_key"] for u in result["units"]]
+    return {"probes": [{"candidate_key": key, "status": "PASS", "validated": True, "invoked": True} for key in keys],
+            "units": [{"candidate_key": key, "pre_window_observations": [1, 2]} for key in keys],
+            "artifact_registry": {}}
+
+
+@pytest.mark.parametrize("evidence", [None, {"probes": []}, {"probes": [], "units": [], "artifact_registry": {}}])
+def test_network_executor_is_fail_closed_without_complete_admission(evidence):
+    calls = []
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
+    assert calls == []
+    assert result["mode"] == "blocked"
+    assert result["execution_audit"]["blocked"]
+
+
+def test_network_executor_rejects_missing_pre_window_and_incomplete_coverage():
+    calls = []
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    evidence["units"] = evidence["units"][:1]
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
+    assert calls == []
+    assert any("coverage" in str(item) or "PRE_WINDOW" in str(item) for item in result["execution_audit"]["blocked"])
+
+
+def test_network_executor_only_receives_validated_primary_units(monkeypatch):
+    calls = []
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit["candidate_key"]), acquisition_evidence=evidence)
+    assert calls == [u["candidate_key"] for u in plan["units"]]
+    assert result["execution_audit"]["invoked"] == calls
+    assert result["network_fetch_allowed"] is True

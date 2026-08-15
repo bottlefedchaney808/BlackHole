@@ -15,8 +15,17 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .dealer_exposure_acquisition import build_candidate_schedule
+from .dealer_exposure_acquisition import (
+    build_candidate_schedule,
+    select_primary_schedule,
+)
 from .dealer_exposure_universe import DTE_STRATA, held_pairs_from_paths
+from .run_live_vs_expiry_book_common_input import (
+    CanonicalInput,
+    ComparisonInvalid,
+    compare_common_input,
+    validate_causal_eligibility,
+)
 
 
 class ExpansionApprovalError(RuntimeError):
@@ -114,6 +123,83 @@ def build_expansion_manifest(
     return {"schema_version": 1, "mode": "dry-run", "network_fetch_allowed": False, "approval_required": True, "approval_command": "python -m Vol_Suite.dealer_exposure_expansion --approve-network", "selection_provenance": {"candidate_source": sources[0] if len(sources) == 1 else sources, "candidate_count": len(raw_rows)}, "planned_candidates": [row["candidate_key"] for row in units], "units": units, "exclusions": sorted(exclusions, key=lambda row: (row["calendar_day"], row["ticker"], row["reason"])), "expected_ticker_day_units": len(units), "intended_unique_day_denominator": len({row["calendar_day"] for row in units}), "counts": {"event": event_n, "control": control_n, "event_unique_days": len(event_days), "control_unique_days": len(control_days), "dte_strata": dict(sorted(strata.items()))}, "quota": quota, "balance_gate": balance_gate, "registry_path": registry_path, "gates": {"THETADATA_HIST_CONCURRENCY": 1, "pre_window_observations_required": 2, "imputation_policy": "reject_missing", "no_imputation": True, "balanced_panel": True, "approval_required": True}, "stop_conditions": stops, "no_imputation": True}
 
 
+def compare_expansion_common_input(
+    canonical_input: CanonicalInput, *, live_runner: Callable[[Any], Any],
+    new_runner: Callable[[Any], Any], deadband: float = 0.01,
+    provenance_units: Iterable[Mapping[str, Any]] | None = None,
+    artifact_registry: Mapping[str, Any] | None = None,
+    intended_units: int | None = None,
+    intended_corpus_manifest: Any = None,
+) -> dict[str, Any]:
+    """Compose the Task 3 harness; never emit headline metrics on a gap."""
+    captured: dict[str, Any] = {}
+
+    def capture(name: str, runner: Callable[[Any], Any]) -> Callable[[Any], Any]:
+        def invoke(payload: Any) -> Any:
+            result = runner(payload)
+            captured[name] = result
+            return result
+        return invoke
+
+    comparison = compare_common_input(
+        canonical_input, capture("live", live_runner), capture("new", new_runner),
+        deadband=deadband, provenance_units=provenance_units,
+        artifact_registry=artifact_registry, intended_units=intended_units,
+        intended_corpus_manifest=intended_corpus_manifest,
+    )
+    live = captured["live"]
+    required = {"sign_model": "vol_surface_replication", "accumulate": True,
+                "iv_deadband": 0.01, "dealer_vanna_flow": 1}
+    for attr, expected in required.items():
+        actual = getattr(live, attr, None)
+        if actual != expected:
+            raise ComparisonInvalid(f"live configuration identity is not explicit: {attr}={actual!r}")
+    if getattr(live, "spot", canonical_input.spot) != canonical_input.spot:
+        raise ComparisonInvalid("live spot does not match canonical input")
+    comparison["config"].update({"IV_DEADBAND": 0.01, "DEALER_VANNA_FLOW": 1,
+                                  "accumulation": "ON"})
+    comparison["headline_eligible"] = comparison["coverage"]["common"] == comparison["coverage"]["total"]
+    return comparison
+
+
+def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return admitted units and auditable reasons; approval alone never admits."""
+    reasons: list[dict[str, Any]] = []
+    schedule = [dict(unit) for unit in manifest.get("units", ())]
+    if not manifest.get("balance_gate"):
+        reasons.append({"reason": "event/control balance gate failed"})
+    if not schedule:
+        reasons.append({"reason": "empty primary schedule"})
+    if not isinstance(evidence, Mapping):
+        reasons.append({"reason": "canonical acquisition evidence is required"})
+        return [], reasons
+    probes = evidence.get("probes")
+    if not isinstance(probes, list):
+        reasons.append({"reason": "validated probes are required"})
+        probes = []
+    primary = select_primary_schedule(schedule, probes)
+    if {u["candidate_key"] for u in primary} != {u["candidate_key"] for u in schedule}:
+        reasons.append({"reason": "every schedule unit requires a validated PASS probe"})
+    units = evidence.get("units")
+    registry = evidence.get("artifact_registry")
+    if not isinstance(units, list) or not isinstance(registry, Mapping):
+        reasons.append({"reason": "complete canonical evidence and verified registry are required"})
+        return [], reasons
+    by_key = {u.get("candidate_key"): dict(u) for u in units}
+    if set(by_key) != {u["candidate_key"] for u in primary}:
+        reasons.append({"reason": "evidence coverage is not 100% of primary schedule"})
+    for key, unit in by_key.items():
+        observations = unit.get("pre_window_observations")
+        if not isinstance(observations, list) or len(observations) < 2:
+            reasons.append({"candidate_key": key, "reason": "two PRE_WINDOW observations are required"})
+    causal = validate_causal_eligibility(by_key.values(), intended_units=len(schedule),
+                                         intended_corpus_manifest={"units": schedule},
+                                         artifact_registry=registry)
+    if causal.get("causal_status") != "CAUSAL_ELIGIBLE":
+        reasons.extend(causal.get("reasons", []))
+    return ([by_key[u["candidate_key"]] for u in primary] if not reasons else []), reasons
+
+
 def run_expansion_plan(
     candidates: Iterable[Mapping[str, Any]],
     *,
@@ -124,6 +210,7 @@ def run_expansion_plan(
     approve_network: bool = False,
     executor: Callable[[Mapping[str, Any]], Any] | None = None,
     write_manifest: bool = False,
+    acquisition_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not dry_run and not approve_network:
         raise ExpansionApprovalError("explicit --approve-network approval is required")
@@ -132,9 +219,19 @@ def run_expansion_plan(
     result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root)
     if not dry_run:
         result["mode"] = "approved-execution"
-        result["network_fetch_allowed"] = True
-        for unit in result["units"]:
-            executor(unit)  # type: ignore[misc]
+        admitted, reasons = _execution_gate(result, acquisition_evidence)
+        result["network_fetch_allowed"] = bool(admitted)
+        result["execution_audit"] = {"invoked": [], "blocked": reasons}
+        if not admitted:
+            result["mode"] = "blocked"
+        else:
+            for unit in admitted:
+                try:
+                    executor(unit)  # type: ignore[misc]
+                    result["execution_audit"]["invoked"].append(unit["candidate_key"])
+                except Exception as exc:  # noqa: BLE001 - executor failures are audit evidence
+                    result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "reason": str(exc)[:200]})
+                    break
     if write_manifest:
         path = Path(output_root) / "expansion_manifest.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["ExpansionApprovalError", "build_expansion_manifest", "main", "run_expansion_plan"]
+__all__ = ["ExpansionApprovalError", "build_expansion_manifest", "compare_expansion_common_input", "main", "run_expansion_plan"]
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -1,51 +1,48 @@
-# Task 5 — Deterministic expansion execution package
+# Task 5 — Universe-expansion execution package
 
 ## Status
 
-Implemented and verified as a network-free acquisition execution package. No ThetaData, market-data, or other network acquisition was run. `dealer_positioning.py`, live configuration, `master`, secrets, and unrelated untracked artifacts were not modified.
+Implemented and verified a fail-closed, network-free execution package. No ThetaData, market-data, or other network acquisition was run. `dealer_positioning.py`, live configuration, `master`, secrets, and unrelated untracked artifacts were not modified.
 
-## Files
+## Changes
 
 - `Vol_Suite/dealer_exposure_expansion.py`
-  - Composes Task 1 held-pair/DTE contracts and Task 2 scheduling gates.
-  - Builds stable candidate keys, exact planned candidates, explicit held/invalid/duplicate exclusions, selection provenance, event/control and DTE-stratum counts, expected ticker×day units, and intended unique-day denominator.
-  - Publishes deterministic registry/raw/record artifact paths.
-  - Publishes strict `THETADATA_HIST_CONCURRENCY=1`, two timestamped `PRE_WINDOW` observations, reject-missing/no-imputation, balanced-panel, approval, and stop-condition contracts.
-  - `run_expansion_plan(..., dry_run=True)` is network-free and does not write unless `write_manifest=True` is explicitly supplied.
-  - Any non-dry execution requires explicit `approve_network=True` (CLI boundary: `--approve-network`) and an injected executor; there is no implicit network adapter.
+  - Composes the Task 3 `run_live_vs_expiry_book_common_input` harness through `compare_expansion_common_input`; canonical payload consumption, engine identities, SVI/deadband/accumulation settings, exact strike/right coverage, exclusions, pairwise levels/units/sign provenance, metrics, and 100% coverage remain owned by the common harness.
+  - Adds an execution admission gate requiring balanced event/control schedule, validated PASS probes for every primary unit, two PRE_WINDOW observations per unit, complete canonical Task 1 evidence, verified registry integrity, no-imputation evidence, and exact primary-schedule coverage.
+  - Approval is necessary but insufficient. Blocked attempts return an auditable `execution_audit`; executors receive only admitted evidence units and failures are recorded.
+  - Preserves dry-run/probe-only behavior, no imputation, strict `THETADATA_HIST_CONCURRENCY=1`, and no implicit network adapter.
 - `tests/test_dealer_exposure_expansion.py`
-  - 14 network-free tests for deterministic planning, held exclusions, approval boundary, denominator, event/control balance, DTE strata, artifact paths/export, no-imputation, PRE_WINDOW requirements, strict concurrency, provenance, and probe-only behavior.
+  - Adds regressions for missing probes/evidence, missing PRE_WINDOW observations, incomplete coverage, balance failure, and a valid gated executor call list.
 - `.superpowers/sdd/task-5-report.md`
+  - Repaired the malformed report tail/newline and appended this review-fix report.
 
 ## Verification
 
+Commands run with no plugin autoload:
+
 ```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py --disable-warnings
+19 passed
+
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-66 passed in 0.11s
+71 passed in 0.11s
 
 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-exit 0
 
 C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-All checks passed!
 
 git diff --check
-exit 0
 ```
 
-The initial focused test run was intentionally RED before implementation (`ModuleNotFoundError`), then the implementation reached 14/14 focused tests. The combined Task 1/2/5 contract slice is 66/66 passing.
-
-## Approval / acquisition boundary
-
-Dry-run is the default and publishes `network_fetch_allowed: false`. The package never invokes an executor in dry-run/probe-only mode. A caller must explicitly cross the boundary with `--approve-network` / `approve_network=True` and supply an executor; missing either condition raises `ExpansionApprovalError`. The package itself does not provide a network fetcher.
+Real acquisition was not authorized and was not attempted.
 
 ## Commit scope
 
-Only the Task 5 implementation, tests, and report are included in the Task 5 commit. Existing modified `.superpowers/sdd/progress.md`, `.hermes/`, and untracked `Vol_Suite` acquisition/scratch corpora remain preserved and unstaged.
+Only the Task 5 implementation, tests, and report are to be committed. Existing modified `.superpowers/sdd/progress.md`, `.hermes/`, and unrelated untracked acquisition/scratch artifacts remain preserved and unstaged.
 
-Commit: recorded in handback after final verification.
+## Limitations
 
-## Limitations / follow-up
+The package still requires caller-supplied canonical acquisition evidence and an injected executor. The manifest alone can never authorize network execution or produce headline comparison eligibility.
 
-The manifest is an execution plan, not evidence of data availability. Real probes and acquisition remain blocked until explicit approval and must populate the Task 1 evidence contract before any unit can be admitted to comparison.
-"} оттура  билдүргәнjson 天天中彩票网  Sop?}ымкәаimuhamed to=functions.terminal  code.cjson彩票平台注册аӡара  (commentary  കുറ)  尚度 512? ниң 玩北京赛车助赢软件json C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py && git diff --check && git status --short && git diff --stat -- Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py .superpowers/sdd/task-5-report.md && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+
+<!-- report ends with a newline -->
