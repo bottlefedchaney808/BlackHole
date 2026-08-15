@@ -156,3 +156,31 @@ Final commit hash is reported in the handback.
 - `git diff --check` — passed
 
 No acquisition, live-model/master, or secrets files were changed.
+
+## Latest review follow-up (2026-08-15)
+
+- `build_provenance_census` now delegates every unit to the same strict
+  `validate_causal_eligibility` contract used by `compare_common_input`, with a
+  registry-bound manifest/payload, endpoint/request/spot/chain provenance,
+  timestamped two-observation PRE_WINDOW derivation, hashes, and cluster metadata.
+  A forged minimal PASS returns `gate_pass: false`, `CAUSAL_BLOCKED`, and
+  `COMPARISON_INVALID` reasons instead of being approved.
+- Causal validation now checks same-day cluster membership across the complete
+  unit set: one day-derived cluster ID, identical unique ticker membership and
+  `n_tickers`, required units, and registered aggregation rule. Contradictory
+  per-unit clusters block eligibility.
+- Runner exceptions and malformed `gamma_records`/`rows` containers are converted
+  to structured `ComparisonInvalid` results with `COMPARISON_INVALID`; no
+  `BaseException` catch was introduced.
+- Added regressions for forged census units, contradictory same-day clusters,
+  missing result containers, and runner exceptions. Existing acquisition and
+  comparison gates remain network-free and fail closed.
+
+## Latest verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **82 passed**
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **All checks passed**
+- `git diff --check` — passed
+
+No acquisition, live-model/master, or secrets files were changed.

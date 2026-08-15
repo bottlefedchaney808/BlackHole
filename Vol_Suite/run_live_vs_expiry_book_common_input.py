@@ -124,8 +124,8 @@ class ComparisonInvalid(ValueError):
     """The comparison cannot support a better/worse/descriptive conclusion."""
 
     def __init__(self, reason: str, *, exclusions: Sequence[Mapping[str, Any]] = (),
-                 causal_blocked: bool = False) -> None:
-        self.invalid_result = {"status": "COMPARISON_INVALID" if causal_blocked else "INVALID",
+                 causal_blocked: bool = False, structured_invalid: bool = False) -> None:
+        self.invalid_result = {"status": "COMPARISON_INVALID" if (causal_blocked or structured_invalid) else "INVALID",
                                "causal_status": "CAUSAL_BLOCKED" if causal_blocked else None,
                                "reason": reason,
                                "exclusions": [dict(item) for item in exclusions]}
@@ -479,6 +479,25 @@ def _validate_cluster(unit: Mapping[str, Any], calendar_day: str) -> None:
         raise ValueError("same-day cluster aggregation rule is not registered")
 
 
+def _validate_cluster_groups(units: Sequence[Mapping[str, Any]]) -> None:
+    """Require one identical, whole-unit cluster contract for each calendar day."""
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for unit in units:
+        grouped.setdefault(str(unit.get("calendar_day", "")), []).append(unit)
+    for day, rows in grouped.items():
+        tickers = sorted({unit.get("ticker") for unit in rows})
+        expected = {"cluster_id": day, "calendar_day": day,
+                    "tickers": tickers, "n_tickers": len(tickers),
+                    "aggregation_rule": "preserve_ticker_values_v1"}
+        for unit in rows:
+            cluster = unit.get("same_day_cluster")
+            if not isinstance(cluster, Mapping):
+                raise TypeError("same-day cluster metadata is required")
+            actual = {key: cluster.get(key) for key in expected}
+            if actual != expected:
+                raise ValueError("same-day cluster metadata is inconsistent across unit set")
+
+
 def validate_causal_eligibility(
     units: Iterable[Mapping[str, Any]], *, intended_units: int | None = None,
     artifact_registry: Mapping[str, Any] | None = None,
@@ -526,6 +545,11 @@ def validate_causal_eligibility(
         except (TypeError, ValueError, OSError, OverflowError,
                 KeyError, IndexError, AttributeError) as exc:
             reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "reason": str(exc)})
+    if not reasons:
+        try:
+            _validate_cluster_groups(rows)
+        except (TypeError, ValueError, KeyError, IndexError, AttributeError) as exc:
+            reasons.append({"reason": str(exc)})
     return {"causal_status": "CAUSAL_ELIGIBLE" if not reasons else "CAUSAL_BLOCKED",
             "status": "VALID" if not reasons else "COMPARISON_INVALID", "n": len(rows), "N": expected,
             "coverage": len(rows) / expected if expected else 1.0, "reasons": reasons}
@@ -551,9 +575,15 @@ def compare_common_input(
     new_reads: list[bytes] = []
     live_payload = CanonicalPayload(canonical_bytes, live_reads.append)
     new_payload = CanonicalPayload(canonical_bytes, new_reads.append)
-    live = live_runner(live_payload)
+    try:
+        live = live_runner(live_payload)
+    except Exception as exc:
+        raise ComparisonInvalid("live runner failed: " + str(exc), structured_invalid=True) from exc
     live_attestation = hashlib.sha256(b"".join(live_reads)).hexdigest() if live_reads else None
-    new = new_runner(new_payload)
+    try:
+        new = new_runner(new_payload)
+    except Exception as exc:
+        raise ComparisonInvalid("new runner failed: " + str(exc), structured_invalid=True) from exc
     new_attestation = hashlib.sha256(b"".join(new_reads)).hexdigest() if new_reads else None
     canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
     if live_attestation != canonical_digest or new_attestation != canonical_digest:
@@ -567,8 +597,14 @@ def compare_common_input(
         )
     if getattr(live, "sign_model", None) != "vol_surface_replication" or not getattr(live, "accumulate", False):
         raise ComparisonInvalid("live identity/actual accumulation assertion failed")
-    live_levels, live_exclusions = _live_levels(live, inp)
-    new_levels, new_exclusions = _new_levels(new, inp)
+    try:
+        live_levels, live_exclusions = _live_levels(live, inp)
+    except Exception as exc:
+        raise ComparisonInvalid("live result container is malformed: " + str(exc), structured_invalid=True) from exc
+    try:
+        new_levels, new_exclusions = _new_levels(new, inp)
+    except Exception as exc:
+        raise ComparisonInvalid("new result container is malformed: " + str(exc), structured_invalid=True) from exc
     exclusions = live_exclusions + new_exclusions
     if exclusions:
         raise ComparisonInvalid("common-input coverage is not exactly the canonical key set",

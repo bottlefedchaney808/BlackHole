@@ -373,3 +373,48 @@ def test_artifact_writer_is_strict_and_refuses_invalid_payload(tmp_path):
     with pytest.raises(ComparisonInvalid):
         write_deterministic_artifact(str(target), {"status": "VALID", "value": float("nan")})
     assert not target.exists()
+
+
+def test_causal_gate_rejects_contradictory_same_day_clusters_across_units():
+    first = _causal_unit()
+    second = _causal_unit()
+    second["ticker"] = "AAPL"
+    second["candidate_key"] = "AAPL|2026-08-14"
+    second["same_day_cluster"] = {"cluster_id": "2026-08-14", "calendar_day": "2026-08-14",
+                                   "tickers": ["AAPL"], "n_tickers": 1,
+                                   "aggregation_rule": "preserve_ticker_values_v1"}
+    registry = {}
+    registry.update(_registry(first))
+    registry.update(_registry(second))
+    result = validate_causal_eligibility([first, second], artifact_registry=registry)
+    assert result["causal_status"] == "CAUSAL_BLOCKED"
+    assert any("inconsistent across unit set" in reason["reason"] for reason in result["reasons"])
+
+
+def test_missing_gamma_or_rows_container_is_structured_invalid():
+    live, new = _engines()
+
+    def missing_gamma(payload):
+        payload.read()
+        return SimpleNamespace(sign_model="vol_surface_replication", accumulate=True, gamma_records=None)
+
+    def missing_rows(payload):
+        payload.read()
+        return SimpleNamespace(rows=None)
+
+    with pytest.raises(ComparisonInvalid, match="live result container"):
+        compare_common_input(_input(), missing_gamma, new)
+    with pytest.raises(ComparisonInvalid, match="new result container"):
+        compare_common_input(_input(), live, missing_rows)
+
+
+def test_runner_exception_is_structured_comparison_invalid():
+    _live, new = _engines()
+
+    def raising_runner(payload):
+        payload.read()
+        raise RuntimeError("runner unavailable")
+
+    with pytest.raises(ComparisonInvalid, match="live runner failed") as exc:
+        compare_common_input(_input(), raising_runner, new)
+    assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"

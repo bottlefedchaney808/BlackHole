@@ -69,8 +69,11 @@ def test_sequential_pass_hashes_and_same_day_cluster():
 def test_census_rejects_manually_supplied_causal_pass_without_acquisition_provenance():
     unit = {"calendar_day": "2026-08-17", "ticker": "AAPL", "status": "PASS",
             "pre_window_provenance": "PRE_WINDOW", "raw_payload_hash": "a" * 64}
-    with pytest.raises(AcquisitionGateError, match="required provenance"):
-        build_provenance_census([unit], intended_units=1)
+    census = build_provenance_census([unit], intended_units=1)
+    assert census["gate_pass"] is False
+    assert census["causal_status"] == "CAUSAL_BLOCKED"
+    assert census["comparison_status"] == "COMPARISON_INVALID"
+    assert census["reasons"]
 
 def test_no_imputation_and_associational_status():
     result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: {"record": {}}, dry_run=False, approval=True)
@@ -88,8 +91,8 @@ def test_fail_loud_census_below_100_percent():
     assert c["gate_pass"] is False and c["pre_window_coverage"] == 0.0
 
 def test_census_requires_hash_and_counts_statuses():
-    with pytest.raises(AcquisitionGateError, match="provenance"):
-        build_provenance_census([{ "calendar_day":"d", "ticker":"A", "status":"PASS", "pre_window_provenance":"PRE_WINDOW"}], intended_units=1)
+    c_bad = build_provenance_census([{ "calendar_day":"d", "ticker":"A", "status":"PASS", "pre_window_provenance":"PRE_WINDOW"}], intended_units=1)
+    assert c_bad["gate_pass"] is False and c_bad["comparison_status"] == "COMPARISON_INVALID"
     c = build_provenance_census([], intended_units=0)
     assert c["gate_pass"] and c["pre_window_coverage"] == 1.0 and c["raw_payload_hash_census"]
 

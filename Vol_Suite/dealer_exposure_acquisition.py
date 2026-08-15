@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .dealer_exposure_universe import DTE_STRATA, EVENT_HABITATS, held_pairs_from_paths
-from .provenance_contract import SHA256_RE, canonical_json_bytes, validate_source_hashes
+from .provenance_contract import canonical_json_bytes, validate_source_hashes
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -199,36 +199,21 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     return artifact
 
 
-def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_units: int, fail_loud: bool = False, generated_at: str | None = None) -> dict[str, Any]:
+def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_units: int, fail_loud: bool = False, generated_at: str | None = None, artifact_registry: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if intended_units < 0: raise ValueError("intended_units cannot be negative")
     rows = [dict(u) for u in units]
     rows.sort(key=lambda u: (str(u.get("calendar_day", "")), str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
-    for u in rows:
-        if u.get("status") not in _STATUS: raise AcquisitionGateError("invalid unit status")
-        if not isinstance(u.get("raw_payload_hash"), str) or not SHA256_RE.fullmatch(u["raw_payload_hash"]): raise AcquisitionGateError("provenance census requires semantic SHA-256 payload hashes")
-        if u.get("source_hashes") is not None:
-            try: validate_source_hashes(u["source_hashes"])
-            except ValueError as exc: raise AcquisitionGateError(str(exc)) from exc
-        if u.get("status") == "PASS" and str(u.get("pre_window_provenance", "")).upper() == _PREWINDOW:
-            required = ("source_hashes", "iv_source_ts", "breach_window_start_prov", "declared_timezone", "endpoint", "parameters", "spot_timestamp", "chain_timestamp", "artifact_manifest", "artifact_hash")
-            missing = [key for key in required if u.get(key) in (None, "", [])]
-            if missing:
-                raise AcquisitionGateError(f"causal PASS unit missing required provenance: {', '.join(missing)}")
-            try:
-                validate_source_hashes(u["source_hashes"])
-                if _hash(u["artifact_manifest"]) != str(u["artifact_hash"]).lower():
-                    raise ValueError("artifact_hash does not match canonical artifact manifest")
-            except (TypeError, ValueError) as exc:
-                raise AcquisitionGateError(str(exc)) from exc
-    n = sum(u.get("status") == "PASS" and u.get("pre_window_provenance") == _PREWINDOW for u in rows)
+    from .run_live_vs_expiry_book_common_input import validate_causal_eligibility
+    causal = validate_causal_eligibility(rows, intended_units=intended_units, artifact_registry=artifact_registry)
+    n = sum(u.get("status") == "PASS" and str(u.get("pre_window_provenance", "")).upper() == _PREWINDOW for u in rows)
     coverage = n / intended_units if intended_units else 1.0
-    gate = len(rows) == intended_units and coverage == 1.0
+    gate = len(rows) == intended_units and coverage == 1.0 and causal["causal_status"] == "CAUSAL_ELIGIBLE"
     day_groups = defaultdict(list)
-    for unit in rows:
-        day_groups[str(unit.get("calendar_day", ""))].append(unit)
-    day_gate = all(all(item.get("status") == "PASS" and item.get("pre_window_provenance") == _PREWINDOW for item in group) for group in day_groups.values())
+    for unit in rows: day_groups[str(unit.get("calendar_day", ""))].append(unit)
+    day_gate = all(all(item.get("status") == "PASS" and str(item.get("pre_window_provenance", "")).upper() == _PREWINDOW for item in group) for group in day_groups.values())
     gate = gate and day_gate
-    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "causal_status": "CAUSAL_ELIGIBLE" if gate else "CAUSAL_BLOCKED", "fail_loud": fail_loud, "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "same_day_gate": day_gate, "gate_reason": "100% PRE_WINDOW coverage" if gate else f"below strict PRE_WINDOW coverage ({n}/{intended_units}) or mixed same-day provenance"}
+    reasons = list(causal["reasons"])
+    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "causal_status": "CAUSAL_ELIGIBLE" if gate else "CAUSAL_BLOCKED", "comparison_status": "COMPARISON_VALID" if gate else "COMPARISON_INVALID", "reasons": reasons, "fail_loud": fail_loud, "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "same_day_gate": day_gate, "gate_reason": "100% PRE_WINDOW coverage" if gate else f"strict causal eligibility failed ({n}/{intended_units})", "causal_reasons": reasons}
     if fail_loud and not gate: raise AcquisitionGateError(f"100% PRE_WINDOW gate failed: {n}/{intended_units}")
     return doc
 
@@ -289,6 +274,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     primary_keys = {u["candidate_key"] for u in primary_schedule}
     probe_by_key = {p["candidate_key"]: p for p in probes}
     units = []
+    payloads: dict[str, Any] = {}
     network_executed = False
     for unit in ordered:
         if unit.get("held_pair_exclusion"):
@@ -318,6 +304,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 payload, status, reason = {"error": str(exc)}, "HARD_GAP", str(exc)[:200]
                 item = _unit_from_payload(unit, payload)
         item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
+        payloads[unit["candidate_key"]] = payload
         manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": item["raw_payload_hash"], "status": status, "imputed": False}
         item["artifact_manifest"] = manifest
         item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
@@ -346,7 +333,17 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
                 item["artifact_hash"] = _hash(manifest)
     generated_at = generated_at or dt.datetime.now(dt.UTC).isoformat()
-    census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at)
+    artifact_registry = {
+        str(item["artifact_hash"]): {
+            "artifact_hash": item["artifact_hash"],
+            "raw_payload_hash": item["raw_payload_hash"],
+            "artifact_manifest": item["artifact_manifest"],
+            "source_hashes": item.get("source_hashes"),
+            "payload_bytes": payloads.get(item["candidate_key"]),
+        }
+        for item in units
+    }
+    census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
     result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
