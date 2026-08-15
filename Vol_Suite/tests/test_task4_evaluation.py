@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import pytest
 from run_task4_evaluation import (
@@ -13,16 +14,28 @@ from run_task4_evaluation import (
 def row(day, ticker, y=0.02, v=2.0, div=0.1, *, daily=-0.01, breach=0.02):
     input_hash = hashlib.sha256(f"input:{day}:{ticker}".encode()).hexdigest()
     source_hash = hashlib.sha256(f"source:{day}:{ticker}".encode()).hexdigest()
-    artifact_hash = hashlib.sha256(f"artifact:{day}:{ticker}".encode()).hexdigest()
+    payload = f"payload:{day}:{ticker}".encode()
+    raw_hash = hashlib.sha256(payload).hexdigest()
+    candidate = f"{ticker}|{day}"
+    manifest = {"candidate_key": candidate, "ticker": ticker, "calendar_day": day,
+                "canonical_input_hash": input_hash, "source_hashes": [source_hash]}
+    artifact_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    registry = {artifact_hash: {"artifact_hash": artifact_hash, "raw_payload_hash": raw_hash,
+                                "candidate_key": candidate, "ticker": ticker, "calendar_day": day,
+                                "canonical_input_hash": input_hash, "source_hashes": [source_hash],
+                                "artifact_manifest": manifest, "payload_bytes": payload}}
     return {
-        "day": day, "ticker": ticker, "family": ticker,
+        "day": day, "ticker": ticker, "family": ticker, "candidate_key": candidate,
+        "canonical_input_hash": input_hash,
+        "artifact_registry": registry,
         "comparison": {"status": "VALID", "input_hash": input_hash,
                        "coverage": {"live": 1, "new": 1, "common": 1, "total": 1},
                        "artifact_hash": artifact_hash,
                        "source_hashes": [source_hash]},
         "provenance": {"causal_status": "CAUSAL_ELIGIBLE", "no_imputation": True,
                        "artifact_hash": artifact_hash, "input_hash": input_hash,
-                       "source_hashes": [source_hash], "record_artifact_hash": artifact_hash},
+                       "raw_payload_hash": raw_hash, "source_hashes": [source_hash],
+                       "record_artifact_hash": artifact_hash},
         "pre_vanna": v, "delta_iv_pre_window": div, "gamma_burst": 1.0,
         "delta_s": 0.01, "market": 0.005, "a6_reflexivity": 0.2,
         "cross_family_spillover": 0.1, "event": int(day == "2026-01-02"),
@@ -47,13 +60,11 @@ def test_missing_outcome_is_invalid_not_imputed_zero():
         evaluate_task4([bad], min_days=1)
 
 
-def test_causal_blocked_provenance_keeps_descriptive_and_blocks_causal():
+def test_incomplete_provenance_registry_fails_closed():
     bad = row("2026-01-01", "SPY")
     bad["provenance"] = {"causal_status": "CAUSAL_BLOCKED", "no_imputation": True}
-    result = evaluate_task4([bad], min_days=1)
-    assert result["descriptive"]["status"] == "VALID"
-    assert result["causal"]["status"] == "CAUSAL_BLOCKED"
-    assert result["decision"] == "INDETERMINATE"
+    with pytest.raises(EvaluationInvalid, match="provenance|registry|hash"):
+        evaluate_task4([bad], min_days=1)
 
 
 def test_placebo_and_reverse_are_reported_without_best_lag_selection():
@@ -98,6 +109,18 @@ def test_task3_minimal_valid_status_is_rejected():
 
 
 @pytest.mark.parametrize("mutation", [
+    lambda r: r.pop("artifact_registry"),
+    lambda r: next(iter(r["artifact_registry"].values())).update(candidate_key="FORGED"),
+    lambda r: r["provenance"].update(raw_payload_hash="f" * 64),
+])
+def test_task3_registry_is_required_and_candidate_raw_binding_is_verified(mutation):
+    bad = row("2026-01-01", "SPY")
+    mutation(bad)
+    with pytest.raises(EvaluationInvalid, match="registry|candidate|raw|identity"):
+        evaluate_task4([bad], min_days=1)
+
+
+@pytest.mark.parametrize("mutation", [
     lambda r: r["comparison"]["coverage"].update(common=0),
     lambda r: r["comparison"].update(source_hashes=["0" * 64]),
     lambda r: r["provenance"].update(artifact_hash="f" * 64),
@@ -121,14 +144,24 @@ def test_balanced_sensitivity_is_deterministic_and_separate_from_primary():
 
 
 def test_all_strata_run_same_diagnostics_and_pooled_keeps_no_firing_days():
-    records = [row("2026-01-01", "SPY"), row("2026-01-02", "QQQ"),
-               row("2026-01-03", "IWM")]
+    records = [row("2026-01-01", "SPY", daily=-0.01, breach=0.02),
+               row("2026-01-02", "QQQ", daily=0.01, breach=-0.02),
+               row("2026-01-03", "IWM", daily=-0.01, breach=0.02)]
     result = evaluate_task4(records, min_days=1)
+    assert result["n_unique_days"] == 3
+    assert result["clocks"]["daily_close_to_close"]["negative_days"] == 2
+    assert result["clocks"]["daily_close_to_close"]["positive_days"] == 1
+    assert result["clocks"]["from_breach"]["negative_days"] == 1
+    assert result["clocks"]["from_breach"]["positive_days"] == 2
+    assert result["clocks"]["daily_close_to_close"]["mean_return"] == pytest.approx(-1 / 300)
     assert result["strata"]["pooled"]["n"] == 3
     assert result["strata"]["pooled"]["coverage"] == 1.0
     assert result["strata"]["pooled"]["no_firing_days"] == 2
     for name in ("event_only", "control_only", "pooled"):
-        assert set(result["strata"][name]) >= {"descriptive", "daily", "from_breach", "causal", "power", "status", "n", "coverage"}
+        stratum = result["strata"][name]
+        assert set(stratum) >= {"descriptive", "daily", "from_breach", "causal", "power", "status", "n", "coverage"}
+        assert set(stratum["daily"]) >= {"negative_days", "positive_days", "mean_return"}
+        assert set(stratum["from_breach"]) >= {"negative_days", "positive_days", "mean_return"}
 
 
 def test_missing_falsifiers_are_indeterminate_and_cannot_make_worse():
@@ -138,18 +171,20 @@ def test_missing_falsifiers_are_indeterminate_and_cannot_make_worse():
         record.pop("reverse_return")
     result = evaluate_task4(records, min_days=1)
     assert result["falsifiers"]["placebo"]["status"] == "NOT_AVAILABLE"
-    assert result["falsifiers"]["reverse_lead_lag"]["interpretation"] == "INDETERMINATE"
+    assert result["falsifiers"]["reverse_lead_lag"]["interpretation"] == "NOT_AVAILABLE"
     assert result["falsifiers"]["placebo"]["drives_decision"] is False
     assert result["decision"] != "WORSE"
 
 
-def test_observed_falsifier_failure_can_make_worse():
+def test_non_identifiable_primary_and_placebo_are_neutral_not_worse():
     records = [row(f"2026-01-{i:02d}", "SPY", y=0.01) for i in range(1, 15)]
     for record in records:
         record["placebo_return"] = 0.02
     result = evaluate_task4(records, min_days=1)
-    assert result["falsifiers"]["placebo"]["drives_decision"] is True
-    assert result["decision"] == "WORSE"
+    assert result["causal"]["status"] == "NOT-IDENTIFIABLE"
+    assert result["falsifiers"]["placebo"]["fit"]["status"] == "NOT-IDENTIFIABLE"
+    assert result["falsifiers"]["placebo"]["drives_decision"] is False
+    assert result["decision"] != "WORSE"
 
 
 def test_underpowered_is_indeterminate_even_with_positive_estimate():

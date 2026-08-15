@@ -56,3 +56,18 @@ Verification for this retry:
 - `git diff --check` — passed
 
 Only `Vol_Suite/run_task4_evaluation.py`, `Vol_Suite/tests/test_task4_evaluation.py`, and this report were changed for the retry.
+
+## Important evaluator review closure (2026-08-15)
+
+- Task 3 registry binding is now mandatory at Task 4 evaluation: every record must carry a verified registry, resolve its artifact entry, and match the registry manifest/payload for raw payload hash, source hashes, canonical input hash, candidate identity, ticker/day, and record artifact hash. Missing, incomplete, detached, or forged registry evidence raises structured `EvaluationInvalid` rather than entering analysis.
+- Restored top-level fixed-clock diagnostics and extended every event-only/control-only/pooled stratum with daily and from-breach negative/positive/zero day counts, coverage, and means. Regression tests assert the counts and means.
+- Falsifier failure can drive `WORSE` only for an identifiable, finite, beta-bearing fit whose declared power threshold is reached and whose primary comparison is identifiable. Missing data, missing beta, non-identifiable, or underpowered fits are `NOT_AVAILABLE`/`INDETERMINATE` and neutral. Removed fallback `or 0.0` semantics; regression covers non-identifiable primary and placebo neutrality.
+
+Verification:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **21 passed**
+- Python 3.12 `py_compile` — passed
+- Python 3.12 Ruff check — passed
+- `git diff --check` — passed
+
+Only Task 4 evaluator, focused tests, and this report were changed; no production/live model or acquisition code was modified.

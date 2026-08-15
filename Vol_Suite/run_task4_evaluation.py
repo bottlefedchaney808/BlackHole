@@ -6,6 +6,8 @@ or auto-promote a model.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -73,20 +75,67 @@ def _comparison(row: Mapping[str, Any]) -> Mapping[str, Any]:
             "source_hashes": normalized_sources, "coverage": counts}
 
 
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def _registry(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> Mapping[str, Any]:
+    registry = row.get("artifact_registry", comparison.get("artifact_registry"))
+    if not isinstance(registry, Mapping) or not registry:
+        raise EvaluationInvalid("Task 3 artifact registry is required")
+    return registry
+
+
+def _registry_payload_hash(entry: Mapping[str, Any]) -> str:
+    payload = entry.get("payload_bytes", entry.get("payload"))
+    if payload is None:
+        raise EvaluationInvalid("registry entry lacks raw/source payload")
+    raw = payload if isinstance(payload, bytes) else payload.encode("utf-8") if isinstance(payload, str) else _canonical_json(payload)
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
     value = row.get("provenance", row.get("causal_provenance"))
     if not isinstance(value, Mapping):
         return False
-    try:
-        input_hash = _hash(value.get("input_hash"), "provenance input_hash")
-        artifact_hash = _hash(value.get("artifact_hash"), "provenance artifact_hash")
-        record_artifact_hash = _hash(value.get("record_artifact_hash"), "record artifact hash")
-        sources = tuple(_hash(item, "provenance source hash") for item in value.get("source_hashes", ()))
-    except EvaluationInvalid:
-        return False
-    if (input_hash != comparison["input_hash"] or artifact_hash != comparison["artifact_hash"]
-            or record_artifact_hash != artifact_hash or sources != comparison["source_hashes"]):
+    input_hash = _hash(value.get("input_hash"), "provenance input_hash")
+    canonical_input_hash = _hash(row.get("canonical_input_hash"), "canonical input hash")
+    artifact_hash = _hash(value.get("artifact_hash"), "provenance artifact_hash")
+    raw_hash = _hash(value.get("raw_payload_hash"), "provenance raw_payload_hash")
+    record_artifact_hash = _hash(value.get("record_artifact_hash"), "record artifact hash")
+    candidate = row.get("candidate_key", value.get("candidate_key"))
+    if not isinstance(candidate, str) or not candidate.strip():
+        raise EvaluationInvalid("candidate identity is required")
+    sources = tuple(_hash(item, "provenance source hash") for item in value.get("source_hashes", ()))
+    if (input_hash != comparison["input_hash"] or canonical_input_hash != input_hash
+            or artifact_hash != comparison["artifact_hash"] or record_artifact_hash != artifact_hash
+            or raw_hash != value.get("raw_payload_hash") or sources != comparison["source_hashes"]):
         raise EvaluationInvalid("record-artifact/provenance identity mismatch")
+    registry = _registry(row, comparison)
+    entry = registry.get(artifact_hash)
+    if not isinstance(entry, Mapping):
+        raise EvaluationInvalid("artifact registry entry lookup failed")
+    manifest = entry.get("artifact_manifest", entry.get("manifest"))
+    if not isinstance(manifest, Mapping):
+        raise EvaluationInvalid("artifact registry entry manifest is incomplete")
+    if _hash(entry.get("artifact_hash"), "registry artifact_hash") != artifact_hash:
+        raise EvaluationInvalid("registry artifact identity is forged")
+    if _hash(entry.get("raw_payload_hash"), "registry raw_payload_hash") != raw_hash:
+        raise EvaluationInvalid("registry raw/source identity mismatch")
+    if _registry_payload_hash(entry) != raw_hash:
+        raise EvaluationInvalid("registry raw payload hash mismatch")
+    if hashlib.sha256(_canonical_json(manifest)).hexdigest() != artifact_hash:
+        raise EvaluationInvalid("registry canonical manifest hash mismatch")
+    expected = {"candidate_key": candidate, "ticker": row.get("ticker"),
+                "calendar_day": row.get("day", row.get("date")),
+                "canonical_input_hash": canonical_input_hash, "source_hashes": list(sources)}
+    for field, expected_value in expected.items():
+        actual = manifest.get(field)
+        if field == "source_hashes":
+            actual = tuple(_hash(item, "manifest source hash") for item in actual or ())
+            expected_value = sources
+        if actual != expected_value or entry.get(field) != (list(sources) if field == "source_hashes" else expected_value):
+            raise EvaluationInvalid(f"registry {field} does not bind to evaluation record")
     return value.get("causal_status") == "CAUSAL_ELIGIBLE" and value.get("no_imputation") is True
 
 
@@ -176,14 +225,22 @@ def decision_ladder(*, descriptive_ok: bool, causal_ok: bool, falsifiers_ok: boo
     return "BETTER"
 
 
+def _clock(rows: list[dict[str, Any]], field: str, expected: str) -> dict[str, Any]:
+    values = [r[field] for r in rows]
+    return {"expected": expected, "n": len(values), "mean_return": float(np.mean(values)) if values else None,
+            "negative_days": sum(value < 0 for value in values),
+            "positive_days": sum(value > 0 for value in values),
+            "zero_days": sum(value == 0 for value in values)}
+
+
 def _stratum(rows: list[dict[str, Any]], *, total_days: int, min_days: int) -> dict[str, Any]:
     n = len(rows)
     coverage = n / total_days if total_days else 0.0
     descriptive = {"status": "VALID" if rows else "NOT_AVAILABLE", "n": n, "agreement": float(np.mean([r["pre_vanna"] >= 0 for r in rows])) if rows else None, "role": "DESCRIPTIVE_ONLY"}
-    daily = {"expected": "negative", "n": n, "mean_return": float(np.mean([r["daily_return"] for r in rows])) if rows else None}
-    breach = {"expected": "positive", "n": n, "mean_return": float(np.mean([r["from_breach_return"] for r in rows])) if rows else None}
-    eligible = all(r["causal_eligible"] for r in rows)
-    causal = _fit(rows, "forward_return_h") if eligible else {"status": "CAUSAL_BLOCKED", "n": n, "beta": None, "se": None, "p": 0}
+    daily = _clock(rows, "daily_return", "negative")
+    breach = _clock(rows, "from_breach_return", "positive")
+    eligible = bool(rows) and all(r["causal_eligible"] for r in rows)
+    causal = _fit(rows, "forward_return_h") if eligible else {"status": "CAUSAL_BLOCKED" if rows else "NOT_AVAILABLE", "n": n, "p": 0, "beta": None, "se": None}
     power = power_diagnostics(causal.get("beta"), causal.get("se"), n, causal.get("p", 0))
     status = "VALID" if rows else "NOT_AVAILABLE"
     if rows and not eligible:
@@ -214,16 +271,24 @@ def evaluate_task4(records: Iterable[Mapping[str, Any]], *, min_days: int = TARG
     for name, field in (("placebo", "placebo_return"), ("reverse_lead_lag", "reverse_return")):
         available = all(r[field] is not None for r in rows)
         fit = _fit(rows, field) if available else None
-        observed_failure = bool(available and (fit is not None) and (abs(fit.get("beta") or 0.0) >= abs(primary.get("beta") or 0.0)) and (abs(float(np.mean([r[field] for r in rows]))) > 0.0))
+        fit_power = power_diagnostics(fit.get("beta"), fit.get("se"), fit.get("n", 0), fit.get("p", 0), target_days=min_days) if fit else None
+        prerequisites = (available and fit is not None and primary.get("status") == "IDENTIFIABLE"
+                         and fit.get("status") == "IDENTIFIABLE" and fit_power is not None
+                         and fit_power["reach_80"] and primary.get("beta") is not None)
+        observed_failure = bool(prerequisites and abs(float(fit["beta"])) >= abs(float(primary["beta"]))
+                                and math.isfinite(float(fit["beta"])) and math.isfinite(float(primary["beta"])))
         falsifier_failure = falsifier_failure or observed_failure
-        falsifiers[name] = {"status": "VALID" if available else "NOT_AVAILABLE", "fit": fit, "pre_registered": True, "best_lag_selection": False, "interpretation": "OBSERVED_FAILURE" if observed_failure else ("VALID" if available else "INDETERMINATE"), "drives_decision": observed_failure}
+        interpretation = "OBSERVED_FAILURE" if observed_failure else ("VALID" if prerequisites else ("NOT_AVAILABLE" if not available else "INDETERMINATE"))
+        falsifiers[name] = {"status": "VALID" if available else "NOT_AVAILABLE", "fit": fit, "power": fit_power,
+                            "pre_registered": True, "best_lag_selection": False, "interpretation": interpretation,
+                            "drives_decision": observed_failure}
     opposite = [dict(r, pre_vanna=r["opposite_vanna"]) for r in rows] if all(r["opposite_vanna"] is not None for r in rows) else []
     sensitivity = {"opposite_convention": {"role": "SENSITIVITY", "fit": _fit(opposite, "forward_return_h") if opposite else None}, "balanced_panel": {"role": "SENSITIVITY", "weighting": "equal-family/day", "primary_replacement": False, "fit": _fit(rows, "forward_return_h", _balanced_weights(rows)) if causal_eligible else None}}
     strata = {"event_only": _stratum([r for r in rows if r["event"]], total_days=len(rows), min_days=min_days), "control_only": _stratum([r for r in rows if not r["event"]], total_days=len(rows), min_days=min_days), "pooled": _stratum(rows, total_days=len(rows), min_days=min_days)}
     strata["pooled"]["no_firing_days"] = sum(not r["event"] for r in rows)
     descriptive_ok = descriptive["agreement"] >= 0.5
     decision = decision_ladder(descriptive_ok=descriptive_ok, causal_ok=primary.get("status") == "IDENTIFIABLE", falsifiers_ok=not falsifier_failure, powered=not power["underpowered"])
-    return {"status": "VALID", "decision": decision, "n_unique_days": len(rows), "days": rows, "descriptive": descriptive, "causal": primary, "primary_all_eligible": primary, "power": power, "falsifiers": falsifiers, "sensitivity": sensitivity, "strata": strata, "diagnostics": {"rank": primary.get("rank"), "condition": primary.get("condition"), "vif": primary.get("vif")}, "config": {"unit": "unique_calendar_day", "cluster": "same-day tickers", "no_imputation": True, "best_lag_selection": False, "auto_promote": False, "causal_target": "Vanna_orth × ΔIV_PRE_WINDOW", "min_days": min_days, "primary_universe": "all_eligible"}}
+    return {"status": "VALID", "decision": decision, "n_unique_days": len(rows), "days": rows, "descriptive": descriptive, "causal": primary, "primary_all_eligible": primary, "power": power, "falsifiers": falsifiers, "sensitivity": sensitivity, "clocks": {"daily_close_to_close": _clock(rows, "daily_return", "negative"), "from_breach": _clock(rows, "from_breach_return", "positive")}, "strata": strata, "diagnostics": {"rank": primary.get("rank"), "condition": primary.get("condition"), "vif": primary.get("vif")}, "config": {"unit": "unique_calendar_day", "cluster": "same-day tickers", "no_imputation": True, "best_lag_selection": False, "auto_promote": False, "causal_target": "Vanna_orth × ΔIV_PRE_WINDOW", "min_days": min_days, "primary_universe": "all_eligible"}}
 
 
 __all__ = ["EvaluationInvalid", "decision_ladder", "evaluate_task4", "power_diagnostics", "unique_calendar_days"]
