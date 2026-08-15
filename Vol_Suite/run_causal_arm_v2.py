@@ -374,7 +374,8 @@ def build_design(day_records: List[dict], family_l2: bool = True) -> Dict[str, A
     The combined `family_interaction` contrast column is intentionally NOT added
     (it is a linear combination of the two per-family columns => collinear).
     Family interaction columns are added only for families actually present in
-    the data (an all-zero family column would make the design rank-deficient)."""
+    the data (an all-zero family column would make the design rank-deficient).
+    """
     # detect families present across the deduped records
     present_fams = set()
     for r in day_records:
@@ -415,6 +416,83 @@ def build_design(day_records: List[dict], family_l2: bool = True) -> Dict[str, A
     X = np.asarray(rows_X, dtype=float)
     y = np.asarray(y_rows, dtype=float)
     return {"X": X, "y": y, "col_names": cols, "days": days}
+
+
+def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) -> Dict[str, Any]:
+    """Vanna⊥ orthogonalization (Cem's R3 lever, zero acquisition cost).
+
+    The target column pre_vanna×ΔIV is structurally collinear (VIF≈85.1) with its
+    own constituents: the per-family pre_vanna levels (family_interaction_*) and the
+    ΔIV main effect. Regress pre_vanna×ΔIV on those constituents, keep the residual
+    `(pre_vanna×ΔIV)⊥ = Vanna⊥`, and re-fit the outcome model with Vanna⊥ replacing
+    the raw interaction (the pre-registered controls gamma_burst / ΔIV / ΔS / market /
+    event / A6 / spillover / family levels remain unchanged).
+
+    This removes the structural overlap that inflates SE and drags β power — the
+    binding constraint Cem identified. It is equivalent (up to the linear span) to
+    including the interaction as a residualized regressor in a Frisch-Waugh-Lovell
+    sense: the coefficient on Vanna⊥ is the same as the coefficient on the interaction
+    in the fully-saturated design where the interaction is orthogonalized against its
+    constituents.
+
+    Columns: [intercept, vanna_orth (residualized target), gamma_burst, delta_iv,
+    delta_s, market, event, a6_reflexivity, cross_family_spillover, family levels...]
+    """
+    present_fams = set()
+    for r in day_records:
+        for f in _as_list(r.get("families")):
+            present_fams.add(str(f).upper())
+    fam_cols = [f"family_interaction_{f.lower()}" for f in sorted(present_fams)]
+
+    # constituents of the interaction: per-family pre_vanna levels + ΔIV main effect
+    constituent_cols = list(fam_cols) + ["delta_iv"]
+
+    rows_Z = []   # design for the residualization regression (constituents)
+    rows_X = []   # full outcome design with Vanna⊥ in place of the raw interaction
+    y_rows = []
+    days = []
+    for r in day_records:
+        l2 = r.get("l2", {})
+        pre_v = l2.get("pre_vanna_exposure", 0.0)
+        div = l2.get("delta_iv", 0.0)
+        interaction = pre_v * div
+        # residualization regressors
+        zrow = []
+        for c in constituent_cols:
+            zrow.append(l2.get(c, 0.0))
+        rows_Z.append([1.0] + zrow)          # + intercept
+        # outcome design: Vanna⊥ in the target slot (filled after residualization)
+        rows_X.append([1.0, 0.0, l2.get("gamma_burst", 0.0), div,
+                       l2.get("delta_s", 0.0), l2.get("market", 0.0),
+                       float(l2.get("event", 0) or 0), l2.get("a6_reflexivity", 0.0),
+                       l2.get("cross_family_spillover", 0.0)])
+        if family_l2:
+            for fam_col in fam_cols:
+                rows_X[-1].append(l2.get(fam_col, 0.0))
+        y_rows.append(l2.get("forward_return_h", 0.0))
+        days.append(r.get("day") or r.get("date"))
+
+    Z = np.asarray(rows_Z, dtype=float)          # n x (1 + len(constituents))
+    target = np.asarray([r.get("l2", {}).get("pre_vanna_exposure", 0.0)
+                         * r.get("l2", {}).get("delta_iv", 0.0) for r in day_records],
+                        dtype=float)
+    # residualize target on constituents + intercept (FWL step)
+    coef_z, *_ = np.linalg.lstsq(Z, target, rcond=None)
+    resid = target - Z @ coef_z
+    for i, xrow in enumerate(rows_X):
+        xrow[1] = float(resid[i])               # Vanna⊥ into the target slot
+
+    X = np.asarray(rows_X, dtype=float)
+    y = np.asarray(y_rows, dtype=float)
+    cols = (["intercept", "vanna_orth", "gamma_burst", "delta_iv",
+             "delta_s", "market", "event", "a6_reflexivity",
+             "cross_family_spillover"])
+    if family_l2:
+        cols += fam_cols
+    # report the residualization diagnostics
+    return {"X": X, "y": y, "col_names": cols, "days": days,
+            "constituents": constituent_cols, "resid_target": resid,
+            "target_vif_pre": None}  # VIF computed downstream
 
 
 # ---------------------------------------------------------------------------
