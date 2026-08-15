@@ -103,6 +103,11 @@ class DecodeResult:
     company_name: Optional[str]
     tier: str    # "local" | "openfigi" | "unresolved"
     detail: str  # human-readable provenance, e.g. "RIC:ZK->SHE"
+    # Ticker symbol used for the OpenFIGI lookup (tier="openfigi" only).
+    # Tier "local"/"unresolved" have no ticker to offer -- decode_local()
+    # only ever produces a company name, never a symbol -- so this stays
+    # None for those tiers rather than guessing one.
+    ticker: Optional[str] = None
 
 
 class OpenFigiClient:
@@ -187,6 +192,7 @@ def decode_one(
             if mic:
                 names = figi_client.lookup_ticker_batch([(ticker, mic)])
                 if names and names[0]:
-                    return DecodeResult(names[0], "openfigi", f"RIC:{suffix}->{mic}")
+                    return DecodeResult(names[0], "openfigi", f"RIC:{suffix}->{mic}",
+                                        ticker=ticker)
 
     return DecodeResult(None, "unresolved", "no local name, no OpenFIGI mapping")
