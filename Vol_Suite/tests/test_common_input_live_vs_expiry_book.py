@@ -154,9 +154,12 @@ def test_payload_is_opaque_and_only_read_records_bytes():
     payload = CanonicalPayload(b"canonical")
     assert not hasattr(payload, "canonical_input")
     assert not hasattr(payload, "consume")
-    assert payload.read_sha256 is None
+    assert not hasattr(payload, "read_sha256")
+    assert not hasattr(payload, "read_bytes")
+    assert not any(name in {"data", "digest", "canonical_bytes", "_accessed"} for name in dir(payload))
+    with pytest.raises((AttributeError, TypeError)):
+        vars(payload)
     assert payload.read() == b"canonical"
-    assert payload.read_sha256 is not None
 
 
 def test_malformed_strike_row_is_structured_invalid():
@@ -169,11 +172,21 @@ def test_malformed_strike_row_is_structured_invalid():
                for item in exc.value.invalid_result["exclusions"])
 
 
-def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026-08-14T12:00:00Z", breach="2026-08-14T13:00:00Z", source_hash="a" * 64):
+def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026-08-14T12:00:00Z", breach="2026-08-14T13:00:00Z", source_hash="a" * 64, *, raw_hash="b" * 64, artifact_hash="c" * 64, timezone="America/New_York"):
     return {"ticker": "IWM", "calendar_day": "2026-08-14", "status": status,
             "pre_window_provenance": provenance, "pre_window_value": value,
             "delta_iv_pre_window": value, "iv_source_ts": source,
-            "breach_window_start_prov": breach, "source_hashes": [source_hash]}
+            "breach_window_start_prov": breach, "source_hashes": [source_hash],
+            "raw_payload_hash": raw_hash, "artifact_hash": artifact_hash,
+            "declared_timezone": timezone}
+
+
+def _registry(unit, payload=b"verified canonical payload"):
+    import hashlib
+    unit["raw_payload_hash"] = hashlib.sha256(payload).hexdigest()
+    return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
+            "raw_payload_hash": unit["raw_payload_hash"],
+            "source_hashes": unit["source_hashes"], "payload_bytes": payload}}
 
 
 def test_causal_gate_blocks_missing_equal_later_and_mixed_provenance():
@@ -191,5 +204,38 @@ def test_compare_returns_causal_blocked_invalid_result():
     live, new = _engines()
     with pytest.raises(ComparisonInvalid) as exc:
         compare_common_input(_input(), live, new, provenance_units=[_causal_unit(value=None)])
+    assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"
+    assert exc.value.invalid_result["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_causal_gate_requires_registered_payload_binding_and_rejects_forged_hash():
+    unit = _causal_unit()
+    assert validate_causal_eligibility([unit])["causal_status"] == "CAUSAL_BLOCKED"
+    registry = _registry(unit)
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_ELIGIBLE"
+    unit["raw_payload_hash"] = "d" * 64
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_causal_gate_rejects_wrong_calendar_day_in_declared_timezone():
+    unit = _causal_unit(source="2026-08-15T05:30:00Z", breach="2026-08-15T06:00:00Z")
+    result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
+    assert result["causal_status"] == "CAUSAL_BLOCKED"
+    assert any("calendar_day" in reason["reason"] for reason in result["reasons"])
+
+
+def test_valid_registered_provenance_is_causally_eligible():
+    unit = _causal_unit(source="2026-08-14T10:00:00-04:00", breach="2026-08-14T19:00:00Z")
+    result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
+    assert result["causal_status"] == "CAUSAL_ELIGIBLE"
+
+
+def test_compare_blocks_forged_registered_provenance():
+    live, new = _engines()
+    unit = _causal_unit()
+    registry = _registry(unit)
+    unit["raw_payload_hash"] = "d" * 64
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new, provenance_units=[unit], artifact_registry=registry)
     assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"
     assert exc.value.invalid_result["causal_status"] == "CAUSAL_BLOCKED"

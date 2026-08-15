@@ -2,11 +2,15 @@
 
 This module is intentionally an offline harness. Acquisition is out of scope:
 callers provide one canonical snapshot and may inject engine adapters in tests.
-Adapters receive one immutable byte payload and must attest to the digest of the
-bytes actually consumed.
+Adapters receive one immutable byte payload and must consume it through ``read``.
+The read ledger and digest are closure state owned by ``compare_common_input``;
+no audit or consumption override is exposed on the adapter object. This is a
+Python protocol boundary, not a sandbox: deliberately malicious code can use
+reflection or mutate process state, so such code must not be treated as trusted.
 """
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import math
@@ -16,6 +20,7 @@ import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
+from zoneinfo import ZoneInfo
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -56,11 +61,8 @@ class CanonicalInput:
             raise ValueError("rows contain invalid right, IV, or OI")
         if not self.source_hashes or any(not re.fullmatch(r"[0-9a-fA-F]{64}", str(item)) for item in self.source_hashes):
             raise ValueError("source_hashes must contain 64-character hexadecimal SHA-256 hashes")
-        if not isinstance(self.iv_source_ts, str) or not self.iv_source_ts.endswith("Z") and "+" not in self.iv_source_ts and "-" not in self.iv_source_ts[10:]:
-            raise ValueError("iv_source_ts must be timezone-qualified ISO-8601")
-        import datetime as dt
         try:
-            dt.datetime.fromisoformat(self.iv_source_ts[:-1] + "+00:00" if self.iv_source_ts.endswith("Z") else self.iv_source_ts)
+            _parse_timestamp(self.iv_source_ts)
         except ValueError as exc:
             raise ValueError("iv_source_ts must be a valid ISO-8601 timestamp") from exc
 
@@ -86,30 +88,19 @@ class CanonicalPayload:
     harness, not an adapter result, owns the resulting attestation.
     """
 
-    __slots__ = ("__read_bytes", "__reader")
+    __slots__ = ("__on_read", "__reader")
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, _on_read: Callable[[bytes], None] | None = None) -> None:
         canonical = bytes(data)
         self.__reader = lambda: canonical
-        self.__read_bytes: list[bytes] = []
+        self.__on_read = _on_read
 
     def read(self) -> bytes:
         """Read the complete canonical payload and record the returned bytes."""
         returned = bytes(self.__reader())
-        self.__read_bytes.append(returned)
+        if self.__on_read is not None:
+            self.__on_read(returned)
         return returned
-
-    @property
-    def read_sha256(self) -> str | None:
-        """Harness-owned digest of the bytes actually returned by ``read``."""
-        if not self.__read_bytes:
-            return None
-        return hashlib.sha256(b"".join(self.__read_bytes)).hexdigest()
-
-    @property
-    def read_bytes(self) -> tuple[bytes, ...]:
-        """Read audit data for the harness; adapters must not use this metadata."""
-        return tuple(self.__read_bytes)
 
 
 class ComparisonInvalid(ValueError):
@@ -311,11 +302,66 @@ def _validate_source_hashes(value: Any) -> tuple[str, ...]:
     return tuple(str(item).lower() for item in value)
 
 
-def validate_causal_eligibility(units: Iterable[Mapping[str, Any]], *, intended_units: int | None = None) -> dict[str, Any]:
+def _parse_timestamp(value: Any) -> dt.datetime:
+    """Parse an aware ISO-8601 timestamp, accepting every valid numeric offset."""
+    if not isinstance(value, str):
+        raise TypeError("timestamp must be timezone-qualified ISO-8601")
+    text = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("timestamp must be valid ISO-8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-qualified ISO-8601")
+    return parsed.astimezone(dt.UTC)
+
+
+def _manifest_payload_digest(entry: Mapping[str, Any]) -> str:
+    payload = entry.get("payload_bytes", entry.get("payload"))
+    if payload is None:
+        raise ValueError("registry entry lacks canonical payload")
+    if isinstance(payload, bytes):
+        raw = payload
+    elif isinstance(payload, str):
+        raw = payload.encode("utf-8")
+    else:
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                         allow_nan=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[str, Any]) -> None:
+    artifact_hash = unit.get("artifact_hash")
+    raw_hash = unit.get("raw_payload_hash")
+    if not isinstance(artifact_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", artifact_hash):
+        raise ValueError("artifact_hash must identify a verified registry entry")
+    if not isinstance(raw_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", raw_hash):
+        raise ValueError("raw_payload_hash is required and must be SHA-256")
+    entry = registry.get(artifact_hash)
+    if not isinstance(entry, Mapping):
+        raise TypeError("artifact_hash is not bound to a verified registry entry")
+    if str(entry.get("artifact_hash", "")).lower() != artifact_hash.lower():
+        raise ValueError("registry artifact binding does not match")
+    if str(entry.get("raw_payload_hash", "")).lower() != raw_hash.lower():
+        raise ValueError("raw_payload_hash does not match registry")
+    if _manifest_payload_digest(entry) != raw_hash.lower():
+        raise ValueError("raw_payload_hash does not match canonical registry payload")
+    declared = _validate_source_hashes(unit.get("source_hashes"))
+    registered = _validate_source_hashes(entry.get("source_hashes"))
+    if declared != registered:
+        raise ValueError("source_hashes do not match registry provenance")
+
+
+def validate_causal_eligibility(
+    units: Iterable[Mapping[str, Any]], *, intended_units: int | None = None,
+    artifact_registry: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Validate the strict, all-unit causal provenance boundary.
 
-    This is deliberately an adapter-boundary gate: it validates supplied
-    provenance evidence and never claims to prove arbitrary code is honest.
+    Hash syntax is not provenance. Every unit must bind to a caller-supplied
+    verified artifact registry whose manifest payload hashes to the unit's
+    raw payload digest. The registry is the explicit acquisition/harness
+    boundary; this function does not treat arbitrary hashes as evidence.
     """
     rows = [dict(unit) for unit in units]
     expected = len(rows) if intended_units is None else intended_units
@@ -330,9 +376,23 @@ def validate_causal_eligibility(units: Iterable[Mapping[str, Any]], *, intended_
                 raise ValueError("provenance is not PRE_WINDOW")
             if unit.get("pre_window_value") is None or unit.get("delta_iv_pre_window") is None:
                 raise ValueError("delta_iv_pre_window is missing")
-            _validate_source_hashes(unit.get("source_hashes", [unit.get("raw_payload_hash")]))
+            if not isinstance(artifact_registry, Mapping):
+                raise TypeError("verified artifact registry is required")
+            _validate_registered_provenance(unit, artifact_registry)
             source = _parse_timestamp(unit.get("iv_source_ts"))
             breach = _parse_timestamp(unit.get("breach_window_start_prov"))
+            declared_tz = unit.get("declared_timezone", unit.get("timezone"))
+            if not isinstance(declared_tz, str) or not declared_tz:
+                raise ValueError("declared_timezone is required")
+            try:
+                zone = ZoneInfo(declared_tz)
+            except Exception as exc:
+                raise ValueError("declared_timezone is invalid") from exc
+            calendar_day = unit.get("calendar_day")
+            if not isinstance(calendar_day, str) or source.astimezone(zone).date().isoformat() != calendar_day:
+                raise ValueError("iv_source_ts does not match calendar_day in declared timezone")
+            if breach.astimezone(zone).date().isoformat() != calendar_day:
+                raise ValueError("breach_window_start_prov does not match calendar_day in declared timezone")
             if source >= breach:
                 raise ValueError("iv_source_ts must strictly precede breach")
         except (TypeError, ValueError) as exc:
@@ -342,35 +402,30 @@ def validate_causal_eligibility(units: Iterable[Mapping[str, Any]], *, intended_
             "coverage": len(rows) / expected if expected else 1.0, "reasons": reasons}
 
 
-def _parse_timestamp(value: Any) -> Any:
-    if not isinstance(value, str) or not value.endswith(("Z",)) and not any(value.endswith(f"{sign}{hour:02d}:00") for sign in "+-" for hour in range(24)):
-        raise ValueError("timestamp must be timezone-qualified ISO-8601")
-    text = value[:-1] + "+00:00" if value.endswith("Z") else value
-    import datetime as dt
-    return dt.datetime.fromisoformat(text).astimezone(dt.UTC)
-
-
 def compare_common_input(
     inp: CanonicalInput,
     live_runner: Callable[[CanonicalPayload], Any] | None = None,
     new_runner: Callable[[CanonicalPayload], Any] | None = None,
     deadband: float = 1e-12,
     provenance_units: Iterable[Mapping[str, Any]] | None = None,
+    artifact_registry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run both adapters with one immutable serialization and return diagnostics."""
     if provenance_units is not None:
-        causal = validate_causal_eligibility(provenance_units)
+        causal = validate_causal_eligibility(provenance_units, artifact_registry=artifact_registry)
         if causal["causal_status"] != "CAUSAL_ELIGIBLE":
             raise ComparisonInvalid("causal provenance is incomplete", exclusions=causal["reasons"], causal_blocked=True)
     live_runner = live_runner or _default_live_runner
     new_runner = new_runner or _default_new_runner
     canonical_bytes = inp.canonical_bytes()
-    live_payload = CanonicalPayload(canonical_bytes)
-    new_payload = CanonicalPayload(canonical_bytes)
+    live_reads: list[bytes] = []
+    new_reads: list[bytes] = []
+    live_payload = CanonicalPayload(canonical_bytes, live_reads.append)
+    new_payload = CanonicalPayload(canonical_bytes, new_reads.append)
     live = live_runner(live_payload)
-    live_attestation = live_payload.read_sha256
+    live_attestation = hashlib.sha256(b"".join(live_reads)).hexdigest() if live_reads else None
     new = new_runner(new_payload)
-    new_attestation = new_payload.read_sha256
+    new_attestation = hashlib.sha256(b"".join(new_reads)).hexdigest() if new_reads else None
     canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
     if live_attestation != canonical_digest or new_attestation != canonical_digest:
         raise ComparisonInvalid(

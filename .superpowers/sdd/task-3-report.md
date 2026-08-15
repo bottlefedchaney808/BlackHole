@@ -93,6 +93,21 @@ malformed rights, and a falsified per-record vanna regression.
 - `py -3.12 -m ruff check ...` — passed after the final slot-order fix
 - `git diff --check` — passed
 
+## Latest critical-finding fixes (2026-08-15)
+
+- Removed public `CanonicalPayload.read_bytes` and `read_sha256` audit APIs. The only adapter-facing operation is `read()`; the harness keeps read-ledger bytes and digest in local closure state, so adapters cannot manually mark consumption through a public method or read harness attestation state. The documented boundary is a Python protocol, not a malicious-code sandbox; reflection/process mutation are outside the trust model.
+- `validate_causal_eligibility` now rejects syntax-only or `raw_payload_hash` fallback evidence. Each unit requires `artifact_hash`, `raw_payload_hash`, and `source_hashes` bound to a supplied artifact registry entry; the registry payload is hashed and must match `raw_payload_hash`, and source hashes must match the registry.
+- Both causal timestamps must be aware ISO-8601 values, accept all numeric offsets supported by `datetime.fromisoformat`, fall on `calendar_day` in `declared_timezone`, and satisfy strict source-before-breach ordering.
+- `compare_common_input` forwards the registry to the strict validator and therefore raises `COMPARISON_INVALID` with `CAUSAL_BLOCKED` for missing binding, forged hashes, or wrong-day timestamps.
+- Added regressions for public bypass attempts, missing/forged registry binding, wrong-day timestamps, valid registered provenance, and comparison causal blocking.
+
+## Latest verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 py -3.12 -m pytest Vol_Suite/tests/test_common_input_live_vs_expiry_book.py -q` — `20 passed`
+- `py -3.12 -m py_compile Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py` — passed
+- `py -3.12 -m ruff check Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py` — `All checks passed!`
+- `git diff --check` — passed
+
 ## Commit
 
 Final commit hash is reported in the handback.
