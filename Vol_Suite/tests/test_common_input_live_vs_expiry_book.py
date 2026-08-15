@@ -209,7 +209,8 @@ def _registry(unit, payload=b"verified canonical payload"):
     unit["artifact_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
             "raw_payload_hash": unit["raw_payload_hash"], "artifact_manifest": manifest,
-            "source_hashes": unit["source_hashes"], "payload_bytes": payload}}
+            "source_hashes": unit["source_hashes"], "payload_bytes": payload,
+            "expiry": unit["expiry"], "dte": unit["dte"]}}
 
 
 def test_causal_gate_blocks_missing_equal_later_and_mixed_provenance():
@@ -235,7 +236,7 @@ def test_causal_gate_requires_registered_payload_binding_and_rejects_forged_hash
     unit = _causal_unit()
     assert validate_causal_eligibility([unit])["causal_status"] == "CAUSAL_BLOCKED"
     registry = _registry(unit)
-    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_ELIGIBLE"
+    assert validate_causal_eligibility([unit], intended_units=1, artifact_registry=registry)["causal_status"] == "CAUSAL_ELIGIBLE"
     unit["raw_payload_hash"] = "d" * 64
     assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
 
@@ -249,8 +250,17 @@ def test_causal_gate_rejects_wrong_calendar_day_in_declared_timezone():
 
 def test_valid_registered_provenance_is_causally_eligible():
     unit = _causal_unit(source="2026-08-14T10:00:00-04:00", breach="2026-08-14T19:00:00Z")
-    result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
+    result = validate_causal_eligibility([unit], intended_units=1, artifact_registry=_registry(unit))
     assert result["causal_status"] == "CAUSAL_ELIGIBLE"
+
+
+def test_direct_causal_validator_requires_explicit_denominator():
+    unit = _causal_unit()
+    result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
+    assert result["status"] == "COMPARISON_INVALID"
+    assert result["causal_status"] == "CAUSAL_BLOCKED"
+    assert result["N"] == 0
+    assert any("explicit intended_units or intended_corpus_manifest" in item["reason"] for item in result["reasons"])
 
 
 @pytest.mark.parametrize("field", ["endpoint", "request_parameters", "spot_timestamp", "chain_timestamp", "iv_source_ts", "breach_window_start_prov"])
@@ -293,7 +303,7 @@ def test_causal_gate_requires_same_day_clustering_metadata():
 
 def test_declared_timezone_handles_utc_boundary_calendar_day():
     unit = _causal_unit(source="2026-08-15T03:30:00Z", breach="2026-08-15T03:45:00Z")
-    result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
+    result = validate_causal_eligibility([unit], intended_units=1, artifact_registry=_registry(unit))
     assert result["causal_status"] == "CAUSAL_ELIGIBLE"
 
 
@@ -391,7 +401,7 @@ def test_causal_gate_rejects_contradictory_same_day_clusters_across_units():
     registry = {}
     registry.update(_registry(first))
     registry.update(_registry(second))
-    result = validate_causal_eligibility([first, second], artifact_registry=registry)
+    result = validate_causal_eligibility([first, second], intended_units=2, artifact_registry=registry)
     assert result["causal_status"] == "CAUSAL_BLOCKED"
     assert any("inconsistent across unit set" in reason["reason"] for reason in result["reasons"])
 

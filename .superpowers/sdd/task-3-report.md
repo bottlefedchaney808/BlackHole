@@ -218,3 +218,19 @@ No acquisition, live-model/master, or secrets files were changed.
 - `git diff --check` — passed
 
 No network, acquisition endpoint, live model, master, or secrets path was invoked.
+
+## Review follow-up closure (2026-08-15)
+
+- `validate_causal_eligibility` now requires an explicit `intended_units` or `intended_corpus_manifest`; absent denominators return `COMPARISON_INVALID` / `CAUSAL_BLOCKED` with `N=0` and never self-size from supplied rows.
+- Added a direct-validator regression with one valid registered unit and no denominator. Existing valid direct calls now declare `intended_units` explicitly.
+- Registry entries now expose top-level `expiry`/`dte` alongside the already complete manifest-bound identity; validator rejects any top-level/manifest mismatch without weakening field-by-field manifest checks.
+- Added shared `sha256_bytes` and routed comparison payload attestations, canonical input bytes, and registry payload hashing through the shared strict hashing primitive; comparison no longer imports or duplicates `hashlib` semantics.
+
+## Verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **102 passed**
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `uvx ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **All checks passed**
+- `git diff --check` — passed
+
+No acquisition, live-model/master, or secrets changes were made.

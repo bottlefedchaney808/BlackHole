@@ -26,9 +26,16 @@ def canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
+def sha256_bytes(value: bytes) -> str:
+    """Hash exact bytes through the shared strict attestation primitive."""
+    if not isinstance(value, bytes):
+        raise TypeError("sha256_bytes requires bytes")
+    return hashlib.sha256(value).hexdigest()
+
+
 def canonical_sha256(value: Any) -> str:
     """Hash the one strict canonical JSON representation used at every boundary."""
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    return sha256_bytes(canonical_json_bytes(value))
 
 
 def normalize_hashes(value: Iterable[str]) -> tuple[str, ...]:
@@ -36,4 +43,4 @@ def normalize_hashes(value: Iterable[str]) -> tuple[str, ...]:
     return validate_source_hashes(tuple(value))
 
 
-__all__ = ["SHA256_RE", "canonical_json_bytes", "canonical_sha256", "normalize_hashes", "validate_source_hashes"]
+__all__ = ["SHA256_RE", "canonical_json_bytes", "canonical_sha256", "normalize_hashes", "sha256_bytes", "validate_source_hashes"]

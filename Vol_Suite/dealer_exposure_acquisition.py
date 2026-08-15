@@ -350,6 +350,8 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             "source_hashes": item.get("source_hashes"),
             "payload_bytes": payloads.get(item["candidate_key"]),
             "ticker": item.get("ticker"),
+            "expiry": item.get("expiry"),
+            "dte": item.get("dte"),
             "calendar_day": item.get("calendar_day"),
             "canonical_input_hash": item.get("canonical_input_hash"),
         }

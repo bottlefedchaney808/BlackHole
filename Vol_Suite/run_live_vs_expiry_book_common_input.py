@@ -11,7 +11,6 @@ reflection or mutate process state, so such code must not be treated as trusted.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import math
 import os
@@ -26,6 +25,7 @@ try:
         SHA256_RE,
         canonical_json_bytes,
         canonical_sha256,
+        sha256_bytes,
         validate_source_hashes,
     )
 except ImportError:
@@ -33,6 +33,7 @@ except ImportError:
         SHA256_RE,
         canonical_json_bytes,
         canonical_sha256,
+        sha256_bytes,
         validate_source_hashes,
     )
 
@@ -405,7 +406,7 @@ def _manifest_payload_digest(entry: Mapping[str, Any]) -> str:
         raw = payload.encode("utf-8")
     else:
         raw = canonical_json_bytes(payload)
-    return hashlib.sha256(raw).hexdigest()
+    return sha256_bytes(raw)
 
 
 _PROVENANCE_FIELDS = (
@@ -518,6 +519,9 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
         raise TypeError("registry entry lacks canonical artifact manifest")
     if canonical_sha256(manifest) != artifact_hash.lower():
         raise ValueError("artifact_hash does not match canonical registry manifest")
+    for identity_field in ("expiry", "dte"):
+        if identity_field in entry and entry[identity_field] != manifest.get(identity_field):
+            raise ValueError(f"registry {identity_field} does not match canonical manifest")
     declared = validate_source_hashes(unit.get("source_hashes"))
     registered = validate_source_hashes(entry.get("source_hashes"))
     if declared != registered:
@@ -642,10 +646,20 @@ def validate_causal_eligibility(
             intended_ids = _intended_identity_set(intended_corpus_manifest)
         except (TypeError, ValueError, AttributeError) as exc:
             reasons.append({"reason": str(exc)})
-    expected = len(intended_ids) if intended_ids is not None else (len(rows) if intended_units is None else intended_units)
-    if intended_units is not None and (not isinstance(intended_units, int) or isinstance(intended_units, bool) or intended_units < 0):
+    if intended_units is None and intended_ids is None:
+        reasons.append({"reason": "explicit intended_units or intended_corpus_manifest is required for causal eligibility"})
+    valid_intended_units = (
+        isinstance(intended_units, int)
+        and not isinstance(intended_units, bool)
+        and intended_units >= 0
+    )
+    if intended_units is not None and not valid_intended_units:
         reasons.append({"reason": "intended_units must be a non-negative integer"})
-    if expected < 0 or len(rows) != expected:
+    expected = len(intended_ids) if intended_ids is not None else (intended_units if valid_intended_units else 0)
+    if intended_ids is not None and valid_intended_units and intended_units != len(intended_ids):
+        reasons.append({"reason": "intended_units does not match intended corpus manifest", "intended_units": intended_units,
+                        "manifest_units": len(intended_ids)})
+    if len(rows) != expected:
         reasons.append({"reason": "unit coverage is not complete", "n": len(rows), "N": expected})
     if intended_ids is not None:
         supplied_ids = {unit.get("candidate_key") for unit in rows}
@@ -740,13 +754,13 @@ def compare_common_input(
         live = live_runner(live_payload)
     except Exception as exc:
         raise ComparisonInvalid("live runner failed: " + str(exc), structured_invalid=True) from exc
-    live_attestation = hashlib.sha256(b"".join(live_reads)).hexdigest() if live_reads else None
+    live_attestation = sha256_bytes(b"".join(live_reads)) if live_reads else None
     try:
         new = new_runner(new_payload)
     except Exception as exc:
         raise ComparisonInvalid("new runner failed: " + str(exc), structured_invalid=True) from exc
-    new_attestation = hashlib.sha256(b"".join(new_reads)).hexdigest() if new_reads else None
-    canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
+    new_attestation = sha256_bytes(b"".join(new_reads)) if new_reads else None
+    canonical_digest = sha256_bytes(canonical_bytes)
     if live_attestation != canonical_digest or new_attestation != canonical_digest:
         raise ComparisonInvalid(
             "adapter did not consume canonical payload bytes",
