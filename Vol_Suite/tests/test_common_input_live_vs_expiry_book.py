@@ -174,18 +174,31 @@ def test_malformed_strike_row_is_structured_invalid():
 
 
 def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026-08-14T12:00:00Z", breach="2026-08-14T13:00:00Z", source_hash="a" * 64, *, raw_hash="b" * 64, artifact_hash="c" * 64, timezone="America/New_York"):
-    return {"ticker": "IWM", "calendar_day": "2026-08-14", "status": status,
+    candidate_key = "IWM|2026-08-14"
+    return {"ticker": "IWM", "calendar_day": "2026-08-14", "candidate_key": candidate_key, "status": status,
             "pre_window_provenance": provenance, "pre_window_value": value,
-            "delta_iv_pre_window": value, "iv_source_ts": source,
+            "delta_iv_pre_window": value, "iv_before_ts": "2026-08-14T11:00:00Z",
+            "iv_before_value": 0.0, "iv_source_ts": source, "iv_source_value": value,
+            "delta_iv_aggregation": "iv_source_minus_iv_before",
+            "delta_iv_aggregation_version": "1",
             "breach_window_start_prov": breach, "source_hashes": [source_hash],
             "raw_payload_hash": raw_hash, "artifact_hash": artifact_hash,
-            "declared_timezone": timezone}
+            "declared_timezone": timezone, "endpoint": "https://example.invalid/chain",
+            "request_parameters": {"ticker": "IWM", "day": "2026-08-14"},
+            "spot_timestamp": "2026-08-14T10:00:00Z", "chain_timestamp": source,
+            "same_day_cluster": {"cluster_id": "2026-08-14", "calendar_day": "2026-08-14",
+                                  "tickers": ["IWM"], "aggregation_rule": "preserve_ticker_values_v1"}}
 
 
 def _registry(unit, payload=b"verified canonical payload"):
     import hashlib
     unit["raw_payload_hash"] = hashlib.sha256(payload).hexdigest()
-    manifest = {"candidate_key": "IWM|2026-08-14", "raw_payload_hash": unit["raw_payload_hash"], "status": "PASS", "imputed": False}
+    manifest = {key: unit[key] for key in (
+        "candidate_key", "status", "raw_payload_hash", "endpoint", "request_parameters",
+        "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
+        "breach_window_start_prov", "source_hashes", "same_day_cluster",
+        "iv_before_ts", "iv_before_value", "iv_source_value", "delta_iv_aggregation",
+        "delta_iv_aggregation_version")}
     unit["artifact_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
             "raw_payload_hash": unit["raw_payload_hash"], "artifact_manifest": manifest,
@@ -231,6 +244,44 @@ def test_valid_registered_provenance_is_causally_eligible():
     unit = _causal_unit(source="2026-08-14T10:00:00-04:00", breach="2026-08-14T19:00:00Z")
     result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
     assert result["causal_status"] == "CAUSAL_ELIGIBLE"
+
+
+@pytest.mark.parametrize("field", ["endpoint", "request_parameters", "spot_timestamp", "chain_timestamp", "iv_source_ts", "breach_window_start_prov"])
+def test_causal_gate_requires_complete_acquisition_provenance(field):
+    unit = _causal_unit()
+    registry = _registry(unit)
+    unit.pop(field)
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_causal_gate_rejects_forged_manifest_cross_fields():
+    unit = _causal_unit()
+    registry = _registry(unit)
+    entry = next(iter(registry.values()))
+    entry["artifact_manifest"]["candidate_key"] = "FORGED"
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
+
+
+@pytest.mark.parametrize("mutator", [
+    lambda u: u.pop("iv_before_ts"),
+    lambda u: u.pop("iv_source_value"),
+    lambda u: u.update(delta_iv_pre_window=0.7),
+    lambda u: u.update(delta_iv_aggregation="day_level_delta_iv"),
+    lambda u: u.update(iv_before_ts="2026-08-14T14:00:00Z"),
+    lambda u: u.update(iv_before_ts="2026-08-13T23:00:00Z"),
+])
+def test_causal_gate_rejects_scalar_or_unverifiable_delta_iv(mutator):
+    unit = _causal_unit()
+    registry = _registry(unit)
+    mutator(unit)
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_causal_gate_requires_same_day_clustering_metadata():
+    unit = _causal_unit()
+    registry = _registry(unit)
+    unit.pop("same_day_cluster")
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
 
 
 def test_declared_timezone_handles_utc_boundary_calendar_day():

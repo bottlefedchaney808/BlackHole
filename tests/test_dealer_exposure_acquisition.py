@@ -16,7 +16,7 @@ def row(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tec
     return {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte, "habitat": "NONE", "sector": sector, "candidate_source": "approved-list"}
 
 def valid_payload(prov="PRE_WINDOW", value=0.1):
-    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "declared_timezone": "UTC", "spot_timestamp": "2026-08-17T13:00:00Z", "chain_timestamp": "2026-08-17T14:00:00Z", "endpoint": "https://example.invalid/chain", "parameters": {"ticker": "AAPL"}, "source_hashes": ["a" * 64]}}}
+    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_before_ts": "2026-08-17T13:00:00Z", "iv_before_value": 0.0, "iv_source_value": value, "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1", "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "declared_timezone": "UTC", "spot_timestamp": "2026-08-17T13:00:00Z", "chain_timestamp": "2026-08-17T14:00:00Z", "endpoint": "https://example.invalid/chain", "request_parameters": {"ticker": "AAPL"}, "source_hashes": ["a" * 64]}}}
 
 def valid_probe(_):
     return {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}

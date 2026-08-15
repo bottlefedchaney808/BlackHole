@@ -123,6 +123,20 @@ malformed rights, and a falsified per-record vanna regression.
 - `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check ...` — `All checks passed!`
 - `git diff --check` — passed
 
+## Latest Task 3 provenance-boundary review fixes (2026-08-15)
+
+- `validate_causal_eligibility` now requires typed, complete acquisition provenance on every causal unit: candidate key/status, endpoint, `request_parameters`, declared timezone, spot/chain/source/breach timestamps, source hashes, raw payload hash, registry-bound artifact hash, and same-day cluster metadata. The registered manifest is checked field-by-field against the supplied unit; candidate key, status, raw payload hash, source hashes, and artifact binding cannot be forged independently.
+- Causal `delta_iv_pre_window` now requires two persisted timestamped observations (`iv_before_ts`/`iv_before_value` and `iv_source_ts`/`iv_source_value`), strict `iv_before_ts < iv_source_ts < breach_window_start_prov` ordering, same-day timestamps, aggregation identifier/version `iv_source_minus_iv_before`/`1`, and exact arithmetic equality. Scalar-only, mislabeled day-level, incorrect, and wrong-day derivations are blocked.
+- Acquisition artifacts persist the observation and aggregation fields, canonical `request_parameters`, and explicit same-day cluster metadata before recomputing the artifact manifest/hash. Opaque payload, exact keys, live gates, levels-only scope, no acquisition/live source/master/secrets boundaries remain unchanged.
+- Added regressions for missing acquisition fields/timestamps, forged manifest cross-fields, scalar-only/incorrect/wrong-day IV evidence, missing clustering metadata, and complete valid registered provenance.
+
+## Latest verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — `70 passed`
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — `All checks passed!`
+- `git diff --check` — passed
+
 ## Commit
 
 Final commit hash is reported in the handback.

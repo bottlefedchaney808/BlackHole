@@ -140,9 +140,16 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     supplied_hashes = l2.get("source_hashes", root.get("source_hashes"))
     declared_timezone = l2.get("declared_timezone", root.get("declared_timezone", unit.get("declared_timezone")))
     endpoint = l2.get("endpoint", l2.get("request_endpoint", root.get("endpoint", root.get("request_endpoint"))))
-    parameters = l2.get("parameters", l2.get("request_parameters", root.get("parameters", root.get("request_parameters"))))
+    parameters = l2.get("request_parameters", l2.get("parameters", root.get("request_parameters", root.get("parameters"))))
     spot_timestamp = l2.get("spot_timestamp", root.get("spot_timestamp"))
     chain_timestamp = l2.get("chain_timestamp", root.get("chain_timestamp"))
+    iv_before_ts = l2.get("iv_before_ts", root.get("iv_before_ts"))
+    iv_before_value = l2.get("iv_before_value", root.get("iv_before_value"))
+    iv_source_value = l2.get("iv_source_value", root.get("iv_source_value"))
+    aggregation = l2.get("delta_iv_aggregation", l2.get("aggregation_id", root.get("delta_iv_aggregation", root.get("aggregation_id"))))
+    aggregation_version = l2.get("delta_iv_aggregation_version", l2.get("aggregation_version", root.get("delta_iv_aggregation_version", root.get("aggregation_version"))))
+    cluster = l2.get("same_day_cluster", root.get("same_day_cluster"))
+    request_parameters = dict(parameters) if isinstance(parameters, Mapping) else parameters
     valid = False
     timestamp_reason = None
     if prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
@@ -161,15 +168,29 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
                 timestamp_reason = "PRE_WINDOW source timestamp must strictly precede breach"
             elif any(ts.astimezone(zone).date().isoformat() != day for ts in (source, breach, spot, chain)):
                 timestamp_reason = "PRE_WINDOW timestamps must match calendar day"
-            elif not isinstance(endpoint, str) or not endpoint.strip() or not isinstance(parameters, Mapping):
-                timestamp_reason = "acquisition endpoint and parameters are required"
+            elif not isinstance(endpoint, str) or not endpoint.strip() or not isinstance(request_parameters, Mapping):
+                timestamp_reason = "acquisition endpoint and request_parameters are required"
+            elif iv_before_ts is None or iv_before_value is None or iv_source_value is None or not aggregation or not aggregation_version:
+                timestamp_reason = "two timestamped pre-window IV observations and aggregation are required"
             else:
-                valid = True
+                before = _timestamp(iv_before_ts)
+                source_value = float(iv_source_value)
+                before_value = float(iv_before_value)
+                if before >= source or source >= breach:
+                    timestamp_reason = "pre-window IV timestamps must be ordered before breach"
+                elif before.astimezone(zone).date().isoformat() != day or not math.isfinite(source_value) or not math.isfinite(before_value):
+                    timestamp_reason = "pre-window IV observations are invalid or wrong-day"
+                elif aggregation != "iv_source_minus_iv_before" or str(aggregation_version) != "1":
+                    timestamp_reason = "unsupported pre-window IV aggregation"
+                elif not math.isclose(float(value), source_value - before_value, rel_tol=1e-12, abs_tol=1e-12):
+                    timestamp_reason = "delta_iv_pre_window does not equal registered aggregation"
+                else:
+                    valid = True
         except (TypeError, ValueError, OSError) as exc:
             timestamp_reason = str(exc)
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
     artifact = dict(unit)
-    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": dict(parameters) if isinstance(parameters, Mapping) else parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
     manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": raw_hash, "status": status, "imputed": False}
     artifact["artifact_manifest"] = manifest
     artifact["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
@@ -302,6 +323,27 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
         item["artifact_hash"] = _hash(manifest)
         units.append(item)
+    # Persist explicit same-day cluster metadata on every acquired unit before
+    # hashing the manifest; causal validation must see the clustering boundary.
+    by_day: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in units:
+        by_day[str(item["calendar_day"])].append(item)
+    for day, group in by_day.items():
+        tickers = sorted({str(item.get("ticker", "")) for item in group})
+        cluster = {"cluster_id": day, "calendar_day": day, "tickers": tickers,
+                   "aggregation_rule": "preserve_ticker_values_v1"}
+        for item in group:
+            item["same_day_cluster"] = cluster
+            if item.get("status") == "PASS":
+                manifest = {key: item[key] for key in (
+                    "candidate_key", "status", "raw_payload_hash", "endpoint", "request_parameters",
+                    "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
+                    "breach_window_start_prov", "source_hashes", "same_day_cluster", "iv_before_ts",
+                    "iv_before_value", "iv_source_value", "delta_iv_aggregation",
+                    "delta_iv_aggregation_version")}
+                item["artifact_manifest"] = manifest
+                item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
+                item["artifact_hash"] = _hash(manifest)
     generated_at = generated_at or dt.datetime.now(dt.UTC).isoformat()
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at)
     result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}

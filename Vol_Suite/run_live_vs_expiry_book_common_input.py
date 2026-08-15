@@ -345,7 +345,29 @@ def _manifest_payload_digest(entry: Mapping[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[str, Any]) -> None:
+_PROVENANCE_FIELDS = (
+    "candidate_key", "status", "endpoint", "request_parameters", "declared_timezone",
+    "spot_timestamp", "chain_timestamp", "iv_source_ts", "breach_window_start_prov",
+    "source_hashes", "raw_payload_hash", "same_day_cluster", "iv_before_ts",
+    "iv_before_value", "iv_source_value", "delta_iv_aggregation", "delta_iv_aggregation_version",
+)
+
+
+def _finite_number(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"{field} must be a finite number")
+    return float(value)
+
+
+def _aggregation_fields(unit: Mapping[str, Any]) -> tuple[str, str]:
+    aggregation = unit.get("delta_iv_aggregation", unit.get("aggregation_id"))
+    version = unit.get("delta_iv_aggregation_version", unit.get("aggregation_version"))
+    if not isinstance(aggregation, str) or not aggregation.strip() or not isinstance(version, str) or not version.strip():
+        raise ValueError("pre-window IV aggregation identifier and version are required")
+    return aggregation.strip(), version.strip()
+
+
+def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[str, Any]) -> Mapping[str, Any]:
     artifact_hash = unit.get("artifact_hash")
     raw_hash = unit.get("raw_payload_hash")
     if not isinstance(artifact_hash, str) or not SHA256_RE.fullmatch(artifact_hash):
@@ -370,19 +392,70 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
     registered = validate_source_hashes(entry.get("source_hashes"))
     if declared != registered:
         raise ValueError("source_hashes do not match registry provenance")
+    for field in _PROVENANCE_FIELDS:
+        if field not in unit or unit[field] in (None, "", []):
+            raise ValueError(f"complete acquisition provenance requires {field}")
+        if field not in manifest:
+            raise ValueError(f"artifact manifest lacks {field}")
+        if field == "source_hashes":
+            if validate_source_hashes(manifest[field]) != declared:
+                raise ValueError("artifact manifest source_hashes do not match unit")
+        elif manifest[field] != unit[field]:
+            raise ValueError(f"artifact manifest {field} does not match unit")
+    if manifest.get("candidate_key") != unit.get("candidate_key") or manifest.get("status") != unit.get("status"):
+        raise ValueError("artifact manifest candidate_key/status do not match unit")
+    if not isinstance(unit.get("candidate_key"), str) or not unit["candidate_key"].strip():
+        raise ValueError("candidate_key must be a non-empty string")
+    if not isinstance(unit.get("status"), str) or unit["status"] != "PASS":
+        raise ValueError("status must be PASS for causal eligibility")
+    if not isinstance(unit.get("endpoint"), str) or not unit["endpoint"].strip():
+        raise ValueError("endpoint must be a non-empty string")
+    if not isinstance(unit.get("request_parameters"), Mapping):
+        raise TypeError("request_parameters must be a mapping")
+    return manifest
+
+
+def _validate_delta_iv(unit: Mapping[str, Any], zone: ZoneInfo, calendar_day: str, breach: dt.datetime) -> None:
+    before = _parse_timestamp(unit["iv_before_ts"])
+    source = _parse_timestamp(unit["iv_source_ts"])
+    if before >= source or source >= breach:
+        raise ValueError("pre-window IV timestamps must be ordered before breach")
+    if breach.astimezone(zone).date().isoformat() != calendar_day:
+        raise ValueError("breach_window_start_prov does not match calendar_day in declared timezone")
+    for label, timestamp in (("iv_before_ts", before), ("iv_source_ts", source)):
+        if timestamp.astimezone(zone).date().isoformat() != calendar_day:
+            raise ValueError(f"{label} does not match calendar_day in declared timezone")
+    before_value = _finite_number(unit["iv_before_value"], "iv_before_value")
+    source_value = _finite_number(unit["iv_source_value"], "iv_source_value")
+    delta = _finite_number(unit["delta_iv_pre_window"], "delta_iv_pre_window")
+    if unit.get("pre_window_value") is not None and not math.isclose(_finite_number(unit["pre_window_value"], "pre_window_value"), delta, rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError("pre_window_value does not match delta_iv_pre_window")
+    aggregation, version = _aggregation_fields(unit)
+    if aggregation != "iv_source_minus_iv_before" or version != "1":
+        raise ValueError("unsupported or unregistered pre-window IV aggregation")
+    expected = source_value - before_value
+    if not math.isclose(delta, expected, rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError("delta_iv_pre_window does not equal registered IV aggregation")
+
+
+def _validate_cluster(unit: Mapping[str, Any], calendar_day: str) -> None:
+    cluster = unit.get("same_day_cluster")
+    if not isinstance(cluster, Mapping):
+        raise TypeError("same-day clustering metadata is required")
+    if cluster.get("calendar_day") != calendar_day or not isinstance(cluster.get("cluster_id"), str):
+        raise ValueError("same-day cluster metadata does not match calendar_day")
+    tickers = cluster.get("tickers")
+    if not isinstance(tickers, list) or not tickers or unit.get("ticker") not in tickers:
+        raise ValueError("same-day cluster tickers must include unit ticker")
+    if cluster.get("aggregation_rule") != "preserve_ticker_values_v1":
+        raise ValueError("same-day cluster aggregation rule is not registered")
 
 
 def validate_causal_eligibility(
     units: Iterable[Mapping[str, Any]], *, intended_units: int | None = None,
     artifact_registry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate the strict, all-unit causal provenance boundary.
-
-    Hash syntax is not provenance. Every unit must bind to a caller-supplied
-    verified artifact registry whose manifest payload hashes to the unit's
-    raw payload digest. The registry is the explicit acquisition/harness
-    boundary; this function does not treat arbitrary hashes as evidence.
-    """
+    """Fail closed unless complete registered acquisition and derivation evidence exists."""
     rows = [dict(unit) for unit in units]
     expected = len(rows) if intended_units is None else intended_units
     reasons: list[dict[str, Any]] = []
@@ -394,14 +467,10 @@ def validate_causal_eligibility(
                 raise ValueError(f"status={unit.get('status')}")
             if str(unit.get("pre_window_provenance", "")).upper() != "PRE_WINDOW":
                 raise ValueError("provenance is not PRE_WINDOW")
-            if unit.get("pre_window_value") is None or unit.get("delta_iv_pre_window") is None:
-                raise ValueError("delta_iv_pre_window is missing")
             if not isinstance(artifact_registry, Mapping):
                 raise TypeError("verified artifact registry is required")
             _validate_registered_provenance(unit, artifact_registry)
-            source = _parse_timestamp(unit.get("iv_source_ts"))
-            breach = _parse_timestamp(unit.get("breach_window_start_prov"))
-            declared_tz = unit.get("declared_timezone", unit.get("timezone"))
+            declared_tz = unit.get("declared_timezone")
             if not isinstance(declared_tz, str) or not declared_tz:
                 raise ValueError("declared_timezone is required")
             try:
@@ -409,12 +478,17 @@ def validate_causal_eligibility(
             except Exception as exc:
                 raise ValueError("declared_timezone is invalid") from exc
             calendar_day = unit.get("calendar_day")
-            if not isinstance(calendar_day, str) or source.astimezone(zone).date().isoformat() != calendar_day:
-                raise ValueError("iv_source_ts does not match calendar_day in declared timezone")
-            if breach.astimezone(zone).date().isoformat() != calendar_day:
-                raise ValueError("breach_window_start_prov does not match calendar_day in declared timezone")
-            if source >= breach:
+            if not isinstance(calendar_day, str):
+                raise TypeError("calendar_day is required")
+            breach = _parse_timestamp(unit["breach_window_start_prov"])
+            for field in ("spot_timestamp", "chain_timestamp"):
+                timestamp = _parse_timestamp(unit[field])
+                if timestamp.astimezone(zone).date().isoformat() != calendar_day:
+                    raise ValueError(f"{field} does not match calendar_day in declared timezone")
+            _validate_delta_iv(unit, zone, calendar_day, breach)
+            if _parse_timestamp(unit["iv_source_ts"]) >= breach:
                 raise ValueError("iv_source_ts must strictly precede breach")
+            _validate_cluster(unit, calendar_day)
         except (TypeError, ValueError, OSError, OverflowError) as exc:
             reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "reason": str(exc)})
     return {"causal_status": "CAUSAL_ELIGIBLE" if not reasons else "CAUSAL_BLOCKED",
