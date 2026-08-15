@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .dealer_exposure_universe import DTE_STRATA, EVENT_HABITATS, held_pairs_from_paths
+from .provenance_contract import SHA256_RE, canonical_json_bytes, validate_source_hashes
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -121,9 +122,6 @@ def _extract_l2(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 _ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
-_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
-
-
 def _timestamp(value: Any) -> dt.datetime:
     """Parse a timezone-qualified ISO-8601 instant and normalize it to UTC."""
     if not isinstance(value, str) or not _ISO_TIMESTAMP_RE.fullmatch(value):
@@ -132,44 +130,50 @@ def _timestamp(value: Any) -> dt.datetime:
     return dt.datetime.fromisoformat(text).astimezone(dt.UTC)
 
 
-def _validate_source_hashes(value: Any) -> tuple[str, ...]:
-    """Require non-placeholder SHA-256 provenance identifiers."""
-    if not isinstance(value, (list, tuple)) or not value:
-        raise ValueError("source_hashes must be a non-empty list of SHA-256 hashes")
-    hashes = tuple(str(item).lower() for item in value)
-    if any(not _SHA256_RE.fullmatch(item) for item in hashes):
-        raise ValueError("source_hashes must contain 64-character hexadecimal SHA-256 hashes")
-    return hashes
-
-
 def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     raw_hash = _hash(payload)
     l2 = _extract_l2(payload) if isinstance(payload, Mapping) else {}
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")
     source_ts, breach_ts = l2.get("iv_source_ts"), l2.get("breach_window_start_prov")
-    supplied_hashes = l2.get("source_hashes", payload.get("source_hashes") if isinstance(payload, Mapping) else None)
+    root = payload if isinstance(payload, Mapping) else {}
+    supplied_hashes = l2.get("source_hashes", root.get("source_hashes"))
+    declared_timezone = l2.get("declared_timezone", root.get("declared_timezone", unit.get("declared_timezone")))
+    endpoint = l2.get("endpoint", l2.get("request_endpoint", root.get("endpoint", root.get("request_endpoint"))))
+    parameters = l2.get("parameters", l2.get("request_parameters", root.get("parameters", root.get("request_parameters"))))
+    spot_timestamp = l2.get("spot_timestamp", root.get("spot_timestamp"))
+    chain_timestamp = l2.get("chain_timestamp", root.get("chain_timestamp"))
     valid = False
     timestamp_reason = None
     if prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
         try:
-            _validate_source_hashes(supplied_hashes)
+            validate_source_hashes(supplied_hashes)
             source = _timestamp(source_ts)
             breach = _timestamp(breach_ts)
+            spot = _timestamp(spot_timestamp)
+            chain = _timestamp(chain_timestamp)
+            if not isinstance(declared_timezone, str) or not declared_timezone:
+                raise ValueError("declared_timezone is required")
+            from zoneinfo import ZoneInfo
+            zone = ZoneInfo(declared_timezone)
             day = _date(unit.get("calendar_day"))
             if source >= breach:
                 timestamp_reason = "PRE_WINDOW source timestamp must strictly precede breach"
-            elif source.date().isoformat() != day or breach.date().isoformat() != day:
+            elif any(ts.astimezone(zone).date().isoformat() != day for ts in (source, breach, spot, chain)):
                 timestamp_reason = "PRE_WINDOW timestamps must match calendar day"
+            elif not isinstance(endpoint, str) or not endpoint.strip() or not isinstance(parameters, Mapping):
+                timestamp_reason = "acquisition endpoint and parameters are required"
             else:
                 valid = True
-        except ValueError as exc:
+        except (TypeError, ValueError, OSError) as exc:
             timestamp_reason = str(exc)
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
     artifact = dict(unit)
-    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
-    artifact["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": status, "imputed": False}, sort_keys=True, default=str, allow_nan=False)
-    artifact["artifact_hash"] = _hash(artifact["artifact_basis"])
+    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": dict(parameters) if isinstance(parameters, Mapping) else parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": raw_hash, "status": status, "imputed": False}
+    artifact["artifact_manifest"] = manifest
+    artifact["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
+    artifact["artifact_hash"] = _hash(manifest)
     artifact["reason"] = None if status == "PASS" else (timestamp_reason or ("missing_or_associational_prewindow" if status == "ASSOCIATIONAL" else "hard_gap"))
     return artifact
 
@@ -180,10 +184,21 @@ def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_unit
     rows.sort(key=lambda u: (str(u.get("calendar_day", "")), str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
     for u in rows:
         if u.get("status") not in _STATUS: raise AcquisitionGateError("invalid unit status")
-        if not isinstance(u.get("raw_payload_hash"), str) or not _SHA256_RE.fullmatch(u["raw_payload_hash"]): raise AcquisitionGateError("provenance census requires semantic SHA-256 payload hashes")
+        if not isinstance(u.get("raw_payload_hash"), str) or not SHA256_RE.fullmatch(u["raw_payload_hash"]): raise AcquisitionGateError("provenance census requires semantic SHA-256 payload hashes")
         if u.get("source_hashes") is not None:
-            try: _validate_source_hashes(u["source_hashes"])
+            try: validate_source_hashes(u["source_hashes"])
             except ValueError as exc: raise AcquisitionGateError(str(exc)) from exc
+        if u.get("status") == "PASS" and str(u.get("pre_window_provenance", "")).upper() == _PREWINDOW:
+            required = ("source_hashes", "iv_source_ts", "breach_window_start_prov", "declared_timezone", "endpoint", "parameters", "spot_timestamp", "chain_timestamp", "artifact_manifest", "artifact_hash")
+            missing = [key for key in required if u.get(key) in (None, "", [])]
+            if missing:
+                raise AcquisitionGateError(f"causal PASS unit missing required provenance: {', '.join(missing)}")
+            try:
+                validate_source_hashes(u["source_hashes"])
+                if _hash(u["artifact_manifest"]) != str(u["artifact_hash"]).lower():
+                    raise ValueError("artifact_hash does not match canonical artifact manifest")
+            except (TypeError, ValueError) as exc:
+                raise AcquisitionGateError(str(exc)) from exc
     n = sum(u.get("status") == "PASS" and u.get("pre_window_provenance") == _PREWINDOW for u in rows)
     coverage = n / intended_units if intended_units else 1.0
     gate = len(rows) == intended_units and coverage == 1.0
@@ -282,8 +297,10 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 payload, status, reason = {"error": str(exc)}, "HARD_GAP", str(exc)[:200]
                 item = _unit_from_payload(unit, payload)
         item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
-        item["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": status, "imputed": False}, sort_keys=True, default=str)
-        item["artifact_hash"] = _hash(item["artifact_basis"])
+        manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": item["raw_payload_hash"], "status": status, "imputed": False}
+        item["artifact_manifest"] = manifest
+        item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
+        item["artifact_hash"] = _hash(manifest)
         units.append(item)
     generated_at = generated_at or dt.datetime.now(dt.UTC).isoformat()
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at)

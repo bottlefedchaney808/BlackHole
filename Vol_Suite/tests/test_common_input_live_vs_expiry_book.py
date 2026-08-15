@@ -1,3 +1,4 @@
+import json
 import math
 from types import SimpleNamespace
 
@@ -184,8 +185,10 @@ def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026
 def _registry(unit, payload=b"verified canonical payload"):
     import hashlib
     unit["raw_payload_hash"] = hashlib.sha256(payload).hexdigest()
+    manifest = {"candidate_key": "IWM|2026-08-14", "raw_payload_hash": unit["raw_payload_hash"], "status": "PASS", "imputed": False}
+    unit["artifact_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
-            "raw_payload_hash": unit["raw_payload_hash"],
+            "raw_payload_hash": unit["raw_payload_hash"], "artifact_manifest": manifest,
             "source_hashes": unit["source_hashes"], "payload_bytes": payload}}
 
 
@@ -230,6 +233,12 @@ def test_valid_registered_provenance_is_causally_eligible():
     assert result["causal_status"] == "CAUSAL_ELIGIBLE"
 
 
+def test_declared_timezone_handles_utc_boundary_calendar_day():
+    unit = _causal_unit(source="2026-08-15T03:30:00Z", breach="2026-08-15T03:45:00Z")
+    result = validate_causal_eligibility([unit], artifact_registry=_registry(unit))
+    assert result["causal_status"] == "CAUSAL_ELIGIBLE"
+
+
 def test_compare_blocks_forged_registered_provenance():
     live, new = _engines()
     unit = _causal_unit()
@@ -239,3 +248,22 @@ def test_compare_blocks_forged_registered_provenance():
         compare_common_input(_input(), live, new, provenance_units=[unit], artifact_registry=registry)
     assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"
     assert exc.value.invalid_result["causal_status"] == "CAUSAL_BLOCKED"
+
+
+@pytest.mark.parametrize("field", ["spot", "strike", "iv", "oi"])
+def test_canonical_input_rejects_non_finite_numbers(field):
+    rows = [{"strike": 210, "right": "P", "iv": 0.24, "oi": 1000}]
+    spot = 220.0
+    if field == "spot":
+        spot = float("nan")
+    else:
+        rows[0][field] = float("inf")
+    with pytest.raises(ValueError):
+        make_canonical_input("IWM", "20260814", EXPIRY, 35, spot, "2026-08-14T13:00:00Z", rows, ["a" * 64])
+
+
+def test_canonical_json_refuses_nan_and_inf():
+    inp = _input()
+    object.__setattr__(inp, "spot", float("inf"))
+    with pytest.raises(ValueError, match="non-finite"):
+        inp.canonical_bytes()

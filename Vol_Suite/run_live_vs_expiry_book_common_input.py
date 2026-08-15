@@ -15,12 +15,24 @@ import hashlib
 import json
 import math
 import os
-import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
+
+try:
+    from .provenance_contract import (
+        SHA256_RE,
+        canonical_json_bytes,
+        validate_source_hashes,
+    )
+except ImportError:
+    from provenance_contract import (
+        SHA256_RE,
+        canonical_json_bytes,
+        validate_source_hashes,
+    )
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -53,14 +65,16 @@ class CanonicalInput:
     def __post_init__(self) -> None:
         if not self.ticker or not self.expiry or not self.calendar_day:
             raise ValueError("ticker, calendar_day, and expiry are required")
-        if self.dte <= 0 or self.spot <= 0 or not self.rows:
+        if self.dte <= 0 or not math.isfinite(float(self.spot)) or self.spot <= 0 or not self.rows:
             raise ValueError("positive DTE/spot and at least one row are required")
         if len({(r.strike, r.right) for r in self.rows}) != len(self.rows):
             raise ValueError("duplicate strike/right rows are not canonical")
-        if any(r.right not in {"C", "P"} or r.iv <= 0 or r.oi < 0 for r in self.rows):
+        if any(r.right not in {"C", "P"} or not math.isfinite(float(r.strike)) or r.strike <= 0 or not math.isfinite(float(r.iv)) or r.iv <= 0 or not math.isfinite(float(r.oi)) or r.oi < 0 for r in self.rows):
             raise ValueError("rows contain invalid right, IV, or OI")
-        if not self.source_hashes or any(not re.fullmatch(r"[0-9a-fA-F]{64}", str(item)) for item in self.source_hashes):
-            raise ValueError("source_hashes must contain 64-character hexadecimal SHA-256 hashes")
+        try:
+            validate_source_hashes(self.source_hashes)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         try:
             _parse_timestamp(self.iv_source_ts)
         except ValueError as exc:
@@ -73,7 +87,10 @@ class CanonicalInput:
         return result
 
     def canonical_bytes(self) -> bytes:
-        return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":")).encode()
+        try:
+            return canonical_json_bytes(self.as_dict())
+        except (TypeError, ValueError) as exc:
+            raise ValueError("canonical input contains non-finite or non-JSON values") from exc
 
     @property
     def input_hash(self) -> str:
@@ -120,11 +137,15 @@ def make_canonical_input(
     iv_source_ts: str, rows: Iterable[Mapping[str, Any]],
     source_hashes: Iterable[str], chain_source: str = "offline-canonical",
 ) -> CanonicalInput:
-    canonical_rows = tuple(sorted(
-        (CanonicalRow(float(r["strike"]), r["right"],
-                      float(r.get("iv", r.get("implied_vol"))), int(r["oi"]))
-         for r in rows), key=lambda r: (r.strike, r.right)))
-    return CanonicalInput(ticker, calendar_day, expiry, int(dte), float(spot),
+    try:
+        canonical_rows = tuple(sorted(
+            (CanonicalRow(float(r["strike"]), r["right"],
+                          float(r.get("iv", r.get("implied_vol"))), int(r["oi"]))
+             for r in rows), key=lambda r: (r.strike, r.right)))
+        canonical_spot = float(spot)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("canonical input contains invalid numeric fields") from exc
+    return CanonicalInput(ticker, calendar_day, expiry, int(dte), canonical_spot,
                           iv_source_ts, canonical_rows, tuple(sorted(source_hashes)),
                           chain_source)
 
@@ -296,12 +317,6 @@ def _default_new_runner(payload: CanonicalPayload) -> Any:
     return result
 
 
-def _validate_source_hashes(value: Any) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)) or not value or any(not re.fullmatch(r"[0-9a-fA-F]{64}", str(item)) for item in value):
-        raise ValueError("source_hashes must contain non-empty SHA-256 hashes")
-    return tuple(str(item).lower() for item in value)
-
-
 def _parse_timestamp(value: Any) -> dt.datetime:
     """Parse an aware ISO-8601 timestamp, accepting every valid numeric offset."""
     if not isinstance(value, str):
@@ -333,9 +348,9 @@ def _manifest_payload_digest(entry: Mapping[str, Any]) -> str:
 def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[str, Any]) -> None:
     artifact_hash = unit.get("artifact_hash")
     raw_hash = unit.get("raw_payload_hash")
-    if not isinstance(artifact_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", artifact_hash):
+    if not isinstance(artifact_hash, str) or not SHA256_RE.fullmatch(artifact_hash):
         raise ValueError("artifact_hash must identify a verified registry entry")
-    if not isinstance(raw_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", raw_hash):
+    if not isinstance(raw_hash, str) or not SHA256_RE.fullmatch(raw_hash):
         raise ValueError("raw_payload_hash is required and must be SHA-256")
     entry = registry.get(artifact_hash)
     if not isinstance(entry, Mapping):
@@ -346,8 +361,13 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
         raise ValueError("raw_payload_hash does not match registry")
     if _manifest_payload_digest(entry) != raw_hash.lower():
         raise ValueError("raw_payload_hash does not match canonical registry payload")
-    declared = _validate_source_hashes(unit.get("source_hashes"))
-    registered = _validate_source_hashes(entry.get("source_hashes"))
+    manifest = entry.get("artifact_manifest", entry.get("manifest"))
+    if not isinstance(manifest, Mapping):
+        raise TypeError("registry entry lacks canonical artifact manifest")
+    if hashlib.sha256(canonical_json_bytes(manifest)).hexdigest() != artifact_hash.lower():
+        raise ValueError("artifact_hash does not match canonical registry manifest")
+    declared = validate_source_hashes(unit.get("source_hashes"))
+    registered = validate_source_hashes(entry.get("source_hashes"))
     if declared != registered:
         raise ValueError("source_hashes do not match registry provenance")
 
@@ -395,7 +415,7 @@ def validate_causal_eligibility(
                 raise ValueError("breach_window_start_prov does not match calendar_day in declared timezone")
             if source >= breach:
                 raise ValueError("iv_source_ts must strictly precede breach")
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OSError, OverflowError) as exc:
             reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "reason": str(exc)})
     return {"causal_status": "CAUSAL_ELIGIBLE" if not reasons else "CAUSAL_BLOCKED",
             "status": "VALID" if not reasons else "COMPARISON_INVALID", "n": len(rows), "N": expected,

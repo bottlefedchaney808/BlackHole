@@ -16,7 +16,7 @@ def row(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tec
     return {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte, "habitat": "NONE", "sector": sector, "candidate_source": "approved-list"}
 
 def valid_payload(prov="PRE_WINDOW", value=0.1):
-    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "source_hashes": ["a" * 64]}}}
+    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "declared_timezone": "UTC", "spot_timestamp": "2026-08-17T13:00:00Z", "chain_timestamp": "2026-08-17T14:00:00Z", "endpoint": "https://example.invalid/chain", "parameters": {"ticker": "AAPL"}, "source_hashes": ["a" * 64]}}}
 
 def valid_probe(_):
     return {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}
@@ -62,6 +62,15 @@ def test_sequential_pass_hashes_and_same_day_cluster():
     assert all(u["status"] == "PASS" and u["raw_payload_hash"] and u["artifact_hash"] and not u["imputed"] for u in result["units"])
     assert result["same_day_clusters"]["2026-08-17"]["tickers"] == ["AAPL", "MSFT"]
     assert result["census"]["pre_window_n"] == result["census"]["pre_window_N"] == 2
+    required = {"endpoint", "parameters", "spot_timestamp", "chain_timestamp", "declared_timezone", "artifact_manifest"}
+    assert all(required <= set(unit) for unit in result["units"])
+
+
+def test_census_rejects_manually_supplied_causal_pass_without_acquisition_provenance():
+    unit = {"calendar_day": "2026-08-17", "ticker": "AAPL", "status": "PASS",
+            "pre_window_provenance": "PRE_WINDOW", "raw_payload_hash": "a" * 64}
+    with pytest.raises(AcquisitionGateError, match="required provenance"):
+        build_provenance_census([unit], intended_units=1)
 
 def test_no_imputation_and_associational_status():
     result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: {"record": {}}, dry_run=False, approval=True)

@@ -108,6 +108,21 @@ malformed rights, and a falsified per-record vanna regression.
 - `py -3.12 -m ruff check Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py` — `All checks passed!`
 - `git diff --check` — passed
 
+## Review follow-up fixes (2026-08-15)
+
+- Added shared `Vol_Suite/provenance_contract.py` so acquisition and comparison use one source-hash validator and canonical JSON serializer.
+- Every acquired unit now persists endpoint, request parameters, declared timezone, spot timestamp, chain timestamp, source/breach timestamps, hashes, and a canonical artifact manifest. Artifact hashes are recomputed from that manifest; malformed causal PASS/PRE_WINDOW units are rejected by the census, so manually supplied PASS records cannot bypass acquisition provenance.
+- Calendar-day checks now use the declared `ZoneInfo` consistently for source, breach, spot, and chain timestamps. Source/breach/spot/chain timestamps must be timezone-qualified; UTC-boundary regression coverage confirms local-day matching.
+- `CanonicalInput` rejects non-finite spot/strike/IV/OI and canonical JSON serialization uses `allow_nan=False`; malformed artifacts return structured causal invalidity reasons.
+- Existing opaque payload/attestation, exact-key coverage, live accumulation, levels-only comparison, same-day clustering, no-network, no-acquisition, and no live source/master/secrets boundaries remain unchanged.
+
+## Verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — `56 passed`
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check ...` — `All checks passed!`
+- `git diff --check` — passed
+
 ## Commit
 
 Final commit hash is reported in the handback.
