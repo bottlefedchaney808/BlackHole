@@ -372,7 +372,73 @@ _PROVENANCE_FIELDS = (
     "spot_timestamp", "chain_timestamp", "iv_source_ts", "breach_window_start_prov",
     "source_hashes", "raw_payload_hash", "same_day_cluster", "iv_before_ts",
     "iv_before_value", "iv_source_value", "delta_iv_aggregation", "delta_iv_aggregation_version",
+    "expiry", "dte", "imputed", "no_imputation",
 )
+
+
+def _validate_no_imputation(unit: Mapping[str, Any]) -> None:
+    if unit.get("imputed") is not False:
+        raise ValueError("causal eligibility requires imputed=false")
+    if unit.get("no_imputation") is not True:
+        raise ValueError("causal eligibility requires no_imputation=true")
+
+
+def _identity_day(value: Any) -> str:
+    text = str(value)
+    if len(text) == 8 and text.isdigit():
+        text = f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    try:
+        return dt.date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise ValueError("calendar_day is not a valid identity date") from exc
+
+
+def _validate_provenance_identity(unit: Mapping[str, Any], inp: CanonicalInput) -> None:
+    expected = {
+        "ticker": inp.ticker,
+        "expiry": inp.expiry,
+        "dte": inp.dte,
+        "canonical_input_hash": inp.input_hash,
+    }
+    for field, value in expected.items():
+        if unit.get(field) != value:
+            raise ValueError(f"provenance {field} does not match canonical input")
+    if _identity_day(unit.get("calendar_day")) != _identity_day(inp.calendar_day):
+        raise ValueError("provenance calendar_day does not match canonical input")
+    cluster = unit.get("same_day_cluster")
+    if not isinstance(cluster, Mapping):
+        raise TypeError("provenance same_day_cluster is required")
+    if (_identity_day(cluster.get("cluster_id")) != _identity_day(inp.calendar_day)
+            or _identity_day(cluster.get("calendar_day")) != _identity_day(inp.calendar_day)):
+        raise ValueError("provenance cluster identity does not match canonical input day")
+    tickers = cluster.get("tickers")
+    if not isinstance(tickers, list) or inp.ticker not in tickers:
+        raise ValueError("provenance cluster identity does not include canonical ticker")
+
+
+def _duplicate_provenance_reasons(units: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    reasons: list[dict[str, Any]] = []
+    seen_candidate: dict[Any, int] = {}
+    seen_identity: dict[tuple[Any, ...], int] = {}
+    for index, unit in enumerate(units):
+        candidate = unit.get("candidate_key")
+        if candidate in seen_candidate:
+            reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"),
+                            "reason": "duplicate candidate_key/provenance unit",
+                            "candidate_key": candidate, "first_index": seen_candidate[candidate], "index": index})
+        else:
+            seen_candidate[candidate] = index
+        cluster = unit.get("same_day_cluster")
+        cluster_id = cluster.get("cluster_id") if isinstance(cluster, Mapping) else None
+        identity = (unit.get("calendar_day"), unit.get("ticker"), unit.get("expiry"),
+                    unit.get("dte"), cluster_id)
+        if identity in seen_identity:
+            reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"),
+                            "reason": "duplicate same-day cluster membership/provenance unit",
+                            "first_index": seen_identity[identity], "index": index})
+        else:
+            seen_identity[identity] = index
+    return reasons
 
 
 def _finite_number(value: Any, field: str) -> float:
@@ -396,6 +462,7 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
         raise ValueError("artifact_hash must identify a verified registry entry")
     if not isinstance(raw_hash, str) or not SHA256_RE.fullmatch(raw_hash):
         raise ValueError("raw_payload_hash is required and must be SHA-256")
+    _validate_no_imputation(unit)
     entry = registry.get(artifact_hash)
     if not isinstance(entry, Mapping):
         raise TypeError("artifact_hash is not bound to a verified registry entry")
@@ -511,7 +578,7 @@ def validate_causal_eligibility(
                 "coverage": 0.0,
                 "reasons": [{"reason": f"invalid causal unit collection: {exc}"}]}
     expected = len(rows) if intended_units is None else intended_units
-    reasons: list[dict[str, Any]] = []
+    reasons: list[dict[str, Any]] = _duplicate_provenance_reasons(rows)
     if expected < 0 or len(rows) != expected:
         reasons.append({"reason": "unit coverage is not complete", "n": len(rows), "N": expected})
     for unit in rows:
@@ -565,7 +632,19 @@ def compare_common_input(
 ) -> dict[str, Any]:
     """Run both adapters with one immutable serialization and return diagnostics."""
     if provenance_units is not None:
-        causal = validate_causal_eligibility(provenance_units, artifact_registry=artifact_registry)
+        supplied_units = [dict(unit) for unit in provenance_units]
+        identity_reasons: list[dict[str, Any]] = []
+        for unit in supplied_units:
+            try:
+                _validate_provenance_identity(unit, inp)
+            except (TypeError, ValueError, KeyError, IndexError, AttributeError) as exc:
+                identity_reasons.append({"ticker": unit.get("ticker"),
+                                         "calendar_day": unit.get("calendar_day"),
+                                         "reason": str(exc)})
+        if identity_reasons:
+            raise ComparisonInvalid("causal provenance is detached from canonical input",
+                                    exclusions=identity_reasons, causal_blocked=True)
+        causal = validate_causal_eligibility(supplied_units, artifact_registry=artifact_registry)
         if causal["causal_status"] != "CAUSAL_ELIGIBLE":
             raise ComparisonInvalid("causal provenance is incomplete", exclusions=causal["reasons"], causal_blocked=True)
     live_runner = live_runner or _default_live_runner

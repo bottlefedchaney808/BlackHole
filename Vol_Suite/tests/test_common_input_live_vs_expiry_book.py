@@ -187,6 +187,8 @@ def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026
             "declared_timezone": timezone, "endpoint": "https://example.invalid/chain",
             "request_parameters": {"ticker": "IWM", "day": "2026-08-14"},
             "spot_timestamp": "2026-08-14T10:00:00Z", "chain_timestamp": source,
+            "expiry": EXPIRY, "dte": 35, "canonical_input_hash": _input().input_hash,
+            "imputed": False, "no_imputation": True,
             "same_day_cluster": {"cluster_id": "2026-08-14", "calendar_day": "2026-08-14",
                                   "tickers": ["IWM"], "n_tickers": 1,
                                   "aggregation_rule": "preserve_ticker_values_v1"}}
@@ -200,7 +202,8 @@ def _registry(unit, payload=b"verified canonical payload"):
         "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
         "breach_window_start_prov", "source_hashes", "same_day_cluster",
         "iv_before_ts", "iv_before_value", "iv_source_value", "delta_iv_aggregation",
-        "delta_iv_aggregation_version")}
+        "delta_iv_aggregation_version", "expiry", "dte", "canonical_input_hash",
+        "imputed", "no_imputation")}
     unit["artifact_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
             "raw_payload_hash": unit["raw_payload_hash"], "artifact_manifest": manifest,
@@ -418,3 +421,51 @@ def test_runner_exception_is_structured_comparison_invalid():
     with pytest.raises(ComparisonInvalid, match="live runner failed") as exc:
         compare_common_input(_input(), raising_runner, new)
     assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"
+
+
+def test_compare_accepts_fully_bound_provenance_unit():
+    live, new = _engines()
+    unit = _causal_unit()
+    assert compare_common_input(_input(), live, new, provenance_units=[unit], artifact_registry=_registry(unit))["status"] == "VALID"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("ticker", "AAPL"), ("calendar_day", "2026-08-15"),
+    ("expiry", "20261016"), ("dte", 63),
+    ("canonical_input_hash", "d" * 64),
+])
+def test_compare_blocks_provenance_detached_from_canonical_identity(field, value):
+    live, new = _engines()
+    unit = _causal_unit()
+    registry = _registry(unit)
+    unit[field] = value
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new, provenance_units=[unit], artifact_registry=registry)
+    assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"
+    assert exc.value.invalid_result["causal_status"] == "CAUSAL_BLOCKED"
+
+
+@pytest.mark.parametrize("field,value", [("imputed", True), ("no_imputation", False), ("no_imputation", None)])
+def test_causal_gate_rejects_imputed_or_missing_no_imputation_flags(field, value):
+    unit = _causal_unit()
+    registry = _registry(unit)
+    unit[field] = value
+    assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_causal_gate_rejects_duplicate_candidate_and_provenance_units():
+    first = _causal_unit()
+    second = _causal_unit()
+    registry = _registry(first)
+    result = validate_causal_eligibility([first, second], intended_units=2, artifact_registry=registry)
+    assert result["causal_status"] == "CAUSAL_BLOCKED"
+    assert any("duplicate" in reason["reason"] for reason in result["reasons"])
+
+
+def test_registry_rejects_post_registration_expiry_or_dte_mutation():
+    for field, value in (("expiry", "20261016"), ("dte", 63)):
+        unit = _causal_unit()
+        registry = _registry(unit)
+        unit[field] = value
+        result = validate_causal_eligibility([unit], artifact_registry=registry)
+        assert result["causal_status"] == "CAUSAL_BLOCKED"

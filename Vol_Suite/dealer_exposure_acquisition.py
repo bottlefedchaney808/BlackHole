@@ -191,7 +191,9 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
     artifact = dict(unit)
     artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
-    manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": raw_hash, "status": status, "imputed": False}
+    manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": raw_hash, "status": status,
+                "expiry": unit.get("expiry"), "dte": unit.get("dte"),
+                "imputed": False, "no_imputation": True}
     artifact["artifact_manifest"] = manifest
     artifact["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
     artifact["artifact_hash"] = _hash(manifest)
@@ -305,7 +307,9 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 item = _unit_from_payload(unit, payload)
         item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
         payloads[unit["candidate_key"]] = payload
-        manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": item["raw_payload_hash"], "status": status, "imputed": False}
+        manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": item["raw_payload_hash"], "status": status,
+                    "expiry": unit.get("expiry"), "dte": unit.get("dte"),
+                    "imputed": False, "no_imputation": True}
         item["artifact_manifest"] = manifest
         item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
         item["artifact_hash"] = _hash(manifest)
@@ -328,7 +332,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                     "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
                     "breach_window_start_prov", "source_hashes", "same_day_cluster", "iv_before_ts",
                     "iv_before_value", "iv_source_value", "delta_iv_aggregation",
-                    "delta_iv_aggregation_version")}
+                    "delta_iv_aggregation_version", "expiry", "dte", "imputed", "no_imputation")}
                 item["artifact_manifest"] = manifest
                 item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
                 item["artifact_hash"] = _hash(manifest)

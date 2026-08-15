@@ -184,3 +184,20 @@ No acquisition, live-model/master, or secrets files were changed.
 - `git diff --check` — passed
 
 No acquisition, live-model/master, or secrets files were changed.
+
+## Critical/Important provenance-integrity closure (2026-08-15)
+
+- `compare_common_input` now binds every supplied provenance unit to the exact canonical ticker, calendar day, expiry, DTE, canonical input SHA-256, and declared same-day cluster identity before either adapter runs; detached identity returns structured `COMPARISON_INVALID` / `CAUSAL_BLOCKED`.
+- Registry-bound provenance now includes `expiry`, `dte`, `imputed`, and `no_imputation` in `_PROVENANCE_FIELDS` and the canonical artifact manifest. Manifest/unit equality and artifact hashing reject post-registration expiry/DTE mutation.
+- Causal eligibility is explicitly no-imputation: `imputed` must be exactly `False` and `no_imputation` exactly `True`; missing or contradictory flags block eligibility.
+- Duplicate `candidate_key` units and duplicate same-day cluster memberships are rejected before coverage/census can satisfy `intended_units`.
+- Added regressions for wrong ticker/day/expiry/DTE/input hash, expiry/DTE registry mutation, imputation flags, duplicate units, and a valid fully-bound unit.
+
+## Latest verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **93 passed**
+- `python -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `uvx ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `git diff --check` — passed
+
+No acquisition, live-model/master, or secrets files were changed.
