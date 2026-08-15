@@ -118,3 +118,34 @@ def test_artifact_hash_changes_with_payload():
     a = execute_sequential_acquisition(s, fetcher=lambda _: {"x": 1}, dry_run=False, approval=True)
     b = execute_sequential_acquisition(s, fetcher=lambda _: {"x": 2}, dry_run=False, approval=True)
     assert a["units"][0]["artifact_hash"] != b["units"][0]["artifact_hash"]
+
+
+def test_prewindow_rejects_malformed_equal_later_and_cross_day_timestamps():
+    schedule = build_candidate_schedule([row()])
+    for source, breach in (("0000", "2026-08-17T15:00:00"), ("2026-08-17T15:00:00", "2026-08-17T15:00:00"), ("2026-08-17T16:00:00", "2026-08-17T15:00:00"), ("2026-08-16T14:00:00", "2026-08-17T15:00:00")):
+        payload = valid_payload()
+        payload["record"]["l2"].update(iv_source_ts=source, breach_window_start_prov=breach)
+        result = execute_sequential_acquisition(schedule, fetcher=lambda _, p=payload: p, dry_run=False, approval=True)
+        assert result["units"][0]["status"] == "ASSOCIATIONAL"
+
+
+def test_timezone_normalization_accepts_equivalent_ordering():
+    payload = valid_payload()
+    payload["record"]["l2"].update(iv_source_ts="2026-08-17T10:00:00-04:00", breach_window_start_prov="2026-08-17T19:00:00Z")
+    result = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: payload, dry_run=False, approval=True)
+    assert result["units"][0]["status"] == "PASS"
+
+
+def test_no_fetcher_is_hard_gap_and_not_executed():
+    result = execute_sequential_acquisition(build_candidate_schedule([row()]), dry_run=False, approval=True)
+    assert result["network_heavy_acquisition_executed"] is False
+    assert result["units"][0]["status"] == "HARD_GAP"
+
+
+def test_probe_schema_and_pass_only_primary_schedule():
+    from Vol_Suite.dealer_exposure_acquisition import run_availability_probes
+    schedule = build_candidate_schedule([row("AAPL"), row("MSFT")])
+    probes = run_availability_probes(schedule, probe_fetcher=lambda request: {"status": "PASS" if request["ticker"] == "AAPL" else "INELIGIBLE", "response_status": 200, "counts": {"rows": 2}, "source_counts": {"theta": 2}}, approval=True, dry_run=False)
+    assert {"request_parameters", "response_status", "response_counts", "source_counts", "probe_code_version", "probe_code_hash"} <= set(probes[0])
+    result = execute_sequential_acquisition(schedule, probe_fetcher=lambda request: {"status": "PASS" if request["ticker"] == "AAPL" else "INELIGIBLE", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}, fetcher=lambda _: valid_payload(), dry_run=False, approval=True)
+    assert [u["ticker"] for u in result["primary_schedule"]] == ["AAPL"]

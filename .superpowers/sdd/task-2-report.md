@@ -38,3 +38,24 @@ All checks passed!
 - Existing live model/config files were not modified. Existing unrelated acquisition corpora and worktree artifacts were left untouched.
 - The module records raw payload hashes in memory/result artifacts; persistence to an output directory is intentionally not automatic in dry-run mode.
 - Task 1 contracts remain unchanged.
+
+## Reviewer fix report (2026-08-15)
+- Replaced lexicographic PRE_WINDOW timestamp comparison with strict ISO-8601 parsing, UTC normalization, strict source-before-breach comparison, and calendar-day consistency checks. Malformed values, equality, later timestamps, and cross-day windows downgrade to non-PASS.
+- Acquisition without an injected heavy fetcher now remains a non-executed `HARD_GAP`; the execution flag is set only after the injected fetcher is actually invoked.
+- Added sequential lightweight availability-probe orchestration with deterministic request parameters, response status/counts, source counts, probe code version/hash, invocation/validation fields, and PASS-only primary schedule selection. Dry-run/probe-only paths never invoke probes or heavy fetchers.
+- Added explicit `generated_at` injection support for deterministic artifacts, removed the mutable recursive visitor default, and narrowed injected-adapter exception handling.
+- Added regression coverage for malformed/equal/later/cross-day/timezone timestamps, no-fetcher acquisition, probe schema, and PASS-only schedule selection.
+
+### Fix verification
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+45 passed in 0.08s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
+exit 0
+
+git diff --check
+exit 0
+```
+
+No acquisition was executed; live model/config and unrelated untracked corpora were not modified.

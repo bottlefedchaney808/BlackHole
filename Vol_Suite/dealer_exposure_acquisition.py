@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -54,12 +55,14 @@ def _held_references(paths: Iterable[str | Path]) -> dict[tuple[str, str], str]:
             except (OSError, ValueError, UnicodeDecodeError):
                 continue
             objects: list[Mapping[str, Any]] = []
-            def visit(value: Any, _objects: list[Mapping[str, Any]] = objects) -> None:
+            def visit(value: Any) -> None:
                 if isinstance(value, Mapping):
-                    _objects.append(value)
-                    for child in value.values(): visit(child)
+                    objects.append(value)
+                    for child in value.values():
+                        visit(child)
                 elif isinstance(value, list):
-                    for child in value: visit(child)
+                    for child in value:
+                        visit(child)
             visit(payload)
             for obj in objects:
                 ticker = str(obj.get("ticker", "")).strip().lstrip("$").upper()
@@ -112,22 +115,51 @@ def _extract_l2(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return l2 if isinstance(l2, Mapping) else {}
 
 
+_ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$")
+
+
+def _timestamp(value: Any) -> dt.datetime:
+    """Parse a real ISO-8601 instant and normalize it to UTC."""
+    if not isinstance(value, str) or not _ISO_TIMESTAMP_RE.fullmatch(value):
+        raise ValueError(f"invalid ISO-8601 timestamp: {value!r}")
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    parsed = dt.datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
 def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     raw_hash = _hash(payload)
     l2 = _extract_l2(payload) if isinstance(payload, Mapping) else {}
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")
     source_ts, breach_ts = l2.get("iv_source_ts"), l2.get("breach_window_start_prov")
-    valid = prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)) and source_ts and breach_ts and str(source_ts) < str(breach_ts)
+    valid = False
+    timestamp_reason = None
+    if prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
+        try:
+            source = _timestamp(source_ts)
+            breach = _timestamp(breach_ts)
+            day = _date(unit.get("calendar_day"))
+            if source >= breach:
+                timestamp_reason = "PRE_WINDOW source timestamp must strictly precede breach"
+            elif source.date().isoformat() != day or breach.date().isoformat() != day:
+                timestamp_reason = "PRE_WINDOW timestamps must match calendar day"
+            else:
+                valid = True
+        except ValueError as exc:
+            timestamp_reason = str(exc)
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
-    artifact = dict(unit); artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    artifact = dict(unit)
+    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
     artifact["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": status, "imputed": False}, sort_keys=True, default=str, allow_nan=False)
     artifact["artifact_hash"] = _hash(artifact["artifact_basis"])
-    artifact["reason"] = None if status == "PASS" else ("missing_or_associational_prewindow" if status == "ASSOCIATIONAL" else "hard_gap")
+    artifact["reason"] = None if status == "PASS" else (timestamp_reason or ("missing_or_associational_prewindow" if status == "ASSOCIATIONAL" else "hard_gap"))
     return artifact
 
 
-def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_units: int, fail_loud: bool = False) -> dict[str, Any]:
+def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_units: int, fail_loud: bool = False, generated_at: str | None = None) -> dict[str, Any]:
     if intended_units < 0: raise ValueError("intended_units cannot be negative")
     rows = [dict(u) for u in units]
     rows.sort(key=lambda u: (str(u.get("calendar_day", "")), str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
@@ -137,7 +169,7 @@ def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_unit
     n = sum(u.get("status") == "PASS" and u.get("pre_window_provenance") == _PREWINDOW for u in rows)
     coverage = n / intended_units if intended_units else 1.0
     gate = len(rows) == intended_units and coverage == 1.0
-    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "fail_loud": fail_loud, "generated_at": dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "gate_reason": "100% PRE_WINDOW coverage" if gate else f"below 100% PRE_WINDOW coverage ({n}/{intended_units})"}
+    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "fail_loud": fail_loud, "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "gate_reason": "100% PRE_WINDOW coverage" if gate else f"below 100% PRE_WINDOW coverage ({n}/{intended_units})"}
     if fail_loud and not gate: raise AcquisitionGateError(f"100% PRE_WINDOW gate failed: {n}/{intended_units}")
     return doc
 
@@ -153,36 +185,74 @@ def cluster_same_day(units: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, 
     return out
 
 
-def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None) -> dict[str, Any]:
+def _probe_request(unit: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: unit[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")}
+
+
+def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None) -> list[dict[str, Any]]:
+    """Run sequential lightweight probes; never dispatches the heavy fetcher."""
+    ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
+    if dry_run or probe_only or not approval or probe_fetcher is None:
+        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP" if probe_fetcher is None and approval and not (dry_run or probe_only) else "INELIGIBLE", "reason": "probe_not_run", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False} for u in ordered]
+    results = []
+    for unit in ordered:
+        request = _probe_request(unit)
+        try:
+            response = probe_fetcher(request)
+            if not isinstance(response, Mapping):
+                raise ValueError("probe response must be a mapping")
+            status = str(response.get("status", "HARD_GAP")).upper()
+            if status not in {"PASS", "INELIGIBLE", "HARD_GAP"}:
+                status = "HARD_GAP"
+            response_status = response.get("response_status", response.get("status_code"))
+            response_counts = dict(response.get("response_counts", response.get("counts", {})) or {})
+            source_counts = dict(response.get("source_counts", {}) or {})
+            validated = status == "PASS" and response_status is not None and bool(response_counts) and bool(source_counts)
+            results.append({"candidate_key": unit["candidate_key"], "status": status, "reason": response.get("reason"), "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True})
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True})
+    return results
+
+
+def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Admit candidates only when their corresponding validated probe is PASS."""
+    by_key = {p.get("candidate_key"): p for p in probes if p.get("status") == "PASS" and p.get("validated") is True and p.get("invoked") is True}
+    return [dict(u) for u in sorted(schedule, key=lambda x: x["candidate_key"]) if u.get("candidate_key") in by_key]
+
+
+def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None) -> dict[str, Any]:
     if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1": raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
     if not dry_run and not approval: raise AcquisitionGateError("explicit approval is required")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
+    probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash)
     units = []
     network_executed = False
     for unit in ordered:
         if unit.get("held_pair_exclusion"):
-            payload = {"mode": "held-exclusion", "candidate_key": unit["candidate_key"], "network": False}
+            payload, status, reason = {"mode": "held-exclusion", "candidate_key": unit["candidate_key"], "network": False}, "INELIGIBLE", "held_pair_exclusion"
             item = _unit_from_payload(unit, None)
-            item.update({"status": "INELIGIBLE", "reason": "held_pair_exclusion", "raw_payload_hash": _hash(payload)})
-            item["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": "INELIGIBLE", "imputed": False}, sort_keys=True)
-            item["artifact_hash"] = _hash(item["artifact_basis"])
         elif dry_run or probe_only:
-            payload = {"mode": "probe-only", "candidate_key": unit["candidate_key"], "network": False}
+            payload, status, reason = {"mode": "probe-only", "candidate_key": unit["candidate_key"], "network": False}, "INELIGIBLE", "dry_run_probe_only"
             item = _unit_from_payload(unit, None)
-            item.update({"status": "INELIGIBLE", "reason": "dry_run_probe_only", "raw_payload_hash": _hash(payload)})
-            item["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": "INELIGIBLE", "imputed": False}, sort_keys=True)
-            item["artifact_hash"] = _hash(item["artifact_basis"])
+        elif fetcher is None:
+            payload, status, reason = {"mode": "acquisition", "candidate_key": unit["candidate_key"], "network": False}, "HARD_GAP", "heavy acquisition requires an injected fetcher"
+            item = _unit_from_payload(unit, None)
         else:
             try:
-                payload = fetcher(unit) if fetcher else None
+                payload = fetcher(unit)
                 item = _unit_from_payload(unit, payload)
                 network_executed = True
-            except Exception as exc:  # noqa: BLE001 - injected network adapter must fail closed
-                item = _unit_from_payload(unit, {"error": str(exc)})
-                item.update({"status": "HARD_GAP", "reason": str(exc)[:200]})
+                status, reason = item["status"], item["reason"]
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                payload, status, reason = {"error": str(exc)}, "HARD_GAP", str(exc)[:200]
+                item = _unit_from_payload(unit, payload)
+        item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
+        item["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": status, "imputed": False}, sort_keys=True, default=str)
+        item["artifact_hash"] = _hash(item["artifact_basis"])
         units.append(item)
-    census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud)
-    return {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": False if (dry_run or probe_only) else network_executed, "no_imputation": True, "schedule": ordered, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "generated_at": dt.datetime.now(dt.UTC).isoformat()}
+    generated_at = generated_at or dt.datetime.now(dt.UTC).isoformat()
+    census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at)
+    return {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": select_primary_schedule(ordered, probes), "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "generated_at": generated_at}
 
 
-__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "execute_sequential_acquisition"]
+__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "run_availability_probes", "select_primary_schedule", "execute_sequential_acquisition"]
