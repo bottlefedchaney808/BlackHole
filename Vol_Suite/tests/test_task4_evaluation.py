@@ -67,6 +67,27 @@ def test_incomplete_provenance_registry_fails_closed():
         evaluate_task4([bad], min_days=1)
 
 
+@pytest.mark.parametrize("mutation", [
+    lambda r: r.pop("provenance"),
+    lambda r: r.update(provenance=None),
+    lambda r: r.update(provenance=[("not", "a mapping")]),
+])
+def test_missing_or_non_mapping_provenance_is_structured_invalid(mutation):
+    bad = row("2026-01-01", "SPY")
+    mutation(bad)
+    with pytest.raises(EvaluationInvalid, match="COMPARISON_INVALID.*provenance"):
+        evaluate_task4([bad], min_days=1)
+
+
+def test_explicit_associational_record_is_retained_as_noncausal_appendix():
+    record = row("2026-01-01", "SPY")
+    record["provenance"].update(causal_status="ASSOCIATIONAL", reasons=["pre-window evidence unavailable"])
+    result = evaluate_task4([record], min_days=1)
+    assert result["status"] == "VALID"
+    assert result["causal"]["status"] == "CAUSAL_BLOCKED"
+    assert result["causal"]["reason"] == "causal provenance is incomplete"
+
+
 def test_placebo_and_reverse_are_reported_without_best_lag_selection():
     result = evaluate_task4([row(f"2026-01-{i:02d}", "SPY") for i in range(1, 8)], min_days=1)
     assert set(result["falsifiers"]) >= {"placebo", "reverse_lead_lag"}

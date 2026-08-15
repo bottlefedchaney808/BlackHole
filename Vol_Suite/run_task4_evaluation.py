@@ -22,7 +22,14 @@ SHA256_HEX = 64
 
 
 class EvaluationInvalid(ValueError):
-    """Input cannot support a descriptive or causal evaluation."""
+    """Input cannot support a descriptive or causal evaluation.
+
+    ``status`` is intentionally machine-readable so callers can publish the
+    failure as a comparison-contract invalidation rather than confusing it
+    with a merely causally blocked appendix.
+    """
+
+    status = "COMPARISON_INVALID"
 
 
 def _number(value: Any, name: str) -> float:
@@ -97,7 +104,7 @@ def _registry_payload_hash(entry: Mapping[str, Any]) -> str:
 def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
     value = row.get("provenance", row.get("causal_provenance"))
     if not isinstance(value, Mapping):
-        return False
+        raise EvaluationInvalid("COMPARISON_INVALID: provenance must be a mapping")
     input_hash = _hash(value.get("input_hash"), "provenance input_hash")
     canonical_input_hash = _hash(row.get("canonical_input_hash"), "canonical input hash")
     artifact_hash = _hash(value.get("artifact_hash"), "provenance artifact_hash")
@@ -136,7 +143,19 @@ def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
             expected_value = sources
         if actual != expected_value or entry.get(field) != (list(sources) if field == "source_hashes" else expected_value):
             raise EvaluationInvalid(f"registry {field} does not bind to evaluation record")
-    return value.get("causal_status") == "CAUSAL_ELIGIBLE" and value.get("no_imputation") is True
+    if value.get("no_imputation") is not True:
+        raise EvaluationInvalid("COMPARISON_INVALID: provenance no_imputation must be true")
+    if value.get("causal_status") == "CAUSAL_ELIGIBLE":
+        return True
+    if value.get("causal_status") in {"ASSOCIATIONAL", "NON_CAUSAL"}:
+        reasons = value.get("reasons")
+        if (not isinstance(reasons, (list, tuple)) or not reasons
+                or any(not isinstance(reason, str) or not reason.strip() for reason in reasons)):
+            raise EvaluationInvalid("COMPARISON_INVALID: associational provenance reasons are required")
+        return False
+    raise EvaluationInvalid(
+        "COMPARISON_INVALID: provenance must declare CAUSAL_ELIGIBLE or explicit associational status"
+    )
 
 
 def _mean_required(rows: list[Mapping[str, Any]], field: str) -> float:

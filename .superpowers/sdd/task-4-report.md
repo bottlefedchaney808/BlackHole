@@ -71,3 +71,16 @@ Verification:
 - `git diff --check` — passed
 
 Only Task 4 evaluator, focused tests, and this report were changed; no production/live model or acquisition code was modified.
+
+## Final provenance strictness fix (2026-08-15)
+
+- Missing, `None`, or non-mapping `provenance` now raises `EvaluationInvalid` with machine-readable `status=COMPARISON_INVALID` before a record can enter `_collapse` or receive a `VALID` result.
+- Mapping provenance is still required to pass complete registry/hash identity binding and `no_imputation`; causal status must be explicitly `CAUSAL_ELIGIBLE`, or an explicit `ASSOCIATIONAL`/`NON_CAUSAL` appendix with non-empty structured reasons. `CAUSAL_BLOCKED` without that explicit appendix declaration is invalid.
+- Added regressions for absent, `None`, and wrong-type provenance plus a complete explicit associational appendix. Existing registry binding, balanced sensitivity, strata clocks, falsifier neutrality, and network-free/no-live-master scope remain unchanged.
+
+Final verification:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **25 passed in 0.11s**
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — **All checks passed**
+- `git diff --check` — passed (Git emitted only the normal LF→CRLF working-copy warning)
