@@ -44,3 +44,29 @@ The report is committed separately as documentation only. Existing unrelated acq
 ## Boundary / follow-up
 
 This task does not integrate the calendar into Task 1 acquisition/probe contracts or Task 4 evaluation. Those remain later gated tasks. Calendar identity is available for those integrations through the pure binding API.
+
+## Review-fix closure (2026-08-15)
+
+- Enforced non-empty, fully described source records (identity, kind, publisher, version, availability, content hash, and selection reason). Monthly, listing, session, holiday, and event facts now require source references; resolution checks only referenced sources against `as_of` and requires listing evidence.
+- Standard-monthly classification now requires agreement among arithmetic third-Friday, explicit venue-rule date, and listing date. Settlement timestamps are timezone-qualified and must fall on the observed session's local day. Session IDs and open/close facts are mandatory.
+- `PRE_OPEX_SESSION`, `OPEX_DAY`, and `POST_OPEX_RESPONSE` derive distinct validated boundaries from adjacent/session and event facts; unknown or conflicting records fail closed. Event source references and surprise eligibility are validated.
+- `calendar_for_probe` now requires `as_of` and binds observed/nominal dates, exact DTE, session facts, settlement, event IDs/windows, timezone, snapshot/calendar/binding hashes, source hashes, and policy/resolver identity. Snapshot records and nested probe bindings are deeply immutable.
+- Added regressions for empty/incomplete provenance, fake standard-monthly labels, distinct policy boundaries, invalid settlement local day, incomplete probe binding, and nested mutation attempts.
+
+## Review-fix verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_opex_calendar.py tests/test_dealer_exposure_acquisition.py --disable-warnings
+59 passed in 13.40s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/tests/test_opex_calendar.py
+exit 0
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/opex_calendar.py Vol_Suite/tests/test_opex_calendar.py
+All checks passed!
+
+git diff --check
+exit 0
+```
+
+Only the calendar implementation, its tests, and this report are included in the review-fix commit. Existing acquisition scratch artifacts and progress changes remain untouched.

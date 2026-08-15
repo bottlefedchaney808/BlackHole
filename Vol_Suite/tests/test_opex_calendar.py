@@ -29,18 +29,30 @@ def payload():
             "source_version": "1", "effective_start": None, "effective_end": None,
             "retrieved_at": "2025-01-01T00:00:00Z", "available_at": "2025-01-01T00:00:00Z",
             "content_sha256": H, "parser_version": "1", "selection_reason": "authoritative",
+        }, {
+            "source_id": "listing", "source_kind": "listing", "publisher": "test",
+            "source_version": "1", "available_at": "2025-01-01T00:00:00Z",
+            "content_sha256": "b" * 64, "selection_reason": "authoritative listing",
         }],
         "holidays": [],
         "sessions": [{
             "session_id": "S-2025-01-17", "session_date": "2025-01-17", "status": "OPEN",
             "regular_open": "2025-01-17T09:30:00-05:00", "regular_close": "2025-01-17T16:00:00-05:00",
             "early_close": False, "close_reason": None, "source_ref": "rule",
+        }, {
+            "session_id": "S-2025-01-16", "session_date": "2025-01-16", "status": "OPEN",
+            "regular_open": "2025-01-16T09:30:00-05:00", "regular_close": "2025-01-16T16:00:00-05:00",
+            "early_close": False, "close_reason": None, "source_ref": "rule",
+        }, {
+            "session_id": "S-2025-01-20", "session_date": "2025-01-20", "status": "OPEN",
+            "regular_open": "2025-01-20T09:30:00-05:00", "regular_close": "2025-01-20T16:00:00-05:00",
+            "early_close": False, "close_reason": None, "source_ref": "rule",
         }],
         "monthly_rules": [{
             "product_family": "EQUITY_ETF", "nominal_date": "2025-01-17",
             "observed_expiry_date": "2025-01-17", "settlement_style": "PM_CLOSE",
             "settlement_timestamp": "2025-01-17T16:00:00-05:00", "source_ref": "rule",
-            "listing_source_ref": "listing",
+            "listing_source_ref": "listing", "venue_rule_date": "2025-01-17", "listing_expiry_date": "2025-01-17",
         }],
         "event_records": [{
             "event_id": "fomc-1", "event_type": "FOMC", "event_day": "2025-01-17",
@@ -71,7 +83,7 @@ def test_resolve_opex_and_probe_are_exact():
     result = resolve_opex(snapshot, product_family="EQUITY_ETF", nominal_or_observed="2025-01-17", as_of="2025-01-01T00:00:00Z")
     assert result.observed_expiry_date == "2025-01-17"
     assert result.settlement_style == "PM_CLOSE"
-    probe = calendar_for_probe(snapshot, ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0)
+    probe = calendar_for_probe(snapshot, ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
     assert probe["calendar_hash"] == snapshot.snapshot_hash
     assert probe["session_status"] == "OPEN"
 
@@ -132,7 +144,7 @@ def test_month_boundaries():
 
 def test_dte_must_match_exact_local_date():
     with pytest.raises(CalendarGapError, match="DTE"):
-        calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-16", expiry="2025-01-17", dte=0)
+        calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-16", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
 
 
 def test_am_settlement_distinct_from_close():
@@ -162,3 +174,41 @@ def test_early_close_is_not_holiday():
     p = payload(); p["sessions"][0].update(early_close=True, regular_close="2025-01-17T13:00:00-05:00", close_reason="holiday eve")
     result = resolve_opex(load_snapshot(p), product_family="EQUITY_ETF", nominal_or_observed="2025-01-17", as_of="2025-01-01T00:00:00Z")
     assert result.early_close is True and result.session_status == "OPEN"
+
+
+def test_empty_and_incomplete_source_provenance_rejected():
+    p = payload(); p["source_records"] = []
+    with pytest.raises(ValueError, match="source_records"):
+        load_snapshot(p)
+    p = payload(); del p["source_records"][0]["selection_reason"]
+    with pytest.raises(ValueError, match="source_records"):
+        load_snapshot(p)
+
+
+def test_standard_monthly_label_cannot_override_rule_and_listing_facts():
+    p = payload(); p["monthly_rules"][0]["venue_rule_date"] = "2025-01-16"
+    with pytest.raises(CalendarGapError, match="third-Friday"):
+        resolve_opex(load_snapshot(p), product_family="EQUITY_ETF", nominal_or_observed="2025-01-17", as_of="2025-01-01T00:00:00Z")
+
+
+def test_window_policies_derive_distinct_boundaries():
+    s = load_snapshot(payload())
+    values = [resolve_event_window(s, event_type="FOMC", event_day="2025-01-17", window_policy=policy, as_of="2025-01-01T00:00:00Z") for policy in ("PRE_OPEX_SESSION", "OPEX_DAY", "POST_OPEX_RESPONSE")]
+    assert len({(v.window_start, v.window_end) for v in values}) == 3
+    assert values[1].anchor == "SESSION_BOUNDARY"
+
+
+def test_settlement_must_be_on_observed_session_day():
+    p = payload(); p["monthly_rules"][0]["settlement_timestamp"] = "2025-01-18T16:00:00-05:00"
+    with pytest.raises(CalendarGapError, match="local day"):
+        resolve_opex(load_snapshot(p), product_family="EQUITY_ETF", nominal_or_observed="2025-01-17", as_of="2025-01-01T00:00:00Z")
+
+
+def test_probe_binding_requires_complete_identity_and_is_deeply_immutable():
+    binding = calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    for key in ("observed_expiry", "nominal_date", "session_id", "settlement_timestamp", "event_ids", "event_windows", "as_of", "snapshot_hash", "calendar_binding_hash", "source_hashes", "calendar_policy_version", "resolver_code_version", "exact_dte"):
+        assert key in binding
+    with pytest.raises(TypeError):
+        binding["event_windows"]["fomc-1"] = {}
+    with pytest.raises(CalendarGapError, match="as_of"):
+        calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0)
