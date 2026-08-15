@@ -85,7 +85,7 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
     held = {(str(t).strip().lstrip("$").upper(), _date(d)) for t, d in held_pairs}
     held |= held_pairs_from_paths(paths)
     refs = _held_references(paths)
-    result = []
+    result_by_key: dict[str, dict[str, Any]] = {}
     for raw in candidates:
         ticker = str(raw.get("ticker", "")).strip().lstrip("$").upper()
         if ticker in {"SPY", "QQQ"}: raise ValueError("reference families cannot be expansion candidates")
@@ -107,8 +107,11 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
         key = "|".join((day, ticker, expiry, str(dte), habitat, sector, source))
         pair = (ticker, day)
         excluded = pair in held
-        result.append({"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair)})
-    return sorted(result, key=lambda x: tuple(x[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")))
+        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair)}
+        previous = result_by_key.get(key)
+        if previous is None or json.dumps(item, sort_keys=True, default=str) < json.dumps(previous, sort_keys=True, default=str):
+            result_by_key[key] = item
+    return sorted(result_by_key.values(), key=lambda x: tuple(x[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")))
 
 
 def _extract_l2(payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -211,7 +214,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
             source_counts = dict(response.get("source_counts", {}) or {})
             validated = status == "PASS" and response_status is not None and bool(response_counts) and bool(source_counts)
             results.append({"candidate_key": unit["candidate_key"], "status": status, "reason": response.get("reason"), "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True})
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
             results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True})
     return results
 
@@ -256,7 +259,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 payload = fetcher(unit)
                 item = _unit_from_payload(unit, payload)
                 status, reason = item["status"], item["reason"]
-            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
                 payload, status, reason = {"error": str(exc)}, "HARD_GAP", str(exc)[:200]
                 item = _unit_from_payload(unit, payload)
         item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
@@ -270,8 +273,8 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / "dealer_exposure_acquisition.json"
-        artifact_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str, allow_nan=False) + "\n", encoding="utf-8")
         result["artifact_path"] = str(artifact_path)
+        artifact_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str, allow_nan=False) + "\n", encoding="utf-8")
     return result
 
 

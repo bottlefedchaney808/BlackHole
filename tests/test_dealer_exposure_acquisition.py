@@ -33,6 +33,13 @@ def test_schedule_deterministic_and_contract_key():
     assert s == build_candidate_schedule([row("AAPL"), row("MSFT")])
     assert s[0]["candidate_key"] == "2026-08-17|AAPL|2026-08-21|4|NONE|Tech|approved-list"
 
+
+def test_schedule_deduplicates_identical_candidate_keys():
+    duplicate = row()
+    schedule = build_candidate_schedule([duplicate, dict(duplicate)])
+    assert len(schedule) == 1
+    assert schedule[0]["candidate_key"] == "2026-08-17|AAPL|2026-08-21|4|NONE|Tech|approved-list"
+
 def test_dry_run_does_not_fetch_and_is_probe_only(monkeypatch):
     monkeypatch.setenv("THETADATA_HIST_CONCURRENCY", "1")
     result = execute_sequential_acquisition(build_candidate_schedule([row()]), fetcher=lambda _: pytest.fail("network"), dry_run=True)
@@ -174,6 +181,24 @@ def test_heavy_fetcher_is_called_only_for_validated_pass_schedule():
     assert result["network_heavy_acquisition_executed"] is True
 
 
+def test_plain_exception_fetcher_records_invocation_and_hard_gap():
+    schedule = build_candidate_schedule([row()])
+
+    def raising_fetcher(_):
+        raise Exception("plain upstream unavailable")  # noqa: TRY002 - regression targets ordinary Exception
+
+    result = execute_sequential_acquisition(
+        schedule,
+        probe_fetcher=lambda _: {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}},
+        fetcher=raising_fetcher,
+        dry_run=False,
+        approval=True,
+    )
+    assert result["network_heavy_acquisition_executed"] is True
+    assert result["units"][0]["status"] == "HARD_GAP"
+    assert "plain upstream unavailable" in result["units"][0]["reason"]
+
+
 def test_raising_fetcher_records_invocation_and_hard_gap():
     schedule = build_candidate_schedule([row()])
 
@@ -192,6 +217,21 @@ def test_raising_fetcher_records_invocation_and_hard_gap():
     assert "upstream unavailable" in result["units"][0]["reason"]
 
 
+def test_plain_exception_probe_records_invocation_and_hard_gap():
+    from Vol_Suite.dealer_exposure_acquisition import run_availability_probes
+
+    schedule = build_candidate_schedule([row()])
+    probes = run_availability_probes(
+        schedule,
+        probe_fetcher=lambda _: (_ for _ in ()).throw(Exception("plain probe outage")),
+        approval=True,
+        dry_run=False,
+    )
+    assert probes[0]["invoked"] is True
+    assert probes[0]["status"] == "HARD_GAP"
+    assert "plain probe outage" in probes[0]["reason"]
+
+
 def test_output_dir_writes_auditable_artifact(tmp_path):
     result = execute_sequential_acquisition(
         build_candidate_schedule([row()]),
@@ -201,5 +241,6 @@ def test_output_dir_writes_auditable_artifact(tmp_path):
     artifact = tmp_path / "dealer_exposure_acquisition.json"
     assert result["artifact_path"] == str(artifact)
     saved = json.loads(artifact.read_text(encoding="utf-8"))
+    assert saved["artifact_path"] == str(artifact)
     assert saved["no_imputation"] is True
     assert saved["mode"] == "probe-only"

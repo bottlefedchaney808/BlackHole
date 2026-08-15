@@ -83,3 +83,26 @@ exit 0
 ```
 
 No heavy or live acquisition was executed; no dealer_positioning.py, live config, master, secrets, or unrelated untracked corpora were modified.
+
+## Latest re-review fixes (2026-08-15)
+- Ordinary injected `Exception` failures from both the probe adapter and heavy fetcher are now retained as auditable `HARD_GAP` records. Adapter invocation remains `True` once the call is entered; `Exception` is caught intentionally without catching `BaseException` subclasses such as `SystemExit` or `KeyboardInterrupt`.
+- Candidate schedules now deduplicate identical contract keys `(calendar_day, ticker, expiry, dte, habitat, sector, candidate_source)` before probe/fetch, selecting duplicate representations deterministically.
+- `artifact_path` is inserted into the result before output serialization, so the persisted JSON is self-describing.
+- Added regressions for ordinary probe/fetch exceptions, duplicate schedules, and persisted artifact self-reference.
+
+### Latest verification
+```text
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
+exit 0
+
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
+All checks passed!
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+51 passed in 0.09s
+
+git diff --check
+exit 0
+```
+
+No network acquisition was executed.
