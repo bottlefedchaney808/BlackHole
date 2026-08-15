@@ -52,4 +52,25 @@ The package still requires caller-supplied canonical acquisition evidence and an
 - Structured executor failure returns are classified as auditable `HARD_GAP` / `FAILED_EXECUTION` and cannot produce a successful execution status.
 - Added regressions for wrong deadband, missing configuration attestation, omitted result identity/rows, missing per-strike provenance, and structured executor failure.
 
+## Review-blocker closure (2026-08-15)
+
+- `_require_result_identity` now validates every live/new row, not only the container: exact expiry, spot, DTE/T, strike/right, IV, OI, canonical source hash, and non-empty config identity are required; optional canonical `config_hash` attributes are matched exactly.
+- Pair metadata is populated from the verified live/new rows for spot, T, DTE, IV, OI, and provenance; it no longer copies canonical values into the output.
+- Live config output is the actual validated attestation, including `sign_model`, `accumulate`, route, deadband, vanna-flow, and explicit `attested`; omitted or mutated attestations block comparison.
+- Executor admission is now fail-closed: only an explicit `SUCCESS`/`SUCCEEDED`/`PASS`/`OK` mapping with `validated=True` and `success=True` or `ok=True` proceeds. `HARD_GAP`, `FAILED_EXECUTION`, `BLOCKED`, `ERROR`, `FAIL`, false success/ok, missing status, and non-mapping returns are auditable `HARD_GAP`/`FAILED_EXECUTION` with `network_fetch_allowed=False`.
+- Added regressions for per-strike identity/IV/OI/source mutations and omissions, config mutations/omitted explicit validation, and every structured executor failure class.
+
+## Verification (review-blocker closure)
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+104 passed in 0.15s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
+# All checks passed
+
+git diff --check
+```
+
 <!-- report ends with a newline -->

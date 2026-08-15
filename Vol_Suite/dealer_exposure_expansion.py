@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
@@ -142,25 +143,70 @@ def _field(obj: Any, *names: str) -> Any:
 
 
 def _require_result_identity(result: Any, inp: CanonicalInput, engine: str) -> list[Any]:
+    """Require container *and every row* to identify the canonical snapshot.
+
+    The common harness checks expiry/T again for its numerical path, but Task 5
+    must reject an apparently complete result before any pair is assembled.
+    In particular, a row may not inherit spot, IV, OI, or provenance from the
+    canonical input merely because its strike/right key happens to match.
+    """
+    def number(value: Any, label: str) -> float:
+        if isinstance(value, bool):
+            raise ComparisonInvalid(f"{engine} {label} identity is missing or malformed", structured_invalid=True)
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ComparisonInvalid(f"{engine} {label} identity is missing or malformed", structured_invalid=True) from exc
+        if not math.isfinite(value):
+            raise ComparisonInvalid(f"{engine} {label} identity is missing or malformed", structured_invalid=True)
+        return value
+
     spot = _field(result, "spot", "result_spot")
     expiry = _field(result, "expiry", "selected_expiry", "result_expiry")
     dte = _field(result, "dte", "DTE", "result_dte")
     T = _field(result, "T", "t", "result_T")
-    if spot is None or float(spot) != inp.spot:
+    if spot is None or number(spot, "spot") != inp.spot:
         raise ComparisonInvalid(f"{engine} result spot identity is missing or mismatched", structured_invalid=True)
     if expiry != inp.expiry:
         raise ComparisonInvalid(f"{engine} selected expiry identity is missing or mismatched", structured_invalid=True)
-    if dte is None or int(dte) != inp.dte:
+    if dte is None or number(dte, "DTE") != inp.dte:
         raise ComparisonInvalid(f"{engine} DTE identity is missing or mismatched", structured_invalid=True)
-    if T is None or abs(float(T) - inp.dte / 365.0) > 1e-12:
+    if T is None or abs(number(T, "T") - inp.dte / 365.0) > 1e-12:
         raise ComparisonInvalid(f"{engine} T identity is missing or mismatched", structured_invalid=True)
     rows = _field(result, "gamma_records" if engine == "live" else "rows")
     if not isinstance(rows, (list, tuple)) or len(rows) != len(inp.rows):
         raise ComparisonInvalid(f"{engine} result record count is not exactly canonical", structured_invalid=True)
-    expected = {(r.strike, r.right) for r in inp.rows}
-    actual = {(_field(row, "strike"), _field(row, "right")) for row in rows}
-    if actual != expected:
-        raise ComparisonInvalid(f"{engine} result strike/right coverage is not exact", structured_invalid=True)
+    expected = {(r.strike, r.right): r for r in inp.rows}
+    actual: set[tuple[float, str]] = set()
+    for row in rows:
+        row_expiry = _field(row, "expiry", "selected_expiry", "result_expiry")
+        row_spot = _field(row, "spot", "result_spot")
+        row_dte = _field(row, "dte", "DTE", "result_dte")
+        row_t = _field(row, "T", "t", "result_T")
+        strike = _field(row, "strike")
+        right = _field(row, "right")
+        if row_expiry != inp.expiry or row_spot is None or number(row_spot, "per-strike spot") != inp.spot:
+            raise ComparisonInvalid(f"{engine} per-strike expiry/spot identity is missing or mismatched", structured_invalid=True)
+        if row_dte is None or number(row_dte, "per-strike DTE") != inp.dte or row_t is None or abs(number(row_t, "per-strike T") - inp.dte / 365.0) > 1e-12:
+            raise ComparisonInvalid(f"{engine} per-strike DTE/T identity is missing or mismatched", structured_invalid=True)
+        if right not in {"C", "P"} or strike is None:
+            raise ComparisonInvalid(f"{engine} per-strike strike/right identity is missing or malformed", structured_invalid=True)
+        key = (number(strike, "per-strike strike"), right)
+        if key not in expected or key in actual:
+            raise ComparisonInvalid(f"{engine} result strike/right coverage is not exact", structured_invalid=True)
+        canonical = expected[key]
+        iv = _field(row, "iv", "implied_vol")
+        oi = _field(row, "oi", "open_interest")
+        if iv is None or number(iv, "per-strike IV") != canonical.iv or oi is None or number(oi, "per-strike OI") != canonical.oi:
+            raise ComparisonInvalid(f"{engine} per-strike IV/OI identity is missing or mismatched", structured_invalid=True)
+        source_hash = _field(row, "source_hash", "source_sha256", "per_strike_source_hash")
+        config_hash = _field(row, "config_hash", "per_strike_config_hash", "config_identity")
+        if not isinstance(source_hash, str) or source_hash not in inp.source_hashes or not isinstance(config_hash, str) or not config_hash.strip():
+            raise ComparisonInvalid(f"{engine} per-strike source/config identity is missing or mismatched", structured_invalid=True)
+        expected_config_hash = getattr(inp, "config_hash", None)
+        if expected_config_hash is not None and config_hash != expected_config_hash:
+            raise ComparisonInvalid(f"{engine} per-strike config identity is missing or mismatched", structured_invalid=True)
+        actual.add(key)
     return list(rows)
 
 
@@ -175,6 +221,8 @@ def _require_live_attestation(result: Any) -> Mapping[str, Any]:
         actual = next((attestation.get(name) for name in names if name in attestation), None)
         if actual != LIVE_CONFIG[expected]:
             raise ComparisonInvalid(f"live attestation does not verify {expected}={LIVE_CONFIG[expected]!r}", structured_invalid=True)
+    if attestation.get("attested") is not True:
+        raise ComparisonInvalid("live configuration attestation is not explicitly validated", structured_invalid=True)
     return attestation
 
 
@@ -233,15 +281,20 @@ def compare_expansion_common_input(
         pair.pop("live_sign_source", None)
         pair.pop("new_sign_source", None)
         pair.update({"oi": _field(lr, "oi", "open_interest"), "iv": _field(lr, "iv", "implied_vol"),
-                     "spot": canonical_input.spot, "T": canonical_input.dte / 365.0, "dte": canonical_input.dte,
+                     "new_oi": _field(nr, "oi", "open_interest"), "new_iv": _field(nr, "iv", "implied_vol"),
+                     "spot": _field(lr, "spot", "result_spot"), "T": _field(lr, "T", "t", "result_T"),
+                     "dte": _field(lr, "dte", "DTE", "result_dte"),
+                     "live_spot": _field(lr, "spot", "result_spot"), "new_spot": _field(nr, "spot", "result_spot"),
+                     "live_T": _field(lr, "T", "t", "result_T"), "new_T": _field(nr, "T", "t", "result_T"),
+                     "live_dte": _field(lr, "dte", "DTE", "result_dte"), "new_dte": _field(nr, "dte", "DTE", "result_dte"),
                      "live_source_hash": _field(lr, "source_hash", "source_sha256", "per_strike_source_hash"),
                      "new_source_hash": _field(nr, "source_hash", "source_sha256", "per_strike_source_hash"),
                      "live_config_hash": _field(lr, "config_hash", "per_strike_config_hash"),
                      "new_config_hash": _field(nr, "config_hash", "per_strike_config_hash"),
                      "live_sign_provenance": _field(lr, "sign_provenance", "resolved_sign_provenance", "sign_source"),
                      "new_sign_provenance": _field(nr, "sign_provenance", "resolved_sign_provenance", "sign_source")})
-    comparison["config"].update({"route": "SVI", "deadband": EXPECTED_DEADBAND, "dealer_vanna_flow": 1,
-                                  "attested": True})
+    attestation = _require_live_attestation(live)
+    comparison["config"].update(dict(attestation))
     comparison["headline_eligible"] = comparison["coverage"]["common"] == comparison["coverage"]["total"]
     return comparison
 
@@ -312,11 +365,14 @@ def run_expansion_plan(
             for unit in admitted:
                 try:
                     execution = executor(unit)  # type: ignore[misc]
-                    if isinstance(execution, Mapping) and (
-                        str(execution.get("status", "")).upper() in {"FAILED", "FAIL", "ERROR"}
-                        or execution.get("success") is False
-                        or execution.get("ok") is False
-                    ):
+                    status = str(execution.get("status", "")).upper() if isinstance(execution, Mapping) else ""
+                    validated_success = (
+                        isinstance(execution, Mapping)
+                        and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"}
+                        and execution.get("validated") is True
+                        and (execution.get("success") is True or execution.get("ok") is True)
+                    )
+                    if not validated_success:
                         result["execution_audit"]["blocked"].append({
                             "candidate_key": unit["candidate_key"],
                             "classification": "HARD_GAP",

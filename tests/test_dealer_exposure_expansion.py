@@ -183,7 +183,7 @@ def test_network_executor_only_receives_validated_primary_units(monkeypatch):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit["candidate_key"]), acquisition_evidence=evidence)
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: (calls.append(unit["candidate_key"]) or {"status": "SUCCESS", "validated": True, "success": True}), acquisition_evidence=evidence)
     assert calls == [u["candidate_key"] for u in plan["units"]]
     assert result["execution_audit"]["invoked"] == calls
     assert result["network_fetch_allowed"] is True
@@ -218,6 +218,32 @@ def test_missing_live_config_attestation_is_structured_invalid():
         expansion._require_live_attestation(SimpleNamespace())
 
 
+@pytest.mark.parametrize("mutation", [{"route": "legacy"}, {"deadband": 0.02}, {"dealer_vanna_flow": -1},
+                                       {"sign_model": "wrong"}, {"accumulate": False}, {"attested": False}])
+def test_mutated_live_config_attestation_is_structured_invalid(mutation):
+    attestation = {**expansion.LIVE_CONFIG, "attested": True}
+    attestation.update(mutation)
+    with pytest.raises(ComparisonInvalid, match="attestation"):
+        expansion._require_live_attestation(SimpleNamespace(config_attestation=attestation))
+
+
+def test_config_attestation_requires_explicit_validation_flag():
+    attestation = dict(expansion.LIVE_CONFIG)
+    with pytest.raises(ComparisonInvalid, match="validated"):
+        expansion._require_live_attestation(SimpleNamespace(config_attestation=attestation))
+
+
+def test_executor_requires_explicit_validated_success(monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
+                                executor=lambda _unit: {"status": "SUCCESS", "success": True},
+                                acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is False
+
+
 def test_missing_per_strike_provenance_is_structured_invalid():
     with pytest.raises(ComparisonInvalid, match="provenance"):
         expansion._require_strike_provenance(SimpleNamespace(), "live")
@@ -232,3 +258,44 @@ def test_structured_executor_failure_is_hard_gap(monkeypatch):
     assert result["mode"] == "failed-execution"
     assert result["network_fetch_allowed"] is False
     assert result["execution_audit"]["blocked"][0]["classification"] == "HARD_GAP"
+
+
+def _identity_row(**overrides):
+    values = {"strike": 100.0, "right": "C", "expiry": "2026-08-19", "spot": 100.0,
+              "dte": 2, "T": 2 / 365.0, "iv": 0.2, "oi": 10,
+              "source_hash": "a" * 64, "config_hash": "config-1", "sign_provenance": "attested"}
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize("field,value", [("expiry", "2026-08-20"), ("spot", 101.0), ("dte", 3),
+                                          ("T", 3 / 365.0), ("iv", 0.21), ("oi", 11),
+                                          ("source_hash", "b" * 64)])
+def test_every_per_strike_identity_field_is_checked(field, value):
+    inp = _canonical()
+    row = _identity_row(**{field: value})
+    result = SimpleNamespace(spot=100.0, expiry=inp.expiry, dte=inp.dte, T=inp.dte / 365.0, rows=[row])
+    with pytest.raises(ComparisonInvalid, match="per-strike|source/config"):
+        expansion._require_result_identity(result, inp, "new")
+
+
+def test_valid_per_strike_identity_is_returned_for_pair_evidence():
+    inp = _canonical()
+    row = _identity_row()
+    result = SimpleNamespace(spot=100.0, expiry=inp.expiry, dte=inp.dte, T=inp.dte / 365.0, rows=[row])
+    assert expansion._require_result_identity(result, inp, "new") == [row]
+
+
+@pytest.mark.parametrize("failure", [
+    {"status": "HARD_GAP"}, {"status": "FAILED_EXECUTION"}, {"status": "BLOCKED"},
+    {"status": "ERROR"}, {"status": "FAIL"}, {"success": False}, {"ok": False}, None,
+])
+def test_all_structured_executor_failures_block_network(monkeypatch, failure):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: failure, acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is False
+    assert result["mode"] == "failed-execution"
+    assert result["execution_audit"]["blocked"][0]["status"] == "FAILED_EXECUTION"
