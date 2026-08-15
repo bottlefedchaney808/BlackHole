@@ -122,4 +122,10 @@
 
 **FAIL** — level-level agree 6/12=50% < 2/3
 
+### RECOMMENDED RULING (for R3 Cem arbiter)
+
+- **RECOMMENDATION: NOT ACCEPT** — demote the new expiry-book exposure model to **descriptive/conditional only** (do not promote). Approval is not earned: the sign arm is chance-compatible (3/9 unique-day conjunction, P=0.81; 6/12 cluster), the magnitude-weighted fallback→0 cross-engine agreement is 6/12 (no recovery of coherence), and the correlational arms are convention-bound and underpowered.
+- **Mechanism status: formally open-not-disproven.** The δ screen is a **supporting one-sided production-deviation proxy only** (delta_new==0 by construction, unweighted IV-median count proxy); it cannot prove permanent mechanism disproof. The verdict is operational demotion, not a claim of mechanistic closure.
+- **No further day acquisition.** Additional sign-arm days cannot change the verdict (directional/reflexivity + R6-3 + powered sign already resolve against). Only an **intentional symmetric two-sided convention-distance rerun** (persisting new-engine per-strike rows alongside production arrays) could reopen the mechanistic question — and a positive result would not by itself establish causality or authorize promotion.
+
 Ran in 49.4s. Raw: `dual_pipeline_gate_v5_obs.json`.
