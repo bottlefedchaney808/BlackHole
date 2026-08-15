@@ -1,0 +1,53 @@
+-- 006_add_regulator_ingested_index.sql
+-- Additive-only. Fixes a first-page timeout in SwapsQuery.search_trades()
+-- for the dashboard's default sort (ingested_at DESC) combined with the
+-- regulator filter (the most common /swaps filter -- only SEC/CFTC exist,
+-- so it's low-cardinality but highly selective for the planner).
+--
+-- Root cause (confirmed via EXPLAIN QUERY PLAN against the production
+-- swaps.db, 342GB / tens of millions of rows, read-only): with only
+-- idx_swap_trades_regulator_asset(regulator, asset_class) and
+-- idx_swap_trades_ingested_at(ingested_at DESC, dissemination_id DESC)
+-- available, `WHERE regulator=? ORDER BY ingested_at DESC, dissemination_id
+-- DESC LIMIT ? OFFSET ?` picks the regulator index (justifiably -- it's the
+-- more selective predicate) but then can't get the required order from it,
+-- so SQLite pulls every matching row (potentially tens of millions) into a
+-- temp B-tree to sort before applying LIMIT/OFFSET -- unbounded work
+-- regardless of page size. That's what made the already-shipped bounded
+-- COUNT(*) fix (SEARCH_COUNT_CAP) insufficient on its own: the row SELECT
+-- itself, not just the count, was the slow part for filtered listings.
+--
+-- Filtering by asset_class, cleared, or effective_date alone was verified
+-- NOT to hit this: with no competing selective index, the planner just
+-- scans idx_swap_trades_ingested_at in order and filters inline, which is
+-- fine. Only the regulator predicate has a competing index selective
+-- enough to make the planner prefer it over the ordered scan.
+--
+-- This index is a covering index for exactly that shape: filter equality
+-- on regulator, then the same order the default listing already sorts by.
+-- Benchmarked on a synthetic 3M-row table (2 regulator values, matching
+-- production's SEC/CFTC-only cardinality): the identical query plan went
+-- from "SEARCH USING INDEX idx_swap_trades_regulator_asset + USE TEMP
+-- B-TREE FOR ORDER BY" at ~0.5s to "SEARCH USING COVERING INDEX
+-- idx_swap_trades_regulator_ingested" at ~0ms, with the temp B-tree step
+-- gone entirely. A regulator+asset_class filter combo also picks up this
+-- index for the regulator/order part and filters asset_class inline.
+--
+-- Maintenance note for the real 342GB database: this migration is applied
+-- automatically (idempotently, via schema_version) by `python setup_db.py`
+-- like every other numbered migration here -- there is no separate manual
+-- step. CREATE INDEX on a table this size will take a non-trivial amount
+-- of wall-clock time (likely minutes) and holds a write lock on
+-- swap_trades for its duration, so run it during a maintenance window with
+-- run_scheduler.bat / poll_ingest.py NOT running, e.g.:
+--   1. Stop run_scheduler.bat (or any other process with swaps.db open).
+--   2. .venv\Scripts\python.exe setup_db.py
+--   3. Confirm success: SELECT * FROM schema_version ORDER BY version DESC LIMIT 1;
+--      should show version 6, add_regulator_ingested_index.
+--   4. Restart run_scheduler.bat.
+-- If a maintenance window isn't available, CREATE INDEX still succeeds
+-- while WAL-mode readers continue (SQLite allows concurrent readers during
+-- index builds in WAL mode), it just extends how long writers are blocked.
+
+CREATE INDEX IF NOT EXISTS idx_swap_trades_regulator_ingested
+ON swap_trades(regulator, ingested_at DESC, dissemination_id DESC);

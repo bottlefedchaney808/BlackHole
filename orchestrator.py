@@ -980,6 +980,62 @@ def _print_phase_header(phase_num: int, phase_name: str, description: str) -> No
     print("-" * 60)
 
 
+def _build_swaps_result(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the swaps_result.json artifact from context['swap_activity']
+    (already populated by build_context via get_recent_swap_activity).
+
+    Deliberately not added to `run_unified`'s `results` dict: swaps is a
+    same-process DB read with no subprocess/validation-gate lifecycle like
+    the other suites, so it never contributes to the unified run's ok/error
+    suite tally -- it's enrichment surfaced for visibility, with its own
+    artifact and its own Output-tab panel (see output_runs.py's
+    SUITE_MARKER_FILES['swaps']).
+    """
+    from shared.schemas import validate_swaps_result
+
+    ticker = (context.get('focus') or {}).get('ticker')
+    rows = context.get('swap_activity') or []
+    result = {
+        'schema_version': 1,
+        'suite': 'swaps',
+        'status': 'ok' if rows else 'no_data',
+        'ticker': ticker,
+        'timestamp': _iso_utc_now(),
+        'row_count': len(rows),
+        'top_notional': rows[:20],
+        'effective_date': rows[0].get('effective_date') if rows else None,
+    }
+    try:
+        validate_swaps_result(result)
+    except Exception as e:
+        print(f"  [swaps] WARNING: swaps_result failed validation: {e}", file=sys.stderr)
+    return result
+
+
+def _print_swaps_block(swaps_result: Dict[str, Any]) -> None:
+    """Bounded, clearly-delimited swaps summary in unified-run stdout --
+    at most 10 product lines regardless of how many rows swap_activity has,
+    with a graceful message when there is nothing to show (cold swaps.db or
+    no recent DTCC activity for this ticker)."""
+    print(f"\n{'-' * 60}")
+    print("  SWAPS (recent DTCC activity)")
+    print(f"{'-' * 60}")
+    if swaps_result['status'] != 'ok':
+        print("  No swap activity available -- swaps.db may be cold, or there is "
+              "no recent DTCC-reported activity for this ticker.")
+    else:
+        print(f"  {swaps_result['row_count']} product row(s) as of "
+              f"{swaps_result['effective_date']}")
+        for row in swaps_result['top_notional'][:10]:
+            notional = row.get('total_notional')
+            notional_str = f"${notional:,.0f}" if isinstance(notional, (int, float)) else '--'
+            product = str(row.get('product') or '?')[:40]
+            print(f"    {product:40s} {notional_str:>18s}  ({row.get('trade_count')} trades)")
+        if swaps_result['row_count'] > 10:
+            print(f"    ... and {swaps_result['row_count'] - 10} more (see swaps_result.json)")
+    print(f"{'-' * 60}")
+
+
 def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str, Any]) -> None:
     """Vol_Suite computes a real per-ticker realized annualized vol and a
     pairwise correlation matrix for the resolved basket (correlation_engine.py
@@ -1078,6 +1134,15 @@ def run_unified(focus: Dict[str, Any],
     if fail_on_suite_error:
         print("[unified] --fail-on-suite-error: the first invalid or failed "
               "stage aborts the chain.")
+
+    swaps_result = _build_swaps_result(context)
+    try:
+        with open(os.path.join(output_dir, 'swaps_result.json'), 'w', encoding='utf-8') as f:
+            json.dump(swaps_result, f, indent=2, default=str)
+            f.write('\n')
+    except Exception as e:
+        print(f"  [swaps] WARNING: could not write swaps_result.json: {e}", file=sys.stderr)
+    _print_swaps_block(swaps_result)
 
     aborted_by: Optional[str] = None
 
@@ -1195,6 +1260,7 @@ def run_unified(focus: Dict[str, Any],
         'context_path': os.path.join(output_dir, 'suite_context.json'),
         'focus': context['focus'],
         'swap_activity_rows': len(context.get('swap_activity') or []),
+        'swaps': swaps_result,
         'results': results,
         'fail_on_suite_error': bool(fail_on_suite_error),
         'aborted_by': aborted_by,

@@ -724,3 +724,52 @@ def _validate_quant_summary_distributions(distributions: Any, i: int) -> None:
             for key, value in pct.items():
                 _require(_is_number(value),
                          f"{where}.percentiles.{key} must be numeric")
+
+
+# ── 8. swaps_result.json ────────────────────────────────────────────────
+
+SWAPS_RESULT_SCHEMA_VERSION = 1
+
+#: 'ok' -- swap_activity had rows for this run's ticker/date.
+#: 'no_data' -- the query ran fine but came back empty (cold swaps.db, or no
+#:   recent DTCC activity for this name) -- not an error, just nothing to show.
+#: 'error' -- the swaps enrichment itself failed (see orchestrator.py's
+#:   get_recent_swap_activity, which normally swallows this into `[]`/'no_data'
+#:   instead; 'error' is reserved for a caller that wants to report the
+#:   underlying exception rather than silently degrading).
+SWAPS_RESULT_STATUSES = ("ok", "no_data", "error")
+
+
+def validate_swaps_result(data: Dict[str, Any]) -> None:
+    """Validate a swaps_result.json payload produced by
+    orchestrator.py::run_unified() from context['swap_activity']
+    (get_recent_swap_activity's DTCC top_notional_products rows).
+
+    Unlike options/var, there is no subprocess suite behind this artifact --
+    it is a same-process DB read surfaced as its own file so the Output tab
+    can show swap activity next to the suites that ran for the same ticker.
+    """
+    _require(isinstance(data, dict), "swaps_result must be a JSON object")
+
+    _require(data.get("schema_version") == SWAPS_RESULT_SCHEMA_VERSION,
+             f"schema_version must be {SWAPS_RESULT_SCHEMA_VERSION}")
+    _require(data.get("suite") == "swaps", "suite must be 'swaps'")
+    _require(data.get("status") in SWAPS_RESULT_STATUSES,
+             f"status must be one of {SWAPS_RESULT_STATUSES}")
+    _require(isinstance(data.get("ticker"), str) and data["ticker"].strip(),
+             "ticker must be a non-empty string")
+    _require(isinstance(data.get("timestamp"), str) and data["timestamp"].strip(),
+             "timestamp must be a non-empty string")
+    _require(isinstance(data.get("row_count"), int) and not _is_bool(data["row_count"])
+             and data["row_count"] >= 0,
+             "row_count must be a non-negative integer")
+
+    top_notional = data.get("top_notional")
+    _require(isinstance(top_notional, list), "top_notional must be a list")
+    for i, row in enumerate(top_notional):
+        _require(isinstance(row, dict), f"top_notional[{i}] must be an object")
+        _require("product" in row, f"top_notional[{i}] missing 'product'")
+
+    if data["status"] == "error":
+        _require(isinstance(data.get("error"), str) and data["error"].strip(),
+                 "error must be a non-empty string for status='error'")
