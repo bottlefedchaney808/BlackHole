@@ -60,14 +60,21 @@ def test_actual_tier2b_window_directory_is_explicit_day_fixture(tmp_path):
 
 
 def test_probe_requires_all_eligibility_evidence_and_rejects_zero_dte():
-    assert validate_probe_result(probe()) .ticker == "AAPL"
+    assert validate_probe_result(probe()).ticker == "AAPL"
     for check in ("spot_ohlc_coverage", "same_expiry_grid_oi_iv", "strike_side_moneyness", "strict_pre_window_ordering", "return_clocks"):
-        bad = probe(evidence_override := None) if False else None
         data = evidence(); data.pop(check)
         with pytest.raises(ValueError):
             validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
     with pytest.raises(ValueError):
         validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 0, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, evidence()))
+
+
+def test_probe_rejects_scalar_timestamp_only_spot_ohlc_rows():
+    for window in ("pre_window", "firing_window", "response_window"):
+        data = evidence()
+        data["spot_ohlc_coverage"][window] = ["2026-08-17T14:00:00"]
+        with pytest.raises(ValueError):
+            validate_probe_result(ProbeResult("AAPL", "2026-08-17", "2026-08-21", 4, "PASS", {n: "PASS" for n in PROBE_CHECKS}, [], False, data))
 
 
 def test_probe_enforces_strict_ordering_distinct_return_clocks_and_no_imputation():

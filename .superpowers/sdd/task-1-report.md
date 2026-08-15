@@ -114,4 +114,27 @@ git diff --check
 exit 0
 ```
 
-Only the Task 1 implementation, its tests, and this report were modified; unrelated untracked corpora were preserved.
+Only the Task 1 implementation, its tests, and this report were modified; unrelated untracked corpora were preserved and are excluded from the commit.
+
+## Remaining Task 1 review finding fix (2026-08-15)
+
+- `_validate_probe_evidence` now requires every `pre_window`, `firing_window`, and `response_window` row to be a mapping with an explicit valid `timestamp`, positive `spot`, and positive `open`/`high`/`low`/`close` OHLC fields. Scalar timestamp-only rows and rows using only the legacy `ts` alias are rejected.
+- Removed the dead conditional test statement (`if False`) noted by review and normalized the nearby assertion spacing.
+- Added `test_probe_rejects_scalar_timestamp_only_spot_ohlc_rows`, covering all three required windows.
+
+### Fix verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py::test_probe_rejects_scalar_timestamp_only_spot_ohlc_rows --disable-warnings
+F                                                                        [100%]
+1 failed in 0.07s
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
+..................                                                       [100%]
+18 passed in 0.04s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py && git diff --check
+exit 0
+```
+
+The first focused run is the intentional RED check before the implementation change; it failed because the pre-fix validator accepted the scalar timestamp row. No live model, acquisition data, or unrelated untracked corpora were modified.

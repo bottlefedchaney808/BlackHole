@@ -260,15 +260,17 @@ def _validate_probe_evidence(result: ProbeResult) -> None:
     for window in ("pre_window", "firing_window", "response_window"):
         rows = _rows(spot[window], window)
         for row in rows:
-            if isinstance(row, Mapping):
-                stamp = row.get("timestamp", row.get("ts"))
-                _timestamp(stamp)
-                _number(row.get("spot"), positive=True)
-                ohlc = row.get("ohlc", row)
-                for field in ("open", "high", "low", "close"):
-                    _number(ohlc.get(field), positive=True)
-            else:
-                _timestamp(row)
+            if not isinstance(row, Mapping):
+                raise ValueError(f"{window} evidence rows must be mappings with spot/OHLC values")
+            if "timestamp" not in row:
+                raise ValueError(f"{window} evidence rows must contain timestamp")
+            _timestamp(row["timestamp"])
+            _number(row.get("spot"), positive=True)
+            ohlc = row.get("ohlc", row)
+            if not isinstance(ohlc, Mapping):
+                raise ValueError(f"{window} evidence OHLC values must be a mapping")
+            for field in ("open", "high", "low", "close"):
+                _number(ohlc.get(field), positive=True)
     if spot.get("return_clocks") != "daily/from_breach":
         raise ValueError("spot/OHLC coverage must identify daily/from_breach clocks")
 
