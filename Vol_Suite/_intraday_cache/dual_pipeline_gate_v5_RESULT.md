@@ -22,7 +22,7 @@
   - 20260729: 2 resolvable cluster(s), 1 agree -> DISAGREE
   - 20260731: 1 resolvable cluster(s), 1 agree -> AGREE
 - **Unique-day agreement: 3/9 = 33.3%**
-- Exact binomial null: P(agree>=3 | n=9, p=0.5) = **0.9102**
+- R7-A **HETEROGENEOUS (Poisson-binomial) null** for the CONJUNCTION day rule: single-family days agree by chance q=0.5, two-family days q=0.25 (p²). P(agree>=3 | mixture null) = **0.8066** — NOT a uniform p=0.5 tail. The primary is a **conjunction statistic**, not an ordinary agreement rate.
 
 ### SENSITIVITY — 12-cluster (NOT the primary; same-day SPY/QQQ families are not independent)
 
@@ -34,7 +34,7 @@
 - Bar-clearing prob at n=12 (sensitivity): P(clear >= 8/12 | p=2/3) = 0.632.
 - n-for-80% power (one-sided sign test, H0:p=0.5 vs H1:p>0.5, alpha=0.05): detect true p=2/3 -> **n=58**; detect true p=0.75 -> **n=23**.
 - n-for-80% bar-clearing (power to PASS the 2/3 bar under a true p): p=2/3 -> NEVER (bar sits at the mean, power -> 0.5 asymptotically); p=0.75 -> n=3.
-- **Current n=9 is ~18% test power — NOT 80%-powered.** md=0.816 is a CORRELATION MDE, NOT binomial power (do not quote it as such).
+- **Current n=9 exact one-sided sign-test power = 14.3%** (rejection at X>=8, P_null=0.0195; power at true p=2/3 = 0.143) — NOT 80%-powered.** md=0.816 is a CORRELATION MDE, NOT binomial power (do not quote it as such).
 
 ### R6-3 — TRUE MAGNITUDE/OI/VANNA-WEIGHTED FALLBACK->0 PRODUCTION LEVEL (CROSS-ENGINE)
 
@@ -58,10 +58,8 @@
 - **Magnitude-weighted fallback->0 vs new-engine sign: 6/12 resolvable clusters agree** (50% if any).
 - Per-strike arrays persisted for 12/12 re-derived clusters. Baseline (fallback=-1) sign reported for reference.
 
-### R6-7 — CONVENTION-DISTANCE TEST ON SVI DEVIATION TERMS (delta_prod vs delta_new), FULL CORPUS incl zero-firing
-
-- delta_prod = (rich_plus1 - cheap_minus1)/total_strikes (production's SVI deviation term). delta_new = 0 BY CONSTRUCTION (new engine has no SVI branch; dealer_frame_vanna is flat -1xBS). Convention distance D = |delta_prod - delta_new| = |delta_prod|. Pre-registered rule: DEMOTE if mean|D|<0.10 AND <25% of clusters have |D|>=0.10 (production hugs the shared -1 baseline); OPEN otherwise.
-
+### R6-7 / R7-C — CONVENTION-DISTANCE SCREEN ON SVI DEVIATION TERMS (SUPPORTING, NOT decisive)
+- delta_prod = (rich_plus1 - cheap_minus1)/total_strikes is an **unweighted IV-vs-chain-median strike-count proxy** (run_dual_pipeline_gate_v3.py _sign_provenance), NOT the production SVI `deviation_by_strike` / `resolve_vol_surface_sign` path. delta_new = 0 **BY CONSTRUCTION** (new engine has no SVI branch; flat -1xBS), so D = |delta_prod| is a **one-sided production-deviation screen**, not a genuine two-sided convention-distance. Per R7-C this is a **supporting descriptive screen only — it cannot affirm or refute the shared -1 root as a mechanism**; the mechanism stays formally open-not-disproven. RULE (screen): 'production-hugs--1-baseline' if mean|D|<0.10 AND <25% of clusters have |D|>=0.10.
 | Ticker | Day | firing_buckets | delta_prod | delta_new | D |
 |---|---|---|---|---|---|
 | QQQ | 20260508 | 1 | -0.0263 | +0.0000 | 0.0263 |
@@ -106,7 +104,7 @@
 | SPY | 20260807 | 0 | +0.0789 | +0.0000 | 0.0789 |
 
 - Corpus: 40 clusters (seed 12 + v4 28), INCLUDING zero-firing clusters. mean|D| = 0.0246; 2.5% of clusters have |D| >= 0.1.
-- **DELTA VERDICT: DEMOTE** — delta_prod hugs the shared -1 baseline (mean|D|=0.0246 < 0.1, 2.5% of clusters >= 0.1) and delta_new==0 by construction -> convention-bound, demote permanently
+- **DELTA VERDICT: SUPPORTING-screen: -1-bound** — delta_prod hugs the shared -1 baseline (mean|D|=0.0246 < 0.1, 2.5% of clusters >= 0.1); one-sided proxy, delta_new==0 by construction. Descriptive screen only — mechanism formally open-not-disproven (not a decisive demote).
 
   - SPY: 20 clusters, mean|delta_prod| = 0.0291.
   - QQQ: 20 clusters, mean|delta_prod| = 0.0201.
@@ -124,4 +122,4 @@
 
 **FAIL** — level-level agree 6/12=50% < 2/3
 
-Ran in 70.1s. Raw: `dual_pipeline_gate_v5_obs.json`.
+Ran in 49.4s. Raw: `dual_pipeline_gate_v5_obs.json`.
