@@ -140,3 +140,19 @@ malformed rights, and a falsified per-record vanna regression.
 ## Commit
 
 Final commit hash is reported in the handback.
+
+## Final fail-closed review follow-up (2026-08-15)
+
+- Hardened `validate_causal_eligibility` and every nested provenance validator against missing `KeyError`, `IndexError`, and `AttributeError` paths. Missing `delta_iv_pre_window` and nested acquisition/cluster fields now return structured `COMPARISON_INVALID` / `CAUSAL_BLOCKED` reasons; no `BaseException` catch was added.
+- Engine output validation now rejects non-finite live vanna, OI, applied signs, new `rec.vanna`, new levels, and all emitted diagnostic numeric fields. Invalid rows become structured exclusions and cannot select or describe a model.
+- `write_deterministic_artifact` now serializes with `allow_nan=False`, validates `VALID` status, refuses causal-blocked/invalid payloads before opening the destination, and has deterministic regression coverage for NaN and invalid status payloads.
+- Same-day cluster validation now requires `cluster_id == calendar_day`, unique ticker membership, consistent `n_tickers`, unit-ticker membership, and the registered aggregation rule. Acquisition persists `n_tickers` in cluster metadata; regressions cover mismatched IDs and membership counts.
+
+## Latest verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **79 passed**
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — **All checks passed**
+- `git diff --check` — passed
+
+No acquisition, live-model/master, or secrets files were changed.

@@ -331,6 +331,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     for day, group in by_day.items():
         tickers = sorted({str(item.get("ticker", "")) for item in group})
         cluster = {"cluster_id": day, "calendar_day": day, "tickers": tickers,
+                   "n_tickers": len(tickers),
                    "aggregation_rule": "preserve_ticker_values_v1"}
         for item in group:
             item["same_day_cluster"] = cluster

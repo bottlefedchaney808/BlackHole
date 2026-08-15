@@ -9,6 +9,7 @@ from run_live_vs_expiry_book_common_input import (
     compare_common_input,
     make_canonical_input,
     validate_causal_eligibility,
+    write_deterministic_artifact,
 )
 
 EXPIRY = "20260918"
@@ -187,7 +188,8 @@ def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026
             "request_parameters": {"ticker": "IWM", "day": "2026-08-14"},
             "spot_timestamp": "2026-08-14T10:00:00Z", "chain_timestamp": source,
             "same_day_cluster": {"cluster_id": "2026-08-14", "calendar_day": "2026-08-14",
-                                  "tickers": ["IWM"], "aggregation_rule": "preserve_ticker_values_v1"}}
+                                  "tickers": ["IWM"], "n_tickers": 1,
+                                  "aggregation_rule": "preserve_ticker_values_v1"}}
 
 
 def _registry(unit, payload=b"verified canonical payload"):
@@ -318,3 +320,56 @@ def test_canonical_json_refuses_nan_and_inf():
     object.__setattr__(inp, "spot", float("inf"))
     with pytest.raises(ValueError, match="non-finite"):
         inp.canonical_bytes()
+
+
+@pytest.mark.parametrize("field", ["delta_iv_pre_window", "iv_before_ts", "same_day_cluster"])
+def test_causal_validator_missing_nested_fields_is_structured_fail_closed(field):
+    unit = _causal_unit()
+    registry = _registry(unit)
+    unit.pop(field)
+    result = validate_causal_eligibility([unit], artifact_registry=registry)
+    assert result["status"] == "COMPARISON_INVALID"
+    assert result["causal_status"] == "CAUSAL_BLOCKED"
+    assert result["reasons"]
+
+
+def test_causal_validator_rejects_cluster_id_and_membership_mismatch():
+    unit = _causal_unit()
+    unit["same_day_cluster"]["cluster_id"] = "2026-08-15"
+    assert validate_causal_eligibility([unit], artifact_registry=_registry(unit))["causal_status"] == "CAUSAL_BLOCKED"
+    unit = _causal_unit()
+    unit["same_day_cluster"]["n_tickers"] = 2
+    assert validate_causal_eligibility([unit], artifact_registry=_registry(unit))["causal_status"] == "CAUSAL_BLOCKED"
+
+
+@pytest.mark.parametrize("field", ["vanna", "oi", "applied_sign"])
+def test_non_finite_live_output_is_structured_invalid(field):
+    rows = [
+        SimpleNamespace(strike=210, right="P", expiry=EXPIRY, vanna=-0.02, oi=1000, applied_sign=1),
+        SimpleNamespace(strike=220, right="C", expiry=EXPIRY, vanna=0.01, oi=1200, applied_sign=1),
+    ]
+    setattr(rows[0], field, float("nan"))
+    live, new = _engines(live_rows=rows)
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new)
+    assert any("finite" in item["reason"] for item in exc.value.invalid_result["exclusions"])
+
+
+def test_non_finite_new_output_is_structured_invalid():
+    live, _new = _engines()
+    bad = _row(210, "P", -20.0)
+    bad.greeks["vanna"] = float("inf")
+    new = _engines(new_rows=[bad, _row(220, "C", 12.0)])[1]
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new)
+    assert any("finite" in item["reason"] for item in exc.value.invalid_result["exclusions"])
+
+
+def test_artifact_writer_is_strict_and_refuses_invalid_payload(tmp_path):
+    target = tmp_path / "comparison.json"
+    with pytest.raises(ComparisonInvalid):
+        write_deterministic_artifact(str(target), {"status": "COMPARISON_INVALID", "value": float("nan")})
+    assert not target.exists()
+    with pytest.raises(ComparisonInvalid):
+        write_deterministic_artifact(str(target), {"status": "VALID", "value": float("nan")})
+    assert not target.exists()

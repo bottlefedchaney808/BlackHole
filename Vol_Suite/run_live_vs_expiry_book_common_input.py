@@ -175,6 +175,18 @@ def _ranks(values: Sequence[float]) -> list[float]:
     return out
 
 
+def _assert_finite_diagnostics(value: Any, path: str = "comparison") -> None:
+    """Reject non-finite numeric diagnostics before they can be returned or written."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ComparisonInvalid(f"non-finite diagnostic numeric field: {path}")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _assert_finite_diagnostics(item, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _assert_finite_diagnostics(item, f"{path}[{index}]")
+
+
 def _deadband(v: float, eps: float) -> int:
     return 0 if abs(v) <= eps else (1 if v > 0 else -1)
 
@@ -222,8 +234,9 @@ def _coverage(rows: Iterable[Any], inp: CanonicalInput, engine: str, value_fn: C
                                "reason": "duplicate strike/right row"})
             continue
         try:
-            levels[key] = value_fn(row)
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            level = value_fn(row)
+            levels[key] = _finite_number(level, f"{engine} output level")
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError, OverflowError) as exc:
             exclusions.append({"engine": engine, "key": list(key), "expiry": expiry,
                                "reason": f"invalid output record: {exc}"})
     missing = sorted(expected - set(levels))
@@ -234,15 +247,18 @@ def _coverage(rows: Iterable[Any], inp: CanonicalInput, engine: str, value_fn: C
 
 def _new_vanna_level(row: Any, inp: CanonicalInput) -> float:
     """Validate rec.vanna against an independently computed BS invariant."""
-    sigma = float(row.iv)
-    T = float(row.T)
-    d1 = (math.log(inp.spot / float(row.strike)) + (0.05 + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    sigma = _finite_number(row.iv, "new IV")
+    T = _finite_number(row.T, "new T")
+    if sigma <= 0 or T <= 0:
+        raise ValueError("new IV/T must be positive")
+    strike = _finite_number(row.strike, "new strike")
+    d1 = (math.log(inp.spot / strike) + (0.05 + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
     expected = -math.exp(0.0) * math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi) * d2 / sigma
-    actual = float(row.greeks["vanna"])
+    actual = _finite_number(row.greeks["vanna"], "new rec.vanna")
     if not math.isclose(actual, expected, rel_tol=1e-10, abs_tol=1e-12):
         raise ValueError("rec.vanna is not -1xBS")
-    return float(row.exposure_of("vanna"))
+    return _finite_number(row.exposure_of("vanna"), "new vanna level")
 
 
 def _new_levels(engine_result: Any, inp: CanonicalInput) -> tuple[dict[tuple[float, str], float], list[dict[str, Any]]]:
@@ -253,7 +269,13 @@ def _new_levels(engine_result: Any, inp: CanonicalInput) -> tuple[dict[tuple[flo
 def _live_levels(engine_result: Any, inp: CanonicalInput) -> tuple[dict[tuple[float, str], float], list[dict[str, Any]]]:
     return _coverage(
         engine_result.gamma_records, inp, "live",
-        lambda row: float(row.vanna) * float(row.oi) * 100.0 * 0.01 * float(row.applied_sign),
+        lambda row: (
+            _finite_number(row.vanna, "live vanna")
+            * _finite_number(row.oi, "live OI")
+            * 100.0
+            * 0.01
+            * _finite_number(row.applied_sign, "live applied sign")
+        ),
     )
 
 
@@ -442,11 +464,17 @@ def _validate_cluster(unit: Mapping[str, Any], calendar_day: str) -> None:
     cluster = unit.get("same_day_cluster")
     if not isinstance(cluster, Mapping):
         raise TypeError("same-day clustering metadata is required")
-    if cluster.get("calendar_day") != calendar_day or not isinstance(cluster.get("cluster_id"), str):
+    if (cluster.get("calendar_day") != calendar_day
+            or cluster.get("cluster_id") != calendar_day):
         raise ValueError("same-day cluster metadata does not match calendar_day")
     tickers = cluster.get("tickers")
     if not isinstance(tickers, list) or not tickers or unit.get("ticker") not in tickers:
         raise ValueError("same-day cluster tickers must include unit ticker")
+    if (isinstance(cluster.get("n_tickers"), bool)
+            or not isinstance(cluster.get("n_tickers"), int)
+            or cluster["n_tickers"] != len(tickers)
+            or len(set(tickers)) != len(tickers)):
+        raise ValueError("same-day cluster membership count is missing or inconsistent")
     if cluster.get("aggregation_rule") != "preserve_ticker_values_v1":
         raise ValueError("same-day cluster aggregation rule is not registered")
 
@@ -456,7 +484,13 @@ def validate_causal_eligibility(
     artifact_registry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fail closed unless complete registered acquisition and derivation evidence exists."""
-    rows = [dict(unit) for unit in units]
+    try:
+        rows = [dict(unit) for unit in units]
+    except (TypeError, ValueError, AttributeError, KeyError, IndexError) as exc:
+        return {"causal_status": "CAUSAL_BLOCKED", "status": "COMPARISON_INVALID",
+                "n": 0, "N": intended_units if intended_units is not None else 0,
+                "coverage": 0.0,
+                "reasons": [{"reason": f"invalid causal unit collection: {exc}"}]}
     expected = len(rows) if intended_units is None else intended_units
     reasons: list[dict[str, Any]] = []
     if expected < 0 or len(rows) != expected:
@@ -489,7 +523,8 @@ def validate_causal_eligibility(
             if _parse_timestamp(unit["iv_source_ts"]) >= breach:
                 raise ValueError("iv_source_ts must strictly precede breach")
             _validate_cluster(unit, calendar_day)
-        except (TypeError, ValueError, OSError, OverflowError) as exc:
+        except (TypeError, ValueError, OSError, OverflowError,
+                KeyError, IndexError, AttributeError) as exc:
             reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "reason": str(exc)})
     return {"causal_status": "CAUSAL_ELIGIBLE" if not reasons else "CAUSAL_BLOCKED",
             "status": "VALID" if not reasons else "COMPARISON_INVALID", "n": len(rows), "N": expected,
@@ -550,24 +585,35 @@ def compare_common_input(
     nv = [p["new_vanna_level"] for p in pairs]
     denom = sum(abs(x) + abs(y) for x, y in zip(lv, nv))
     d_conv = sum(abs(x - y) for x, y in zip(lv, nv)) / denom if denom else 0.0
-    return {"status": "VALID", "input_hash": canonical_digest,
-            "coverage": {"live": len(live_levels), "new": len(new_levels),
-                          "common": len(keys), "total": len(inp.rows)},
-            "pairs": pairs,
-            "aggregate": {"live_vanna_level": sum(lv), "new_vanna_level": sum(nv),
-                           "absolute_error": sum(abs(x - y) for x, y in zip(lv, nv)),
-                           "pearson": _pearson(lv, nv), "spearman": _pearson(_ranks(lv), _ranks(nv)),
-                           "sign_agreement": sum(p["class"] == "same" for p in pairs) / len(pairs),
-                           "D_conv": d_conv, "deadband": deadband,
-                           "comparison": "levels-only; live vanna level vs new net vanna level"},
-            "config": {"sign_model": "vol_surface_replication", "accumulate": True,
-                       "new_vanna": "rec.vanna=-1xBS", "flow_compared": False,
-                       "canonical_sha256": canonical_digest}}
+    comparison = {"status": "VALID", "input_hash": canonical_digest,
+                  "coverage": {"live": len(live_levels), "new": len(new_levels),
+                                "common": len(keys), "total": len(inp.rows)},
+                  "pairs": pairs,
+                  "aggregate": {"live_vanna_level": sum(lv), "new_vanna_level": sum(nv),
+                                 "absolute_error": sum(abs(x - y) for x, y in zip(lv, nv)),
+                                 "pearson": _pearson(lv, nv), "spearman": _pearson(_ranks(lv), _ranks(nv)),
+                                 "sign_agreement": sum(p["class"] == "same" for p in pairs) / len(pairs),
+                                 "D_conv": d_conv, "deadband": deadband,
+                                 "comparison": "levels-only; live vanna level vs new net vanna level"},
+                  "config": {"sign_model": "vol_surface_replication", "accumulate": True,
+                             "new_vanna": "rec.vanna=-1xBS", "flow_compared": False,
+                             "canonical_sha256": canonical_digest}}
+    _assert_finite_diagnostics(comparison)
+    return comparison
 
 
 def write_deterministic_artifact(path: str, comparison: Mapping[str, Any]) -> None:
+    if not isinstance(comparison, Mapping):
+        raise ComparisonInvalid("comparison artifact must be a mapping")
+    if comparison.get("status") != "VALID" or comparison.get("causal_status") == "CAUSAL_BLOCKED":
+        raise ComparisonInvalid("refusing to publish invalid comparison artifact",
+                                causal_blocked=comparison.get("causal_status") == "CAUSAL_BLOCKED")
+    try:
+        payload = json.dumps(comparison, sort_keys=True, indent=2, allow_nan=False)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ComparisonInvalid(f"comparison artifact contains non-finite or non-JSON data: {exc}") from exc
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(comparison, handle, sort_keys=True, indent=2)
+        handle.write(payload)
         handle.write("\n")
 
 
