@@ -71,3 +71,25 @@ feat(vol): add deterministic dealer exposure universe contracts (final commit re
 ```
 
 Unrelated untracked files were preserved and are excluded from the commit.
+
+## Reviewer fix report (2026-08-15)
+
+- Corrected held-pair extraction for actual `_scratch_tier2` and `_scratch_tier2b` schemas: seed filename dates are treated as expiries, while `manifest.as_of`, acquisition-manifest `as_of`, and explicit `window_YYYYMMDD` acquisition directories provide held calendar days. Added minimized fixtures matching both artifact formats.
+- `build_manifest` now validates and deterministically orders probes, associates by ticker/day/expiry/DTE, admits only exactly one validated `PASS`, and records `missing_probe`, `ambiguous_probe`, and non-PASS exclusions explicitly.
+- Expanded the probe contract to require evidence for spot/OHLC windows, same-expiry/grid OI+IV, both strike sides and moneyness, strict PRE_WINDOW ordering, distinct return clocks, no imputation, and positive locked-stratum DTE. Invalid dates and reversed duplicate/probe inputs are deterministic and explicit.
+
+### Fix verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
+.............                                                            [100%]
+13 passed in 0.05s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
+exit 0
+
+python -c "from Vol_Suite.dealer_exposure_universe import held_pairs_from_paths; p=held_pairs_from_paths(['Vol_Suite/_scratch_tier2','Vol_Suite/_scratch_tier2b']); print(len(p), sorted(p)[:5], sorted(p)[-5:])"
+96 [('AAPL', '2026-05-08'), ..., ('TSLA', '2026-08-14')]
+```
+
+Remaining concern: this remains a network-free contract layer; real acquisition probes must populate the evidence fields from approved data sources before any unit is admitted.
