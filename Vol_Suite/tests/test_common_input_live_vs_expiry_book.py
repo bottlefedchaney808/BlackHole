@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -19,13 +20,22 @@ def _input():
     )
 
 
-def _row(strike, right, value, *, expiry=EXPIRY):
-    return SimpleNamespace(strike=strike, right=right, expiry=expiry,
+def _expected_vanna(strike, iv=0.2):
+    T = 35 / 365
+    d1 = (math.log(220.0 / strike) + (0.05 + 0.5 * iv * iv) * T) / (iv * math.sqrt(T))
+    d2 = d1 - iv * math.sqrt(T)
+    return -math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi) * d2 / iv
+
+
+def _row(strike, right, value, *, expiry=EXPIRY, iv=0.2):
+    return SimpleNamespace(strike=strike, right=right, expiry=expiry, iv=iv, T=35 / 365,
+                           greeks={"vanna": _expected_vanna(strike, iv)},
                            exposure_of=lambda _g, value=value: value)
 
 
 def _engines(live_accumulate=True, *, live_rows=None, new_rows=None):
     def live(payload):
+        payload.consume()
         return SimpleNamespace(
             consumed_input_sha256=payload.digest,
             sign_model="vol_surface_replication", accumulate=live_accumulate,
@@ -36,6 +46,7 @@ def _engines(live_accumulate=True, *, live_rows=None, new_rows=None):
         )
 
     def new(payload):
+        payload.consume()
         return SimpleNamespace(consumed_input_sha256=payload.digest,
                                rows=new_rows or [_row(210, "P", -20.0), _row(220, "C", 12.0)])
     return live, new
@@ -53,14 +64,15 @@ def test_adapters_consume_one_immutable_payload_and_compare_levels_not_flow():
 
 
 def test_adapter_that_transforms_or_ignores_payload_invalidates_comparison():
-    live, new = _engines()
+    _live, new = _engines()
 
     def dishonest_live(payload):
-        result = live(payload)
-        result.consumed_input_sha256 = "not-the-bytes-i-consumed"
-        return result
+        # It can echo the canonical digest, but never accesses payload.data.
+        return SimpleNamespace(consumed_input_sha256=payload.digest,
+                               sign_model="vol_surface_replication", accumulate=True,
+                               gamma_records=[])
 
-    with pytest.raises(ComparisonInvalid, match="consumed-input digest") as exc:
+    with pytest.raises(ComparisonInvalid, match="did not consume canonical") as exc:
         compare_common_input(_input(), dishonest_live, new)
     assert exc.value.invalid_result["status"] == "INVALID"
     assert exc.value.invalid_result["exclusions"][0]["engine"] == "live"
@@ -107,3 +119,30 @@ def test_adapter_contract_is_dependency_independent():
     """The injected payload/digest contract is the smoke test; no matplotlib import is needed."""
     live, new = _engines()
     assert compare_common_input(_input(), live, new)["status"] == "VALID"
+
+
+def test_malformed_input_right_is_rejected_without_normalization():
+    with pytest.raises(ValueError, match="invalid right"):
+        make_canonical_input(
+            "IWM", "20260814", EXPIRY, 35, 220.0, "ts",
+            [{"strike": 210, "right": "PUT", "iv": 0.24, "oi": 1000}], ["h"],
+        )
+
+
+def test_malformed_output_right_is_invalid():
+    live, _new = _engines()
+    new = _engines(new_rows=[_row(210, "PUT", -20.0), _row(220, "C", 12.0)])[1]
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new)
+    assert any("malformed right" in item["reason"] for item in exc.value.invalid_result["exclusions"])
+
+
+def test_vanna_invariant_is_runtime_verified():
+    live, _new = _engines()
+    bad = _row(210, "P", -20.0)
+    bad.greeks["vanna"] += 0.5
+    new = _engines(new_rows=[bad, _row(220, "C", 12.0)])[1]
+    with pytest.raises(ComparisonInvalid, match="coverage") as exc:
+        compare_common_input(_input(), live, new)
+    assert any("rec.vanna is not -1xBS" in item["reason"]
+               for item in exc.value.invalid_result["exclusions"])

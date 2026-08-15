@@ -33,7 +33,7 @@ results as evidence.
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 py -3.12 -m pytest Vol_Suite/tests/test_common_input_live_vs_expiry_book.py -q`
   - `4 passed in 0.04s` on the original implementation
 - `env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 py -3.12 -m pytest Vol_Suite/tests/test_common_input_live_vs_expiry_book.py -q`
-  - `9 passed in 0.04s` after review fixes
+  - `12 passed in 0.04s` after review fixes
 - `py -3.12 -m py_compile Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py`
   - passed
 - `py -3.12 -m ruff check Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py`
@@ -48,11 +48,21 @@ network or acquisition endpoint was called.
 
 ## Review-fix details
 
-- `compare_common_input` serializes the `CanonicalInput` once, constructs one immutable
-  `CanonicalPayload(data, digest, canonical_input)`, and passes that exact payload to both
-  adapters. Each adapter must return/record `consumed_input_sha256`; both digests are checked
-  against the canonical SHA-256 before any comparison. A transforming/ignoring adapter yields
-  an explicit `ComparisonInvalid.invalid_result` with status `INVALID`, reason, and exclusions.
+- `compare_common_input` serializes the `CanonicalInput` once and gives each adapter an
+  immutable `CanonicalPayload` wrapper over those exact bytes. The wrapper records access and
+  derives the consumption digest internally; returned result fields are never trusted as
+  attestation. An adapter that ignores the payload (even while echoing its digest) yields an
+  explicit `ComparisonInvalid.invalid_result` with status `INVALID`.
+- Default adapters call `payload.consume()` before constructing or normalizing engine input, so
+  attestation is tied to actual input consumption rather than stamped after computation.
+- New-engine rows are runtime-checked against an independently computed Black-Scholes invariant:
+  returned `rec.vanna` must equal `-1xBS` before its level enters the comparison. Canonical and
+  returned rights are exact `C`/`P`; `PUT`, `CALL`, lowercase, and other ambiguous tokens are
+  rejected rather than normalized.
+- Deterministic JSON artifact writing remains sorted, fixed-format, and newline-stable.
+
+Previous review-fix coverage was expanded to 12 focused tests, including ignored/echoed payload,
+malformed rights, and a falsified per-record vanna regression.
 - Each engine's `(strike, right)` rows is checked against the canonical key set exactly, with
   expiry checked on each row (or the new engine's result-level expiry). Missing, extra, duplicate,
   and wrong-expiry rows are recorded as exclusions and invalidate the comparison. No dict

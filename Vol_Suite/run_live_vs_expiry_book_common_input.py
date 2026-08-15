@@ -70,17 +70,38 @@ class CanonicalInput:
         return hashlib.sha256(self.canonical_bytes()).hexdigest()
 
 
-@dataclass(frozen=True)
 class CanonicalPayload:
-    """The one serialized payload supplied to each engine adapter."""
+    """Read-only canonical bytes with harness-owned consumption attestation."""
 
-    data: bytes
-    digest: str
-    canonical_input: CanonicalInput
+    __slots__ = ("_accessed", "_canonical_input", "_data", "_digest")
 
-    @classmethod
-    def from_input(cls, inp: CanonicalInput, data: bytes) -> CanonicalPayload:
-        return cls(data=data, digest=hashlib.sha256(data).hexdigest(), canonical_input=inp)
+    def __init__(self, inp: CanonicalInput, data: bytes) -> None:
+        self._data = bytes(data)
+        self._digest = hashlib.sha256(self._data).hexdigest()
+        self._canonical_input = inp
+        self._accessed = False
+
+    @property
+    def data(self) -> bytes:
+        self._accessed = True
+        return self._data
+
+    def consume(self) -> bytes:
+        """Return exactly the canonical bytes and record their consumption."""
+        return self.data
+
+    @property
+    def canonical_input(self) -> CanonicalInput:
+        return self._canonical_input
+
+    @property
+    def digest(self) -> str:
+        """Metadata only; compare_common_input never trusts this as attestation."""
+        return self._digest
+
+    @property
+    def consumed_input_sha256(self) -> str | None:
+        return self._digest if self._accessed else None
 
 
 class ComparisonInvalid(ValueError):
@@ -98,7 +119,7 @@ def make_canonical_input(
     source_hashes: Iterable[str], chain_source: str = "offline-canonical",
 ) -> CanonicalInput:
     canonical_rows = tuple(sorted(
-        (CanonicalRow(float(r["strike"]), str(r["right"]).upper()[:1],
+        (CanonicalRow(float(r["strike"]), r["right"],
                       float(r.get("iv", r.get("implied_vol"))), int(r["oi"]))
          for r in rows), key=lambda r: (r.strike, r.right)))
     return CanonicalInput(ticker, calendar_day, expiry, int(dte), float(spot),
@@ -145,7 +166,7 @@ def _classify(live: float, new: float, eps: float) -> str:
 
 
 def _row_key(row: Any) -> tuple[float, str]:
-    return float(row.strike), str(row.right).upper()[:1]
+    return float(row.strike), row.right
 
 
 def _coverage(rows: Iterable[Any], inp: CanonicalInput, engine: str, value_fn: Callable[[Any], float],
@@ -156,6 +177,10 @@ def _coverage(rows: Iterable[Any], inp: CanonicalInput, engine: str, value_fn: C
     for row in rows:
         key = _row_key(row)
         expiry = getattr(row, "expiry", None) or parent_expiry
+        if key[1] not in {"C", "P"}:
+            exclusions.append({"engine": engine, "key": list(key), "expiry": expiry,
+                               "reason": "malformed right; expected exact C or P"})
+            continue
         if expiry != inp.expiry:
             exclusions.append({"engine": engine, "key": list(key), "expiry": expiry,
                                "reason": "wrong expiry"})
@@ -168,15 +193,32 @@ def _coverage(rows: Iterable[Any], inp: CanonicalInput, engine: str, value_fn: C
             exclusions.append({"engine": engine, "key": list(key), "expiry": expiry,
                                "reason": "duplicate strike/right row"})
             continue
-        levels[key] = value_fn(row)
+        try:
+            levels[key] = value_fn(row)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            exclusions.append({"engine": engine, "key": list(key), "expiry": expiry,
+                               "reason": f"invalid output record: {exc}"})
     missing = sorted(expected - set(levels))
     exclusions.extend({"engine": engine, "key": list(key), "reason": "missing strike/right key"}
                       for key in missing)
     return levels, exclusions
 
 
+def _new_vanna_level(row: Any, inp: CanonicalInput) -> float:
+    """Validate rec.vanna against an independently computed BS invariant."""
+    sigma = float(row.iv)
+    T = float(row.T)
+    d1 = (math.log(inp.spot / float(row.strike)) + (0.05 + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    expected = -math.exp(0.0) * math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi) * d2 / sigma
+    actual = float(row.greeks["vanna"])
+    if not math.isclose(actual, expected, rel_tol=1e-10, abs_tol=1e-12):
+        raise ValueError("rec.vanna is not -1xBS")
+    return float(row.exposure_of("vanna"))
+
+
 def _new_levels(engine_result: Any, inp: CanonicalInput) -> tuple[dict[tuple[float, str], float], list[dict[str, Any]]]:
-    return _coverage(engine_result.rows, inp, "new", lambda row: float(row.exposure_of("vanna")),
+    return _coverage(engine_result.rows, inp, "new", lambda row: _new_vanna_level(row, inp),
                      parent_expiry=getattr(engine_result, "expiry", None))
 
 
@@ -193,7 +235,13 @@ def _default_live_runner(payload: CanonicalPayload) -> Any:
 
     import dealer_positioning as dp
 
-    inp = payload.canonical_input
+    inp_dict = json.loads(payload.consume())
+    inp = CanonicalInput(
+        inp_dict["ticker"], inp_dict["calendar_day"], inp_dict["expiry"], inp_dict["dte"],
+        inp_dict["spot"], inp_dict["iv_source_ts"],
+        tuple(CanonicalRow(**row) for row in inp_dict["rows"]),
+        tuple(inp_dict["source_hashes"]), inp_dict["chain_source"],
+    )
     class SeedController:
         def fetch_spot_price(self, ticker: str) -> float: return inp.spot
         def fetch_dividend_yield(self, ticker: str, spot: float | None = None) -> float: return 0.0
@@ -220,7 +268,6 @@ def _default_live_runner(payload: CanonicalPayload) -> Any:
             inp.ticker, target_years=inp.dte / 365, expiration=inp.expiry,
             sign_model="vol_surface_replication", accumulate=True,
             _accumulation_hist_rows=(hist_g, hist_oi, hist_spot))
-    result.consumed_input_sha256 = payload.digest
     if result.sign_model != "vol_surface_replication" or not result.accumulate:
         raise ComparisonInvalid("live accumulation fell back or identity changed")
     return result
@@ -228,12 +275,17 @@ def _default_live_runner(payload: CanonicalPayload) -> Any:
 
 def _default_new_runner(payload: CanonicalPayload) -> Any:
     import expiry_book_exposure as ebe
-    inp = payload.canonical_input
+    inp_dict = json.loads(payload.consume())
+    inp = CanonicalInput(
+        inp_dict["ticker"], inp_dict["calendar_day"], inp_dict["expiry"], inp_dict["dte"],
+        inp_dict["spot"], inp_dict["iv_source_ts"],
+        tuple(CanonicalRow(**row) for row in inp_dict["rows"]),
+        tuple(inp_dict["source_hashes"]), inp_dict["chain_source"],
+    )
     result = ebe.build_net_exposure(
         [{"strike": r.strike, "right": r.right, "oi": r.oi, "implied_vol": r.iv,
           "expiry": inp.expiry} for r in inp.rows], inp.spot, ticker=inp.ticker,
         expiry=inp.expiry, T=inp.dte / 365.0, dte=inp.dte)
-    result.consumed_input_sha256 = payload.digest
     return result
 
 
@@ -247,18 +299,22 @@ def compare_common_input(
     live_runner = live_runner or _default_live_runner
     new_runner = new_runner or _default_new_runner
     canonical_bytes = inp.canonical_bytes()
-    payload = CanonicalPayload.from_input(inp, canonical_bytes)
-    live = live_runner(payload)
-    new = new_runner(payload)
-    consumed = [getattr(live, "consumed_input_sha256", None),
-                getattr(new, "consumed_input_sha256", None)]
-    if consumed != [payload.digest, payload.digest]:
-        raise ComparisonInvalid("adapter consumed-input digest does not match canonical hash",
-                                exclusions=[{"engine": name, "consumed_sha256": digest,
-                                             "canonical_sha256": payload.digest,
-                                             "reason": "canonical payload attestation failed"}
-                                            for name, digest in zip(("live", "new"), consumed)
-                                            if digest != payload.digest])
+    live_payload = CanonicalPayload(inp, canonical_bytes)
+    new_payload = CanonicalPayload(inp, canonical_bytes)
+    live = live_runner(live_payload)
+    live_attestation = live_payload.consumed_input_sha256
+    new = new_runner(new_payload)
+    new_attestation = new_payload.consumed_input_sha256
+    canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
+    if live_attestation != canonical_digest or new_attestation != canonical_digest:
+        raise ComparisonInvalid(
+            "adapter did not consume canonical payload bytes",
+            exclusions=[{"engine": name, "consumed_sha256": digest,
+                         "canonical_sha256": canonical_digest,
+                         "reason": "canonical payload consumption not observed"}
+                        for name, digest in (("live", live_attestation), ("new", new_attestation))
+                        if digest != canonical_digest],
+        )
     if getattr(live, "sign_model", None) != "vol_surface_replication" or not getattr(live, "accumulate", False):
         raise ComparisonInvalid("live identity/actual accumulation assertion failed")
     live_levels, live_exclusions = _live_levels(live, inp)
@@ -279,7 +335,7 @@ def compare_common_input(
     nv = [p["new_vanna_level"] for p in pairs]
     denom = sum(abs(x) + abs(y) for x, y in zip(lv, nv))
     d_conv = sum(abs(x - y) for x, y in zip(lv, nv)) / denom if denom else 0.0
-    return {"status": "VALID", "input_hash": payload.digest,
+    return {"status": "VALID", "input_hash": canonical_digest,
             "coverage": {"live": len(live_levels), "new": len(new_levels),
                           "common": len(keys), "total": len(inp.rows)},
             "pairs": pairs,
@@ -291,7 +347,7 @@ def compare_common_input(
                            "comparison": "levels-only; live vanna level vs new net vanna level"},
             "config": {"sign_model": "vol_surface_replication", "accumulate": True,
                        "new_vanna": "rec.vanna=-1xBS", "flow_compared": False,
-                       "canonical_sha256": payload.digest}}
+                       "canonical_sha256": canonical_digest}}
 
 
 def write_deterministic_artifact(path: str, comparison: Mapping[str, Any]) -> None:
