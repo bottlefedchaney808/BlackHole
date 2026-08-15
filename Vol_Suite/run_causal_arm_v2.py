@@ -265,10 +265,28 @@ def _fit_ols(X: np.ndarray, y: np.ndarray, target_col: str, col_names: List[str]
     target column is NaN with beta_status NOT-IDENTIFIABLE when the target is
     aliased / the design is rank-deficient / condition > COND_MAX / non-finite."""
     n, p = X.shape
+    # Rank and conditioning are computed on SCALE-INVARIANT inputs:
+    #   - rank is identical under column scaling (SVD pivot), so use raw X.
+    #   - condition number is NOT scale-invariant: the raw design here mixes
+    #     ~1e9 (gamma_burst) / ~1e6 (pre_vanna) columns with ~1e-3 (delta_s,
+    #     market, spillover) columns, so raw cond can be ~1e12 purely from unit
+    #     mismatch even when the columns are genuinely independent (standardized
+    #     cond ~20). Gating identifiability on raw cond would fabricate
+    #     NOT-IDENTIFIABLE for a well-conditioned, full-rank design. So the
+    #     conditioning GUARD uses the standardized (mean-0, unit-variance, on
+    #     non-intercept columns) design; the OLS fit itself stays in natural units.
+    _Xs = X.astype(float).copy()
+    for _j in range(1, _Xs.shape[1]):
+        _s = _Xs[:, _j].std()
+        if _s > 1e-12:
+            _Xs[:, _j] = (_Xs[:, _j] - _Xs[:, _j].mean()) / _s
+    _rank = int(np.linalg.matrix_rank(X))
+    _cond_std = (float(np.linalg.cond(_Xs)) if n >= p and _rank == p else float("nan"))
     out: Dict[str, Any] = {
         "n": n, "p": p, "solver": "numpy.lstsq(SVD)",
-        "rank": int(np.linalg.matrix_rank(X)),
-        "cond": float(np.linalg.cond(X)) if n >= p and np.linalg.matrix_rank(X) == p else float("nan"),
+        "rank": _rank,
+        "cond": float(np.linalg.cond(X)) if n >= p and _rank == p else float("nan"),
+        "cond_standardized": _cond_std,
         "col_names": list(col_names),
     }
     # identify target column by NAME, never by positional index (audit pin)
@@ -294,11 +312,17 @@ def _fit_ols(X: np.ndarray, y: np.ndarray, target_col: str, col_names: List[str]
         out["beta_unavailable_reason"] = f"rank-deficient design (rank {rank} < p {p})"
         return out
 
-    cond = out["cond"]
-    if not math.isfinite(cond) or cond > COND_MAX:
+    # Conditioning GUARD uses the SCALE-INVARIANT standardized cond (see the
+    # block above: raw cond can be ~1e12 purely from column-unit mismatch on a
+    # genuinely full-rank design). A design is "not identifiable" for conditioning
+    # only if its standardized cond exceeds COND_MAX. Raw cond is still reported
+    # as a diagnostic but never gates identifiability.
+    cond_std = out.get("cond_standardized")
+    if not math.isfinite(cond_std) or cond_std > COND_MAX:
         out["beta_status"] = "NOT-IDENTIFIABLE"
         out["beta"] = float("nan")
-        out["beta_unavailable_reason"] = f"ill-conditioned design (cond {cond:.2e} > {COND_MAX:.1e})"
+        out["beta_unavailable_reason"] = (f"ill-conditioned design (std cond "
+                                          f"{cond_std:.2e} > {COND_MAX:.1e})")
         return out
 
     # VIF diagnostics per column
@@ -673,8 +697,10 @@ def run_causal_arm(records: List[dict], config: Optional[dict] = None) -> Dict[s
         "rank": fit.get("rank"),
         "p": fit.get("p"),
         "cond": fit.get("cond"),
+        "cond_standardized": fit.get("cond_standardized"),
         "max_vif": fit.get("max_vif"),
         "vif_flag": fit.get("vif_flag"),
+        "beta_t": fit.get("beta_t"),
         "beta": beta,
         "beta_se": se_beta,
         "beta_status": fit.get("beta_status"),

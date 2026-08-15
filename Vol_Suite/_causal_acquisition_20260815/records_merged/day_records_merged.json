@@ -1,0 +1,5458 @@
+[
+  {
+    "day": "20260105",
+    "date": "20260105",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 1609.070861977752,
+      "delta_iv": 0.1037,
+      "gamma_burst": 0.0,
+      "delta_s": 0.000647,
+      "market": 0.000647,
+      "event": 0,
+      "a6_reflexivity": 0.252262,
+      "cross_family_spillover": 0.003294,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 1609.070861977752,
+      "forward_return_h": 0.000167
+    },
+    "clock": {
+      "daily": {
+        "return": 0.000647,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260105-spy"
+  },
+  {
+    "day": "20260105",
+    "date": "20260105",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 1271298.672840785,
+      "delta_iv": 0.1625,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002647,
+      "market": 0.000647,
+      "event": 0,
+      "a6_reflexivity": 0.454467,
+      "cross_family_spillover": 0.003294,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 1271298.672840785,
+      "forward_return_h": -0.001009
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002647,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260105-qqq"
+  },
+  {
+    "day": "20260106",
+    "date": "20260106",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 55607.695213537874,
+      "delta_iv": 0.1114,
+      "gamma_burst": 7507056.115489,
+      "delta_s": 0.005012,
+      "market": 0.005012,
+      "event": 0,
+      "a6_reflexivity": -0.054057,
+      "cross_family_spillover": 0.0005690000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 55607.695213537874,
+      "forward_return_h": 0.000145
+    },
+    "clock": {
+      "daily": {
+        "return": 0.005012,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260106-spy"
+  },
+  {
+    "day": "20260106",
+    "date": "20260106",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -522145.3909436847,
+      "delta_iv": 0.154,
+      "gamma_burst": 0.0,
+      "delta_s": 0.005581,
+      "market": 0.005012,
+      "event": 0,
+      "a6_reflexivity": -0.301966,
+      "cross_family_spillover": 0.0005690000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -522145.3909436847,
+      "forward_return_h": -0.000194
+    },
+    "clock": {
+      "daily": {
+        "return": 0.005581,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260106-qqq"
+  },
+  {
+    "day": "20260107",
+    "date": "20260107",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -81577.65547806857,
+      "delta_iv": 0.1114,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003375,
+      "market": -0.003375,
+      "event": 0,
+      "a6_reflexivity": 0.383687,
+      "cross_family_spillover": 0.005542999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -81577.65547806857,
+      "forward_return_h": 7.9e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003375,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260107-spy"
+  },
+  {
+    "day": "20260107",
+    "date": "20260107",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -8278.744529245954,
+      "delta_iv": 0.1633,
+      "gamma_burst": 0.0,
+      "delta_s": 0.002168,
+      "market": -0.003375,
+      "event": 0,
+      "a6_reflexivity": 0.642448,
+      "cross_family_spillover": 0.005542999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -8278.744529245954,
+      "forward_return_h": 8e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.002168,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260107-qqq"
+  },
+  {
+    "day": "20260108",
+    "date": "20260108",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 139578.44186000846,
+      "delta_iv": 0.1472,
+      "gamma_burst": 0.0,
+      "delta_s": 0.001016,
+      "market": 0.001016,
+      "event": 0,
+      "a6_reflexivity": -0.199243,
+      "cross_family_spillover": 0.0041010000000000005,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 139578.44186000846,
+      "forward_return_h": 3.6e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.001016,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260108-spy"
+  },
+  {
+    "day": "20260108",
+    "date": "20260108",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260109",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 12252.286567942183,
+      "delta_iv": 0.1926,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003085,
+      "market": 0.001016,
+      "event": 0,
+      "a6_reflexivity": -0.243735,
+      "cross_family_spillover": 0.0041010000000000005,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 12252.286567942183,
+      "forward_return_h": -0.000675
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003085,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260108-qqq"
+  },
+  {
+    "day": "20260109",
+    "date": "20260109",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -7865.84120642004,
+      "delta_iv": 0.0941,
+      "gamma_burst": 180846.343976,
+      "delta_s": 0.004647,
+      "market": 0.004647,
+      "event": 0,
+      "a6_reflexivity": -0.225837,
+      "cross_family_spillover": 0.005069000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -7865.84120642004,
+      "forward_return_h": -5.8e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.004647,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260109-spy"
+  },
+  {
+    "day": "20260109",
+    "date": "20260109",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 54600000,
+      "pre_window_end": 54600000,
+      "breach_window_start": 55200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -253954.96481457705,
+      "delta_iv": 0.1369,
+      "gamma_burst": 37139708.031642,
+      "delta_s": 0.009716,
+      "market": 0.004647,
+      "event": 0,
+      "a6_reflexivity": -0.22899,
+      "cross_family_spillover": 0.005069000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -253954.96481457705,
+      "forward_return_h": 0.000295
+    },
+    "clock": {
+      "daily": {
+        "return": 0.009716,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000295,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260109-qqq"
+  },
+  {
+    "day": "20260112",
+    "date": "20260112",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 34791.09002935845,
+      "delta_iv": 0.1188,
+      "gamma_burst": 9367568.996905,
+      "delta_s": 0.005533,
+      "market": 0.005533,
+      "event": 0,
+      "a6_reflexivity": 0.4822,
+      "cross_family_spillover": 0.0005140000000000006,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 34791.09002935845,
+      "forward_return_h": 0.0006
+    },
+    "clock": {
+      "daily": {
+        "return": 0.005533,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260112-spy"
+  },
+  {
+    "day": "20260112",
+    "date": "20260112",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 187237.36716249952,
+      "delta_iv": 0.1684,
+      "gamma_burst": 0.0,
+      "delta_s": 0.006047,
+      "market": 0.005533,
+      "event": 0,
+      "a6_reflexivity": 0.237741,
+      "cross_family_spillover": 0.0005140000000000006,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 187237.36716249952,
+      "forward_return_h": 0.001315
+    },
+    "clock": {
+      "daily": {
+        "return": 0.006047,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260112-qqq"
+  },
+  {
+    "day": "20260113",
+    "date": "20260113",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 50400000,
+      "pre_window_end": 50400000,
+      "breach_window_start": 51000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -317203.24587443634,
+      "delta_iv": 0.1189,
+      "gamma_burst": 1264270.007606,
+      "delta_s": -0.002989,
+      "market": -0.002989,
+      "event": 0,
+      "a6_reflexivity": 0.20956,
+      "cross_family_spillover": 0.00032899999999999987,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -317203.24587443634,
+      "forward_return_h": 7.9e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002989,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 7.9e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260113-spy"
+  },
+  {
+    "day": "20260113",
+    "date": "20260113",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 245302.342079836,
+      "delta_iv": 0.1622,
+      "gamma_burst": 0.0,
+      "delta_s": -0.00266,
+      "market": -0.002989,
+      "event": 0,
+      "a6_reflexivity": 0.378679,
+      "cross_family_spillover": 0.00032899999999999987,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 245302.342079836,
+      "forward_return_h": -0.000731
+    },
+    "clock": {
+      "daily": {
+        "return": -0.00266,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260113-qqq"
+  },
+  {
+    "day": "20260114",
+    "date": "20260114",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 38400000,
+      "pre_window_end": 38400000,
+      "breach_window_start": 39000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -317445.8219575386,
+      "delta_iv": 0.1281,
+      "gamma_burst": 24683110.594841,
+      "delta_s": -0.001136,
+      "market": -0.001136,
+      "event": 0,
+      "a6_reflexivity": -0.391047,
+      "cross_family_spillover": 0.002738,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -317445.8219575386,
+      "forward_return_h": -0.000138
+    },
+    "clock": {
+      "daily": {
+        "return": -0.001136,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000138,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260114-spy"
+  },
+  {
+    "day": "20260114",
+    "date": "20260114",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -67520.25446200225,
+      "delta_iv": 0.1751,
+      "gamma_burst": 3464268.778619,
+      "delta_s": -0.003874,
+      "market": -0.001136,
+      "event": 0,
+      "a6_reflexivity": -0.455777,
+      "cross_family_spillover": 0.002738,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -67520.25446200225,
+      "forward_return_h": -0.001833
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003874,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260114-qqq"
+  },
+  {
+    "day": "20260115",
+    "date": "20260115",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -153241.79946892092,
+      "delta_iv": 0.1375,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002709,
+      "market": -0.002709,
+      "event": 0,
+      "a6_reflexivity": -0.206347,
+      "cross_family_spillover": 0.00442,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -153241.79946892092,
+      "forward_return_h": 0.000475
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002709,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260115-spy"
+  },
+  {
+    "day": "20260115",
+    "date": "20260115",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260116",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -85328.65543235521,
+      "delta_iv": 0.1723,
+      "gamma_burst": 0.0,
+      "delta_s": -0.007129,
+      "market": -0.002709,
+      "event": 0,
+      "a6_reflexivity": 0.221018,
+      "cross_family_spillover": 0.00442,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -85328.65543235521,
+      "forward_return_h": 0.000234
+    },
+    "clock": {
+      "daily": {
+        "return": -0.007129,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260115-qqq"
+  },
+  {
+    "day": "20260116",
+    "date": "20260116",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260123",
+    "event_habitat": "OPEX",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 307909.6970750504,
+      "delta_iv": 0.1013,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003214,
+      "market": -0.003214,
+      "event": 1,
+      "a6_reflexivity": -0.210143,
+      "cross_family_spillover": 0.0045190000000000004,
+      "surprise": null,
+      "event_habitat": "OPEX",
+      "family_interaction_spy": 307909.6970750504,
+      "forward_return_h": 0.000151
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003214,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260116-spy"
+  },
+  {
+    "day": "20260116",
+    "date": "20260116",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260123",
+    "event_habitat": "OPEX",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 25370.980320839,
+      "delta_iv": 0.1348,
+      "gamma_burst": 998859.99225,
+      "delta_s": -0.007733,
+      "market": -0.003214,
+      "event": 1,
+      "a6_reflexivity": -0.207463,
+      "cross_family_spillover": 0.0045190000000000004,
+      "surprise": null,
+      "event_habitat": "OPEX",
+      "family_interaction_qqq": 25370.980320839,
+      "forward_return_h": -0.000735
+    },
+    "clock": {
+      "daily": {
+        "return": -0.007733,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260116-qqq"
+  },
+  {
+    "day": "20260120",
+    "date": "20260120",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260123",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 53400000,
+      "pre_window_end": 53400000,
+      "breach_window_start": 54000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 42445.89156387381,
+      "delta_iv": 0.1865,
+      "gamma_burst": 12011907.606608,
+      "delta_s": -0.007063,
+      "market": -0.007063,
+      "event": 0,
+      "a6_reflexivity": 0.196202,
+      "cross_family_spillover": 0.0010309999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 42445.89156387381,
+      "forward_return_h": 8.9e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.007063,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 8.9e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260120-spy"
+  },
+  {
+    "day": "20260120",
+    "date": "20260120",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260123",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 2462.3687814780487,
+      "delta_iv": 0.2441,
+      "gamma_burst": 0.0,
+      "delta_s": -0.006032,
+      "market": -0.007063,
+      "event": 0,
+      "a6_reflexivity": 0.272428,
+      "cross_family_spillover": 0.0010309999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 2462.3687814780487,
+      "forward_return_h": -0.001259
+    },
+    "clock": {
+      "daily": {
+        "return": -0.006032,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260120-qqq"
+  },
+  {
+    "day": "20260121",
+    "date": "20260121",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260123",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 51600000,
+      "pre_window_end": 51600000,
+      "breach_window_start": 52200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 3324.0568746921913,
+      "delta_iv": 0.1474,
+      "gamma_burst": 41762813.665104,
+      "delta_s": 0.007409,
+      "market": 0.007409,
+      "event": 1,
+      "a6_reflexivity": -0.083079,
+      "cross_family_spillover": 0.0027400000000000002,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_spy": 3324.0568746921913,
+      "forward_return_h": -0.000686
+    },
+    "clock": {
+      "daily": {
+        "return": 0.007409,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000686,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260121-spy"
+  },
+  {
+    "day": "20260121",
+    "date": "20260121",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260123",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 51600000,
+      "pre_window_end": 51600000,
+      "breach_window_start": 52200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 4890.096824037163,
+      "delta_iv": 0.2007,
+      "gamma_burst": 143698228.128376,
+      "delta_s": 0.010149,
+      "market": 0.007409,
+      "event": 1,
+      "a6_reflexivity": 0.062718,
+      "cross_family_spillover": 0.0027400000000000002,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_qqq": 4890.096824037163,
+      "forward_return_h": -0.001258
+    },
+    "clock": {
+      "daily": {
+        "return": 0.010149,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.001258,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260121-qqq"
+  },
+  {
+    "day": "20260122",
+    "date": "20260122",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260123",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 15214.207261025378,
+      "delta_iv": 0.1189,
+      "gamma_burst": 0.0,
+      "delta_s": -0.00129,
+      "market": -0.00129,
+      "event": 1,
+      "a6_reflexivity": -0.204396,
+      "cross_family_spillover": 0.0005659999999999999,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_spy": 15214.207261025378,
+      "forward_return_h": 0.000391
+    },
+    "clock": {
+      "daily": {
+        "return": -0.00129,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260122-spy"
+  },
+  {
+    "day": "20260122",
+    "date": "20260122",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260123",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -90387.49702654364,
+      "delta_iv": 0.1589,
+      "gamma_burst": 0.0,
+      "delta_s": -0.000724,
+      "market": -0.00129,
+      "event": 1,
+      "a6_reflexivity": -0.294764,
+      "cross_family_spillover": 0.0005659999999999999,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_qqq": -90387.49702654364,
+      "forward_return_h": -0.000193
+    },
+    "clock": {
+      "daily": {
+        "return": -0.000724,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260122-qqq"
+  },
+  {
+    "day": "20260123",
+    "date": "20260123",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260130",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 40011.157661223595,
+      "delta_iv": 0.1251,
+      "gamma_burst": 0.0,
+      "delta_s": 0.001351,
+      "market": 0.001351,
+      "event": 1,
+      "a6_reflexivity": 0.300055,
+      "cross_family_spillover": 0.003117,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_spy": 40011.157661223595,
+      "forward_return_h": 0.000276
+    },
+    "clock": {
+      "daily": {
+        "return": 0.001351,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260123-spy"
+  },
+  {
+    "day": "20260123",
+    "date": "20260123",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260130",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 8120.559286784996,
+      "delta_iv": 0.1757,
+      "gamma_burst": 0.0,
+      "delta_s": 0.004468,
+      "market": 0.001351,
+      "event": 1,
+      "a6_reflexivity": 0.230254,
+      "cross_family_spillover": 0.003117,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_qqq": 8120.559286784996,
+      "forward_return_h": 0.001064
+    },
+    "clock": {
+      "daily": {
+        "return": 0.004468,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260123-qqq"
+  },
+  {
+    "day": "20260126",
+    "date": "20260126",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260130",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -342410.9484005249,
+      "delta_iv": 0.1324,
+      "gamma_burst": 43449194.302336,
+      "delta_s": 0.003637,
+      "market": 0.003637,
+      "event": 0,
+      "a6_reflexivity": 0.170277,
+      "cross_family_spillover": 0.0012949999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -342410.9484005249,
+      "forward_return_h": 0.001286
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003637,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260126-spy"
+  },
+  {
+    "day": "20260126",
+    "date": "20260126",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260130",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -57252.78183222062,
+      "delta_iv": 0.193,
+      "gamma_burst": 0.0,
+      "delta_s": 0.004932,
+      "market": 0.003637,
+      "event": 0,
+      "a6_reflexivity": 0.322251,
+      "cross_family_spillover": 0.0012949999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -57252.78183222062,
+      "forward_return_h": 0.001558
+    },
+    "clock": {
+      "daily": {
+        "return": 0.004932,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260126-qqq"
+  },
+  {
+    "day": "20260127",
+    "date": "20260127",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260130",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 437948.83043406083,
+      "delta_iv": 0.1461,
+      "gamma_burst": 0.0,
+      "delta_s": 0.00193,
+      "market": 0.00193,
+      "event": 1,
+      "a6_reflexivity": 0.264486,
+      "cross_family_spillover": 0.0015840000000000001,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_spy": 437948.83043406083,
+      "forward_return_h": -0.000403
+    },
+    "clock": {
+      "daily": {
+        "return": 0.00193,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260127-spy"
+  },
+  {
+    "day": "20260127",
+    "date": "20260127",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260130",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 24527.958738441157,
+      "delta_iv": 0.2195,
+      "gamma_burst": 0.0,
+      "delta_s": 0.003514,
+      "market": 0.00193,
+      "event": 1,
+      "a6_reflexivity": 0.42559,
+      "cross_family_spillover": 0.0015840000000000001,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_qqq": 24527.958738441157,
+      "forward_return_h": 0.000588
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003514,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260127-qqq"
+  },
+  {
+    "day": "20260128",
+    "date": "20260128",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260130",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 106816.95900188462,
+      "delta_iv": 0.1579,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002937,
+      "market": -0.002937,
+      "event": 1,
+      "a6_reflexivity": 0.203462,
+      "cross_family_spillover": 0.0009190000000000001,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_spy": 106816.95900188462,
+      "forward_return_h": 0.000202
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002937,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260128-spy"
+  },
+  {
+    "day": "20260128",
+    "date": "20260128",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260130",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -23358.709919001296,
+      "delta_iv": 0.2343,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003856,
+      "market": -0.002937,
+      "event": 1,
+      "a6_reflexivity": 0.130669,
+      "cross_family_spillover": 0.0009190000000000001,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_qqq": -23358.709919001296,
+      "forward_return_h": 0.000346
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003856,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260128-qqq"
+  },
+  {
+    "day": "20260129",
+    "date": "20260129",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260130",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 35400000,
+      "pre_window_end": 35400000,
+      "breach_window_start": 36000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -217891.96730480916,
+      "delta_iv": 0.1405,
+      "gamma_burst": 92779295.229141,
+      "delta_s": -0.003775,
+      "market": -0.003775,
+      "event": 1,
+      "a6_reflexivity": -0.276064,
+      "cross_family_spillover": 0.0016929999999999996,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_spy": -217891.96730480916,
+      "forward_return_h": -0.000492
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003775,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000492,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260129-spy"
+  },
+  {
+    "day": "20260129",
+    "date": "20260129",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260130",
+    "event_habitat": "EARNINGS",
+    "pre_window": {
+      "pre_vanna_timestamp": 35400000,
+      "pre_window_end": 35400000,
+      "breach_window_start": 36000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -84315.00984459282,
+      "delta_iv": 0.1975,
+      "gamma_burst": 539866033.249778,
+      "delta_s": -0.005468,
+      "market": -0.003775,
+      "event": 1,
+      "a6_reflexivity": -0.312502,
+      "cross_family_spillover": 0.0016929999999999996,
+      "surprise": null,
+      "event_habitat": "EARNINGS",
+      "family_interaction_qqq": -84315.00984459282,
+      "forward_return_h": -0.000848
+    },
+    "clock": {
+      "daily": {
+        "return": -0.005468,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000848,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260129-qqq"
+  },
+  {
+    "day": "20260130",
+    "date": "20260130",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 117942.77061214263,
+      "delta_iv": 0.1442,
+      "gamma_burst": 100952953.008493,
+      "delta_s": -0.0014,
+      "market": -0.0014,
+      "event": 0,
+      "a6_reflexivity": -0.11947,
+      "cross_family_spillover": 0.007209999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 117942.77061214263,
+      "forward_return_h": -0.001703
+    },
+    "clock": {
+      "daily": {
+        "return": -0.0014,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260130-spy"
+  },
+  {
+    "day": "20260130",
+    "date": "20260130",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 127483.68766944886,
+      "delta_iv": 0.2064,
+      "gamma_burst": 27372662.212408,
+      "delta_s": -0.00861,
+      "market": -0.0014,
+      "event": 0,
+      "a6_reflexivity": -0.118734,
+      "cross_family_spillover": 0.007209999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 127483.68766944886,
+      "forward_return_h": -0.00245
+    },
+    "clock": {
+      "daily": {
+        "return": -0.00861,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260130-qqq"
+  },
+  {
+    "day": "20260202",
+    "date": "20260202",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 1011.769848162707,
+      "delta_iv": 0.1371,
+      "gamma_burst": 1061350.223471,
+      "delta_s": 0.007132,
+      "market": 0.007132,
+      "event": 0,
+      "a6_reflexivity": -0.019188,
+      "cross_family_spillover": 0.0018549999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 1011.769848162707,
+      "forward_return_h": -0.000333
+    },
+    "clock": {
+      "daily": {
+        "return": 0.007132,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260202-spy"
+  },
+  {
+    "day": "20260202",
+    "date": "20260202",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 43200000,
+      "pre_window_end": 43200000,
+      "breach_window_start": 43800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -42379.705173948656,
+      "delta_iv": 0.2003,
+      "gamma_burst": 189627.453714,
+      "delta_s": 0.008987,
+      "market": 0.007132,
+      "event": 0,
+      "a6_reflexivity": -0.237338,
+      "cross_family_spillover": 0.0018549999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -42379.705173948656,
+      "forward_return_h": 3.2e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.008987,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 3.2e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260202-qqq"
+  },
+  {
+    "day": "20260203",
+    "date": "20260203",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 37200000,
+      "pre_window_end": 37200000,
+      "breach_window_start": 37800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -245165.8924552639,
+      "delta_iv": 0.1669,
+      "gamma_burst": 34478034.260211,
+      "delta_s": -0.010321,
+      "market": -0.010321,
+      "event": 0,
+      "a6_reflexivity": 0.042191,
+      "cross_family_spillover": 0.008913999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -245165.8924552639,
+      "forward_return_h": -5.8e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.010321,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -5.8e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260203-spy"
+  },
+  {
+    "day": "20260203",
+    "date": "20260203",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 35400000,
+      "pre_window_end": 35400000,
+      "breach_window_start": 36000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -31098.844691517323,
+      "delta_iv": 0.2572,
+      "gamma_burst": 206358803.258564,
+      "delta_s": -0.019235,
+      "market": -0.010321,
+      "event": 0,
+      "a6_reflexivity": -0.094598,
+      "cross_family_spillover": 0.008913999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -31098.844691517323,
+      "forward_return_h": -0.000661
+    },
+    "clock": {
+      "daily": {
+        "return": -0.019235,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000661,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260203-qqq"
+  },
+  {
+    "day": "20260204",
+    "date": "20260204",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 41400000,
+      "pre_window_end": 41400000,
+      "breach_window_start": 42000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -216126.03282304687,
+      "delta_iv": 0.2283,
+      "gamma_burst": 1907416952.428327,
+      "delta_s": -0.005465,
+      "market": -0.005465,
+      "event": 0,
+      "a6_reflexivity": 0.172386,
+      "cross_family_spillover": 0.006929,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -216126.03282304687,
+      "forward_return_h": -0.000117
+    },
+    "clock": {
+      "daily": {
+        "return": -0.005465,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000117,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260204-spy"
+  },
+  {
+    "day": "20260204",
+    "date": "20260204",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 41400000,
+      "pre_window_end": 41400000,
+      "breach_window_start": 42000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 58229.66950204924,
+      "delta_iv": 0.3546,
+      "gamma_burst": 3235545.238447,
+      "delta_s": -0.012394,
+      "market": -0.005465,
+      "event": 0,
+      "a6_reflexivity": 0.270462,
+      "cross_family_spillover": 0.006929,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 58229.66950204924,
+      "forward_return_h": -0.000165
+    },
+    "clock": {
+      "daily": {
+        "return": -0.012394,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000165,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260204-qqq"
+  },
+  {
+    "day": "20260205",
+    "date": "20260205",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -2179649.054105738,
+      "delta_iv": 0.2756,
+      "gamma_burst": 167297112.195206,
+      "delta_s": -0.003735,
+      "market": -0.003735,
+      "event": 0,
+      "a6_reflexivity": -0.392166,
+      "cross_family_spillover": 0.0007460000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -2179649.054105738,
+      "forward_return_h": -0.000941
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003735,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260205-spy"
+  },
+  {
+    "day": "20260205",
+    "date": "20260205",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260206",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 6907.4059476628045,
+      "delta_iv": 0.3995,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002989,
+      "market": -0.003735,
+      "event": 0,
+      "a6_reflexivity": -0.457224,
+      "cross_family_spillover": 0.0007460000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 6907.4059476628045,
+      "forward_return_h": -0.001428
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002989,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260205-qqq"
+  },
+  {
+    "day": "20260206",
+    "date": "20260206",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 34800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -20420.387307284695,
+      "delta_iv": 0.1422,
+      "gamma_burst": 11220655.251374,
+      "delta_s": 0.013367,
+      "market": 0.013367,
+      "event": 0,
+      "a6_reflexivity": -0.528943,
+      "cross_family_spillover": 0.0032249999999999987,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -20420.387307284695,
+      "forward_return_h": -0.001226
+    },
+    "clock": {
+      "daily": {
+        "return": 0.013367,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.001226,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260206-spy"
+  },
+  {
+    "day": "20260206",
+    "date": "20260206",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 44400000,
+      "pre_window_end": 44400000,
+      "breach_window_start": 45000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -8601.532234037577,
+      "delta_iv": 0.2156,
+      "gamma_burst": 403568918.842098,
+      "delta_s": 0.016592,
+      "market": 0.013367,
+      "event": 0,
+      "a6_reflexivity": -0.66584,
+      "cross_family_spillover": 0.0032249999999999987,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -8601.532234037577,
+      "forward_return_h": 0.000313
+    },
+    "clock": {
+      "daily": {
+        "return": 0.016592,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000313,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260206-qqq"
+  },
+  {
+    "day": "20260209",
+    "date": "20260209",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -78599.70874187599,
+      "delta_iv": 0.1487,
+      "gamma_burst": 4678.947728,
+      "delta_s": 0.007492,
+      "market": 0.007492,
+      "event": 0,
+      "a6_reflexivity": -0.163687,
+      "cross_family_spillover": 0.006442999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -78599.70874187599,
+      "forward_return_h": -0.000195
+    },
+    "clock": {
+      "daily": {
+        "return": 0.007492,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000195,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260209-spy"
+  },
+  {
+    "day": "20260209",
+    "date": "20260209",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 38400000,
+      "pre_window_end": 38400000,
+      "breach_window_start": 39000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -43364.43155487811,
+      "delta_iv": 0.2133,
+      "gamma_burst": 22732217.196904,
+      "delta_s": 0.013935,
+      "market": 0.007492,
+      "event": 0,
+      "a6_reflexivity": -0.175809,
+      "cross_family_spillover": 0.006442999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -43364.43155487811,
+      "forward_return_h": -0.000236
+    },
+    "clock": {
+      "daily": {
+        "return": 0.013935,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000236,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260209-qqq"
+  },
+  {
+    "day": "20260210",
+    "date": "20260210",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -22.790972907827022,
+      "delta_iv": 0.1746,
+      "gamma_burst": 0.0,
+      "delta_s": -0.004388,
+      "market": -0.004388,
+      "event": 0,
+      "a6_reflexivity": -0.263807,
+      "cross_family_spillover": 0.001901,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -22.790972907827022,
+      "forward_return_h": 0.000187
+    },
+    "clock": {
+      "daily": {
+        "return": -0.004388,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260210-spy"
+  },
+  {
+    "day": "20260210",
+    "date": "20260210",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -3728.573063969715,
+      "delta_iv": 0.2424,
+      "gamma_burst": 0.0,
+      "delta_s": -0.006289,
+      "market": -0.004388,
+      "event": 0,
+      "a6_reflexivity": -0.37682,
+      "cross_family_spillover": 0.001901,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -3728.573063969715,
+      "forward_return_h": -0.00026
+    },
+    "clock": {
+      "daily": {
+        "return": -0.006289,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260210-qqq"
+  },
+  {
+    "day": "20260211",
+    "date": "20260211",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -64430.58348136307,
+      "delta_iv": 0.1668,
+      "gamma_burst": 97606028.338892,
+      "delta_s": -0.007231,
+      "market": -0.007231,
+      "event": 0,
+      "a6_reflexivity": 0.162902,
+      "cross_family_spillover": 0.00011999999999999945,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -64430.58348136307,
+      "forward_return_h": 0.000217
+    },
+    "clock": {
+      "daily": {
+        "return": -0.007231,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000217,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260211-spy"
+  },
+  {
+    "day": "20260211",
+    "date": "20260211",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -47656.01538935139,
+      "delta_iv": 0.2067,
+      "gamma_burst": 13010301.401419,
+      "delta_s": -0.007111,
+      "market": -0.007231,
+      "event": 0,
+      "a6_reflexivity": 0.190996,
+      "cross_family_spillover": 0.00011999999999999945,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -47656.01538935139,
+      "forward_return_h": 0.000197
+    },
+    "clock": {
+      "daily": {
+        "return": -0.007111,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000197,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260211-qqq"
+  },
+  {
+    "day": "20260212",
+    "date": "20260212",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 37800000,
+      "pre_window_end": 37800000,
+      "breach_window_start": 38400000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -59528.831048681895,
+      "delta_iv": 0.2534,
+      "gamma_burst": 10350746017.62362,
+      "delta_s": -0.018753,
+      "market": -0.018753,
+      "event": 0,
+      "a6_reflexivity": -0.068212,
+      "cross_family_spillover": 0.004234000000000002,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -59528.831048681895,
+      "forward_return_h": -0.00021
+    },
+    "clock": {
+      "daily": {
+        "return": -0.018753,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.00021,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260212-spy"
+  },
+  {
+    "day": "20260212",
+    "date": "20260212",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260213",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 39000000,
+      "pre_window_end": 39000000,
+      "breach_window_start": 39600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -24484.103722830692,
+      "delta_iv": 0.3366,
+      "gamma_burst": 2563865103.165038,
+      "delta_s": -0.022987,
+      "market": -0.018753,
+      "event": 0,
+      "a6_reflexivity": 0.036968,
+      "cross_family_spillover": 0.004234000000000002,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -24484.103722830692,
+      "forward_return_h": -0.000288
+    },
+    "clock": {
+      "daily": {
+        "return": -0.022987,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000288,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260212-qqq"
+  },
+  {
+    "day": "20260213",
+    "date": "20260213",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -32870.92335414279,
+      "delta_iv": 0.1659,
+      "gamma_burst": 1390351.692559,
+      "delta_s": -0.000191,
+      "market": -0.000191,
+      "event": 0,
+      "a6_reflexivity": -0.259648,
+      "cross_family_spillover": 0.0024890000000000003,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -32870.92335414279,
+      "forward_return_h": 0.000499
+    },
+    "clock": {
+      "daily": {
+        "return": -0.000191,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260213-spy"
+  },
+  {
+    "day": "20260213",
+    "date": "20260213",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -227847.6800609223,
+      "delta_iv": 0.2309,
+      "gamma_burst": 0.0,
+      "delta_s": 0.002298,
+      "market": -0.000191,
+      "event": 0,
+      "a6_reflexivity": -0.198024,
+      "cross_family_spillover": 0.0024890000000000003,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -227847.6800609223,
+      "forward_return_h": 0.0002
+    },
+    "clock": {
+      "daily": {
+        "return": 0.002298,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260213-qqq"
+  },
+  {
+    "day": "20260217",
+    "date": "20260217",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 35400000,
+      "pre_window_end": 35400000,
+      "breach_window_start": 36000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -123705.83180309067,
+      "delta_iv": 0.1884,
+      "gamma_burst": 316715.900589,
+      "delta_s": 0.003159,
+      "market": 0.003159,
+      "event": 0,
+      "a6_reflexivity": -0.134953,
+      "cross_family_spillover": 0.0029159999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -123705.83180309067,
+      "forward_return_h": 0.000739
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003159,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000739,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260217-spy"
+  },
+  {
+    "day": "20260217",
+    "date": "20260217",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -14654.830442658395,
+      "delta_iv": 0.2703,
+      "gamma_burst": 37869.466782,
+      "delta_s": 0.006075,
+      "market": 0.003159,
+      "event": 0,
+      "a6_reflexivity": -0.155941,
+      "cross_family_spillover": 0.0029159999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -14654.830442658395,
+      "forward_return_h": 0.003012
+    },
+    "clock": {
+      "daily": {
+        "return": 0.006075,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260217-qqq"
+  },
+  {
+    "day": "20260218",
+    "date": "20260218",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -200353.93939487624,
+      "delta_iv": 0.1831,
+      "gamma_burst": 9228000.498868,
+      "delta_s": 0.004509,
+      "market": 0.004509,
+      "event": 0,
+      "a6_reflexivity": 0.243164,
+      "cross_family_spillover": 0.0028079999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -200353.93939487624,
+      "forward_return_h": 0.000233
+    },
+    "clock": {
+      "daily": {
+        "return": 0.004509,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000233,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260218-spy"
+  },
+  {
+    "day": "20260218",
+    "date": "20260218",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 5965.132354454025,
+      "delta_iv": 0.2278,
+      "gamma_burst": 122789349.402759,
+      "delta_s": 0.007317,
+      "market": 0.004509,
+      "event": 0,
+      "a6_reflexivity": 0.134248,
+      "cross_family_spillover": 0.0028079999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 5965.132354454025,
+      "forward_return_h": 0.00028
+    },
+    "clock": {
+      "daily": {
+        "return": 0.007317,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.00028,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260218-qqq"
+  },
+  {
+    "day": "20260219",
+    "date": "20260219",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 290015.339296597,
+      "delta_iv": 0.1867,
+      "gamma_burst": 0.0,
+      "delta_s": 0.000475,
+      "market": 0.000475,
+      "event": 0,
+      "a6_reflexivity": -0.147087,
+      "cross_family_spillover": 0.00029299999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 290015.339296597,
+      "forward_return_h": 5.1e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.000475,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260219-spy"
+  },
+  {
+    "day": "20260219",
+    "date": "20260219",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260220",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 276318.4273418291,
+      "delta_iv": 0.2169,
+      "gamma_burst": 0.0,
+      "delta_s": 0.000182,
+      "market": 0.000475,
+      "event": 0,
+      "a6_reflexivity": -0.144329,
+      "cross_family_spillover": 0.00029299999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 276318.4273418291,
+      "forward_return_h": -5e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.000182,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260219-qqq"
+  },
+  {
+    "day": "20260220",
+    "date": "20260220",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260227",
+    "event_habitat": "OPEX",
+    "pre_window": {
+      "pre_vanna_timestamp": 36000000,
+      "pre_window_end": 36000000,
+      "breach_window_start": 36600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -188429.38756292616,
+      "delta_iv": 0.146,
+      "gamma_burst": 303848.992921,
+      "delta_s": 0.010821,
+      "market": 0.010821,
+      "event": 1,
+      "a6_reflexivity": -0.046707,
+      "cross_family_spillover": 0.003101999999999999,
+      "surprise": null,
+      "event_habitat": "OPEX",
+      "family_interaction_spy": -188429.38756292616,
+      "forward_return_h": -0.001556
+    },
+    "clock": {
+      "daily": {
+        "return": 0.010821,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.001556,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260220-spy"
+  },
+  {
+    "day": "20260220",
+    "date": "20260220",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260227",
+    "event_habitat": "OPEX",
+    "pre_window": {
+      "pre_vanna_timestamp": 36000000,
+      "pre_window_end": 36000000,
+      "breach_window_start": 36600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 30814.35425428721,
+      "delta_iv": 0.2086,
+      "gamma_burst": 1752150.318314,
+      "delta_s": 0.013923,
+      "market": 0.010821,
+      "event": 1,
+      "a6_reflexivity": -0.020948,
+      "cross_family_spillover": 0.003101999999999999,
+      "surprise": null,
+      "event_habitat": "OPEX",
+      "family_interaction_qqq": 30814.35425428721,
+      "forward_return_h": -0.001588
+    },
+    "clock": {
+      "daily": {
+        "return": 0.013923,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.001588,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260220-qqq"
+  },
+  {
+    "day": "20260223",
+    "date": "20260223",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 39000000,
+      "pre_window_end": 39000000,
+      "breach_window_start": 39600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -102194.0401514536,
+      "delta_iv": 0.2182,
+      "gamma_burst": 952868169.901145,
+      "delta_s": -0.009726,
+      "market": -0.009726,
+      "event": 0,
+      "a6_reflexivity": -0.259237,
+      "cross_family_spillover": 4.000000000000531e-06,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -102194.0401514536,
+      "forward_return_h": -0.000528
+    },
+    "clock": {
+      "daily": {
+        "return": -0.009726,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000528,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260223-spy"
+  },
+  {
+    "day": "20260223",
+    "date": "20260223",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 39000000,
+      "pre_window_end": 39000000,
+      "breach_window_start": 39600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 44193.86956387171,
+      "delta_iv": 0.2885,
+      "gamma_burst": 25903632.278216,
+      "delta_s": -0.00973,
+      "market": -0.009726,
+      "event": 0,
+      "a6_reflexivity": -0.287427,
+      "cross_family_spillover": 4.000000000000531e-06,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 44193.86956387171,
+      "forward_return_h": -0.000715
+    },
+    "clock": {
+      "daily": {
+        "return": -0.00973,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000715,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260223-qqq"
+  },
+  {
+    "day": "20260224",
+    "date": "20260224",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 45600000,
+      "pre_window_end": 45600000,
+      "breach_window_start": 46200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -123483.21126619463,
+      "delta_iv": 0.1931,
+      "gamma_burst": 6069352.249098,
+      "delta_s": 0.008258,
+      "market": 0.008258,
+      "event": 0,
+      "a6_reflexivity": 0.434689,
+      "cross_family_spillover": 0.00040500000000000085,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -123483.21126619463,
+      "forward_return_h": -0.000138
+    },
+    "clock": {
+      "daily": {
+        "return": 0.008258,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000138,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260224-spy"
+  },
+  {
+    "day": "20260224",
+    "date": "20260224",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 56400000,
+      "pre_window_end": 56400000,
+      "breach_window_start": 57000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 12126.74411164316,
+      "delta_iv": 0.2387,
+      "gamma_burst": 354214.99858,
+      "delta_s": 0.008663,
+      "market": 0.008258,
+      "event": 0,
+      "a6_reflexivity": 0.339986,
+      "cross_family_spillover": 0.00040500000000000085,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 12126.74411164316,
+      "forward_return_h": -1.6e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.008663,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -1.6e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260224-qqq"
+  },
+  {
+    "day": "20260225",
+    "date": "20260225",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -10092.803569436262,
+      "delta_iv": 0.1567,
+      "gamma_burst": 0.0,
+      "delta_s": 0.003068,
+      "market": 0.003068,
+      "event": 0,
+      "a6_reflexivity": -0.351582,
+      "cross_family_spillover": 0.003775,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -10092.803569436262,
+      "forward_return_h": -0.000304
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003068,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260225-spy"
+  },
+  {
+    "day": "20260225",
+    "date": "20260225",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 27974.868910667537,
+      "delta_iv": 0.2511,
+      "gamma_burst": 0.0,
+      "delta_s": 0.006843,
+      "market": 0.003068,
+      "event": 0,
+      "a6_reflexivity": -0.060666,
+      "cross_family_spillover": 0.003775,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 27974.868910667537,
+      "forward_return_h": 0.00049
+    },
+    "clock": {
+      "daily": {
+        "return": 0.006843,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260225-qqq"
+  },
+  {
+    "day": "20260226",
+    "date": "20260226",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -135895.67316201798,
+      "delta_iv": 0.1415,
+      "gamma_burst": 203047917.077823,
+      "delta_s": -0.004317,
+      "market": -0.004317,
+      "event": 0,
+      "a6_reflexivity": 0.031124,
+      "cross_family_spillover": 0.004017,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -135895.67316201798,
+      "forward_return_h": -0.000933
+    },
+    "clock": {
+      "daily": {
+        "return": -0.004317,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000933,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260226-spy"
+  },
+  {
+    "day": "20260226",
+    "date": "20260226",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260227",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 36476.28436124285,
+      "delta_iv": 0.2225,
+      "gamma_burst": 486247869.418761,
+      "delta_s": -0.008334,
+      "market": -0.004317,
+      "event": 0,
+      "a6_reflexivity": 0.22172,
+      "cross_family_spillover": 0.004017,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 36476.28436124285,
+      "forward_return_h": -0.000578
+    },
+    "clock": {
+      "daily": {
+        "return": -0.008334,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000578,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260226-qqq"
+  },
+  {
+    "day": "20260227",
+    "date": "20260227",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 37843.25930235289,
+      "delta_iv": 0.1666,
+      "gamma_burst": 0.0,
+      "delta_s": 0.004156,
+      "market": 0.004156,
+      "event": 0,
+      "a6_reflexivity": -0.205758,
+      "cross_family_spillover": 0.002739,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 37843.25930235289,
+      "forward_return_h": -0.000498
+    },
+    "clock": {
+      "daily": {
+        "return": 0.004156,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260227-spy"
+  },
+  {
+    "day": "20260227",
+    "date": "20260227",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -419.5591332564351,
+      "delta_iv": 0.2228,
+      "gamma_burst": 0.0,
+      "delta_s": 0.006895,
+      "market": 0.004156,
+      "event": 0,
+      "a6_reflexivity": -0.268673,
+      "cross_family_spillover": 0.002739,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -419.5591332564351,
+      "forward_return_h": -0.000133
+    },
+    "clock": {
+      "daily": {
+        "return": 0.006895,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260227-qqq"
+  },
+  {
+    "day": "20260302",
+    "date": "20260302",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34800000,
+      "pre_window_end": 34800000,
+      "breach_window_start": 35400000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 30335.49706139351,
+      "delta_iv": 0.1991,
+      "gamma_burst": 135959752.29511,
+      "delta_s": 0.010542,
+      "market": 0.010542,
+      "event": 0,
+      "a6_reflexivity": 0.134394,
+      "cross_family_spillover": 0.003195,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 30335.49706139351,
+      "forward_return_h": -0.000403
+    },
+    "clock": {
+      "daily": {
+        "return": 0.010542,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000403,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260302-spy"
+  },
+  {
+    "day": "20260302",
+    "date": "20260302",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 42000000,
+      "pre_window_end": 42000000,
+      "breach_window_start": 42600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -75537.75621617374,
+      "delta_iv": 0.2458,
+      "gamma_burst": 80453786.381237,
+      "delta_s": 0.013737,
+      "market": 0.010542,
+      "event": 0,
+      "a6_reflexivity": -0.002229,
+      "cross_family_spillover": 0.003195,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -75537.75621617374,
+      "forward_return_h": -0.000129
+    },
+    "clock": {
+      "daily": {
+        "return": 0.013737,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000129,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260302-qqq"
+  },
+  {
+    "day": "20260303",
+    "date": "20260303",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 36000000,
+      "pre_window_end": 36000000,
+      "breach_window_start": 36600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 38035.87877716304,
+      "delta_iv": 0.2379,
+      "gamma_burst": 500137.957445,
+      "delta_s": 0.006004,
+      "market": 0.006004,
+      "event": 0,
+      "a6_reflexivity": -0.313604,
+      "cross_family_spillover": 8.600000000000014e-05,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 38035.87877716304,
+      "forward_return_h": 0.000737
+    },
+    "clock": {
+      "daily": {
+        "return": 0.006004,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000737,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260303-spy"
+  },
+  {
+    "day": "20260303",
+    "date": "20260303",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 28728.087931840688,
+      "delta_iv": 0.2836,
+      "gamma_burst": 0.0,
+      "delta_s": 0.005918,
+      "market": 0.006004,
+      "event": 0,
+      "a6_reflexivity": -0.253671,
+      "cross_family_spillover": 8.600000000000014e-05,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 28728.087931840688,
+      "forward_return_h": -0.000234
+    },
+    "clock": {
+      "daily": {
+        "return": 0.005918,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260303-qqq"
+  },
+  {
+    "day": "20260304",
+    "date": "20260304",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 94242.09447945666,
+      "delta_iv": 0.1917,
+      "gamma_burst": 18912256.483054,
+      "delta_s": 0.003486,
+      "market": 0.003486,
+      "event": 0,
+      "a6_reflexivity": -0.23156,
+      "cross_family_spillover": 0.003972,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 94242.09447945666,
+      "forward_return_h": -0.000835
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003486,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260304-spy"
+  },
+  {
+    "day": "20260304",
+    "date": "20260304",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 49200000,
+      "pre_window_end": 49200000,
+      "breach_window_start": 49800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -98109.96433892415,
+      "delta_iv": 0.2552,
+      "gamma_burst": 5808011.276686,
+      "delta_s": 0.007458,
+      "market": 0.003486,
+      "event": 0,
+      "a6_reflexivity": -0.223646,
+      "cross_family_spillover": 0.003972,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -98109.96433892415,
+      "forward_return_h": 1.6e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.007458,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 1.6e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260304-qqq"
+  },
+  {
+    "day": "20260305",
+    "date": "20260305",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 45600000,
+      "pre_window_end": 45600000,
+      "breach_window_start": 46200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 67435.82098232974,
+      "delta_iv": 0.2356,
+      "gamma_burst": 101373295.637521,
+      "delta_s": -0.001568,
+      "market": -0.001568,
+      "event": 0,
+      "a6_reflexivity": 0.186751,
+      "cross_family_spillover": 0.002028,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 67435.82098232974,
+      "forward_return_h": 0.000651
+    },
+    "clock": {
+      "daily": {
+        "return": -0.001568,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.000651,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260305-spy"
+  },
+  {
+    "day": "20260305",
+    "date": "20260305",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260306",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 126179.36689172048,
+      "delta_iv": 0.2483,
+      "gamma_burst": 0.0,
+      "delta_s": 0.00046,
+      "market": -0.001568,
+      "event": 0,
+      "a6_reflexivity": 0.181367,
+      "cross_family_spillover": 0.002028,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 126179.36689172048,
+      "forward_return_h": 0.000345
+    },
+    "clock": {
+      "daily": {
+        "return": 0.00046,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260305-qqq"
+  },
+  {
+    "day": "20260306",
+    "date": "20260306",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -3911.0999537487614,
+      "delta_iv": 0.2891,
+      "gamma_burst": 0.0,
+      "delta_s": -0.000535,
+      "market": -0.000535,
+      "event": 0,
+      "a6_reflexivity": 0.199993,
+      "cross_family_spillover": 0.00021500000000000002,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -3911.0999537487614,
+      "forward_return_h": -0.000609
+    },
+    "clock": {
+      "daily": {
+        "return": -0.000535,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260306-spy"
+  },
+  {
+    "day": "20260306",
+    "date": "20260306",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -8127.5511679778965,
+      "delta_iv": 0.3306,
+      "gamma_burst": 0.0,
+      "delta_s": -0.00075,
+      "market": -0.000535,
+      "event": 0,
+      "a6_reflexivity": 0.269779,
+      "cross_family_spillover": 0.00021500000000000002,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -8127.5511679778965,
+      "forward_return_h": -0.00025
+    },
+    "clock": {
+      "daily": {
+        "return": -0.00075,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260306-qqq"
+  },
+  {
+    "day": "20260309",
+    "date": "20260309",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 54600000,
+      "pre_window_end": 54600000,
+      "breach_window_start": 55200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -33167.32375677654,
+      "delta_iv": 0.2396,
+      "gamma_burst": 15330887.200204,
+      "delta_s": 0.016271,
+      "market": 0.016271,
+      "event": 0,
+      "a6_reflexivity": -0.016084,
+      "cross_family_spillover": 0.0032130000000000006,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -33167.32375677654,
+      "forward_return_h": 0.001023
+    },
+    "clock": {
+      "daily": {
+        "return": 0.016271,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.001023,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260309-spy"
+  },
+  {
+    "day": "20260309",
+    "date": "20260309",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 54600000,
+      "pre_window_end": 54600000,
+      "breach_window_start": 55200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -38582.2511172349,
+      "delta_iv": 0.2734,
+      "gamma_burst": 389381.986258,
+      "delta_s": 0.019484,
+      "market": 0.016271,
+      "event": 0,
+      "a6_reflexivity": 0.07643,
+      "cross_family_spillover": 0.0032130000000000006,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -38582.2511172349,
+      "forward_return_h": 0.001176
+    },
+    "clock": {
+      "daily": {
+        "return": 0.019484,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.001176,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260309-qqq"
+  },
+  {
+    "day": "20260310",
+    "date": "20260310",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 48000000,
+      "pre_window_end": 48000000,
+      "breach_window_start": 48600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -231738.04975402274,
+      "delta_iv": 0.2579,
+      "gamma_burst": 12936365.879703,
+      "delta_s": -0.002049,
+      "market": -0.002049,
+      "event": 0,
+      "a6_reflexivity": -0.208544,
+      "cross_family_spillover": 0.0003969999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -231738.04975402274,
+      "forward_return_h": -0.000146
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002049,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000146,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260310-spy"
+  },
+  {
+    "day": "20260310",
+    "date": "20260310",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 242165.84382191306,
+      "delta_iv": 0.268,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002446,
+      "market": -0.002049,
+      "event": 0,
+      "a6_reflexivity": -0.140547,
+      "cross_family_spillover": 0.0003969999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 242165.84382191306,
+      "forward_return_h": 0.00064
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002446,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260310-qqq"
+  },
+  {
+    "day": "20260311",
+    "date": "20260311",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 48600000,
+      "pre_window_end": 48600000,
+      "breach_window_start": 49200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -75576.51259656204,
+      "delta_iv": 0.2212,
+      "gamma_burst": 32409779.275205,
+      "delta_s": -0.002625,
+      "market": -0.002625,
+      "event": 0,
+      "a6_reflexivity": -0.067183,
+      "cross_family_spillover": 0.0013409999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -75576.51259656204,
+      "forward_return_h": -3e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002625,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -3e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260311-spy"
+  },
+  {
+    "day": "20260311",
+    "date": "20260311",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -244533.42164096617,
+      "delta_iv": 0.2369,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003966,
+      "market": -0.002625,
+      "event": 0,
+      "a6_reflexivity": 0.186851,
+      "cross_family_spillover": 0.0013409999999999997,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -244533.42164096617,
+      "forward_return_h": -0.000729
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003966,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260311-qqq"
+  },
+  {
+    "day": "20260312",
+    "date": "20260312",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -606106.8357790589,
+      "delta_iv": 0.2939,
+      "gamma_burst": 75968597.377256,
+      "delta_s": -0.006829,
+      "market": -0.006829,
+      "event": 0,
+      "a6_reflexivity": -0.338639,
+      "cross_family_spillover": 0.002326999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -606106.8357790589,
+      "forward_return_h": -0.001014
+    },
+    "clock": {
+      "daily": {
+        "return": -0.006829,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260312-spy"
+  },
+  {
+    "day": "20260312",
+    "date": "20260312",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260313",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 17558.97536668166,
+      "delta_iv": 0.3078,
+      "gamma_burst": 0.0,
+      "delta_s": -0.009156,
+      "market": -0.006829,
+      "event": 0,
+      "a6_reflexivity": -0.290604,
+      "cross_family_spillover": 0.002326999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 17558.97536668166,
+      "forward_return_h": -0.001377
+    },
+    "clock": {
+      "daily": {
+        "return": -0.009156,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260312-qqq"
+  },
+  {
+    "day": "20260313",
+    "date": "20260313",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260320",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 49200000,
+      "pre_window_end": 49200000,
+      "breach_window_start": 49800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -68359.52515115691,
+      "delta_iv": 0.2525,
+      "gamma_burst": 5854899.787458,
+      "delta_s": -0.011581,
+      "market": -0.011581,
+      "event": 0,
+      "a6_reflexivity": 0.050401,
+      "cross_family_spillover": 0.0006029999999999994,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -68359.52515115691,
+      "forward_return_h": 7.5e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.011581,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 7.5e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260313-spy"
+  },
+  {
+    "day": "20260313",
+    "date": "20260313",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260320",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 12470.537161676726,
+      "delta_iv": 0.2824,
+      "gamma_burst": 838875.55741,
+      "delta_s": -0.010978,
+      "market": -0.011581,
+      "event": 0,
+      "a6_reflexivity": 0.225881,
+      "cross_family_spillover": 0.0006029999999999994,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 12470.537161676726,
+      "forward_return_h": 0.0
+    },
+    "clock": {
+      "daily": {
+        "return": -0.010978,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260313-qqq"
+  },
+  {
+    "day": "20260316",
+    "date": "20260316",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260320",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -14207.745851504858,
+      "delta_iv": 0.2114,
+      "gamma_burst": 0.0,
+      "delta_s": 0.001077,
+      "market": 0.001077,
+      "event": 0,
+      "a6_reflexivity": -0.009803,
+      "cross_family_spillover": 0.0002930000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -14207.745851504858,
+      "forward_return_h": 0.000404
+    },
+    "clock": {
+      "daily": {
+        "return": 0.001077,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260316-spy"
+  },
+  {
+    "day": "20260316",
+    "date": "20260316",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260320",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -9901033.429389253,
+      "delta_iv": 0.2604,
+      "gamma_burst": 0.0,
+      "delta_s": 0.000784,
+      "market": 0.001077,
+      "event": 0,
+      "a6_reflexivity": -0.050184,
+      "cross_family_spillover": 0.0002930000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -9901033.429389253,
+      "forward_return_h": 0.00095
+    },
+    "clock": {
+      "daily": {
+        "return": 0.000784,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260316-qqq"
+  },
+  {
+    "day": "20260317",
+    "date": "20260317",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260320",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -18352.23514931541,
+      "delta_iv": 0.1858,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002869,
+      "market": -0.002869,
+      "event": 1,
+      "a6_reflexivity": 0.311971,
+      "cross_family_spillover": 0.003234,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_spy": -18352.23514931541,
+      "forward_return_h": 0.000233
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002869,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260317-spy"
+  },
+  {
+    "day": "20260317",
+    "date": "20260317",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260320",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 15469.095475549795,
+      "delta_iv": 0.2185,
+      "gamma_burst": 0.0,
+      "delta_s": 0.000365,
+      "market": -0.002869,
+      "event": 1,
+      "a6_reflexivity": 0.338109,
+      "cross_family_spillover": 0.003234,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_qqq": 15469.095475549795,
+      "forward_return_h": 0.00063
+    },
+    "clock": {
+      "daily": {
+        "return": 0.000365,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260317-qqq"
+  },
+  {
+    "day": "20260318",
+    "date": "20260318",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260320",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -9396.964216461094,
+      "delta_iv": 0.2199,
+      "gamma_burst": 8770642.943475,
+      "delta_s": -0.009641,
+      "market": -0.009641,
+      "event": 1,
+      "a6_reflexivity": -0.062324,
+      "cross_family_spillover": 0.0013500000000000005,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_spy": -9396.964216461094,
+      "forward_return_h": 0.000793
+    },
+    "clock": {
+      "daily": {
+        "return": -0.009641,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260318-spy"
+  },
+  {
+    "day": "20260318",
+    "date": "20260318",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260320",
+    "event_habitat": "FOMC",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -35042.48836555901,
+      "delta_iv": 0.2703,
+      "gamma_burst": 1817896.401843,
+      "delta_s": -0.010991,
+      "market": -0.009641,
+      "event": 1,
+      "a6_reflexivity": -0.088094,
+      "cross_family_spillover": 0.0013500000000000005,
+      "surprise": null,
+      "event_habitat": "FOMC",
+      "family_interaction_qqq": -35042.48836555901,
+      "forward_return_h": 0.000125
+    },
+    "clock": {
+      "daily": {
+        "return": -0.010991,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260318-qqq"
+  },
+  {
+    "day": "20260319",
+    "date": "20260319",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260320",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 35400000,
+      "pre_window_end": 35400000,
+      "breach_window_start": 36000000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 25390.99424737461,
+      "delta_iv": 0.1633,
+      "gamma_burst": 279403210.637722,
+      "delta_s": 0.005939,
+      "market": 0.005939,
+      "event": 0,
+      "a6_reflexivity": 0.392249,
+      "cross_family_spillover": 0.0022900000000000004,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 25390.99424737461,
+      "forward_return_h": -0.000379
+    },
+    "clock": {
+      "daily": {
+        "return": 0.005939,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000379,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260319-spy"
+  },
+  {
+    "day": "20260319",
+    "date": "20260319",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260320",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 54600000,
+      "pre_window_end": 54600000,
+      "breach_window_start": 55200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 52922.39784325033,
+      "delta_iv": 0.2479,
+      "gamma_burst": 4462665.207569,
+      "delta_s": 0.008229,
+      "market": 0.005939,
+      "event": 0,
+      "a6_reflexivity": 0.420855,
+      "cross_family_spillover": 0.0022900000000000004,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 52922.39784325033,
+      "forward_return_h": -0.000168
+    },
+    "clock": {
+      "daily": {
+        "return": 0.008229,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000168,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260319-qqq"
+  },
+  {
+    "day": "20260320",
+    "date": "20260320",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260327",
+    "event_habitat": "OPEX",
+    "pre_window": {
+      "pre_vanna_timestamp": 36600000,
+      "pre_window_end": 36600000,
+      "breach_window_start": 37200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 34509.964058727135,
+      "delta_iv": 0.2483,
+      "gamma_burst": 37828615.605682,
+      "delta_s": -0.011071,
+      "market": -0.011071,
+      "event": 1,
+      "a6_reflexivity": 0.29948,
+      "cross_family_spillover": 0.0016490000000000012,
+      "surprise": null,
+      "event_habitat": "OPEX",
+      "family_interaction_spy": 34509.964058727135,
+      "forward_return_h": -0.000767
+    },
+    "clock": {
+      "daily": {
+        "return": -0.011071,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000767,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260320-spy"
+  },
+  {
+    "day": "20260320",
+    "date": "20260320",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260327",
+    "event_habitat": "OPEX",
+    "pre_window": {
+      "pre_vanna_timestamp": 52200000,
+      "pre_window_end": 52200000,
+      "breach_window_start": 52800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 9981.456980128205,
+      "delta_iv": 0.2684,
+      "gamma_burst": 1029316409.239372,
+      "delta_s": -0.01272,
+      "market": -0.011071,
+      "event": 1,
+      "a6_reflexivity": 0.358199,
+      "cross_family_spillover": 0.0016490000000000012,
+      "surprise": null,
+      "event_habitat": "OPEX",
+      "family_interaction_qqq": 9981.456980128205,
+      "forward_return_h": -0.000447
+    },
+    "clock": {
+      "daily": {
+        "return": -0.01272,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -0.000447,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260320-qqq"
+  },
+  {
+    "day": "20260323",
+    "date": "20260323",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -38014.24153021826,
+      "delta_iv": 0.2707,
+      "gamma_burst": 2251382.833906,
+      "delta_s": -0.003232,
+      "market": -0.003232,
+      "event": 0,
+      "a6_reflexivity": 0.272591,
+      "cross_family_spillover": 0.0002490000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -38014.24153021826,
+      "forward_return_h": 0.000228
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003232,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260323-spy"
+  },
+  {
+    "day": "20260323",
+    "date": "20260323",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -748934.2186810867,
+      "delta_iv": 0.2821,
+      "gamma_burst": 0.0,
+      "delta_s": -0.002983,
+      "market": -0.003232,
+      "event": 0,
+      "a6_reflexivity": 0.10519,
+      "cross_family_spillover": 0.0002490000000000001,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -748934.2186810867,
+      "forward_return_h": 0.000932
+    },
+    "clock": {
+      "daily": {
+        "return": -0.002983,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260323-qqq"
+  },
+  {
+    "day": "20260324",
+    "date": "20260324",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -11960.099235198722,
+      "delta_iv": 0.2623,
+      "gamma_burst": 1004018.761807,
+      "delta_s": 0.002579,
+      "market": 0.002579,
+      "event": 0,
+      "a6_reflexivity": -0.280854,
+      "cross_family_spillover": 0.004459,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -11960.099235198722,
+      "forward_return_h": 0.001151
+    },
+    "clock": {
+      "daily": {
+        "return": 0.002579,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260324-spy"
+  },
+  {
+    "day": "20260324",
+    "date": "20260324",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -4073.323053461809,
+      "delta_iv": 0.2905,
+      "gamma_burst": 0.0,
+      "delta_s": -0.00188,
+      "market": 0.002579,
+      "event": 0,
+      "a6_reflexivity": -0.295041,
+      "cross_family_spillover": 0.004459,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -4073.323053461809,
+      "forward_return_h": 0.001949
+    },
+    "clock": {
+      "daily": {
+        "return": -0.00188,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260324-qqq"
+  },
+  {
+    "day": "20260325",
+    "date": "20260325",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 70985.32018933696,
+      "delta_iv": 0.2423,
+      "gamma_burst": 1461666972.809316,
+      "delta_s": -0.004427,
+      "market": -0.004427,
+      "event": 0,
+      "a6_reflexivity": -0.1293,
+      "cross_family_spillover": 0.0010950000000000005,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 70985.32018933696,
+      "forward_return_h": 0.000409
+    },
+    "clock": {
+      "daily": {
+        "return": -0.004427,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260325-spy"
+  },
+  {
+    "day": "20260325",
+    "date": "20260325",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 33399.582160391634,
+      "delta_iv": 0.2509,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003332,
+      "market": -0.004427,
+      "event": 0,
+      "a6_reflexivity": 0.031541,
+      "cross_family_spillover": 0.0010950000000000005,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 33399.582160391634,
+      "forward_return_h": 0.000271
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003332,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260325-qqq"
+  },
+  {
+    "day": "20260326",
+    "date": "20260326",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 49200000,
+      "pre_window_end": 49200000,
+      "breach_window_start": 49800000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 43808.11623721888,
+      "delta_iv": 0.2741,
+      "gamma_burst": 120575705.252882,
+      "delta_s": -0.009991,
+      "market": -0.009991,
+      "event": 0,
+      "a6_reflexivity": 0.170532,
+      "cross_family_spillover": 0.0033039999999999996,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 43808.11623721888,
+      "forward_return_h": 0.0
+    },
+    "clock": {
+      "daily": {
+        "return": -0.009991,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": 0.0,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260326-spy"
+  },
+  {
+    "day": "20260326",
+    "date": "20260326",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260327",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -171771.68789491605,
+      "delta_iv": 0.2817,
+      "gamma_burst": 26652993.026971,
+      "delta_s": -0.013295,
+      "market": -0.009991,
+      "event": 0,
+      "a6_reflexivity": 0.148501,
+      "cross_family_spillover": 0.0033039999999999996,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -171771.68789491605,
+      "forward_return_h": 8.6e-05
+    },
+    "clock": {
+      "daily": {
+        "return": -0.013295,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260326-qqq"
+  },
+  {
+    "day": "20260406",
+    "date": "20260406",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 4,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 33918.53631880098,
+      "delta_iv": 0.227,
+      "gamma_burst": 0.0,
+      "delta_s": 0.003243,
+      "market": 0.003243,
+      "event": 0,
+      "a6_reflexivity": 0.170388,
+      "cross_family_spillover": 0.0018989999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 33918.53631880098,
+      "forward_return_h": -1.5e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003243,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260406-spy"
+  },
+  {
+    "day": "20260406",
+    "date": "20260406",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 4,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 43306.07790491814,
+      "delta_iv": 0.2442,
+      "gamma_burst": 0.0,
+      "delta_s": 0.001344,
+      "market": 0.003243,
+      "event": 0,
+      "a6_reflexivity": 0.224122,
+      "cross_family_spillover": 0.0018989999999999999,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 43306.07790491814,
+      "forward_return_h": 0.000629
+    },
+    "clock": {
+      "daily": {
+        "return": 0.001344,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260406-qqq"
+  },
+  {
+    "day": "20260407",
+    "date": "20260407",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 3,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 39000000,
+      "pre_window_end": 39000000,
+      "breach_window_start": 39600000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -183469.74839087925,
+      "delta_iv": 0.2992,
+      "gamma_burst": 11009105.402379,
+      "delta_s": 0.003975,
+      "market": 0.003975,
+      "event": 0,
+      "a6_reflexivity": -0.011814,
+      "cross_family_spillover": 0.0008900000000000002,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -183469.74839087925,
+      "forward_return_h": -6.1e-05
+    },
+    "clock": {
+      "daily": {
+        "return": 0.003975,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": -6.1e-05,
+        "eligible": true
+      }
+    },
+    "source": "merged-20260407-spy"
+  },
+  {
+    "day": "20260407",
+    "date": "20260407",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 3,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -2246.105064010293,
+      "delta_iv": 0.3267,
+      "gamma_burst": 5427.006119,
+      "delta_s": 0.004865,
+      "market": 0.003975,
+      "event": 0,
+      "a6_reflexivity": 0.025313,
+      "cross_family_spillover": 0.0008900000000000002,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -2246.105064010293,
+      "forward_return_h": -0.001596
+    },
+    "clock": {
+      "daily": {
+        "return": 0.004865,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260407-qqq"
+  },
+  {
+    "day": "20260408",
+    "date": "20260408",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 2,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -9986.300420263162,
+      "delta_iv": 0.1873,
+      "gamma_burst": 592169.109095,
+      "delta_s": -0.000584,
+      "market": -0.000584,
+      "event": 0,
+      "a6_reflexivity": -0.121718,
+      "cross_family_spillover": 0.0033450000000000003,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": -9986.300420263162,
+      "forward_return_h": -0.00122
+    },
+    "clock": {
+      "daily": {
+        "return": -0.000584,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260408-spy"
+  },
+  {
+    "day": "20260408",
+    "date": "20260408",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 2,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 8836.2643978582,
+      "delta_iv": 0.2238,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003929,
+      "market": -0.000584,
+      "event": 0,
+      "a6_reflexivity": -0.222654,
+      "cross_family_spillover": 0.0033450000000000003,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 8836.2643978582,
+      "forward_return_h": -0.001726
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003929,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260408-qqq"
+  },
+  {
+    "day": "20260409",
+    "date": "20260409",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 1,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 6955702.544039716,
+      "delta_iv": 0.1509,
+      "gamma_burst": 41371364821.56726,
+      "delta_s": 0.007782,
+      "market": 0.007782,
+      "event": 0,
+      "a6_reflexivity": 0.24179,
+      "cross_family_spillover": 0.0007829999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 6955702.544039716,
+      "forward_return_h": 0.000563
+    },
+    "clock": {
+      "daily": {
+        "return": 0.007782,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260409-spy"
+  },
+  {
+    "day": "20260409",
+    "date": "20260409",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 1,
+    "expiry": "20260410",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": -38709.67725761689,
+      "delta_iv": 0.1833,
+      "gamma_burst": 0.0,
+      "delta_s": 0.006999,
+      "market": 0.007782,
+      "event": 0,
+      "a6_reflexivity": 0.378912,
+      "cross_family_spillover": 0.0007829999999999998,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": -38709.67725761689,
+      "forward_return_h": 0.000396
+    },
+    "clock": {
+      "daily": {
+        "return": 0.006999,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260409-qqq"
+  },
+  {
+    "day": "20260410",
+    "date": "20260410",
+    "ticker": "SPY",
+    "families": [
+      "SPY"
+    ],
+    "dte": 7,
+    "expiry": "20260417",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 1765.199545976074,
+      "delta_iv": 0.1419,
+      "gamma_burst": 0.0,
+      "delta_s": -0.003272,
+      "market": -0.003272,
+      "event": 0,
+      "a6_reflexivity": -0.001255,
+      "cross_family_spillover": 0.001471,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_spy": 1765.199545976074,
+      "forward_return_h": 0.000103
+    },
+    "clock": {
+      "daily": {
+        "return": -0.003272,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260410-spy"
+  },
+  {
+    "day": "20260410",
+    "date": "20260410",
+    "ticker": "QQQ",
+    "families": [
+      "QQQ"
+    ],
+    "dte": 7,
+    "expiry": "20260417",
+    "event_habitat": "NONE",
+    "pre_window": {
+      "pre_vanna_timestamp": 34200000,
+      "pre_window_end": 34200000,
+      "breach_window_start": 58200000,
+      "cutoff_pass": true,
+      "n_rows_used": 50,
+      "excluded_post_cutoff": 0
+    },
+    "l2": {
+      "pre_vanna_exposure": 16479.86799418411,
+      "delta_iv": 0.1748,
+      "gamma_burst": 0.0,
+      "delta_s": -0.001801,
+      "market": -0.003272,
+      "event": 0,
+      "a6_reflexivity": 0.340274,
+      "cross_family_spillover": 0.001471,
+      "surprise": null,
+      "event_habitat": "NONE",
+      "family_interaction_qqq": 16479.86799418411,
+      "forward_return_h": 0.001009
+    },
+    "clock": {
+      "daily": {
+        "return": -0.001801,
+        "eligible": true
+      },
+      "from_breach": {
+        "return": null,
+        "eligible": false
+      }
+    },
+    "source": "merged-20260410-qqq"
+  }
+]
