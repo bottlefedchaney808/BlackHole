@@ -111,7 +111,7 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
         key = "|".join((day, ticker, expiry, str(dte), habitat, sector, source))
         pair = (ticker, day)
         excluded = pair in held
-        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair)}
+        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair), **({"declared_timezone": raw["declared_timezone"]} if raw.get("declared_timezone") is not None else {})}
         previous = result_by_key.get(key)
         if previous is None or canonical_json_bytes(item) < canonical_json_bytes(previous):
             result_by_key[key] = item
@@ -133,9 +133,99 @@ def _timestamp(value: Any) -> dt.datetime:
     return dt.datetime.fromisoformat(text).astimezone(dt.UTC)
 
 
+def _captured_row_timestamp(day: Any, ms_of_day: Any, timezone: Any) -> str:
+    """Convert an attested endpoint date/ms pair to a qualified UTC instant."""
+    if not isinstance(timezone, str) or not timezone.strip():
+        raise ValueError("declared_timezone is required for captured rows")
+    from zoneinfo import ZoneInfo
+
+    date_text = _date(day)
+    if isinstance(ms_of_day, bool) or not isinstance(ms_of_day, int) or not 0 <= ms_of_day < 86_400_000:
+        raise ValueError("invalid captured row ms_of_day")
+    local = dt.datetime.combine(dt.date.fromisoformat(date_text), dt.time())
+    local += dt.timedelta(milliseconds=ms_of_day)
+    return local.replace(tzinfo=ZoneInfo(timezone.strip())).astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+
+
+def _captured_table_rows(call: Mapping[str, Any]) -> list[dict[str, Any]]:
+    payload = call.get("payload")
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], list):
+        return []
+    headers = [str(header) for header in payload[0]]
+    return [dict(zip(headers, row, strict=False)) for row in payload[1:] if isinstance(row, list) and len(row) >= len(headers)]
+
+
+def _map_captured_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
+    """Map captured Theta table rows into the strict provenance fields.
+
+    Missing timezone, malformed rows, or fewer than two IV observations leave
+    the mapping incomplete; the existing validator then fails closed.
+    """
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("calls"), list):
+        return {}
+    timezone = unit.get("declared_timezone")
+    calls = [call for call in payload["calls"] if isinstance(call, Mapping) and call.get("response_status") == 200]
+    spot_rows = [row for call in calls if "/stock/ohlc/" in str(call.get("endpoint", "")) for row in _captured_table_rows(call)]
+    chain_calls = [call for call in calls if "/option/all_greeks/" in str(call.get("endpoint", ""))]
+    chain_rows = [row for call in chain_calls for row in _captured_table_rows(call)]
+    try:
+        spot = sorted(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone) for row in spot_rows)
+        chain = sorted(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone) for row in chain_rows)
+        if not spot or not chain:
+            return {}
+        breach_ms = payload.get("metrics", {}).get("breach_window_start_prov")
+        breach = _captured_row_timestamp(unit.get("calendar_day"), breach_ms, timezone)
+        breach_dt = _timestamp(breach)
+        iv_rows: list[tuple[dt.datetime, float, Mapping[str, Any], str]] = []
+        for call in chain_calls:
+            endpoint = str(call.get("endpoint", ""))
+            for row in _captured_table_rows(call):
+                try:
+                    timestamp = _captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)
+                    iv = float(row.get("implied_vol"))
+                    if math.isfinite(iv) and _timestamp(timestamp) < breach_dt:
+                        iv_rows.append((_timestamp(timestamp), iv, row, endpoint))
+                except (TypeError, ValueError, OSError):
+                    continue
+        # Keep one observed IV per timestamp, preferring the row closest to
+        # its attested underlying price rather than averaging strikes.
+        by_timestamp: dict[dt.datetime, tuple[float, Mapping[str, Any], str]] = {}
+        for timestamp, iv, row, endpoint in iv_rows:
+            try:
+                distance = abs(float(row.get("strike")) / 1000.0 - float(row.get("underlying_price")))
+            except (TypeError, ValueError):
+                distance = math.inf
+            previous = by_timestamp.get(timestamp)
+            if previous is None or distance < previous[0]:
+                by_timestamp[timestamp] = (distance, {"iv": iv, **row}, endpoint)
+        observed = sorted((timestamp, value[1], value[2]) for timestamp, value in by_timestamp.items())
+        if len(observed) < 2:
+            return {}
+        before_ts, before_row, before_endpoint = observed[-2]
+        source_ts, source_row, source_endpoint = observed[-1]
+        source_hashes = sorted({str(call.get("payload_sha256")) for call in calls if isinstance(call.get("payload_sha256"), str) and re.fullmatch(r"[0-9a-fA-F]{64}", str(call.get("payload_sha256")))})
+        if len(source_hashes) < 2:
+            return {}
+        observations = [
+            {"role": _PREWINDOW, "timestamp": before_ts.isoformat().replace("+00:00", "Z"), "iv": float(before_row["iv"]), "source_identity": before_endpoint, "source_hash": source_hashes[0]},
+            {"role": _PREWINDOW, "timestamp": source_ts.isoformat().replace("+00:00", "Z"), "iv": float(source_row["iv"]), "source_identity": source_endpoint, "source_hash": source_hashes[1]},
+        ]
+        return {"delta_iv_provenance": _PREWINDOW, "delta_iv_pre_window": observations[1]["iv"] - observations[0]["iv"],
+                "iv_before_ts": observations[0]["timestamp"], "iv_before_value": observations[0]["iv"],
+                "iv_source_ts": observations[1]["timestamp"], "iv_source_value": observations[1]["iv"],
+                "breach_window_start_prov": breach, "declared_timezone": timezone,
+                "spot_timestamp": spot[-1], "chain_timestamp": chain[-1],
+                "endpoint": source_endpoint, "request_parameters": {"captured_calls": len(calls)},
+                "source_hashes": source_hashes, "pre_window_observations": observations,
+                "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1"}
+    except (TypeError, ValueError, OSError):
+        return {}
+
+
 def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     raw_hash = _hash(payload)
-    l2 = _extract_l2(payload) if isinstance(payload, Mapping) else {}
+    l2 = dict(_extract_l2(payload)) if isinstance(payload, Mapping) else {}
+    l2.update({key: value for key, value in _map_captured_payload(unit, payload).items() if key not in l2 or l2[key] is None})
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")
     source_ts, breach_ts = l2.get("iv_source_ts"), l2.get("breach_window_start_prov")
@@ -193,7 +283,7 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
             timestamp_reason = str(exc)
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
     artifact = dict(unit)
-    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "pre_window_observations": l2.get("pre_window_observations", []), "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
     manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"),
                 "calendar_day": unit.get("calendar_day"), "canonical_input_hash": unit.get("canonical_input_hash"),
                 "raw_payload_hash": raw_hash, "status": status,

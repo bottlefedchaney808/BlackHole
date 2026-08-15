@@ -1,7 +1,10 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
+
+RAW_CAPTURE = Path(__file__).parents[1] / "Vol_Suite" / "_bounded_heavy_acquisition_20260815" / "raw" / "2026-07-06_XLE.json"
 
 from Vol_Suite.dealer_exposure_acquisition import (
     AcquisitionGateError,
@@ -74,6 +77,53 @@ def test_census_rejects_manually_supplied_causal_pass_without_acquisition_proven
     assert census["causal_status"] == "CAUSAL_BLOCKED"
     assert census["comparison_status"] == "COMPARISON_INVALID"
     assert census["reasons"]
+
+def test_raw_capture_maps_timestamped_spot_chain_and_two_iv_observations():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    result = execute_sequential_acquisition(
+        schedule, probe_fetcher=valid_probe, fetcher=lambda _: payload,
+        dry_run=False, approval=True,
+    )
+    unit = result["units"][0]
+    assert unit["status"] == "PASS"
+    assert unit["spot_timestamp"].startswith("2026-07-06T")
+    assert unit["chain_timestamp"].startswith("2026-07-06T")
+    assert len(unit["pre_window_observations"]) == 2
+    before, source = unit["pre_window_observations"]
+    assert before["timestamp"] < source["timestamp"] < unit["breach_window_start_prov"]
+    assert unit["delta_iv_pre_window"] == source["iv"] - before["iv"]
+    assert unit["iv_before_ts"] == before["timestamp"]
+    assert unit["iv_source_ts"] == source["timestamp"]
+
+
+def test_raw_mapping_fails_closed_without_timezone_or_timestamp_fields():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    result = execute_sequential_acquisition(
+        schedule, probe_fetcher=valid_probe, fetcher=lambda _: payload,
+        dry_run=False, approval=True,
+    )
+    unit = result["units"][0]
+    assert unit["status"] == "ASSOCIATIONAL"
+    assert unit["delta_iv_pre_window"] is None
+    assert unit["pre_window_observations"] == []
+
+
+def test_malformed_raw_rows_fail_closed():
+    payload = {"calls": [{"endpoint": "/api/theta/hist/stock/ohlc/XLE", "payload": [["date", "ms_of_day"], [20260706, "bad"]], "payload_sha256": "a" * 64, "request_parameters": {}, "response_status": 200}]}
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    result = execute_sequential_acquisition(
+        schedule, probe_fetcher=valid_probe, fetcher=lambda _: payload,
+        dry_run=False, approval=True,
+    )
+    unit = result["units"][0]
+    assert unit["status"] == "ASSOCIATIONAL"
+    assert unit["spot_timestamp"] is None
+    assert unit["pre_window_observations"] == []
+
 
 def test_no_imputation_and_associational_status():
     result = execute_sequential_acquisition(build_candidate_schedule([row()]), probe_fetcher=valid_probe, fetcher=lambda _: {"record": {}}, dry_run=False, approval=True)
