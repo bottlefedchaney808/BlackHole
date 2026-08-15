@@ -3,9 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 from run_live_vs_expiry_book_common_input import (
+    CanonicalPayload,
     ComparisonInvalid,
     compare_common_input,
     make_canonical_input,
+    validate_causal_eligibility,
 )
 
 EXPIRY = "20260918"
@@ -16,7 +18,7 @@ def _input():
         "IWM", "20260814", EXPIRY, 35, 220.0, "2026-08-14T13:00:00Z",
         [{"strike": 210, "right": "P", "iv": 0.24, "oi": 1000},
          {"strike": 220, "right": "C", "iv": 0.20, "oi": 1200}],
-        ["raw-sha256"],
+        ["a" * 64],
     )
 
 
@@ -35,9 +37,9 @@ def _row(strike, right, value, *, expiry=EXPIRY, iv=0.2):
 
 def _engines(live_accumulate=True, *, live_rows=None, new_rows=None):
     def live(payload):
-        payload.consume()
+        consumed = payload.read()
         return SimpleNamespace(
-            consumed_input_sha256=payload.digest,
+            attestation=__import__("hashlib").sha256(consumed).hexdigest(),
             sign_model="vol_surface_replication", accumulate=live_accumulate,
             gamma_records=live_rows or [
                 SimpleNamespace(strike=210, right="P", expiry=EXPIRY, vanna=-0.02, oi=1000, applied_sign=1),
@@ -46,8 +48,8 @@ def _engines(live_accumulate=True, *, live_rows=None, new_rows=None):
         )
 
     def new(payload):
-        payload.consume()
-        return SimpleNamespace(consumed_input_sha256=payload.digest,
+        consumed = payload.read()
+        return SimpleNamespace(attestation=__import__("hashlib").sha256(consumed).hexdigest(),
                                rows=new_rows or [_row(210, "P", -20.0), _row(220, "C", 12.0)])
     return live, new
 
@@ -67,8 +69,8 @@ def test_adapter_that_transforms_or_ignores_payload_invalidates_comparison():
     _live, new = _engines()
 
     def dishonest_live(payload):
-        # It can echo the canonical digest, but never accesses payload.data.
-        return SimpleNamespace(consumed_input_sha256=payload.digest,
+        # It ignores the opaque payload and cannot forge a harness attestation.
+        return SimpleNamespace(attestation="forged",
                                sign_model="vol_surface_replication", accumulate=True,
                                gamma_records=[])
 
@@ -146,3 +148,48 @@ def test_vanna_invariant_is_runtime_verified():
         compare_common_input(_input(), live, new)
     assert any("rec.vanna is not -1xBS" in item["reason"]
                for item in exc.value.invalid_result["exclusions"])
+
+
+def test_payload_is_opaque_and_only_read_records_bytes():
+    payload = CanonicalPayload(b"canonical")
+    assert not hasattr(payload, "canonical_input")
+    assert not hasattr(payload, "consume")
+    assert payload.read_sha256 is None
+    assert payload.read() == b"canonical"
+    assert payload.read_sha256 is not None
+
+
+def test_malformed_strike_row_is_structured_invalid():
+    live, _new = _engines()
+    malformed = SimpleNamespace(right="P", expiry=EXPIRY)
+    new = _engines(new_rows=[malformed, _row(220, "C", 12.0)])[1]
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new)
+    assert any("malformed strike/right row" in item["reason"]
+               for item in exc.value.invalid_result["exclusions"])
+
+
+def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026-08-14T12:00:00Z", breach="2026-08-14T13:00:00Z", source_hash="a" * 64):
+    return {"ticker": "IWM", "calendar_day": "2026-08-14", "status": status,
+            "pre_window_provenance": provenance, "pre_window_value": value,
+            "delta_iv_pre_window": value, "iv_source_ts": source,
+            "breach_window_start_prov": breach, "source_hashes": [source_hash]}
+
+
+def test_causal_gate_blocks_missing_equal_later_and_mixed_provenance():
+    for units in (
+        [_causal_unit(value=None)],
+        [_causal_unit(source="2026-08-14T13:00:00Z")],
+        [_causal_unit(source="2026-08-14T14:00:00Z")],
+        [_causal_unit(), _causal_unit(provenance="ASSOCIATIONAL", value=None)],
+    ):
+        result = validate_causal_eligibility(units)
+        assert result["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_compare_returns_causal_blocked_invalid_result():
+    live, new = _engines()
+    with pytest.raises(ComparisonInvalid) as exc:
+        compare_common_input(_input(), live, new, provenance_units=[_causal_unit(value=None)])
+    assert exc.value.invalid_result["status"] == "COMPARISON_INVALID"
+    assert exc.value.invalid_result["causal_status"] == "CAUSAL_BLOCKED"

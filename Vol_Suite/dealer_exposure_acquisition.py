@@ -120,18 +120,26 @@ def _extract_l2(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return l2 if isinstance(l2, Mapping) else {}
 
 
-_ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$")
+_ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _timestamp(value: Any) -> dt.datetime:
-    """Parse a real ISO-8601 instant and normalize it to UTC."""
+    """Parse a timezone-qualified ISO-8601 instant and normalize it to UTC."""
     if not isinstance(value, str) or not _ISO_TIMESTAMP_RE.fullmatch(value):
-        raise ValueError(f"invalid ISO-8601 timestamp: {value!r}")
+        raise ValueError(f"invalid timezone-qualified ISO-8601 timestamp: {value!r}")
     text = value[:-1] + "+00:00" if value.endswith("Z") else value
-    parsed = dt.datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.UTC)
-    return parsed.astimezone(dt.UTC)
+    return dt.datetime.fromisoformat(text).astimezone(dt.UTC)
+
+
+def _validate_source_hashes(value: Any) -> tuple[str, ...]:
+    """Require non-placeholder SHA-256 provenance identifiers."""
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError("source_hashes must be a non-empty list of SHA-256 hashes")
+    hashes = tuple(str(item).lower() for item in value)
+    if any(not _SHA256_RE.fullmatch(item) for item in hashes):
+        raise ValueError("source_hashes must contain 64-character hexadecimal SHA-256 hashes")
+    return hashes
 
 
 def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
@@ -140,10 +148,12 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")
     source_ts, breach_ts = l2.get("iv_source_ts"), l2.get("breach_window_start_prov")
+    supplied_hashes = l2.get("source_hashes", payload.get("source_hashes") if isinstance(payload, Mapping) else None)
     valid = False
     timestamp_reason = None
     if prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
         try:
+            _validate_source_hashes(supplied_hashes)
             source = _timestamp(source_ts)
             breach = _timestamp(breach_ts)
             day = _date(unit.get("calendar_day"))
@@ -157,7 +167,7 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
             timestamp_reason = str(exc)
     status = "PASS" if valid else ("ASSOCIATIONAL" if payload is not None else "HARD_GAP")
     artifact = dict(unit)
-    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
+    artifact.update({"status": status, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
     artifact["artifact_basis"] = json.dumps({"candidate_key": unit["candidate_key"], "raw_payload": payload, "status": status, "imputed": False}, sort_keys=True, default=str, allow_nan=False)
     artifact["artifact_hash"] = _hash(artifact["artifact_basis"])
     artifact["reason"] = None if status == "PASS" else (timestamp_reason or ("missing_or_associational_prewindow" if status == "ASSOCIATIONAL" else "hard_gap"))
@@ -170,11 +180,19 @@ def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_unit
     rows.sort(key=lambda u: (str(u.get("calendar_day", "")), str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
     for u in rows:
         if u.get("status") not in _STATUS: raise AcquisitionGateError("invalid unit status")
-        if not isinstance(u.get("raw_payload_hash"), str) or not u["raw_payload_hash"]: raise AcquisitionGateError("provenance census requires raw payload hashes")
+        if not isinstance(u.get("raw_payload_hash"), str) or not _SHA256_RE.fullmatch(u["raw_payload_hash"]): raise AcquisitionGateError("provenance census requires semantic SHA-256 payload hashes")
+        if u.get("source_hashes") is not None:
+            try: _validate_source_hashes(u["source_hashes"])
+            except ValueError as exc: raise AcquisitionGateError(str(exc)) from exc
     n = sum(u.get("status") == "PASS" and u.get("pre_window_provenance") == _PREWINDOW for u in rows)
     coverage = n / intended_units if intended_units else 1.0
     gate = len(rows) == intended_units and coverage == 1.0
-    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "fail_loud": fail_loud, "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "gate_reason": "100% PRE_WINDOW coverage" if gate else f"below 100% PRE_WINDOW coverage ({n}/{intended_units})"}
+    day_groups = defaultdict(list)
+    for unit in rows:
+        day_groups[str(unit.get("calendar_day", ""))].append(unit)
+    day_gate = all(all(item.get("status") == "PASS" and item.get("pre_window_provenance") == _PREWINDOW for item in group) for group in day_groups.values())
+    gate = gate and day_gate
+    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "causal_status": "CAUSAL_ELIGIBLE" if gate else "CAUSAL_BLOCKED", "fail_loud": fail_loud, "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "same_day_gate": day_gate, "gate_reason": "100% PRE_WINDOW coverage" if gate else f"below strict PRE_WINDOW coverage ({n}/{intended_units}) or mixed same-day provenance"}
     if fail_loud and not gate: raise AcquisitionGateError(f"100% PRE_WINDOW gate failed: {n}/{intended_units}")
     return doc
 
@@ -186,7 +204,8 @@ def cluster_same_day(units: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, 
     out = {}
     for day in sorted(grouped):
         rows = grouped[day]; statuses = [str(u.get("status", "HARD_GAP")) if u.get("status") in _STATUS else "HARD_GAP" for u in rows]
-        out[day] = {"calendar_day": day, "tickers": sorted({str(u.get("ticker", "")) for u in rows}), "n_tickers": len({u.get("ticker") for u in rows}), "expiry_set": sorted({str(u.get("expiry")) for u in rows if u.get("expiry") is not None}), "status": max(statuses, key=lambda s: rank[s]), "status_counts": {s: statuses.count(s) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}}
+        nested = sorted((dict(u) for u in rows), key=lambda u: (str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
+        out[day] = {"calendar_day": day, "tickers": sorted({str(u.get("ticker", "")) for u in rows}), "n_tickers": len({u.get("ticker") for u in rows}), "expiry_set": sorted({str(u.get("expiry")) for u in rows if u.get("expiry") is not None}), "status": max(statuses, key=lambda s: rank[s]), "status_counts": {s: statuses.count(s) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "units": nested, "aggregation_rule": "preserve ticker-specific values; no averaging before fitting"}
     return out
 
 
@@ -268,7 +287,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         units.append(item)
     generated_at = generated_at or dt.datetime.now(dt.UTC).isoformat()
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "generated_at": generated_at}
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)

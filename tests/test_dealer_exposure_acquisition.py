@@ -16,7 +16,7 @@ def row(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tec
     return {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte, "habitat": "NONE", "sector": sector, "candidate_source": "approved-list"}
 
 def valid_payload(prov="PRE_WINDOW", value=0.1):
-    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_source_ts": "2026-08-17T14:00:00", "breach_window_start_prov": "2026-08-17T15:00:00"}}}
+    return {"record": {"l2": {"delta_iv_provenance": prov, "delta_iv_pre_window": value, "iv_source_ts": "2026-08-17T14:00:00Z", "breach_window_start_prov": "2026-08-17T15:00:00Z", "source_hashes": ["a" * 64]}}}
 
 def valid_probe(_):
     return {"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}
@@ -72,7 +72,7 @@ def test_hard_gap_retained_without_imputation():
     assert result["units"][0]["status"] == "HARD_GAP" and result["units"][0]["imputed"] is False
 
 def test_fail_loud_census_below_100_percent():
-    units = [{"calendar_day":"2026-08-17", "ticker":"AAPL", "status":"HARD_GAP", "pre_window_provenance":"NONE", "raw_payload_hash":"x"}]
+    units = [{"calendar_day":"2026-08-17", "ticker":"AAPL", "status":"HARD_GAP", "pre_window_provenance":"NONE", "raw_payload_hash":"a" * 64}]
     with pytest.raises(AcquisitionGateError, match="100% PRE_WINDOW"):
         build_provenance_census(units, intended_units=1, fail_loud=True)
     c = build_provenance_census(units, intended_units=1)

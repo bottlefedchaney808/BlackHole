@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -53,8 +54,15 @@ class CanonicalInput:
             raise ValueError("duplicate strike/right rows are not canonical")
         if any(r.right not in {"C", "P"} or r.iv <= 0 or r.oi < 0 for r in self.rows):
             raise ValueError("rows contain invalid right, IV, or OI")
-        if not self.source_hashes:
-            raise ValueError("raw source hashes are required")
+        if not self.source_hashes or any(not re.fullmatch(r"[0-9a-fA-F]{64}", str(item)) for item in self.source_hashes):
+            raise ValueError("source_hashes must contain 64-character hexadecimal SHA-256 hashes")
+        if not isinstance(self.iv_source_ts, str) or not self.iv_source_ts.endswith("Z") and "+" not in self.iv_source_ts and "-" not in self.iv_source_ts[10:]:
+            raise ValueError("iv_source_ts must be timezone-qualified ISO-8601")
+        import datetime as dt
+        try:
+            dt.datetime.fromisoformat(self.iv_source_ts[:-1] + "+00:00" if self.iv_source_ts.endswith("Z") else self.iv_source_ts)
+        except ValueError as exc:
+            raise ValueError("iv_source_ts must be a valid ISO-8601 timestamp") from exc
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -71,44 +79,47 @@ class CanonicalInput:
 
 
 class CanonicalPayload:
-    """Read-only canonical bytes with harness-owned consumption attestation."""
+    """Opaque canonical bytes with one harness-controlled read operation.
 
-    __slots__ = ("_accessed", "_canonical_input", "_data", "_digest")
+    The input record and backing bytes are deliberately not exposed.  ``read``
+    returns a fresh immutable copy and records the exact bytes returned.  The
+    harness, not an adapter result, owns the resulting attestation.
+    """
 
-    def __init__(self, inp: CanonicalInput, data: bytes) -> None:
-        self._data = bytes(data)
-        self._digest = hashlib.sha256(self._data).hexdigest()
-        self._canonical_input = inp
-        self._accessed = False
+    __slots__ = ("__read_bytes", "__reader")
 
-    @property
-    def data(self) -> bytes:
-        self._accessed = True
-        return self._data
+    def __init__(self, data: bytes) -> None:
+        canonical = bytes(data)
+        self.__reader = lambda: canonical
+        self.__read_bytes: list[bytes] = []
 
-    def consume(self) -> bytes:
-        """Return exactly the canonical bytes and record their consumption."""
-        return self.data
-
-    @property
-    def canonical_input(self) -> CanonicalInput:
-        return self._canonical_input
+    def read(self) -> bytes:
+        """Read the complete canonical payload and record the returned bytes."""
+        returned = bytes(self.__reader())
+        self.__read_bytes.append(returned)
+        return returned
 
     @property
-    def digest(self) -> str:
-        """Metadata only; compare_common_input never trusts this as attestation."""
-        return self._digest
+    def read_sha256(self) -> str | None:
+        """Harness-owned digest of the bytes actually returned by ``read``."""
+        if not self.__read_bytes:
+            return None
+        return hashlib.sha256(b"".join(self.__read_bytes)).hexdigest()
 
     @property
-    def consumed_input_sha256(self) -> str | None:
-        return self._digest if self._accessed else None
+    def read_bytes(self) -> tuple[bytes, ...]:
+        """Read audit data for the harness; adapters must not use this metadata."""
+        return tuple(self.__read_bytes)
 
 
 class ComparisonInvalid(ValueError):
     """The comparison cannot support a better/worse/descriptive conclusion."""
 
-    def __init__(self, reason: str, *, exclusions: Sequence[Mapping[str, Any]] = ()) -> None:
-        self.invalid_result = {"status": "INVALID", "reason": reason,
+    def __init__(self, reason: str, *, exclusions: Sequence[Mapping[str, Any]] = (),
+                 causal_blocked: bool = False) -> None:
+        self.invalid_result = {"status": "COMPARISON_INVALID" if causal_blocked else "INVALID",
+                               "causal_status": "CAUSAL_BLOCKED" if causal_blocked else None,
+                               "reason": reason,
                                "exclusions": [dict(item) for item in exclusions]}
         super().__init__(reason)
 
@@ -175,7 +186,12 @@ def _coverage(rows: Iterable[Any], inp: CanonicalInput, engine: str, value_fn: C
     exclusions: list[dict[str, Any]] = []
     expected = {(r.strike, r.right) for r in inp.rows}
     for row in rows:
-        key = _row_key(row)
+        try:
+            key = _row_key(row)
+        except (AttributeError, TypeError, ValueError) as exc:
+            exclusions.append({"engine": engine, "key": None, "expiry": getattr(row, "expiry", None) or parent_expiry,
+                               "reason": f"invalid output record: malformed strike/right row ({exc})"})
+            continue
         expiry = getattr(row, "expiry", None) or parent_expiry
         if key[1] not in {"C", "P"}:
             exclusions.append({"engine": engine, "key": list(key), "expiry": expiry,
@@ -235,7 +251,7 @@ def _default_live_runner(payload: CanonicalPayload) -> Any:
 
     import dealer_positioning as dp
 
-    inp_dict = json.loads(payload.consume())
+    inp_dict = json.loads(payload.read())
     inp = CanonicalInput(
         inp_dict["ticker"], inp_dict["calendar_day"], inp_dict["expiry"], inp_dict["dte"],
         inp_dict["spot"], inp_dict["iv_source_ts"],
@@ -275,7 +291,7 @@ def _default_live_runner(payload: CanonicalPayload) -> Any:
 
 def _default_new_runner(payload: CanonicalPayload) -> Any:
     import expiry_book_exposure as ebe
-    inp_dict = json.loads(payload.consume())
+    inp_dict = json.loads(payload.read())
     inp = CanonicalInput(
         inp_dict["ticker"], inp_dict["calendar_day"], inp_dict["expiry"], inp_dict["dte"],
         inp_dict["spot"], inp_dict["iv_source_ts"],
@@ -289,22 +305,72 @@ def _default_new_runner(payload: CanonicalPayload) -> Any:
     return result
 
 
+def _validate_source_hashes(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not value or any(not re.fullmatch(r"[0-9a-fA-F]{64}", str(item)) for item in value):
+        raise ValueError("source_hashes must contain non-empty SHA-256 hashes")
+    return tuple(str(item).lower() for item in value)
+
+
+def validate_causal_eligibility(units: Iterable[Mapping[str, Any]], *, intended_units: int | None = None) -> dict[str, Any]:
+    """Validate the strict, all-unit causal provenance boundary.
+
+    This is deliberately an adapter-boundary gate: it validates supplied
+    provenance evidence and never claims to prove arbitrary code is honest.
+    """
+    rows = [dict(unit) for unit in units]
+    expected = len(rows) if intended_units is None else intended_units
+    reasons: list[dict[str, Any]] = []
+    if expected < 0 or len(rows) != expected:
+        reasons.append({"reason": "unit coverage is not complete", "n": len(rows), "N": expected})
+    for unit in rows:
+        try:
+            if unit.get("status") != "PASS":
+                raise ValueError(f"status={unit.get('status')}")
+            if str(unit.get("pre_window_provenance", "")).upper() != "PRE_WINDOW":
+                raise ValueError("provenance is not PRE_WINDOW")
+            if unit.get("pre_window_value") is None or unit.get("delta_iv_pre_window") is None:
+                raise ValueError("delta_iv_pre_window is missing")
+            _validate_source_hashes(unit.get("source_hashes", [unit.get("raw_payload_hash")]))
+            source = _parse_timestamp(unit.get("iv_source_ts"))
+            breach = _parse_timestamp(unit.get("breach_window_start_prov"))
+            if source >= breach:
+                raise ValueError("iv_source_ts must strictly precede breach")
+        except (TypeError, ValueError) as exc:
+            reasons.append({"ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "reason": str(exc)})
+    return {"causal_status": "CAUSAL_ELIGIBLE" if not reasons else "CAUSAL_BLOCKED",
+            "status": "VALID" if not reasons else "COMPARISON_INVALID", "n": len(rows), "N": expected,
+            "coverage": len(rows) / expected if expected else 1.0, "reasons": reasons}
+
+
+def _parse_timestamp(value: Any) -> Any:
+    if not isinstance(value, str) or not value.endswith(("Z",)) and not any(value.endswith(f"{sign}{hour:02d}:00") for sign in "+-" for hour in range(24)):
+        raise ValueError("timestamp must be timezone-qualified ISO-8601")
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    import datetime as dt
+    return dt.datetime.fromisoformat(text).astimezone(dt.UTC)
+
+
 def compare_common_input(
     inp: CanonicalInput,
     live_runner: Callable[[CanonicalPayload], Any] | None = None,
     new_runner: Callable[[CanonicalPayload], Any] | None = None,
     deadband: float = 1e-12,
+    provenance_units: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run both adapters with one immutable serialization and return diagnostics."""
+    if provenance_units is not None:
+        causal = validate_causal_eligibility(provenance_units)
+        if causal["causal_status"] != "CAUSAL_ELIGIBLE":
+            raise ComparisonInvalid("causal provenance is incomplete", exclusions=causal["reasons"], causal_blocked=True)
     live_runner = live_runner or _default_live_runner
     new_runner = new_runner or _default_new_runner
     canonical_bytes = inp.canonical_bytes()
-    live_payload = CanonicalPayload(inp, canonical_bytes)
-    new_payload = CanonicalPayload(inp, canonical_bytes)
+    live_payload = CanonicalPayload(canonical_bytes)
+    new_payload = CanonicalPayload(canonical_bytes)
     live = live_runner(live_payload)
-    live_attestation = live_payload.consumed_input_sha256
+    live_attestation = live_payload.read_sha256
     new = new_runner(new_payload)
-    new_attestation = new_payload.consumed_input_sha256
+    new_attestation = new_payload.read_sha256
     canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
     if live_attestation != canonical_digest or new_attestation != canonical_digest:
         raise ComparisonInvalid(
@@ -357,4 +423,5 @@ def write_deterministic_artifact(path: str, comparison: Mapping[str, Any]) -> No
 
 
 __all__ = ["CanonicalInput", "CanonicalPayload", "CanonicalRow", "ComparisonInvalid",
-           "compare_common_input", "make_canonical_input", "write_deterministic_artifact"]
+           "compare_common_input", "make_canonical_input", "validate_causal_eligibility",
+           "write_deterministic_artifact"]

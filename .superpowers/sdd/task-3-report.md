@@ -78,6 +78,21 @@ malformed rights, and a falsified per-record vanna regression.
   model. Invalid comparisons remain invalid.
 - Existing historical comparison artifacts remain historical and are not overwritten.
 
+## Final review-blocker fixes
+
+- `CanonicalPayload` is now opaque: it has no public `canonical_input`, `data`, `digest`, or `consume` API. Adapters have one controlled `read()` operation; the harness records the exact returned bytes and computes the SHA-256 itself. Adapter-returned attestation fields are ignored. A bypass that ignores the read API or uses an alternate payload is invalidated before comparison.
+- This boundary enforces the adapter protocol and byte identity, not arbitrary malicious code that deliberately lies or bypasses the process outside the supplied adapter boundary. The report makes no stronger claim.
+- Strict causal/provenance validation now requires timezone-qualified timestamps, `iv_source_ts < breach_window_start_prov`, non-null `delta_iv_pre_window`, semantic SHA-256 source/payload hashes, PASS status, complete all-unit coverage, and no mixed same-day family provenance. Incomplete evidence returns `COMPARISON_INVALID` / `CAUSAL_BLOCKED`; no causal comparison is emitted. Same-day clusters preserve nested ticker records and explicitly prohibit pre-fit averaging.
+- Malformed strike/right output rows are captured as structured exclusions rather than escaping as `AttributeError`. Live sign/accumulation, levels-only comparison, `rec.vanna=-1xBS`, deterministic artifacts, and network-free scope remain preserved.
+
+## Final verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 py -3.12 -m pytest Vol_Suite/tests/test_common_input_live_vs_expiry_book.py -q` — `16 passed`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 py -3.12 -m pytest tests/test_dealer_exposure_acquisition.py -q` — `29 passed`
+- `py -3.12 -m py_compile Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `py -3.12 -m ruff check ...` — passed after the final slot-order fix
+- `git diff --check` — passed
+
 ## Commit
 
-Review-fix commit hash is reported in the handback.
+Final commit hash is reported in the handback.
