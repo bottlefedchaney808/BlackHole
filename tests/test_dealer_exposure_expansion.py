@@ -330,6 +330,42 @@ def test_execution_gate_rejects_duplicate_evidence_units_without_overwrite(monke
     assert any(item.get("reason") == "duplicate evidence candidate identity" for item in result["execution_audit"]["blocked"])
 
 
+@pytest.mark.parametrize("result", [
+    {"status": "SUCCESS", "validated": True, "success": "false"},
+    {"status": "SUCCESS", "validated": True, "success": 0},
+    {"status": "SUCCESS", "validated": True, "success": 1},
+    {"status": "SUCCESS", "validated": True, "success": None},
+    {"status": "SUCCESS", "validated": True},
+    {"status": "SUCCESS", "success": True},
+    {"status": "SUCCESS", "validated": True, "success": True, "ok": "false"},
+    {"status": "SUCCESS", "validated": True, "success": True, "ok": 1},
+    {"status": "SUCCESS", "validated": True, "success": True, "ok": None},
+])
+def test_executor_requires_strict_boolean_success_fields(monkeypatch, result):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    output = run_expansion_plan(rows, dry_run=False, approve_network=True,
+                                executor=lambda _unit: result, acquisition_evidence=evidence)
+    assert output["network_fetch_allowed"] is False
+    assert output["mode"] == "failed-execution"
+
+
+def test_execution_gate_blocks_unhashable_candidate_identity(monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    evidence["units"][0]["candidate_key"] = ["malformed", {"unhashable": True}]
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    output = run_expansion_plan(rows, dry_run=False, approve_network=True,
+                                executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
+                                acquisition_evidence=evidence)
+    assert output["network_fetch_allowed"] is False
+    assert output["mode"] == "blocked"
+    assert any(item["reason"] == "malformed evidence candidate identity" for item in output["execution_audit"]["blocked"])
+
+
 def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):
     rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
     plan = build_expansion_manifest(rows)

@@ -97,3 +97,27 @@ git diff --check
 ```
 
 <!-- report ends with a newline -->
+
+## Review-fix closure (2026-08-15, typed admission and malformed identities)
+
+- Executor admission now requires `status` in the allowed success set, `validated is True`, required `success is True`, and optional `ok is True`; every present boolean gate field must have exact `bool` type. String, integer, `None`, omitted, and contradictory values fail closed, while failure markers remain blocking.
+- Evidence candidate identities are validated as non-empty canonical strings and counted in one pass. Duplicate, unhashable, or malformed identities return structured blocking evidence before mapping/coverage operations; no `TypeError` or silent overwrite is possible.
+- Added regressions for string false, integer 0/1, `None`, omitted fields, contradictory/invalid `ok`, unhashable identity, and retained valid-control coverage.
+
+## Verification (typed admission and malformed identity closure)
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+120 passed in 0.16s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
+# exit 0
+
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
+All checks passed!
+
+git diff --check
+# exit 0 (Git emitted only LF/CRLF conversion warnings)
+```
+
+No network acquisition, live/master, secrets, or unrelated files were changed.

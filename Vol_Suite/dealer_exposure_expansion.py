@@ -322,31 +322,43 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
     if not isinstance(units, list) or not isinstance(registry, Mapping):
         reasons.append({"reason": "complete canonical evidence and verified registry are required"})
         return [], reasons
-    # Validate the source list before indexing it.  A dict-comprehension here
-    # would silently discard all but the last contradictory evidence unit.
-    evidence_keys: list[Any] = []
+    # Validate identities in one pass before indexing.  Candidate identities are
+    # canonical strings produced by the manifest; rejecting anything else keeps
+    # malformed/unhashable caller data at this safety boundary as audit evidence
+    # instead of allowing TypeError or silent dict overwrites.
+    by_identity: dict[str, dict[str, Any]] = {}
+    identity_counts: Counter[str] = Counter()
     for unit in units:
         if not isinstance(unit, Mapping):
             reasons.append({"reason": "evidence unit must be a mapping"})
             return [], reasons
-        evidence_keys.append(unit.get("candidate_key"))
-    duplicate_keys = sorted({key for key in evidence_keys if evidence_keys.count(key) > 1}, key=str)
+        key = unit.get("candidate_key")
+        if not isinstance(key, str) or not key:
+            reasons.append({
+                "candidate_key": repr(key)[:200],
+                "reason": "malformed evidence candidate identity",
+            })
+            return [], reasons
+        identity_counts[key] += 1
+        by_identity.setdefault(key, dict(unit))
+    duplicate_keys = [key for key, count in identity_counts.items() if count > 1]
     if duplicate_keys:
-        reasons.extend({"candidate_key": key, "reason": "duplicate evidence candidate identity"} for key in duplicate_keys)
+        reasons.extend({"candidate_key": key, "reason": "duplicate evidence candidate identity"}
+                       for key in sorted(duplicate_keys))
         return [], reasons
-    by_key = {u.get("candidate_key"): dict(u) for u in units}
-    if set(by_key) != {u["candidate_key"] for u in primary}:
+    schedule_keys = {u["candidate_key"] for u in primary}
+    if set(by_identity) != schedule_keys:
         reasons.append({"reason": "evidence coverage is not 100% of primary schedule"})
-    for key, unit in by_key.items():
+    for key, unit in by_identity.items():
         observations = unit.get("pre_window_observations")
         if not isinstance(observations, list) or len(observations) < 2:
             reasons.append({"candidate_key": key, "reason": "two PRE_WINDOW observations are required"})
-    causal = validate_causal_eligibility(by_key.values(), intended_units=len(schedule),
+    causal = validate_causal_eligibility(by_identity.values(), intended_units=len(schedule),
                                          intended_corpus_manifest={"units": schedule},
                                          artifact_registry=registry)
     if causal.get("causal_status") != "CAUSAL_ELIGIBLE":
         reasons.extend(causal.get("reasons", []))
-    return ([by_key[u["candidate_key"]] for u in primary] if not reasons else []), reasons
+    return ([by_identity[u["candidate_key"]] for u in primary] if not reasons else []), reasons
 
 
 def run_expansion_plan(
@@ -382,19 +394,26 @@ def run_expansion_plan(
                         isinstance(execution, Mapping)
                         and (
                             status in {"FAILED", "FAIL", "ERROR", "BLOCKED", "HARD_GAP", "FAILED_EXECUTION"}
-                            or execution.get("success") is False
-                            or execution.get("ok") is False
-                            or any(execution.get(name) not in (None, False, "") for name in ("error", "failure", "failure_marker"))
+                            or any(execution.get(name) not in (None, False, "")
+                                   for name in ("error", "failure", "failure_marker"))
                         )
                     )
-                    validated_success = (
+                    boolean_fields_valid = (
                         isinstance(execution, Mapping)
+                        and all(
+                            type(execution[field]) is bool
+                            for field in ("validated", "success")
+                            if field in execution
+                        )
+                        and ("ok" not in execution or type(execution["ok"]) is bool)
+                    )
+                    validated_success = (
+                        boolean_fields_valid
                         and not failure_marker
                         and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"}
                         and execution.get("validated") is True
-                        and (execution.get("success") is not False)
-                        and (execution.get("ok") is not False)
-                        and (execution.get("success") is True or execution.get("ok") is True)
+                        and execution.get("success") is True
+                        and ("ok" not in execution or execution.get("ok") is True)
                     )
                     if not validated_success:
                         result["execution_audit"]["blocked"].append({
