@@ -70,3 +70,30 @@ exit 0
 ```
 
 Only the calendar implementation, its tests, and this report are included in the review-fix commit. Existing acquisition scratch artifacts and progress changes remain untouched.
+
+## Remaining review findings closure (2026-08-15)
+
+- `calendar_for_probe` now resolves the exact requested supported policy (`PRE_OPEX_SESSION`, `OPEX_DAY`, or `POST_OPEX_RESPONSE`) and binds the resolved `window_id`, `window_start`, `window_end`, and `window_policy` at top level and per event.
+- Probe binding now invokes `resolve_opex` before construction and invokes `resolve_event_window` for every event row. This prevents probe-only expiry, venue-rule, listing, settlement, session, event-boundary, and source-ref validation from diverging from the strict resolvers.
+- Added fail-closed validation for empty required event context, unsupported event types/policies, reversed or session-inconsistent event windows, unknown/invalid surprise statuses and boolean combinations, unavailable or unknown holiday source references, unknown settlement styles, invalid/reversed session facts, missing listing evidence, wrong expiry dates, and duplicate adjacent session dates.
+- Adjacent-session ordering uses explicit stable keys and detects duplicate dates before sorting, so conflicting sessions deterministically produce `HARD_GAP` rather than a Python comparison `TypeError`.
+- Binding and event-window records remain deeply immutable; canonical snapshot/binding hashes, source hashes, exact local-date DTE, explicit `as_of`, and no-network/no-current-date behavior are preserved.
+- Added adversarial and valid-control regressions covering the above cases and policy/hash identity.
+
+### Final verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_opex_calendar.py tests/test_dealer_exposure_acquisition.py --disable-warnings
+66 passed in 14.59s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/tests/test_opex_calendar.py
+exit 0
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/opex_calendar.py Vol_Suite/tests/test_opex_calendar.py
+All checks passed!
+
+git diff --check
+exit 0
+```
+
+Only `Vol_Suite/opex_calendar.py`, `Vol_Suite/tests/test_opex_calendar.py`, and this report are changed for this closure. Unrelated acquisition artifacts and `.superpowers/sdd/progress.md` remain untouched and uncommitted.

@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import date
 
 import pytest
@@ -160,8 +161,9 @@ def test_source_unavailable_at_as_of_is_gap():
 
 
 def test_event_type_validation():
+    p = payload(); p["event_records"][0]["event_type"] = "NEWS"
     with pytest.raises(ValueError):
-        resolve_event_window(load_snapshot(payload()), event_type="NEWS", event_day="2025-01-17", window_policy="OPEX_DAY", as_of="2025-01-01T00:00:00Z")
+        load_snapshot(p)
 
 
 def test_snapshot_self_hash_tamper_rejected():
@@ -206,9 +208,71 @@ def test_settlement_must_be_on_observed_session_day():
 
 def test_probe_binding_requires_complete_identity_and_is_deeply_immutable():
     binding = calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
-    for key in ("observed_expiry", "nominal_date", "session_id", "settlement_timestamp", "event_ids", "event_windows", "as_of", "snapshot_hash", "calendar_binding_hash", "source_hashes", "calendar_policy_version", "resolver_code_version", "exact_dte"):
+    for key in ("observed_expiry", "nominal_date", "session_id", "settlement_timestamp", "event_ids", "event_windows", "as_of", "snapshot_hash", "calendar_binding_hash", "source_hashes", "calendar_policy_version", "resolver_code_version", "exact_dte", "window_id", "window_start", "window_end", "window_policy"):
         assert key in binding
+    assert binding["window_policy"] == "OPEX_DAY"
+    assert binding["event_windows"]["fomc-1"]["window_id"] == binding["window_id"]
     with pytest.raises(TypeError):
-        binding["event_windows"]["fomc-1"] = {}
+        binding["event_windows"]["fomc-1"]["window_start"] = "bad"
     with pytest.raises(CalendarGapError, match="as_of"):
         calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0)
+
+
+def test_probe_rejects_empty_event_context_and_unknown_policy():
+    p = payload(); p["event_records"] = []
+    with pytest.raises(CalendarGapError, match="event context"):
+        calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    with pytest.raises(CalendarGapError, match="window policy"):
+        calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z", window_policy="LATEST")
+
+
+def test_probe_resolves_every_event_and_rejects_event_window_relationships():
+    p = payload(); p["event_records"][0]["window_start"] = "2025-01-17T16:00:00-05:00"
+    p["event_records"][0]["window_end"] = "2025-01-17T09:30:00-05:00"
+    with pytest.raises(CalendarGapError, match="window"):
+        calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+
+
+def test_probe_rejects_invalid_surprise_combinations_and_unknown_status():
+    for status, eligible in (("NOT_APPLICABLE", True), ("DESCRIPTIVE-HABITAT", True), ("OPERATIONAL", False), ("UNKNOWN", False)):
+        p = payload(); p["event_records"][0].update(surprise_status=status, causal_surprise_eligible=eligible)
+        with pytest.raises((ValueError, CalendarGapError)):
+            load_snapshot(p)
+
+
+def test_probe_resolves_holiday_sources_and_expiry_facts_before_binding():
+    p = payload(); p["holidays"] = [{"holiday_date": "2025-01-17", "source_ref": "missing"}]
+    with pytest.raises(CalendarGapError, match="holiday"):
+        calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    p = payload(); p["monthly_rules"][0]["settlement_style"] = "UNKNOWN"
+    with pytest.raises(CalendarGapError, match="settlement"):
+        calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    p = payload(); p["monthly_rules"][0]["listing_source_ref"] = "missing"
+    with pytest.raises(CalendarGapError, match="listing"):
+        calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+
+
+def test_adjacent_duplicate_dates_are_deterministic_hard_gaps():
+    p = payload(); p["sessions"].append(deepcopy(p["sessions"][1]))
+    p["sessions"][-1]["session_id"] = "conflicting-copy"
+    snapshot = load_snapshot(p)
+    with pytest.raises(CalendarGapError, match="HARD_GAP"):
+        resolve_event_window(snapshot, event_type="FOMC", event_day="2025-01-17", window_policy="PRE_OPEX_SESSION", as_of="2025-01-01T00:00:00Z")
+    with pytest.raises(CalendarGapError, match="HARD_GAP"):
+        calendar_for_probe(snapshot, ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z", window_policy="PRE_OPEX_SESSION")
+
+
+def test_probe_rejects_invalid_session_facts_and_wrong_expiry_date():
+    p = payload(); p["sessions"][0]["regular_close"] = "2025-01-17T09:30:00-05:00"
+    with pytest.raises(CalendarGapError, match="session"):
+        calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    with pytest.raises(CalendarGapError, match="expiry"):
+        calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-18", dte=1, as_of="2025-01-01T00:00:00Z")
+
+
+def test_probe_output_is_stable_for_permuted_events_and_sessions():
+    first = calendar_for_probe(load_snapshot(payload()), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    p = payload(); p["sessions"].reverse(); p["event_records"].reverse()
+    second = calendar_for_probe(load_snapshot(p), ticker="ABC", calendar_day="2025-01-17", expiry="2025-01-17", dte=0, as_of="2025-01-01T00:00:00Z")
+    assert dict(first) == dict(second)
+    assert first["calendar_binding_hash"] == second["calendar_binding_hash"]

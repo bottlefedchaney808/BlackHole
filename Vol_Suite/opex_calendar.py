@@ -15,7 +15,7 @@ from .provenance_contract import canonical_json_bytes
 _HEX64 = set("0123456789abcdefABCDEF")
 _ALLOWED_EVENTS = {"OPEX", "FOMC", "EARNINGS"}
 _ALLOWED_POLICIES = {"OPEX_DAY", "PRE_OPEX_SESSION", "POST_OPEX_RESPONSE"}
-_ALLOWED_SURPRISE = {"NOT_APPLICABLE", "DESCRIPTIVE", "DESCRIPTIVE-HABITAT", "SURPRISE", "UNKNOWN"}
+_ALLOWED_SURPRISE = {"NOT_APPLICABLE", "OPERATIONAL", "OPERATIONAL-NO-EVENT", "DESCRIPTIVE-HABITAT"}
 
 
 class CalendarGapError(ValueError):
@@ -147,6 +147,7 @@ class EventWindow:
     causal_surprise_eligible: bool
     calendar_hash: str
     source_hashes: tuple[str, ...] = ()
+    window_id: str = ""
 
 
 def _snapshot_payload(snapshot: CalendarSnapshot) -> dict[str, Any]:
@@ -242,6 +243,8 @@ def load_snapshot(payload: Mapping[str, Any]) -> CalendarSnapshot:
     for row in events:
         if not row.get("event_id") or not row.get("source_ref"):
             raise ValueError("event_id and source_ref are required")
+        if row.get("event_type") not in _ALLOWED_EVENTS:
+            raise ValueError("invalid event_type")
         _day(row.get("event_day"))
         if not row.get("window_start") or not row.get("window_end"):
             raise ValueError("event windows are required")
@@ -252,6 +255,7 @@ def load_snapshot(payload: Mapping[str, Any]) -> CalendarSnapshot:
             raise ValueError("invalid surprise_status")
         if not isinstance(row.get("causal_surprise_eligible"), bool):
             raise TypeError("causal_surprise_eligible must be boolean")
+        _validate_surprise(str(row["surprise_status"]), row["causal_surprise_eligible"])
     normalized = dict(payload)
     normalized.update({"timezone": timezone, "knowledge_cutoff": str(payload["knowledge_cutoff"])})
     expected = _hash(_canonical_payload(normalized))
@@ -309,11 +313,38 @@ def _session(snapshot: CalendarSnapshot, day: str) -> Mapping[str, Any]:
         raise CalendarGapError("holiday-closed session has no approved shift")
     if str(row.get("status")) not in {"OPEN", "EARLY_CLOSE"}:
         raise CalendarGapError("unknown/closed session status")
+    if not isinstance(row.get("early_close"), bool):
+        raise CalendarGapError("invalid early_close session fact")
+    try:
+        opened = _aware(str(row["regular_open"]), timezone=snapshot.timezone, local_day=day)
+        closed = _aware(str(row["regular_close"]), timezone=snapshot.timezone, local_day=day)
+    except (TypeError, ValueError) as exc:
+        raise CalendarGapError(f"invalid session timestamp: {exc}") from exc
+    if opened >= closed:
+        raise CalendarGapError("reversed session boundaries")
     return row
+
+
+def _validate_surprise(status: str, causal: bool) -> None:
+    if status not in _ALLOWED_SURPRISE or status == "UNKNOWN":
+        raise CalendarGapError("unknown/invalid surprise status")
+    expected = status in {"OPERATIONAL", "OPERATIONAL-NO-EVENT"}
+    if causal is not expected:
+        raise CalendarGapError("invalid surprise status/causal eligibility combination")
+
+
+def _validate_holidays(snapshot: CalendarSnapshot, asof: datetime) -> None:
+    for holiday in snapshot.holidays:
+        try:
+            _day(holiday.get("holiday_date"))
+        except (TypeError, ValueError) as exc:
+            raise CalendarGapError(f"invalid holiday date: {exc}") from exc
+        _source(snapshot, holiday.get("source_ref"), asof, role="holiday")
 
 
 def resolve_opex(snapshot: CalendarSnapshot, *, product_family: str, nominal_or_observed: str, as_of: str) -> OpExRecord:
     asof = _as_of(snapshot, as_of); _day(nominal_or_observed)
+    _validate_holidays(snapshot, asof)
     rules = [r for r in snapshot.monthly_rules if r.get("product_family") == product_family and (r.get("nominal_date") == nominal_or_observed or r.get("observed_expiry_date") == nominal_or_observed)]
     if not rules:
         raise CalendarGapError("no monthly expiry facts")
@@ -328,23 +359,36 @@ def resolve_opex(snapshot: CalendarSnapshot, *, product_family: str, nominal_or_
         settlement = _aware(str(rule["settlement_timestamp"]), timezone=snapshot.timezone, local_day=observed)
     except ValueError as exc:
         raise CalendarGapError(str(exc)) from exc
+    if str(rule["settlement_style"]) not in {"PM_CLOSE", "AM_SETTLEMENT"}:
+        raise CalendarGapError("unknown settlement style")
     if settlement.date() != _aware(str(session["regular_open"]), timezone=snapshot.timezone).date():
         raise CalendarGapError("settlement timestamp is not on session local day")
     candidate = standard_monthly_candidate(*(_day(nominal).year, _day(nominal).month))
     venue_date = _field(rule, "venue_rule_date", "venue_rule_expiry_date", "rule_expiry_date")
     listing_date = _field(rule, "listing_expiry_date", "listed_expiry_date", "listing_date")
-    if nominal == observed:
-        if venue_date is None or listing_date is None or _day(venue_date) != candidate or _day(listing_date) != candidate:
-            raise CalendarGapError("standard monthly lacks third-Friday venue-rule/listing agreement")
-    else:
-        if venue_date is not None and listing_date is not None and _day(venue_date) != _day(listing_date):
-            raise CalendarGapError("venue-rule/listing disagreement")
+    if nominal == observed and (venue_date is None or listing_date is None or _day(venue_date) != candidate or _day(listing_date) != candidate):
+        raise CalendarGapError("standard monthly lacks third-Friday venue-rule/listing agreement")
+    if venue_date is None or listing_date is None or _day(venue_date) != _day(listing_date):
+        raise CalendarGapError("venue-rule/listing disagreement")
+    if _day(venue_date) != _day(observed):
+        raise CalendarGapError("venue-rule/listing date does not match observed expiry")
     return OpExRecord(product_family, nominal, observed, "STANDARD_MONTHLY" if nominal == observed else "SHIFTED_MONTHLY", str(session["session_id"]), str(session["status"]), str(session["regular_open"]), str(session["regular_close"]), bool(session.get("early_close", False)), session.get("close_reason"), str(rule["settlement_style"]), str(rule["settlement_timestamp"]), str(rule["listing_source_ref"]), snapshot.snapshot_hash, _source_hashes([monthly_source, listing_source, session_source]))
 
 
 def _adjacent_session(snapshot: CalendarSnapshot, day: str, direction: int) -> Mapping[str, Any]:
     target = _day(day)
-    candidates = sorted((_day(s["session_date"]), s) for s in snapshot.sessions if str(s.get("status")) in {"OPEN", "EARLY_CLOSE"})
+    candidates = []
+    seen_dates = set()
+    for session in snapshot.sessions:
+        session_day = _day(session.get("session_date"))
+        if session_day in seen_dates:
+            raise CalendarGapError("conflicting adjacent session dates")
+        seen_dates.add(session_day)
+        if str(session.get("status")) not in {"OPEN", "EARLY_CLOSE"}:
+            continue
+        _session(snapshot, str(session["session_date"]))
+        candidates.append((session_day, session))
+    candidates.sort(key=lambda item: (item[0], canonical_json_bytes(_thaw(item[1]))))
     prior = [item for item in candidates if (item[0] < target if direction < 0 else item[0] > target)]
     if not prior:
         raise CalendarGapError("missing adjacent session for window policy")
@@ -362,10 +406,13 @@ def resolve_event_window(snapshot: CalendarSnapshot, *, event_type: str, event_d
         raise CalendarGapError("missing or conflicting event window")
     row = rows[0]; event_source = _source(snapshot, row.get("source_ref"), asof, role="event")
     session = _session(snapshot, event_day); session_source = _source(snapshot, session.get("source_ref"), asof, role="session")
-    event_start = _aware(str(row["window_start"]), timezone=snapshot.timezone, local_day=event_day)
-    event_end = _aware(str(row["window_end"]), timezone=snapshot.timezone, local_day=event_day)
-    open_ = _aware(str(session["regular_open"]), timezone=snapshot.timezone, local_day=event_day)
-    close = _aware(str(session["regular_close"]), timezone=snapshot.timezone, local_day=event_day)
+    try:
+        event_start = _aware(str(row["window_start"]), timezone=snapshot.timezone, local_day=event_day)
+        event_end = _aware(str(row["window_end"]), timezone=snapshot.timezone, local_day=event_day)
+        open_ = _aware(str(session["regular_open"]), timezone=snapshot.timezone, local_day=event_day)
+        close = _aware(str(session["regular_close"]), timezone=snapshot.timezone, local_day=event_day)
+    except (TypeError, ValueError) as exc:
+        raise CalendarGapError(f"invalid event/session window: {exc}") from exc
     if event_start >= event_end or event_start < open_ or event_end > close:
         raise CalendarGapError("event window conflicts with session boundaries")
     if window_policy == "OPEX_DAY":
@@ -382,26 +429,38 @@ def resolve_event_window(snapshot: CalendarSnapshot, *, event_type: str, event_d
         anchor = "EVENT_TO_NEXT_SESSION"
     if start >= end:
         raise CalendarGapError("derived window boundaries conflict")
-    return EventWindow(str(row["event_id"]), event_type, event_day, start.isoformat(), end.isoformat(), snapshot.timezone, anchor, str(row["source_ref"]), str(row["surprise_status"]), bool(row["causal_surprise_eligible"]), snapshot.snapshot_hash, _source_hashes([event_source, session_source]))
+    causal = bool(row["causal_surprise_eligible"])
+    _validate_surprise(str(row["surprise_status"]), causal)
+    window_id = f"{row['event_id']}:{window_policy}"
+    return EventWindow(str(row["event_id"]), event_type, event_day, start.isoformat(), end.isoformat(), snapshot.timezone, anchor, str(row["source_ref"]), str(row["surprise_status"]), causal, snapshot.snapshot_hash, _source_hashes([event_source, session_source]), window_id)
 
 
 def calendar_for_probe(snapshot: CalendarSnapshot, *, ticker: str, calendar_day: str, expiry: str, dte: int, as_of: str | None = None, window_policy: str = "OPEX_DAY") -> Mapping[str, Any]:
     if as_of is None:
         raise CalendarGapError("as_of is required for probe binding")
     asof = _as_of(snapshot, as_of); day = _day(calendar_day); observed = _day(expiry)
+    if window_policy not in _ALLOWED_POLICIES:
+        raise CalendarGapError("unknown window policy")
     if isinstance(dte, bool) or not isinstance(dte, int) or (observed - day).days != dte:
         raise CalendarGapError("DTE does not match exact local dates")
-    session = _session(snapshot, calendar_day); session_source = _source(snapshot, session.get("source_ref"), asof, role="session")
     monthly_matches = [r for r in snapshot.monthly_rules if r.get("observed_expiry_date") == expiry]
-    if len(monthly_matches) != 1:
+    families = {str(r.get("product_family")) for r in monthly_matches}
+    if len(monthly_matches) != 1 or len(families) != 1:
         raise CalendarGapError("missing/conflicting observed expiry binding")
-    rule = monthly_matches[0]; monthly_source = _source(snapshot, rule.get("source_ref"), asof, role="monthly"); listing_source = _source(snapshot, rule.get("listing_source_ref"), asof, role="listing")
-    _aware(str(rule["settlement_timestamp"]), timezone=snapshot.timezone, local_day=expiry)
-    event_rows = [e for e in snapshot.event_records if e.get("event_day") == calendar_day]
+    opex = resolve_opex(snapshot, product_family=next(iter(families)), nominal_or_observed=expiry, as_of=as_of)
+    session = _session(snapshot, calendar_day); session_source = _source(snapshot, session.get("source_ref"), asof, role="session")
+    _validate_holidays(snapshot, asof)
+    event_rows = sorted((e for e in snapshot.event_records if e.get("event_day") == calendar_day), key=lambda e: str(e.get("event_id")))
+    if not event_rows:
+        raise CalendarGapError("event context is required")
     event_ids = [str(e["event_id"]) for e in event_rows]
-    event_windows = {str(e["event_id"]): {"window_start": str(e["window_start"]), "window_end": str(e["window_end"])} for e in event_rows}
-    event_sources = [_source(snapshot, e.get("source_ref"), asof, role="event") for e in event_rows]
-    binding = {"ticker": ticker, "calendar_day": calendar_day, "nominal_date": str(rule["nominal_date"]), "observed_expiry": expiry, "expiry": expiry, "dte": dte, "exact_dte": (observed - day).days, "session_id": str(session["session_id"]), "session_status": str(session["status"]), "regular_open": str(session["regular_open"]), "regular_close": str(session["regular_close"]), "early_close": bool(session.get("early_close", False)), "close_reason": session.get("close_reason"), "settlement_style": str(rule["settlement_style"]), "settlement_timestamp": str(rule["settlement_timestamp"]), "event_ids": event_ids, "event_windows": event_windows, "timezone": snapshot.timezone, "as_of": as_of, "snapshot_hash": snapshot.snapshot_hash, "calendar_hash": snapshot.snapshot_hash, "source_hashes": list(_source_hashes([session_source, monthly_source, listing_source, *event_sources])), "calendar_policy_version": snapshot.calendar_policy_version, "resolver_code_version": snapshot.resolver_code_version, "window_policy": window_policy}
+    if len(set(event_ids)) != len(event_ids):
+        raise CalendarGapError("duplicate event IDs")
+    resolved_events = [resolve_event_window(snapshot, event_type=str(e.get("event_type")), event_day=calendar_day, window_policy=window_policy, as_of=as_of) for e in event_rows]
+    event_windows = {event.event_id: {"window_id": event.window_id, "window_start": event.window_start, "window_end": event.window_end, "window_policy": window_policy} for event in resolved_events}
+    first_window = resolved_events[0]
+    event_source_hashes = [source_hash for event in resolved_events for source_hash in event.source_hashes]
+    binding = {"ticker": ticker, "calendar_day": calendar_day, "nominal_date": opex.nominal_date, "observed_expiry": opex.observed_expiry_date, "expiry": expiry, "dte": dte, "exact_dte": (observed - day).days, "session_id": opex.session_id, "session_status": opex.session_status, "regular_open": opex.regular_open, "regular_close": opex.regular_close, "early_close": opex.early_close, "close_reason": opex.close_reason, "settlement_style": opex.settlement_style, "settlement_timestamp": opex.settlement_timestamp, "event_ids": event_ids, "event_windows": event_windows, "window_id": first_window.window_id, "window_start": first_window.window_start, "window_end": first_window.window_end, "timezone": snapshot.timezone, "as_of": as_of, "snapshot_hash": snapshot.snapshot_hash, "calendar_hash": snapshot.snapshot_hash, "source_hashes": sorted({*opex.source_hashes, *event_source_hashes, str(session_source["content_sha256"])}), "calendar_policy_version": snapshot.calendar_policy_version, "resolver_code_version": snapshot.resolver_code_version, "window_policy": window_policy}
     binding["calendar_binding_hash"] = _hash(binding)
     return MappingProxyType({k: _freeze(v) for k, v in binding.items()})
 
