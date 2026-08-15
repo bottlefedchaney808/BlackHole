@@ -73,4 +73,27 @@ C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_S
 git diff --check
 ```
 
+## Review-fix closure (2026-08-15)
+
+- Executor success admission now fails closed on either explicit `success=False` or `ok=False`, regardless of a contradictory success status or validation flag. It also rejects explicit error/failure markers; admission requires an allowed success status, `validated=True`, at least one explicit true success flag, and no failure marker.
+- `_execution_gate` now inspects the original evidence-unit list for duplicate `candidate_key` identities before constructing the lookup mapping. Duplicates produce structured blocking reasons and return no admitted units, so evidence cannot be silently overwritten or deduplicated.
+- Added regressions for contradictory executor results (`SUCCESS`/`OK` with false flags and error markers), duplicate evidence units, and the valid unique-evidence control.
+- No acquisition, live/master, or secrets changes were made.
+
+## Verification (review-fix closure)
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+110 passed in 0.16s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
+# exit 0
+
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
+All checks passed!
+
+git diff --check
+# exit 0 (Git emitted only LF/CRLF conversion warnings)
+```
+
 <!-- report ends with a newline -->

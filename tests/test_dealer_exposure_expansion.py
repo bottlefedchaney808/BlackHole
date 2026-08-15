@@ -299,3 +299,43 @@ def test_all_structured_executor_failures_block_network(monkeypatch, failure):
     assert result["network_fetch_allowed"] is False
     assert result["mode"] == "failed-execution"
     assert result["execution_audit"]["blocked"][0]["status"] == "FAILED_EXECUTION"
+
+
+@pytest.mark.parametrize("failure", [
+    {"status": "SUCCESS", "validated": True, "success": True, "ok": False},
+    {"status": "OK", "validated": True, "success": False, "ok": True},
+    {"status": "SUCCESS", "validated": True, "success": False, "ok": False},
+    {"status": "SUCCESS", "validated": True, "success": True, "ok": True, "error": "adapter failure"},
+])
+def test_contradictory_executor_success_evidence_blocks_network(monkeypatch, failure):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: failure, acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is False
+    assert result["mode"] == "failed-execution"
+    assert result["execution_audit"]["blocked"][0]["status"] == "FAILED_EXECUTION"
+
+
+def test_execution_gate_rejects_duplicate_evidence_units_without_overwrite(monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    evidence["units"].append(dict(evidence["units"][0]))
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True}, acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is False
+    assert result["mode"] == "blocked"
+    assert any(item.get("reason") == "duplicate evidence candidate identity" for item in result["execution_audit"]["blocked"])
+
+
+def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True}, acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is True
+    assert result["execution_audit"]["blocked"] == []
+    assert result["execution_audit"]["invoked"] == [u["candidate_key"] for u in plan["units"]]

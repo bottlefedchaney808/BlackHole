@@ -322,6 +322,18 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
     if not isinstance(units, list) or not isinstance(registry, Mapping):
         reasons.append({"reason": "complete canonical evidence and verified registry are required"})
         return [], reasons
+    # Validate the source list before indexing it.  A dict-comprehension here
+    # would silently discard all but the last contradictory evidence unit.
+    evidence_keys: list[Any] = []
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            reasons.append({"reason": "evidence unit must be a mapping"})
+            return [], reasons
+        evidence_keys.append(unit.get("candidate_key"))
+    duplicate_keys = sorted({key for key in evidence_keys if evidence_keys.count(key) > 1}, key=str)
+    if duplicate_keys:
+        reasons.extend({"candidate_key": key, "reason": "duplicate evidence candidate identity"} for key in duplicate_keys)
+        return [], reasons
     by_key = {u.get("candidate_key"): dict(u) for u in units}
     if set(by_key) != {u["candidate_key"] for u in primary}:
         reasons.append({"reason": "evidence coverage is not 100% of primary schedule"})
@@ -366,10 +378,22 @@ def run_expansion_plan(
                 try:
                     execution = executor(unit)  # type: ignore[misc]
                     status = str(execution.get("status", "")).upper() if isinstance(execution, Mapping) else ""
+                    failure_marker = (
+                        isinstance(execution, Mapping)
+                        and (
+                            status in {"FAILED", "FAIL", "ERROR", "BLOCKED", "HARD_GAP", "FAILED_EXECUTION"}
+                            or execution.get("success") is False
+                            or execution.get("ok") is False
+                            or any(execution.get(name) not in (None, False, "") for name in ("error", "failure", "failure_marker"))
+                        )
+                    )
                     validated_success = (
                         isinstance(execution, Mapping)
+                        and not failure_marker
                         and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"}
                         and execution.get("validated") is True
+                        and (execution.get("success") is not False)
+                        and (execution.get("ok") is not False)
                         and (execution.get("success") is True or execution.get("ok") is True)
                     )
                     if not validated_success:
