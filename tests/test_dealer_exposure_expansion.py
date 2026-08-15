@@ -413,6 +413,38 @@ def test_canonical_input_exposes_distinct_live_and_new_config_hashes():
     assert inp.live_config_hash != inp.new_config_hash
 
 
+@pytest.mark.parametrize("declared_timezone", ["No/Such timezone", [], {"invalid": "timezone"}])
+def test_invalid_declared_timezone_is_structured_comparison_block(monkeypatch, declared_timezone):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    evidence["units"][0]["declared_timezone"] = declared_timezone
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
+                                executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
+                                acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is False
+    assert result["mode"] == "blocked"
+    blocked = [item for item in result["execution_audit"]["blocked"] if item.get("candidate_key") == evidence["units"][0]["candidate_key"]]
+    assert blocked
+    assert all(item["classification"] == "HARD_GAP" for item in blocked)
+    assert all(item["status"] == "COMPARISON_INVALID" for item in blocked)
+    assert any("timezone" in item["reason"].lower() for item in blocked)
+
+
+def test_valid_declared_timezone_control_remains_admitted(monkeypatch):
+    rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
+    plan = build_expansion_manifest(rows)
+    evidence = _gated_evidence(plan)
+    evidence["units"][0]["declared_timezone"] = "America/New_York"
+    monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
+                                executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
+                                acquisition_evidence=evidence)
+    assert result["network_fetch_allowed"] is True
+    assert result["execution_audit"]["blocked"] == []
+
+
 def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):
     rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
     plan = build_expansion_manifest(rows)

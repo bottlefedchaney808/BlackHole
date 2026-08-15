@@ -145,3 +145,26 @@ git diff --check
 ```
 
 No acquisition, network, live/master, secrets, or unrelated files were changed.
+
+## Review-fix closure (2026-08-15, timezone validation)
+
+- `_validate_pre_window_observations` now catches `ZoneInfoNotFoundError`, `KeyError`, `TypeError`, `ValueError`, `OverflowError`, and `OSError` from malformed declared timezone and PRE_WINDOW values, returning an auditable reason instead of leaking an exception.
+- `_execution_gate` classifies every malformed PRE_WINDOW observation as structured `classification=HARD_GAP` / `status=COMPARISON_INVALID`, preserving fail-closed admission and preventing executor invocation.
+- Added real-path regressions for `No/Such timezone`, non-string timezone values, and a valid `America/New_York` control; existing malformed PRE_WINDOW regressions remain covered.
+- No acquisition, live/master, secrets, or unrelated files were changed.
+
+## Verification (timezone validation closure)
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
+130 passed in 0.16s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
+# exit 0
+
+C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
+All checks passed!
+
+git diff --check
+# exit 0 (Git emitted only LF/CRLF conversion warnings)
+```

@@ -17,7 +17,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 EXPECTED_DEADBAND = 0.01
 LIVE_CONFIG = {
@@ -373,7 +373,7 @@ def _validate_pre_window_observations(unit: Mapping[str, Any]) -> list[str]:
             expected = parsed[-1][1] - parsed[0][1]
             if not math.isclose(float(delta), expected, rel_tol=1e-12, abs_tol=1e-12):
                 return ["delta_iv_pre_window does not bind ordered observations"]
-    except (TypeError, ValueError, OSError) as exc:
+    except (ZoneInfoNotFoundError, KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
         return [str(exc)]
     return []
 
@@ -430,7 +430,11 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
         reasons.append({"reason": "evidence coverage is not 100% of primary schedule"})
     for key, unit in by_identity.items():
         for observation_reason in _validate_pre_window_observations(unit):
-            reasons.append({"candidate_key": key, "reason": observation_reason})
+            # Provenance-shape failures are comparison-invalid hard gaps, not
+            # ordinary executor or Python exceptions.  Keep the reason
+            # auditable while ensuring malformed evidence can never admit work.
+            reasons.append({"candidate_key": key, "classification": "HARD_GAP",
+                            "status": "COMPARISON_INVALID", "reason": observation_reason})
     causal = validate_causal_eligibility(by_identity.values(), intended_units=len(schedule),
                                          intended_corpus_manifest={"units": schedule},
                                          artifact_registry=registry)
