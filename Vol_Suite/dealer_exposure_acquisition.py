@@ -164,10 +164,17 @@ def _captured_table_rows(call: Mapping[str, Any]) -> list[dict[str, Any]] | None
 
 
 def _captured_call_hash(call: Mapping[str, Any]) -> str:
+    """Validate the recorded hash against the exact captured table payload."""
     value = call.get("payload_sha256")
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
         raise ValueError("successful captured call lacks a valid payload_sha256")
-    return value.lower()
+    try:
+        expected = canonical_sha256(call.get("payload"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("successful captured call payload cannot be canonically hashed") from exc
+    if value.lower() != expected:
+        raise ValueError("captured call payload_sha256 does not match payload")
+    return expected
 
 
 def _captured_call_rows(calls: Iterable[Mapping[str, Any]], required: str) -> list[tuple[Mapping[str, Any], dict[str, Any]]]:
@@ -268,6 +275,18 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     mapped = _map_captured_payload(unit, payload)
     mapping_status = mapped.get("_mapping_status") if isinstance(mapped, Mapping) else None
     mapping_reason = mapped.get("_mapping_reason") if isinstance(mapped, Mapping) else None
+    if mapping_status is None and isinstance(mapped, Mapping):
+        conflicts = [
+            key for key, value in mapped.items()
+            if not key.startswith("_") and key in l2 and l2[key] is not None and l2[key] != value
+        ]
+        if conflicts:
+            mapped = {
+                "_mapping_status": "HARD_GAP",
+                "_mapping_reason": "record.l2 conflicts with captured endpoint provenance: " + ", ".join(sorted(conflicts)),
+            }
+            mapping_status = mapped["_mapping_status"]
+            mapping_reason = mapped["_mapping_reason"]
     l2.update({key: value for key, value in mapped.items() if not key.startswith("_") and (key not in l2 or l2[key] is None)})
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")

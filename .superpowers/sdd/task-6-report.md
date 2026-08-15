@@ -64,3 +64,19 @@ Using the captured XLE artifact (without network or acquisition):
 
 No network call or acquisition was performed. Unrelated worktree artifacts remain untouched.
 
+## Critical provenance bypass closure (2026-08-15)
+
+- `_unit_from_payload` now rejects any non-null `record.l2` field that conflicts with mapped captured endpoint provenance. Captured mapping can no longer be shadowed by fabricated pre-existing values; the unit is a `HARD_GAP` and the census is `COMPARISON_INVALID`.
+- `_captured_call_hash` now recomputes `canonical_sha256(call["payload"])` with the shared strict canonical JSON routine and compares it to the recorded `payload_sha256`. Invalid, missing, or tampered call payloads fail closed.
+- Added regressions for retained-hash payload mutation and conflicting fake `record.l2` provenance. The existing valid captured XLE control remains green.
+
+## Critical-fix verification
+
+- `python -m pytest tests/test_dealer_exposure_acquisition.py -q -p no:plugins` — **38 passed**
+- `python -m pytest tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_expansion.py -q -p no:plugins` — **116 passed**
+- `python -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py` — **passed**
+- `git diff --check` — **passed**
+- Ruff unavailable (`ruff` and `python -m ruff` not installed).
+
+No network call or acquisition was performed. Unrelated worktree artifacts remain untouched.
+

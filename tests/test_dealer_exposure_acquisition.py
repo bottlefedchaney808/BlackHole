@@ -113,6 +113,47 @@ def test_captured_xle_valid_rows_preserve_exact_call_hash_binding():
     assert set(unit["source_hashes"]).issuperset({before["source_hash"], source["source_hash"], unit["spot_source_hash"], unit["chain_source_hash"]})
 
 
+def test_captured_payload_mutation_with_retained_hash_fails_closed():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["metrics"]["breach_eligible"] = True
+    payload["metrics"]["decision"] = "PASS"
+    call = next(call for call in payload["calls"] if call.get("response_status") == 200)
+    call["payload"][1][0] = "tampered"
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    result = execute_sequential_acquisition(schedule, probe_fetcher=valid_probe,
+                                            fetcher=lambda _: payload, dry_run=False,
+                                            approval=True)
+    unit = result["units"][0]
+    assert unit["status"] == "HARD_GAP"
+    assert "payload_sha256" in unit["reason"]
+    assert result["census"]["comparison_status"] == "COMPARISON_INVALID"
+
+
+def test_fake_record_l2_provenance_cannot_override_captured_mapping():
+    payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
+    payload["status"] = "PASS"
+    payload["metrics"]["breach_eligible"] = True
+    payload["metrics"]["decision"] = "PASS"
+    payload["record"] = {"l2": {
+        "delta_iv_provenance": "PRE_WINDOW",
+        "delta_iv_pre_window": 999.0,
+        "iv_source_ts": "2026-07-06T13:00:00Z",
+        "breach_window_start_prov": "2026-07-06T19:00:00Z",
+        "declared_timezone": "America/New_York",
+    }}
+    schedule = build_candidate_schedule([row("XLE", "2026-07-06", "2026-07-10", 4, "Energy")])
+    schedule[0]["declared_timezone"] = "America/New_York"
+    result = execute_sequential_acquisition(schedule, probe_fetcher=valid_probe,
+                                            fetcher=lambda _: payload, dry_run=False,
+                                            approval=True)
+    unit = result["units"][0]
+    assert unit["status"] == "HARD_GAP"
+    assert "record.l2 conflicts" in unit["reason"]
+    assert result["census"]["comparison_status"] == "COMPARISON_INVALID"
+
+
 def test_captured_xle_malformed_mixed_iv_rows_fail_closed():
     payload = json.loads(RAW_CAPTURE.read_text(encoding="utf-8"))
     payload["status"] = "PASS"
