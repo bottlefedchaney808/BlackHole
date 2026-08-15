@@ -146,6 +146,24 @@ def test_does_not_touch_live_path():
     assert "vanna_flow" not in src.split("orthogonalize_vanna_design")[0].split("def ")[-1]
 
 
+def test_delta_iv_provenance_assertion():
+    """R1-mandated: the orthogonalization must label the ΔIV provenance and
+    downgrade to ASSOCIATIONAL (not causal) when ΔIV is day-level/unverified."""
+    recs = _make_records()
+    uniq = ca.deduplicate_family_day(recs)
+    # default: no delta_iv_provenance on records -> DAY_LEVEL-UNVERIFIED / ASSOCIATIONAL
+    orth = ca.orthogonalize_vanna_design(uniq, family_l2=True)
+    assert orth["associational_label"] == "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
+    assert orth["delta_iv_provenance"] != "PRE_WINDOW"
+    # explicit pre-window provenance on all records -> CAUSAL-ELIGIBLE
+    for r in recs:
+        r["l2"]["delta_iv_provenance"] = "PRE_WINDOW"
+    uniq2 = ca.deduplicate_family_day(recs)
+    orth2 = ca.orthogonalize_vanna_design(uniq2, family_l2=True)
+    assert orth2["associational_label"] == "CAUSAL-ELIGIBLE"
+    assert orth2["delta_iv_provenance"] == "PRE_WINDOW"
+
+
 def test_full_suite_on_orthogonalized_acquisition():
     """Run the actual committed 62-day acquisition through the orthogonalized
     design and confirm it stays full-rank + IDENTIFIABLE (Cem's review gate)."""

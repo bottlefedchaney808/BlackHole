@@ -489,9 +489,35 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
              "cross_family_spillover"])
     if family_l2:
         cols += fam_cols
+
+    # ---- ΔIV provenance disclosure (R1-mandated; prevents causal overclaim) ----
+    # The `delta_iv` covariate and the residualizer constituent both come from the
+    # record's l2['delta_iv']. If the record carries explicit pre-window timing for
+    # delta_iv we label PRE_WINDOW; otherwise (and for the current acquisition where
+    # delta_iv = net_div, a DAY-LEVEL sum of ATM-IV changes spanning the breach/response
+    # window) we label DAY_LEVEL / ASSOCIATIONAL. A day-level ΔIV means Vanna⊥ is
+    # orthogonalized against a quantity overlapping the outcome, so the residualized β'
+    # is an ASSOCIATIONAL (contemporaneous-ΔIV) incremental effect, NOT a causal Vanna
+    # effect. This label is surfaced in the decision table and must gate any causal claim.
+    div_prov = set()
+    for r in day_records:
+        l2 = r.get("l2", {})
+        prov = l2.get("delta_iv_provenance", l2.get("delta_iv_timing"))
+        if prov is not None:
+            div_prov.add(str(prov).upper())
+    if len(div_prov) == 1 and "PRE_WINDOW" in div_prov:
+        delta_iv_provenance = "PRE_WINDOW"
+        associational_label = "CAUSAL-ELIGIBLE"  # only if pre-window ΔIV can be proven
+    else:
+        # includes None, empty, MIXED, or explicitly DAY_LEVEL -> assume day-level/unknown
+        delta_iv_provenance = (sorted(div_prov)[0] if div_prov else "DAY_LEVEL-UNVERIFIED")
+        associational_label = "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
+
     # report the residualization diagnostics
     return {"X": X, "y": y, "col_names": cols, "days": days,
             "constituents": constituent_cols, "resid_target": resid,
+            "delta_iv_provenance": delta_iv_provenance,
+            "associational_label": associational_label,
             "target_vif_pre": None}  # VIF computed downstream
 
 
