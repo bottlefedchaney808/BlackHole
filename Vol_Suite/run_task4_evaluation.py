@@ -6,14 +6,27 @@ or auto-promote a model.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
+
+try:
+    from .provenance_contract import (
+        SHA256_RE,
+        canonical_json_bytes,
+        canonical_sha256,
+        sha256_bytes,
+    )
+except ImportError:
+    from provenance_contract import (
+        SHA256_RE,
+        canonical_json_bytes,
+        canonical_sha256,
+        sha256_bytes,
+    )
 
 TARGET_DAYS = 257
 CORRELATIONAL_TARGET_DAYS = 29
@@ -47,12 +60,8 @@ def _number(value: Any, name: str) -> float:
 
 
 def _hash(value: Any, name: str) -> str:
-    if not isinstance(value, str) or len(value) != SHA256_HEX:
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise EvaluationInvalid(f"{name} must be a SHA-256 hash")
-    try:
-        int(value, 16)
-    except ValueError as exc:
-        raise EvaluationInvalid(f"{name} must be a SHA-256 hash") from exc
     return value.lower()
 
 
@@ -91,7 +100,10 @@ def _comparison(row: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    try:
+        return canonical_json_bytes(value)
+    except (TypeError, ValueError) as exc:
+        raise EvaluationInvalid("canonical provenance contains non-JSON values") from exc
 
 
 def _registry(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -106,7 +118,7 @@ def _registry_payload_hash(entry: Mapping[str, Any]) -> str:
     if payload is None:
         raise EvaluationInvalid("registry entry lacks raw/source payload")
     raw = payload if isinstance(payload, bytes) else payload.encode("utf-8") if isinstance(payload, str) else _canonical_json(payload)
-    return hashlib.sha256(raw).hexdigest()
+    return sha256_bytes(raw)
 
 
 def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
@@ -139,7 +151,7 @@ def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
         raise EvaluationInvalid("registry raw/source identity mismatch")
     if _registry_payload_hash(entry) != raw_hash:
         raise EvaluationInvalid("registry raw payload hash mismatch")
-    if hashlib.sha256(_canonical_json(manifest)).hexdigest() != artifact_hash:
+    if canonical_sha256(manifest) != artifact_hash:
         raise EvaluationInvalid("registry canonical manifest hash mismatch")
     expected = {"candidate_key": candidate, "ticker": row.get("ticker"),
                 "calendar_day": row.get("day", row.get("date")),

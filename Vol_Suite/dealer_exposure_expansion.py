@@ -32,7 +32,12 @@ from .dealer_exposure_acquisition import (
     build_candidate_schedule,
     select_primary_schedule,
 )
-from .dealer_exposure_universe import DTE_STRATA, held_pairs_from_paths
+from .dealer_exposure_universe import (
+    DTE_STRATA,
+    ProbeResult,
+    held_pairs_from_paths,
+    validate_probe_result,
+)
 from .run_live_vs_expiry_book_common_input import (
     CanonicalInput,
     ComparisonInvalid,
@@ -378,6 +383,38 @@ def _validate_pre_window_observations(unit: Mapping[str, Any]) -> list[str]:
     return []
 
 
+def _validate_probe_contract(probe: Mapping[str, Any], schedule_by_key: Mapping[str, Mapping[str, Any]]) -> tuple[str | None, str | None]:
+    """Validate Task 1 evidence and bind its request to one exact schedule key."""
+    key = probe.get("candidate_key")
+    if not isinstance(key, str) or key not in schedule_by_key:
+        return None, "probe request is detached from the exact candidate schedule key"
+    schedule = schedule_by_key[key]
+    request = probe.get("request_parameters")
+    if not isinstance(request, Mapping):
+        return key, "probe request_parameters are required"
+    expected = {"ticker": schedule.get("ticker"), "day": schedule.get("calendar_day"),
+                "expiry": schedule.get("expiry"), "dte": schedule.get("dte")}
+    actual = {name: request.get(name) for name in expected}
+    if actual != expected:
+        return key, "probe request identity does not match candidate schedule"
+    try:
+        result = ProbeResult(
+            ticker=str(probe.get("ticker", schedule.get("ticker"))),
+            day=str(probe.get("day", schedule.get("calendar_day"))),
+            expiry=str(probe.get("expiry", schedule.get("expiry"))),
+            dte=int(probe.get("dte", schedule.get("dte"))),
+            status=str(probe.get("status", "HARD_GAP")),
+            checks=probe.get("checks", {}), reasons=probe.get("reasons", ()),
+            imputed_zero=probe.get("imputed_zero", False), evidence=probe.get("evidence", {}),
+        )
+        validate_probe_result(result)
+    except (TypeError, ValueError, OverflowError) as exc:
+        return key, f"probe contract invalid: {exc}"
+    if result.status == "PASS" and not (probe.get("validated") is True and probe.get("invoked") is True):
+        return key, "PASS probe must be explicitly validated and invoked"
+    return key, None
+
+
 def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return admitted units and auditable reasons; approval alone never admits."""
     reasons: list[dict[str, Any]] = []
@@ -393,7 +430,23 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
     if not isinstance(probes, list):
         reasons.append({"reason": "validated probes are required"})
         probes = []
-    primary = select_primary_schedule(schedule, probes)
+    schedule_by_key = {unit.get("candidate_key"): unit for unit in schedule}
+    valid_probes: list[dict[str, Any]] = []
+    probe_keys: set[str] = set()
+    for probe in probes:
+        if not isinstance(probe, Mapping):
+            reasons.append({"classification": "HARD_GAP", "status": "COMPARISON_INVALID", "reason": "probe must be a mapping"})
+            continue
+        key, error = _validate_probe_contract(probe, schedule_by_key)
+        if error:
+            reasons.append({"candidate_key": key, "classification": "HARD_GAP", "status": "COMPARISON_INVALID", "reason": error})
+            continue
+        if key in probe_keys:
+            reasons.append({"candidate_key": key, "classification": "HARD_GAP", "status": "COMPARISON_INVALID", "reason": "duplicate probe identity"})
+            continue
+        probe_keys.add(key)
+        valid_probes.append(dict(probe))
+    primary = select_primary_schedule(schedule, valid_probes)
     if {u["candidate_key"] for u in primary} != {u["candidate_key"] for u in schedule}:
         reasons.append({"reason": "every schedule unit requires a validated PASS probe"})
     units = evidence.get("units")

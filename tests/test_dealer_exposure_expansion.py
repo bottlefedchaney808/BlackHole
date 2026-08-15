@@ -152,7 +152,6 @@ def test_held_reference_paths_compose_task_one(tmp_path):
 
 
 def _gated_evidence(result):
-    keys = [u["candidate_key"] for u in result["units"]]
     units = []
     for unit in result["units"]:
         day = unit["calendar_day"]
@@ -164,8 +163,22 @@ def _gated_evidence(result):
                           {"role": "PRE_WINDOW", "timestamp": f"{day}T14:00:00Z", "iv": 0.21,
                            "source_identity": "theta:iv:source", "source_hash": "b" * 64},
                       ]})
-    return {"probes": [{"candidate_key": key, "status": "PASS", "validated": True, "invoked": True} for key in keys],
-            "units": units, "artifact_registry": {}}
+    probes = []
+    for unit in result["units"]:
+        day, ticker, expiry, dte = unit["calendar_day"], unit["ticker"], unit["expiry"], unit["dte"]
+        row = {"timestamp": f"{day}T13:00:00Z", "spot": 100.0,
+               "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5}
+        evidence = {
+            "probe_identity": {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte},
+            "spot_ohlc_coverage": {"pre_window": [row], "firing_window": [row], "response_window": [row], "return_clocks": "daily/from_breach"},
+            "same_expiry_grid_oi_iv": {"expiry": expiry, "grid": [99.0, 101.0], "oi": [100.0, 100.0], "iv": [0.2, 0.21]},
+            "strike_side_moneyness": {"call_side": [101.0], "put_side": [99.0], "moneyness_band": [90.0, 110.0]},
+            "strict_pre_window_ordering": {"pre_window_last": f"{day}T14:00:00Z", "breach_first": f"{day}T15:00:00Z", "strictly_before": True},
+            "return_clocks": {"daily": "1d", "from_breach": "10m"}, "no_imputation": True, "zero_dte": False,
+        }
+        checks = {name: "PASS" for name in ("chain_listing", "historical_greeks_iv", "open_interest", "spot_ohlc", "timestamp_granularity", "expiry_dte", "post_window_returns", "spot_ohlc_coverage", "same_expiry_grid_oi_iv", "strike_side_moneyness", "strict_pre_window_ordering", "return_clocks", "no_imputation")}
+        probes.append({"candidate_key": unit["candidate_key"], "ticker": ticker, "day": day, "expiry": expiry, "dte": dte, "status": "PASS", "validated": True, "invoked": True, "checks": checks, "reasons": [], "evidence": evidence, "request_parameters": {"ticker": ticker, "day": day, "expiry": expiry, "dte": dte}})
+    return {"probes": probes, "units": units, "artifact_registry": {}}
 
 
 @pytest.mark.parametrize("evidence", [None, {"probes": []}, {"probes": [], "units": [], "artifact_registry": {}}])
