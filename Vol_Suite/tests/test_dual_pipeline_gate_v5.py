@@ -242,19 +242,21 @@ def test_delta_new_is_zero_by_construction():
 
 
 def test_convention_distance_demotes_when_production_hugs_baseline():
-    # All delta_prod ~ 0 -> production hugs the shared -1 baseline -> DEMOTE
+    # All delta_prod ~ 0 -> production hugs the shared -1 baseline. R7-C: this is
+    # now a SUPPORTING production-flat-baseline SCREEN (one-sided proxy, not a
+    # decisive demote).
     deltas = [0.0, 0.01, -0.02, 0.005, -0.03, 0.02, 0.0, -0.01]
     mean_abs, frac, verdict, reason = v5.convention_distance(deltas)
-    assert verdict == "DEMOTE"
+    assert verdict.startswith("SUPPORTING-screen")
     assert mean_abs < 0.10
     assert frac < 0.25
 
 
 def test_convention_distance_open_when_material_deviation():
-    # Some clusters with |delta_prod| >= 0.10 -> mechanism OPEN
+    # Some clusters with |delta_prod| >= 0.10 -> deviation-present SCREEN (R7-C).
     deltas = [0.0, 0.15, -0.12, 0.18, -0.05, 0.0]
     mean_abs, frac, verdict, reason = v5.convention_distance(deltas)
-    assert verdict == "OPEN"
+    assert verdict.startswith("SUPPORTING-screen")
 
 
 def test_convention_distance_corpus_includes_zero_firing_clusters():
@@ -277,7 +279,9 @@ def test_convention_distance_corpus_includes_zero_firing_clusters():
 
 
 def test_real_corpus_delta_verdict_demotes():
-    # The real corpus: mean|delta_prod| ~ 0.025, ~2.5% >= 0.10 -> DEMOTE.
+    # The real corpus: mean|delta_prod| ~ 0.025, ~2.5% >= 0.10. R7-C: this is a
+    # SUPPORTING production-flat-baseline SCREEN (one-sided proxy), which still
+    # reads 'production-hugs--1-baseline' but is NOT a decisive demote.
     v3 = json.load(open(os.path.join(os.path.dirname(v5.__file__), "_intraday_cache",
                                      "dual_pipeline_gate_v3_obs.json"), encoding="utf-8"))
     v4 = json.load(open(os.path.join(os.path.dirname(v5.__file__), "_intraday_cache",
@@ -286,8 +290,9 @@ def test_real_corpus_delta_verdict_demotes():
     rows = seed + v4.get("rows", [])
     deltas = [v5.delta_prod(r.get("provenance", {})) for r in rows]
     mean_abs, frac, verdict, reason = v5.convention_distance(deltas)
-    assert verdict == "DEMOTE"
+    assert verdict.startswith("SUPPORTING-screen")
     assert mean_abs < 0.05
+    assert "open-not-disproven" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -303,3 +308,62 @@ def test_corpus_integrity_no_duplicates():
     info = v5.assert_corpus_integrity(rows)
     assert info["n_rows"] == info["n_unique"]  # no dup (ticker,day)
     assert info["n_rows"] == 40
+
+
+# ---------------------------------------------------------------------------
+# R7-A: heterogeneous (Poisson-binomial) strict-AND null
+# ---------------------------------------------------------------------------
+def test_heterogeneous_null_mixture_matches_known_p():
+    # 9 unique days = 6 single-family (q=0.5) + 3 two-family (q=0.25). R2/R1
+    # verified P(K>=3) = 0.8066 under the mixture null (NOT 0.9102 uniform).
+    day_map = {f"day{i}": (1, 0, True) for i in range(6)}   # 6 single-cluster
+    day_map.update({f"two{i}": (2, 0, True) for i in range(3)})  # 3 two-cluster
+    tail, dist = v5._heterogeneous_null_tail(day_map, k_obs=3, p=0.5)
+    assert abs(tail - 0.8066) < 0.01
+
+
+def test_heterogeneous_null_all_single_equals_uniform_binomial():
+    # If all days were single-family, the mixture null = Binom(n, 0.5).
+    day_map = {f"d{i}": (1, 0, True) for i in range(9)}
+    tail_mix, _ = v5._heterogeneous_null_tail(day_map, k_obs=3, p=0.5)
+    tail_bin = v5._binom_tail(3, 9, 0.5)
+    assert abs(tail_mix - tail_bin) < 1e-9
+
+
+def test_heterogeneous_null_two_family_day_is_p_squared():
+    # A 2-cluster day agrees by chance with q=p*p (both families must agree).
+    # With p=0.5 -> q=0.25; with p=0.8 -> q=0.64.
+    tail_single, _ = v5._heterogeneous_null_tail({"d0": (1, 0, True)}, 1, p=0.8)
+    tail_two, _ = v5._heterogeneous_null_tail({"d0": (2, 0, True)}, 1, p=0.8)
+    assert abs(tail_single - 0.8) < 1e-9        # single family: q=p
+    assert abs(tail_two - 0.64) < 1e-9          # two family: q=p^2
+
+
+# ---------------------------------------------------------------------------
+# R7-B: exact sign-test power at n=9
+# ---------------------------------------------------------------------------
+def test_sign_test_rejection_threshold_n9_is_8():
+    # Smallest k with P(X>=k | Bin(9,0.5)) <= 0.05 is k=8 (P=0.0195).
+    k = v5._sign_test_rejection_threshold(9, 0.05)
+    assert k == 8
+    assert abs(v5._binom_tail(8, 9, 0.5) - 0.0195) < 0.001
+
+
+def test_exact_sign_power_n9_p2_3_is_14_percent():
+    # Power at n=9, true p=2/3, reject at X>=8 -> 0.1431 (NOT ~18%).
+    p = v5._exact_sign_power(9, 2 / 3, 0.05)
+    assert abs(p - 0.1431) < 0.01
+
+
+def test_driver_uses_heterogeneous_null_and_exact_power():
+    # Guard the R7-A/B wiring: the driver must call the mixture null and the
+    # exact-power helper, and must not quote md as binomial power.
+    src = open(os.path.join(os.path.dirname(v5.__file__), "run_dual_pipeline_gate_v5.py"),
+               encoding="utf-8").read()
+    assert "_heterogeneous_null_tail(day_map" in src
+    assert "_exact_sign_power(n_unique" in src
+    assert "NOT 80%-powered" in src
+    # R7-C: the delta verdict must be a SUPPORTING screen, not DEMOTE/OPEN
+    assert "SUPPORTING-screen" in src
+    assert "open-not-disproven" in src
+    assert "DEMOTE PERMANENTLY" not in src

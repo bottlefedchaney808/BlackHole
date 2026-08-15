@@ -152,6 +152,31 @@ def _bar_clearing_prob(n, true_p, bar_frac=_AGREE_FRAC):
     return _binom_tail(bar, n, true_p)
 
 
+def _heterogeneous_null_tail(day_map, k_obs, p=0.5):
+    """R7-A: Poisson-binomial tail P(K >= k_obs) under the STRICT-AND day rule.
+
+    The unique-day primary is a CONJUNCTION statistic. A single-family day
+    (one resolvable cluster) agrees by chance with q=p; a two-family day (QQQ
+    + SPY both resolvable, ~0.99 one family) agrees by chance with q=p*p (both
+    must agree). So the null is heterogeneous across days, NOT a uniform p=0.5.
+
+    Returns (tail_prob, full_dist) where full_dist[k] = P(exactly k days agree).
+    """
+    if not day_map:
+        return (float("nan"), {0: 1.0})
+    # Each day contributes q = p if n_resolvable==1 else p*p.
+    dist = {0: 1.0}
+    for day, (nres, _nagree, _is_agree) in day_map.items():
+        q = p if nres <= 1 else p * p
+        nd = {}
+        for kk, pr in dist.items():
+            nd[kk] = nd.get(kk, 0.0) + pr * (1.0 - q)
+            nd[kk + 1] = nd.get(kk + 1, 0.0) + pr * q
+        dist = nd
+    tail = sum(pr for kk, pr in dist.items() if kk >= k_obs)
+    return (min(tail, 1.0), dist)
+
+
 def _n_for_80_power(true_p, alpha=0.05, bar_frac=_AGREE_FRAC):
     """Smallest n such that a one-sided sign test of H0:p=0.5 vs H1:p>0.5 at
     alpha reaches 80% power to REJECT the null when the true agreement rate is
@@ -179,6 +204,27 @@ def _n_for_80_bar_clear(true_p, bar_frac=_AGREE_FRAC):
         if _bar_clearing_prob(n, true_p, bar_frac) >= 0.80:
             return n
     return None
+
+
+def _sign_test_rejection_threshold(n, alpha=0.05):
+    """Smallest k with P(X>=k | Binom(n, 0.5)) <= alpha (one-sided sign test
+    H0:p=0.5 vs H1:p>0.5). Returns the rejection threshold X>=k, or n+1 if
+    none exists at this alpha."""
+    for k in range(n + 1):
+        if _binom_tail(k, n, 0.5) <= alpha:
+            return k
+    return n + 1
+
+
+def _exact_sign_power(n, true_p, alpha=0.05):
+    """Power of the exact one-sided sign test at n under a true agreement p:
+    P(X >= k_reject | Binom(n, true_p))."""
+    if n <= 0:
+        return float("nan")
+    k = _sign_test_rejection_threshold(n, alpha)
+    if k > n:
+        return 0.0
+    return _binom_tail(k, n, true_p)
 
 
 # ---------------------------------------------------------------------------
@@ -319,21 +365,31 @@ def delta_new(_prov):
 
 
 def convention_distance(deltas_prod):
-    """Network-free delta verdict over a corpus of delta_prod values.
-    Returns (mean_abs_D, frac_large, verdict, reason) using the pre-registered
-    R6 threshold. delta_new == 0 everywhere, so D = |delta_prod|."""
+    """R7-C: SUPPORTING production-flat-baseline screen (NOT a decisive two-sided
+    convention-distance test).
+
+    delta_new==0 BY CONSTRUCTION (the new engine has no SVI branch), so
+    D=|delta_prod| is a one-sided production-deviation screen. delta_prod is an
+    unweighted IV-vs-chain-median strike-count proxy (run_dual_pipeline_gate_v3.py
+    _sign_provenance), NOT the production SVI deviation_by_strike /
+    resolve_vol_surface_sign path. This screen can only describe how -1-bound
+    production's OUTPUT sign map is; it cannot affirm or refute the shared -1
+    root as a mechanism. Relabeled per R7-C as supporting, never decisive.
+    """
     if not deltas_prod:
         return (float("nan"), float("nan"), "INDETERMINATE", "empty corpus")
     mean_abs = sum(abs(d) for d in deltas_prod) / len(deltas_prod)
     frac_large = sum(1 for d in deltas_prod if abs(d) >= _DEMOTE_DELTA_MEAN) / len(deltas_prod)
     if mean_abs < _DEMOTE_DELTA_MEAN and frac_large < _DEMOTE_DELTA_FRAC:
-        return (mean_abs, frac_large, "DEMOTE",
+        return (mean_abs, frac_large, "SUPPORTING-screen: -1-bound",
                 f"delta_prod hugs the shared -1 baseline (mean|D|={mean_abs:.4f} < "
-                f"{_DEMOTE_DELTA_MEAN}, {frac_large:.1%} of clusters >= {_DEMOTE_DELTA_MEAN}) "
-                f"and delta_new==0 by construction -> convention-bound, demote permanently")
-    return (mean_abs, frac_large, "OPEN",
+                f"{_DEMOTE_DELTA_MEAN}, {frac_large:.1%} of clusters >= {_DEMOTE_DELTA_MEAN}); "
+                f"one-sided proxy, delta_new==0 by construction. Descriptive screen only — "
+                f"mechanism formally open-not-disproven (not a decisive demote).")
+    return (mean_abs, frac_large, "SUPPORTING-screen: deviation-present",
             f"material production SVI deviation present (mean|D|={mean_abs:.4f}, "
-            f"{frac_large:.1%} of clusters >= {_DEMOTE_DELTA_MEAN}) -> mechanism open")
+            f"{frac_large:.1%} of clusters >= {_DEMOTE_DELTA_MEAN}); one-sided proxy. "
+            f"Descriptive screen only — not a decisive mechanistic test.")
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +444,11 @@ def main():
     resolvable = [r for r in all_rows if r.get("both_nonzero")]
     n_clusters = len(resolvable)
     n_agree_clusters = sum(1 for r in resolvable if r.get("agreed"))
-    binom_unique = _binom_tail(n_agree_unique, n_unique, 0.5) if n_unique else float("nan")
+    # R7-A: the strict-AND day rule is a CONJUNCTION statistic. A single-family
+    # day agrees by chance with q=0.5; a two-family (QQQ+SPY) day with q=p*p=0.25
+    # (both families must agree). So the null is heterogeneous (Poisson-binomial),
+    # NOT a uniform p=0.5. Report the correct mixture null.
+    binom_unique, _hetero_dist = _heterogeneous_null_tail(day_map, n_agree_unique, p=0.5)
     binom_cluster = _binom_tail(n_agree_clusters, n_clusters, 0.5) if n_clusters else float("nan")
     # 2/3 bar-clearing (R6-2)
     bar_unique = math.ceil(_AGREE_FRAC * max(n_unique, 1))
@@ -401,6 +461,9 @@ def main():
     n80_reject_3_4 = _n_for_80_power(0.75)
     n80_bar_2_3 = _n_for_80_bar_clear(2 / 3)   # bar-clear power (None: bar at mean)
     n80_bar_3_4 = _n_for_80_bar_clear(0.75)
+    # R7-B: exact one-sided sign-test power (H0:p=0.5 vs H1:p>0.5, alpha=0.05).
+    bar_unique_reject = _sign_test_rejection_threshold(n_unique, 0.05)
+    exact_power_2_3 = _exact_sign_power(n_unique, 2 / 3, 0.05)
 
     lines.append("### PRIMARY — UNIQUE-DAY SIGN AGREEMENT (R6-1; eff-n on UNIQUE CALENDAR DAYS)\n")
     lines.append(f"- Resolvable clusters: {n_clusters}  **unique calendar days: {n_unique}**.")
@@ -411,8 +474,11 @@ def main():
         lines.append(f"  - {day}: {nres} resolvable cluster(s), {nagree} agree "
                      f"-> {'AGREE' if is_agree else 'DISAGREE'}")
     lines.append(f"- **Unique-day agreement: {n_agree_unique}/{n_unique} = {n_agree_unique/n_unique:.1%}**")
-    lines.append(f"- Exact binomial null: P(agree>={n_agree_unique} | n={n_unique}, p=0.5) = "
-                 f"**{binom_unique:.4f}**\n")
+    lines.append(f"- R7-A **HETEROGENEOUS (Poisson-binomial) null** for the CONJUNCTION day rule: "
+                 f"single-family days agree by chance q=0.5, two-family days q=0.25 (p²). "
+                 f"P(agree>={n_agree_unique} | mixture null) = **{binom_unique:.4f}** — NOT a "
+                 f"uniform p=0.5 tail. The primary is a **conjunction statistic**, not an "
+                 f"ordinary agreement rate.\n")
     lines.append("### SENSITIVITY — 12-cluster (NOT the primary; same-day SPY/QQQ families are "
                  "not independent)\n")
     lines.append(f"- Cluster-level agreement: {n_agree_clusters}/{n_clusters} = "
@@ -432,7 +498,9 @@ def main():
                 else "NEVER (bar sits at the mean, power -> 0.5 asymptotically)")
     lines.append(f"- n-for-80% bar-clearing (power to PASS the 2/3 bar under a true p): "
                  f"p=2/3 -> {n80bar23}; p=0.75 -> n={n80_bar_3_4}.")
-    lines.append(f"- **Current n={n_unique} is ~18% test power — NOT 80%-powered.** "
+    lines.append(f"- **Current n={n_unique} exact one-sided sign-test power = 14.3%** (rejection at "
+                 f"X>={bar_unique_reject}, P_null={_binom_tail(bar_unique_reject, n_unique, 0.5):.4f}; "
+                 f"power at true p=2/3 = {_exact_sign_power(n_unique, 2/3):.3f}) — NOT 80%-powered.** "
                  f"md={_v2._tanh_md(max(n_unique,1)):.3f} is a CORRELATION MDE, NOT binomial "
                  f"power (do not quote it as such).\n")
 
@@ -495,15 +563,19 @@ def main():
     lines.append(f"- Per-strike arrays persisted for {len(wf0_ok)}/{len(RESOLVABLE)} re-derived "
                  f"clusters. Baseline (fallback=-1) sign reported for reference.\n")
 
-    # ---- R6-7: delta convention-distance (network-free, FULL corpus) ----
-    lines.append("### R6-7 — CONVENTION-DISTANCE TEST ON SVI DEVIATION TERMS "
-                 "(delta_prod vs delta_new), FULL CORPUS incl zero-firing\n")
-    lines.append("- delta_prod = (rich_plus1 - cheap_minus1)/total_strikes (production's SVI "
-                 "deviation term). delta_new = 0 BY CONSTRUCTION (new engine has no SVI branch; "
-                 "dealer_frame_vanna is flat -1xBS). Convention distance D = |delta_prod - "
-                 "delta_new| = |delta_prod|. Pre-registered rule: DEMOTE if mean|D|<0.10 AND "
-                 "<25% of clusters have |D|>=0.10 (production hugs the shared -1 baseline); "
-                 "OPEN otherwise.\n")
+    # ---- R6-7/R7-C: delta convention-distance (SUPPORTING screen only) ----
+    lines.append("### R6-7 / R7-C — CONVENTION-DISTANCE SCREEN ON SVI DEVIATION TERMS "
+                 "(SUPPORTING, NOT decisive)")
+    lines.append("- delta_prod = (rich_plus1 - cheap_minus1)/total_strikes is an **unweighted IV-"
+                 "vs-chain-median strike-count proxy** (run_dual_pipeline_gate_v3.py "
+                 "_sign_provenance), NOT the production SVI `deviation_by_strike` / "
+                 "`resolve_vol_surface_sign` path. delta_new = 0 **BY CONSTRUCTION** (new engine "
+                 "has no SVI branch; flat -1xBS), so D = |delta_prod| is a **one-sided "
+                 "production-deviation screen**, not a genuine two-sided convention-distance. "
+                 "Per R7-C this is a **supporting descriptive screen only — it cannot affirm or "
+                 "refute the shared -1 root as a mechanism**; the mechanism stays formally "
+                 "open-not-disproven. RULE (screen): 'production-hugs--1-baseline' if mean|D|<0.10 "
+                 "AND <25% of clusters have |D|>=0.10.")
     deltas = []
     delta_table = []
     for r in all_rows:
@@ -599,6 +671,14 @@ def main():
         "bar_clear_cluster_2_3": bar_clear_cluster_2_3,
         "n80_reject_2_3": n80_reject_2_3, "n80_reject_3_4": n80_reject_3_4,
         "n80_bar_2_3": n80_bar_2_3, "n80_bar_3_4": n80_bar_3_4,
+        "bar_unique_reject": bar_unique_reject, "exact_power_2_3": exact_power_2_3,
+        "r7_mechanism_status": "demote to descriptive/conditional; mechanism formally open-not-disproven",
+        "r7_delta_screen": ("A symmetric magnitude-weighted convention-distance is NOT buildable from the "
+                            "current packet — new-engine per-strike dealer_frame_vanna rows are not persisted "
+                            "(only production per-strike arrays exist). Required rerun: persist new-engine "
+                            "per-strike rows (strike/right/oi/vanna/applied_sign) alongside production arrays, "
+                            "then D_conv = sum w_s|delta_prod,s - delta_new,s| / sum w_s. As written the delta "
+                            "screen is a SUPPORTING one-sided production-deviation proxy, not a decisive test."),
         "corr_nf": corr_nf, "corr_spy": corr_spy, "corr_qqq": corr_qqq,
         "r_a6": r_a6, "ci_lo": ci_lo, "ci_hi": ci_hi, "placebo_p": placebo_p,
         "md_effn": md_effn, "md_buckets": md_buckets,
