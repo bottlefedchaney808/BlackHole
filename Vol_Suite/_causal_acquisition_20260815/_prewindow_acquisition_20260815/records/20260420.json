@@ -1,0 +1,106 @@
+{
+  "day": "20260420",
+  "expiry": "20260424",
+  "habitat": "NONE",
+  "label": "control Mon (Apr 13-23 gap)",
+  "records": [
+    {
+      "day": "20260420",
+      "date": "20260420",
+      "ticker": "SPY",
+      "families": [
+        "SPY"
+      ],
+      "dte": 4,
+      "expiry": "20260424",
+      "event_habitat": "NONE",
+      "pre_window": {
+        "pre_vanna_timestamp": 34200000,
+        "pre_window_end": 34200000,
+        "breach_window_start": 58200000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 482148.72918754566,
+        "delta_iv": 0.1612,
+        "delta_iv_provenance": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "delta_iv_pre_window": null,
+        "iv_source_ts": null,
+        "iv_cutoff_ts": 34200000,
+        "breach_window_start_prov": 58200000,
+        "gamma_burst": 0.0,
+        "delta_s": -0.000494,
+        "market": -0.000494,
+        "event": 0,
+        "a6_reflexivity": 0.066952,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "NONE",
+        "family_interaction_spy": 482148.72918754566,
+        "forward_return_h": -0.00024
+      },
+      "clock": {
+        "daily": {
+          "return": -0.000494,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": null,
+          "eligible": false
+        }
+      },
+      "source": "acq-20260420-spy"
+    },
+    {
+      "day": "20260420",
+      "date": "20260420",
+      "ticker": "QQQ",
+      "families": [
+        "QQQ"
+      ],
+      "dte": 4,
+      "expiry": "20260424",
+      "event_habitat": "NONE",
+      "pre_window": {
+        "pre_vanna_timestamp": 34200000,
+        "pre_window_end": 34200000,
+        "breach_window_start": 58200000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 10746.724448413868,
+        "delta_iv": 0.2095,
+        "delta_iv_provenance": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "delta_iv_pre_window": null,
+        "iv_source_ts": null,
+        "iv_cutoff_ts": 34200000,
+        "breach_window_start_prov": 58200000,
+        "gamma_burst": 0.0,
+        "delta_s": -0.001975,
+        "market": -0.001975,
+        "event": 0,
+        "a6_reflexivity": 0.025574,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "NONE",
+        "family_interaction_qqq": 10746.724448413868,
+        "forward_return_h": -0.001466
+      },
+      "clock": {
+        "daily": {
+          "return": -0.001975,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": null,
+          "eligible": false
+        }
+      },
+      "source": "acq-20260420-qqq"
+    }
+  ]
+}

@@ -1,0 +1,287 @@
+{
+  "as_of": "2026-08-15",
+  "run": "PRE_WINDOW sequential re-acquisition",
+  "intended_causal_units": 7,
+  "prewindow_n": 1,
+  "prewindow_N": 7,
+  "prewindow_coverage": 0.1429,
+  "associational_exclusions": [
+    {
+      "day": "20260415",
+      "expiry": "20260417",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260416",
+      "expiry": "20260417",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260420",
+      "expiry": "20260424",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260421",
+      "expiry": "20260424",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "PRE_WINDOW",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 1,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": 0.0204,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260422",
+      "expiry": "20260424",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260423",
+      "expiry": "20260424",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "PRE_WINDOW",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 1,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": 0.0036,
+        "QQQ": null
+      }
+    }
+  ],
+  "gaps": [],
+  "hard_gap_units": 0,
+  "units": [
+    {
+      "day": "20260414",
+      "expiry": "20260417",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "PRE_WINDOW",
+        "QQQ": "PRE_WINDOW"
+      },
+      "n_firing": 3,
+      "unit_status": "PRE_WINDOW",
+      "delta_iv_pre_window": {
+        "SPY": 0.0035,
+        "QQQ": 0.0018
+      }
+    },
+    {
+      "day": "20260415",
+      "expiry": "20260417",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260416",
+      "expiry": "20260417",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260420",
+      "expiry": "20260424",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260421",
+      "expiry": "20260424",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "PRE_WINDOW",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 1,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": 0.0204,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260422",
+      "expiry": "20260424",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 0,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": null,
+        "QQQ": null
+      }
+    },
+    {
+      "day": "20260423",
+      "expiry": "20260424",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu (Apr 13-23 gap)",
+      "families": [
+        "QQQ",
+        "SPY"
+      ],
+      "family_provenance": {
+        "SPY": "PRE_WINDOW",
+        "QQQ": "ASSOCIATIONAL-\u0394IV-CONTEMPORANEOUS"
+      },
+      "n_firing": 1,
+      "unit_status": "ASSOCIATIONAL-ONLY",
+      "delta_iv_pre_window": {
+        "SPY": 0.0036,
+        "QQQ": null
+      }
+    }
+  ]
+}
