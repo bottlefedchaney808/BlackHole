@@ -92,5 +92,11 @@
 - **Dealer-mechanics/convention:** sign sources independent (SVI rich/cheap map vs explicit −1×BS), BUT **production shares a `−1` fallback root** (Layer-1b: any strike |dev|≤deadband → −1, exactly the new engine's flat −1×BS) → **leak that manufactures agreement**. LEVEL-vs-LEVEL fixed in units but NOT in aggregation/provenance: production = whole-day EOD vendor-IV vanna; new = intraday analytic-BS vanna summed over firing-breach buckets → **20260716 confounded, can't cleanly attribute**. New-engine vanna clean (signed once, no right_dir). Zero-DTE exclusion defensible (can't manufacture agreement) but asymmetric (production-driven). **Insight:** decompose each pipeline into shared −1 baseline + SVI deviation term (production sign = −1 + δ_SVI, δ∈{+2,0,+1}); run pure-SVI mode (fallback→0); same IV surface + same vanna definition both engines → measure convention distance, not binary.
 - **Merged R1 position:** 3/5 is noise (chance-compatible), 20260716 genuine-but-confounded, effective-n overstated (4 days), SPY not an index claim, correlational arm dead + pooling artifact, sign-agreement manufactured partly by shared −1 fallback. **Cem NOT dispatched.** R2 source cross-examination next.
 
+## Round 4 — P0-2/P0-3 R2 SOURCE CROSS-EXAMINER DISPATCHED (deleg_c01b5e5f)
+- R2 verifies each R1 claim (F1–F5, D1–D7, M1–M6) in source: effective-n dedup by calendar day, SPY/QQQ one-family, pooled-corr Simpson artifact, SVI −1 fallback agreement leak, 20260716 provenance attribution, zero-DTE asymmetry.
+- R2 answers: (1) is effective-n really 4 (not 5) → honest md; (2) is pooled corr −0.0482 invalidated by SPY/QQQ sign flip.
+- R2 produces the merged ROUND-5 upgrade set: (A) cheap fixes (dedup by day, cluster-level CI, SVI sign provenance per bucket, align production/new IV+vanna+aggregation, stratify by low/high |dIV|, exact binomial null, pure-SVI fallback→0 sensitivity, SPY separate until multiple resolvable SPY days); (B) required new evidence (8–12 genuinely independent UNIQUE calendar days, high-vol FOMC/earnings days where SPY fires, mixed DTE, separated sessions — with whether the existing seed corpus supplies any or whether new proxy pulls are needed).
+- Cem stays NOT dispatched until the corrected, deduplicated, provenance-aligned result exists. Loop runs automatically.
+
 ---
 
