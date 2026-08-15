@@ -138,3 +138,25 @@ exit 0
 ```
 
 The first focused run is the intentional RED check before the implementation change; it failed because the pre-fix validator accepted the scalar timestamp row. No live model, acquisition data, or unrelated untracked corpora were modified.
+
+## Remaining Task 1 review finding fix — provenance (2026-08-15)
+
+- Removed the `build_manifest` provenance defaults. `selection_date` is now mandatory, canonical `YYYY-MM-DD`, and calendar-valid; `source_list` is mandatory, non-blank, and rejects the fabricated `point-in-time-static` placeholder.
+- Candidate-level `selection_date` and `source_list`, when present, are validated and must exactly agree with manifest metadata. Conflicts fail loudly rather than being discarded or replaced; valid values serialize unchanged in `UniverseManifest.to_dict()`.
+- Added regressions for missing/invalid selection dates, missing/blank/default source lists, conflicting candidate provenance, and valid provenance serialization.
+
+### Fix verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
+......................                                                   [100%]
+22 passed in 0.05s
+
+C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
+exit 0
+
+git diff --check
+exit 0
+```
+
+No live model, acquisition data, or unrelated untracked corpora were modified.

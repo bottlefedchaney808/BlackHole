@@ -31,6 +31,28 @@ _REFERENCE_FAMILIES = {"SPY", "QQQ"}
 _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 _DATE_RE = re.compile(r"^\d{4}[-]?\d{2}[-]?\d{2}$")
 _CLOCK_RE = re.compile(r"^(?:[1-9]\d*)(?:d|h|m)$", re.IGNORECASE)
+_PROVENANCE_SOURCE_DEFAULT = "point-in-time-static"
+
+
+def _selection_date(value: Any) -> str:
+    """Validate the manifest's provenance date as a canonical ISO date."""
+    if not isinstance(value, str) or value != value.strip() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("selection_date must be a supplied valid ISO date (YYYY-MM-DD)")
+    try:
+        dt.date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("selection_date must be a supplied valid ISO date (YYYY-MM-DD)") from exc
+    return value
+
+
+def _source_list(value: Any) -> str:
+    """Require a real, non-placeholder source-list provenance label."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("source_list must be supplied and non-empty")
+    source = value.strip()
+    if source.casefold() == _PROVENANCE_SOURCE_DEFAULT:
+        raise ValueError("source_list must identify a real source, not the fabricated default")
+    return source
 
 
 def _date(value: Any) -> str:
@@ -126,10 +148,18 @@ def normalize_candidate(raw: Mapping[str, Any], *, selection_date: str | None = 
         raise ValueError(f"invalid ticker: {ticker!r}")
     if ticker in _REFERENCE_FAMILIES or raw.get("reference_family"):
         raise ValueError("SPY/QQQ are reference families, not expansion candidates")
-    date = selection_date or raw.get("selection_date")
-    source = source_list or raw.get("source_list")
-    if not date or not source:
+    candidate_date = raw.get("selection_date")
+    candidate_source = raw.get("source_list")
+    if selection_date is not None and candidate_date is not None and _selection_date(candidate_date) != selection_date:
+        raise ValueError("candidate selection_date conflicts with manifest provenance")
+    if source_list is not None and candidate_source is not None and _source_list(candidate_source) != source_list:
+        raise ValueError("candidate source_list conflicts with manifest provenance")
+    date = selection_date if selection_date is not None else candidate_date
+    source = source_list if source_list is not None else candidate_source
+    if date is None or source is None:
         raise ValueError("selection_date and source_list are required provenance")
+    date = _selection_date(date)
+    source = _source_list(source)
     sector = str(raw.get("sector", "")).strip()
     if not sector:
         raise ValueError("point-in-time sector is required")
@@ -347,7 +377,10 @@ def _key(ticker: str, day: str, occurrence: int = 0) -> str:
 
 def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Iterable[tuple[str, str]] = (), intended_units: int | None = None,
                    sector_cap: float = 0.20, ticker_cap: float = 0.10, probe_results: Iterable[ProbeResult] = (),
-                   selection_date: str = "", source_list: str = "point-in-time-static") -> UniverseManifest:
+                   selection_date: str | None = None, source_list: str | None = None) -> UniverseManifest:
+    # Provenance is manifest metadata, never an optional display default.
+    manifest_selection_date = _selection_date(selection_date)
+    manifest_source_list = _source_list(source_list)
     rows = list(candidates); target = intended_units if intended_units is not None else len(rows)
     if target < 0: raise ValueError("intended_units cannot be negative")
     held = {(str(t).upper(), _date(d)) for t, d in held_pairs}
@@ -357,6 +390,10 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
     normalized = []; exclusions: dict[str, str] = {}; occurrences: Counter[tuple[str, str]] = Counter()
     for raw in rows:
         ticker = str(raw.get("ticker", "")).strip().lstrip("$").upper()
+        if raw.get("selection_date") is not None and _selection_date(raw["selection_date"]) != manifest_selection_date:
+            raise ValueError("candidate selection_date conflicts with manifest provenance")
+        if raw.get("source_list") is not None and _source_list(raw["source_list"]) != manifest_source_list:
+            raise ValueError("candidate source_list conflicts with manifest provenance")
         try: day = _date(raw.get("day", raw.get("date")))
         except ValueError: exclusions[f"{ticker}|invalid"] = "invalid_calendar_day"; continue
         pair = (ticker, day); occurrence = occurrences[pair]; occurrences[pair] += 1; key = _key(ticker, day, occurrence)
@@ -375,8 +412,11 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
         matches = by_key.get((ticker, day, expiry, dte), []) if expiry is not None else []
         if len(matches) != 1: exclusions[key] = "missing_probe" if not matches else "ambiguous_probe"; continue
         if matches[0].status != "PASS": exclusions[key] = f"probe_{matches[0].status.lower()}"; continue
-        try: candidate = normalize_candidate(raw, selection_date=selection_date or None, source_list=source_list)
-        except ValueError as exc: exclusions[key] = f"invalid_candidate:{exc}"; continue
+        try: candidate = normalize_candidate(raw, selection_date=manifest_selection_date, source_list=manifest_source_list)
+        except ValueError as exc:
+            if "conflicts with manifest provenance" in str(exc):
+                raise
+            exclusions[key] = f"invalid_candidate:{exc}"; continue
         normalized.append((key, day, candidate, dte, event))
     normalized.sort(key=lambda item: (item[1], item[2].ticker, item[3], item[0]))
     max_sector = max(1, int(target * sector_cap)) if target else 0; max_ticker = max(1, int(target * ticker_cap)) if target else 0
@@ -387,7 +427,7 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
         sector_counts[candidate.sector] += 1; ticker_counts[candidate.ticker] += 1
         units.append(ManifestUnit(candidate.ticker, day, candidate.sector, candidate.asset_type, dte, event, _stratum(dte)))
     quota_schema = {"dte_strata": [list(s) for s in DTE_STRATA], "event_habitats": list(EVENT_HABITATS), "event_habitat_target": 1 / 3, "control_target": 2 / 3, "sector_cap_fraction": sector_cap, "ticker_cap_fraction": ticker_cap, "max_sector_units": max_sector, "max_ticker_units": max_ticker, "event_surprise_required_for_causal_claim": True}
-    return UniverseManifest(_date(selection_date) if selection_date else "", source_list, target, tuple(units), dict(sorted(exclusions.items())), quota_schema, tuple(sorted({u.day for u in units})), dict(sorted(sector_counts.items())), dict(sorted(ticker_counts.items())), validated_probes)
+    return UniverseManifest(manifest_selection_date, manifest_source_list, target, tuple(units), dict(sorted(exclusions.items())), quota_schema, tuple(sorted({u.day for u in units})), dict(sorted(sector_counts.items())), dict(sorted(ticker_counts.items())), validated_probes)
 
 
 __all__ = ["Candidate", "ManifestUnit", "ProbeResult", "UniverseManifest", "DTE_STRATA", "EVENT_HABITATS", "PROBE_CHECKS", "normalize_candidate", "held_pairs_from_paths", "validate_probe_result", "build_manifest"]

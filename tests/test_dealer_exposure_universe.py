@@ -109,23 +109,23 @@ def test_probe_rejects_mismatched_expiry_and_bad_moneyness_coverage():
 def test_manifest_requires_exactly_one_pass_probe_and_records_exclusions():
     rows = [candidate("AAPL"), candidate("MSFT", day="2026-08-18", expiry="2026-08-22"), candidate("NVDA", day="2026-08-19", expiry="2026-08-23")]
     probes = [probe(), probe("MSFT", "2026-08-18", "2026-08-22", 4, "INELIGIBLE", ("no spot",)), probe("NVDA", "2026-08-19", "2026-08-23", 4, "PASS"), probe("NVDA", "2026-08-19", "2026-08-23", 4, "PASS")]
-    manifest = build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15")
+    manifest = build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates")
     assert [(u.ticker, u.day) for u in manifest.units] == [("AAPL", "2026-08-17")]
     assert manifest.exclusions["MSFT|2026-08-18"] == "probe_ineligible"
     assert manifest.exclusions["NVDA|2026-08-19"] == "ambiguous_probe"
 
 
 def test_missing_probe_is_explicit_and_nonmatching_expiry_is_not_admitted():
-    manifest = build_manifest([candidate("AAPL")], probe_results=[], selection_date="2026-08-15")
+    manifest = build_manifest([candidate("AAPL")], probe_results=[], selection_date="2026-08-15", source_list="approved-static-candidates")
     assert manifest.units == () and manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
-    manifest = build_manifest([candidate("AAPL")], probe_results=[probe(expiry="2026-08-22", dte=5)], selection_date="2026-08-15")
+    manifest = build_manifest([candidate("AAPL")], probe_results=[probe(expiry="2026-08-22", dte=5)], selection_date="2026-08-15", source_list="approved-static-candidates")
     assert manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
 
 
 def test_manifest_rejects_missing_candidate_expiry_without_fallback_match():
     raw = candidate("AAPL")
     raw.pop("expiry")
-    manifest = build_manifest([raw], probe_results=[probe()], selection_date="2026-08-15")
+    manifest = build_manifest([raw], probe_results=[probe()], selection_date="2026-08-15", source_list="approved-static-candidates")
     assert manifest.units == ()
     assert manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
 
@@ -133,20 +133,20 @@ def test_manifest_rejects_missing_candidate_expiry_without_fallback_match():
 def test_manifest_is_deterministic_for_reversed_duplicates_and_probe_order():
     rows = [candidate("AAPL", day="2026-08-17"), candidate("AAPL", day="2026-08-17"), candidate("MSFT", day="2026-08-18", expiry="2026-08-22")]
     probes = [probe("MSFT", "2026-08-18", "2026-08-22"), probe()]
-    left = build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15").to_dict()
-    right = build_manifest(list(reversed(rows)), probe_results=list(reversed(probes)), intended_units=3, selection_date="2026-08-15").to_dict()
+    left = build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates").to_dict()
+    right = build_manifest(list(reversed(rows)), probe_results=list(reversed(probes)), intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates").to_dict()
     assert left == right
 
 
 def test_invalid_dates_are_explicit_exclusions():
-    manifest = build_manifest([candidate("AAPL", day="2026-02-30")], selection_date="2026-08-15")
+    manifest = build_manifest([candidate("AAPL", day="2026-02-30")], selection_date="2026-08-15", source_list="approved-static-candidates")
     assert manifest.exclusions["AAPL|invalid"] == "invalid_calendar_day"
 
 
 def test_caps_quotas_and_serialization():
     rows = [candidate("A", "2026-08-01", "2026-08-03", 2, "Tech"), candidate("B", "2026-08-02", "2026-08-04", 2, "Tech")]
     probes = [probe("A", "2026-08-01", "2026-08-03", 2), probe("B", "2026-08-02", "2026-08-04", 2)]
-    manifest = build_manifest(rows, probe_results=probes, intended_units=2, selection_date="2026-08-15")
+    manifest = build_manifest(rows, probe_results=probes, intended_units=2, selection_date="2026-08-15", source_list="approved-static-candidates")
     assert len(manifest.units) == 1 and manifest.quota_schema["dte_strata"] == [list(s) for s in DTE_STRATA]
     assert manifest.to_dict()["probe_results"][0]["evidence"]
     assert EVENT_HABITATS == ("FOMC", "EARNINGS", "OPEX")
@@ -161,6 +161,34 @@ def test_nonpass_requires_reason_and_status_is_closed():
 def test_candidate_requires_provenance_and_asset_type():
     with pytest.raises(ValueError): normalize_candidate({"ticker": "AAPL", "sector": "Tech"})
     with pytest.raises(ValueError): normalize_candidate({"ticker": "AAPL", "sector": "Tech", "asset_type": "crypto"}, selection_date="2026-08-15", source_list="x")
+
+
+def test_build_manifest_requires_valid_selection_date():
+    for value in (None, "", "20260815", "2026-02-30"):
+        with pytest.raises(ValueError, match="selection_date"):
+            build_manifest([], selection_date=value, source_list="approved-static-candidates")
+
+
+def test_build_manifest_requires_real_nonblank_source_list():
+    for value in (None, "", "   ", "point-in-time-static"):
+        with pytest.raises(ValueError, match="source_list"):
+            build_manifest([], selection_date="2026-08-15", source_list=value)
+
+
+def test_manifest_rejects_conflicting_candidate_provenance():
+    row = candidate("AAPL")
+    row.update(selection_date="2026-08-14", source_list="other-approved-list")
+    with pytest.raises(ValueError, match="conflicts with manifest provenance"):
+        build_manifest([row], selection_date="2026-08-15", source_list="approved-static-candidates")
+
+
+def test_valid_provenance_is_serialized_without_defaults():
+    row = candidate("AAPL")
+    row.update(selection_date="2026-08-15", source_list="approved-static-candidates")
+    manifest = build_manifest([row], selection_date="2026-08-15", source_list="approved-static-candidates")
+    payload = manifest.to_dict()
+    assert payload["selection_date"] == "2026-08-15"
+    assert payload["source_list"] == "approved-static-candidates"
 
 
 def test_no_network_dependency_and_closed_probe_checks():
