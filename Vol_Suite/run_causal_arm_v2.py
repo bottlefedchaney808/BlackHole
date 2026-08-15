@@ -492,25 +492,33 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
 
     # ---- ΔIV provenance disclosure (R1-mandated; prevents causal overclaim) ----
     # The `delta_iv` covariate and the residualizer constituent both come from the
-    # record's l2['delta_iv']. If the record carries explicit pre-window timing for
-    # delta_iv we label PRE_WINDOW; otherwise (and for the current acquisition where
-    # delta_iv = net_div, a DAY-LEVEL sum of ATM-IV changes spanning the breach/response
-    # window) we label DAY_LEVEL / ASSOCIATIONAL. A day-level ΔIV means Vanna⊥ is
-    # orthogonalized against a quantity overlapping the outcome, so the residualized β'
-    # is an ASSOCIATIONAL (contemporaneous-ΔIV) incremental effect, NOT a causal Vanna
-    # effect. This label is surfaced in the decision table and must gate any causal claim.
-    div_prov = set()
+    # record's l2['delta_iv']. A record is causal-eligible ONLY if it explicitly
+    # carries delta_iv_provenance=="PRE_WINDOW" AND iv_source_ts is STRICTLY before
+    # breach_window_start_prov. Any record that is missing provenance, has an equal/
+    # later timestamp, or declares ASSOCIATIONAL VETOES the whole corpus (causal β
+    # unavailable unless ALL included units pass — Cem's fail-closed gate). This
+    # prevents a day-level net_div (which the old 62-day corpus uses) from ever being
+    # relabeled as pre-window, and prevents a mixed corpus from leaking a causal label.
+    all_pass = True
+    _reasons = set()
     for r in day_records:
         l2 = r.get("l2", {})
-        prov = l2.get("delta_iv_provenance", l2.get("delta_iv_timing"))
-        if prov is not None:
-            div_prov.add(str(prov).upper())
-    if len(div_prov) == 1 and "PRE_WINDOW" in div_prov:
+        prov = str(l2.get("delta_iv_provenance", "")).upper()
+        src_ts = l2.get("iv_source_ts")
+        b_ts = l2.get("breach_window_start_prov")
+        if prov != "PRE_WINDOW":
+            all_pass = False
+            _reasons.add("missing/associational provenance")
+            continue
+        # PRE_WINDOW declared -> verify the timestamp is STRICTLY before the breach
+        if src_ts is None or b_ts is None or not (float(src_ts) < float(b_ts)):
+            all_pass = False
+            _reasons.add("timestamp not strictly before breach")
+    if all_pass:
         delta_iv_provenance = "PRE_WINDOW"
-        associational_label = "CAUSAL-ELIGIBLE"  # only if pre-window ΔIV can be proven
+        associational_label = "CAUSAL-ELIGIBLE"
     else:
-        # includes None, empty, MIXED, or explicitly DAY_LEVEL -> assume day-level/unknown
-        delta_iv_provenance = (sorted(div_prov)[0] if div_prov else "DAY_LEVEL-UNVERIFIED")
+        delta_iv_provenance = "DAY_LEVEL-UNVERIFIED" if _reasons else "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
         associational_label = "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
 
     # report the residualization diagnostics
@@ -518,6 +526,7 @@ def orthogonalize_vanna_design(day_records: List[dict], family_l2: bool = True) 
             "constituents": constituent_cols, "resid_target": resid,
             "delta_iv_provenance": delta_iv_provenance,
             "associational_label": associational_label,
+            "provenance_reasons": sorted(_reasons),
             "target_vif_pre": None}  # VIF computed downstream
 
 

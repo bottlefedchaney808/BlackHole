@@ -155,9 +155,13 @@ def test_delta_iv_provenance_assertion():
     orth = ca.orthogonalize_vanna_design(uniq, family_l2=True)
     assert orth["associational_label"] == "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
     assert orth["delta_iv_provenance"] != "PRE_WINDOW"
-    # explicit pre-window provenance on all records -> CAUSAL-ELIGIBLE
+    # explicit pre-window provenance on all records WITH valid timestamps
+    # (iv_source_ts strictly before breach_window_start) -> CAUSAL-ELIGIBLE
     for r in recs:
         r["l2"]["delta_iv_provenance"] = "PRE_WINDOW"
+        r["l2"]["iv_source_ts"] = 300000
+        r["l2"]["iv_cutoff_ts"] = 300000
+        r["l2"]["breach_window_start_prov"] = 600000
     uniq2 = ca.deduplicate_family_day(recs)
     orth2 = ca.orthogonalize_vanna_design(uniq2, family_l2=True)
     assert orth2["associational_label"] == "CAUSAL-ELIGIBLE"

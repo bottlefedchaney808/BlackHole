@@ -307,6 +307,69 @@ def _acq_day(ctl, ticker, day, exp):
         breach_eligible = False
         breach_ret = None
 
+    # 7b. PRE_WINDOW ΔIV provenance (Cem's causal gate): persist a timestamped
+    #     IV snapshot strictly before the breach/response window, and the ΔIV
+    #     measured from it. `net_div` (day-level sum over all buckets) is kept
+    #     as DESCRIPTIVE ONLY — never relabeled as pre-window.
+    #     iv_source_ts = the cutoff bucket timestamp (strictly < breach_ts);
+    #     iv_before_ts  = the prior bucket (or opening) IV anchor;
+    #     delta_iv_pre_window = ATM-IV(at iv_source_ts) - ATM-IV(iv_before_ts),
+    #     both strictly before breach_ts.
+    #     If iv_source_ts >= breach_ts or no IV can be anchored pre-window, the
+    #     record is marked ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS and excluded from the
+    #     causal β arm (the driver enforces this via delta_iv_provenance).
+    if breach_eligible:
+        pre_window_ok = cutoff_ts < breach_ts
+        iv_source_ts = cutoff_ts
+        # find the ATM IV at the cutoff bucket (strictly pre-window)
+        _iv_at_cutoff = None
+        _pre_rows = _g._rows_at(chain_c, chain_p, oi_c, oi_p, cutoff_ts)
+        _spot_cutoff = None
+        for sms in ms_all:
+            if sms <= cutoff_ts:
+                _spot_cutoff = spot_min[sms]
+            else:
+                break
+        if _spot_cutoff is not None and len(_pre_rows) >= 20:
+            _ivs = [r_["implied_vol"] for r_ in _pre_rows if r_["implied_vol"] not in (None, 0)]
+            if _ivs:
+                _iv_at_cutoff = min(((r_["strike"], r_["implied_vol"]) for r_ in _pre_rows
+                                     if r_["implied_vol"] not in (None, 0)),
+                                    key=lambda p: abs(p[0] - _spot_cutoff))[1]
+        # IV anchor strictly before cutoff (the previous bucket, or opening)
+        _iv_anchor = None
+        _iv_anchor_ts = None
+        _prior_buckets = [ms for ms in bucket_ms if ms < cutoff_ts]
+        _anchor_ts = _prior_buckets[-1] if _prior_buckets else None
+        if _anchor_ts is not None:
+            _anchor_rows = _g._rows_at(chain_c, chain_p, oi_c, oi_p, _anchor_ts)
+            _spot_anchor = None
+            for sms in ms_all:
+                if sms <= _anchor_ts:
+                    _spot_anchor = spot_min[sms]
+                else:
+                    break
+            if _spot_anchor is not None and len(_anchor_rows) >= 20:
+                _ivs_a = [r_["implied_vol"] for r_ in _anchor_rows if r_["implied_vol"] not in (None, 0)]
+                if _ivs_a:
+                    _iv_anchor = min(((r_["strike"], r_["implied_vol"]) for r_ in _anchor_rows
+                                      if r_["implied_vol"] not in (None, 0)),
+                                     key=lambda p: abs(p[0] - _spot_anchor))[1]
+                    _iv_anchor_ts = _anchor_ts
+        if pre_window_ok and _iv_at_cutoff is not None and _iv_anchor is not None:
+            delta_iv_pre_window = _iv_at_cutoff - _iv_anchor
+            iv_provenance = "PRE_WINDOW"
+        else:
+            delta_iv_pre_window = None
+            iv_provenance = "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
+    else:
+        # no-firing control day: no breach to anchor a pre-window IV against; the
+        # ΔIV is associational-only (there is no response window to be causal for)
+        pre_window_ok = False
+        delta_iv_pre_window = None
+        iv_provenance = "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"
+        iv_source_ts = None
+
     # 8. A6 reflexivity corr(div, fwd) on the day's buckets
     a6 = _g._corr(bucket_divs, bucket_fwds) if len(bucket_divs) >= 4 else float("nan")
 
@@ -347,6 +410,13 @@ def _acq_day(ctl, ticker, day, exp):
         "daily_return_src": daily_ret_src,
         "delta_s": round(delta_s, 6),
         "gaps": gaps,
+        # --- PRE_WINDOW ΔIV provenance (Cem's causal gate) ---
+        "delta_iv_provenance": iv_provenance,
+        "delta_iv_pre_window": (round(delta_iv_pre_window, 6)
+                                if delta_iv_pre_window is not None else None),
+        "iv_source_ts": iv_source_ts,
+        "iv_cutoff_ts": cutoff_ts,
+        "breach_window_start_prov": breach_ts,
     }
 
 
@@ -362,6 +432,16 @@ def build_day_record(metrics):
     l2 = {
         "pre_vanna_exposure": pre_v,
         "delta_iv": metrics["net_div"],
+        # --- PRE_WINDOW ΔIV provenance (Cem's causal gate) ---
+        # delta_iv_provenance drives the driver's associational-vs-causal label.
+        # delta_iv_pre_window is the timestamped ΔIV strictly before the breach
+        # window (None -> associational-only). net_div stays descriptive-only.
+        "delta_iv_provenance": metrics.get("delta_iv_provenance",
+                                           "ASSOCIATIONAL-ΔIV-CONTEMPORANEOUS"),
+        "delta_iv_pre_window": metrics.get("delta_iv_pre_window"),
+        "iv_source_ts": metrics.get("iv_source_ts"),
+        "iv_cutoff_ts": metrics.get("iv_cutoff_ts"),
+        "breach_window_start_prov": metrics.get("breach_window_start_prov"),
         "gamma_burst": metrics["max_abs_burst"],
         "delta_s": metrics["delta_s"],
         "market": metrics["delta_s"],  # filled below at merge if SPY available
