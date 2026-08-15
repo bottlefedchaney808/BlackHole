@@ -211,7 +211,7 @@ def main():
                 continue
             tol = _v2.spy_band_rule(ticker)
             try:
-                locus = ebe.execution_locus(rows_open, open_spot, T=T, band_frac=tol)
+                locus = ebe.execution_locus(rows_open, open_spot, T=T, tolerance_pct=tol)
             except Exception as e:
                 gaps.append({"ticker": ticker, "day": day, "endpoint": "execution_locus",
                              "status": "exc", "note": str(e)[:100]})
@@ -269,13 +269,13 @@ def main():
             # Production same-day book
             seed = _g.build_production_seed(day, exp, close_spot, eod_g, oi_c, oi_p, grid_set)
             prod_v, res = _g.run_production_vanna_same_day(seed, ticker)
-            prod_sign = _v2._sign_of(prod_v)
+            prod_sign = _g._sign_of(prod_v)
 
             # New-engine LEVEL (undo dIV flow factor) per firing bucket
             new_levels = [_v2._flow_to_level(n, dv) for n, dv in zip(firing_N, firing_div)]
             new_levels = [x for x in new_levels if x is not None]
             new_day_level = sum(new_levels) if new_levels else 0.0
-            new_sign = _v2._sign_of(new_day_level)
+            new_sign = _g._sign_of(new_day_level)
 
             both_nonzero = (prod_sign != 0 and new_sign != 0)
             agreed = both_nonzero and (prod_sign == new_sign)
@@ -332,8 +332,8 @@ def main():
         all_fwd.extend(o.get("firing_fwd", []))
         all_div.extend(o.get("firing_div", []))
     n_buckets = len(all_N)
-    corr_nf = _v2._corr(all_N, all_fwd) if n_buckets >= 4 else float("nan")
-    r_a6 = _v2._corr(all_div, all_fwd) if n_buckets >= 4 else float("nan")
+    corr_nf = _g._corr(all_N, all_fwd) if n_buckets >= 4 else float("nan")
+    r_a6 = _g._corr(all_div, all_fwd) if n_buckets >= 4 else float("nan")
 
     # stratified: low vs high |dIV| (R5-5)
     low_x, low_y, high_x, high_y = [], [], [], []
@@ -343,8 +343,8 @@ def main():
             low_x.append(n_); low_y.append(y_)
         else:
             high_x.append(n_); high_y.append(y_)
-    corr_low = _v2._corr(low_x, low_y) if len(low_x) >= 4 else float("nan")
-    corr_high = _v2._corr(high_x, high_y) if len(high_x) >= 4 else float("nan")
+    corr_low = _g._corr(low_x, low_y) if len(low_x) >= 4 else float("nan")
+    corr_high = _g._corr(high_x, high_y) if len(high_x) >= 4 else float("nan")
 
     # SPY vs QQQ stratified (R5-8)
     spy_x, spy_y, qx, qy = [], [], [], []
@@ -354,11 +354,11 @@ def main():
             spy_x += o.get("firing_N", []); spy_y += o.get("firing_fwd", [])
         else:
             qx += o.get("firing_N", []); qy += o.get("firing_fwd", [])
-    corr_spy = _v2._corr(spy_x, spy_y) if len(spy_x) >= 4 else float("nan")
-    corr_qqq = _v2._corr(qx, qy) if len(qx) >= 4 else float("nan")
+    corr_spy = _g._corr(spy_x, spy_y) if len(spy_x) >= 4 else float("nan")
+    corr_qqq = _g._corr(qx, qy) if len(qx) >= 4 else float("nan")
 
     # cluster-level CI at eff-n (R5-2)
-    ci_lo, ci_hi = _v2._fisher_tanh_ci(corr_nf, eff_n) if n_buckets >= 4 else (float("nan"), float("nan"))
+    ci_lo, ci_hi = _g._fisher_tanh_ci(corr_nf, eff_n) if n_buckets >= 4 else (float("nan"), float("nan"))
 
     # ---- gate verdict ----
     sign_agreement = [(r["agreed"], r["both_nonzero"]) for r in rows_table]
@@ -367,7 +367,7 @@ def main():
     # ---- placebo ----
     placebo_obs, placebo_nulls, placebo_p = (float("nan"), [], float("nan"))
     if n_buckets >= 4:
-        placebo_obs, placebo_nulls, placebo_p = _v2._placebo_null(all_N, all_fwd)
+        placebo_obs, placebo_nulls, placebo_p = _g._placebo_null(all_N, all_fwd)
 
     # ---- write result ----
     lines.append("### Data acquisition\n")
