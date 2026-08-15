@@ -519,9 +519,31 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
         raise TypeError("registry entry lacks canonical artifact manifest")
     if canonical_sha256(manifest) != artifact_hash.lower():
         raise ValueError("artifact_hash does not match canonical registry manifest")
-    for identity_field in ("expiry", "dte"):
-        if identity_field in entry and entry[identity_field] != manifest.get(identity_field):
-            raise ValueError(f"registry {identity_field} does not match canonical manifest")
+    # The persisted entry is part of the attestation boundary.  Do not trust
+    # the manifest alone: every duplicated top-level identity field must remain
+    # equal to both the manifest and the supplied unit.  This prevents a JSON
+    # registry round-trip from becoming detached evidence.
+    registry_identity = (
+        "ticker", "calendar_day", "expiry", "dte", "canonical_input_hash",
+        "candidate_key", "status", "raw_payload_hash", "source_hashes",
+    )
+    for identity_field in registry_identity:
+        if identity_field not in entry:
+            raise ValueError(f"registry entry lacks top-level identity field {identity_field}")
+        if identity_field not in manifest:
+            raise ValueError(f"artifact manifest lacks identity field {identity_field}")
+        if identity_field == "source_hashes":
+            top_level = validate_source_hashes(entry[identity_field])
+            manifest_value = validate_source_hashes(manifest[identity_field])
+            unit_value = validate_source_hashes(unit.get(identity_field))
+            if top_level != manifest_value or top_level != unit_value:
+                raise ValueError("source_hashes do not match registry manifest and unit")
+        elif identity_field == "raw_payload_hash":
+            if (str(entry[identity_field]).lower() != str(manifest.get(identity_field, "")).lower()
+                    or str(entry[identity_field]).lower() != str(unit.get(identity_field, "")).lower()):
+                raise ValueError("raw_payload_hash does not match registry manifest and unit")
+        elif entry[identity_field] != manifest[identity_field] or entry[identity_field] != unit.get(identity_field):
+            raise ValueError(f"registry {identity_field} does not match manifest and unit")
     declared = validate_source_hashes(unit.get("source_hashes"))
     registered = validate_source_hashes(entry.get("source_hashes"))
     if declared != registered:

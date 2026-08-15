@@ -346,6 +346,8 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         str(item["artifact_hash"]): {
             "artifact_hash": item["artifact_hash"],
             "raw_payload_hash": item["raw_payload_hash"],
+            "candidate_key": item.get("candidate_key"),
+            "status": item.get("status"),
             "artifact_manifest": item["artifact_manifest"],
             "source_hashes": item.get("source_hashes"),
             "payload_bytes": payloads.get(item["candidate_key"]),

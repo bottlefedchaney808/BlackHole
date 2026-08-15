@@ -234,3 +234,18 @@ No network, acquisition endpoint, live model, master, or secrets path was invoke
 - `git diff --check` — passed
 
 No acquisition, live-model/master, or secrets changes were made.
+
+## Registry identity bypass closure (2026-08-15)
+
+- Closed the remaining persisted-registry identity bypass. `_validate_registered_provenance` now requires the registry entry's duplicated top-level `ticker`, `calendar_day`, `expiry`, `dte`, `canonical_input_hash`, `candidate_key`, `status`, `raw_payload_hash`, and `source_hashes` to match the canonical artifact manifest and the supplied causal unit; artifact hash remains bound to the registry key and canonical manifest digest.
+- Acquisition persistence now writes top-level `candidate_key` and `status` alongside the existing identity/hash fields, so JSON round-trip entries carry one complete identity rather than detached metadata.
+- Added a valid round-trip control and regressions mutating every top-level identity field (`ticker`, `calendar_day`, `expiry`, `dte`, `canonical_input_hash`, `candidate_key`, `status`, `raw_payload_hash`, `source_hashes`, `artifact_hash`). All mutations return structured `CAUSAL_BLOCKED` / `COMPARISON_INVALID`.
+
+## Registry bypass verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — 113 passed
+- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `uvx ruff check Vol_Suite/provenance_contract.py Vol_Suite/run_live_vs_expiry_book_common_input.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/tests/test_common_input_live_vs_expiry_book.py tests/test_dealer_exposure_acquisition.py` — passed
+- `git diff --check` — passed
+
+No acquisition/live/master/secrets changes were made.

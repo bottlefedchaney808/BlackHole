@@ -208,8 +208,11 @@ def _registry(unit, payload=b"verified canonical payload"):
         "imputed", "no_imputation")}
     unit["artifact_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
-            "raw_payload_hash": unit["raw_payload_hash"], "artifact_manifest": manifest,
+            "raw_payload_hash": unit["raw_payload_hash"], "candidate_key": unit["candidate_key"],
+            "status": unit["status"], "artifact_manifest": manifest,
             "source_hashes": unit["source_hashes"], "payload_bytes": payload,
+            "ticker": unit["ticker"], "calendar_day": unit["calendar_day"],
+            "canonical_input_hash": unit["canonical_input_hash"],
             "expiry": unit["expiry"], "dte": unit["dte"]}}
 
 
@@ -277,6 +280,35 @@ def test_causal_gate_rejects_forged_manifest_cross_fields():
     entry = next(iter(registry.values()))
     entry["artifact_manifest"]["candidate_key"] = "FORGED"
     assert validate_causal_eligibility([unit], artifact_registry=registry)["causal_status"] == "CAUSAL_BLOCKED"
+
+
+def test_valid_registry_identity_round_trip_is_causally_eligible():
+    unit = _causal_unit()
+    registry = _registry(unit)
+    assert validate_causal_eligibility([unit], intended_units=1, artifact_registry=registry)["causal_status"] == "CAUSAL_ELIGIBLE"
+
+
+@pytest.mark.parametrize("field", [
+    "ticker", "calendar_day", "expiry", "dte", "canonical_input_hash",
+    "candidate_key", "status", "raw_payload_hash", "source_hashes", "artifact_hash",
+])
+def test_causal_gate_rejects_mutated_top_level_registry_identity(field):
+    unit = _causal_unit()
+    registry = _registry(unit)
+    entry = next(iter(registry.values()))
+    if field == "artifact_hash" or field == "raw_payload_hash":
+        entry[field] = "f" * 64
+    elif field == "source_hashes":
+        entry[field] = ["f" * 64]
+    elif field == "dte":
+        entry[field] = 36
+    elif field == "status":
+        entry[field] = "FAIL"
+    else:
+        entry[field] = "FORGED"
+    result = validate_causal_eligibility([unit], intended_units=1, artifact_registry=registry)
+    assert result["causal_status"] == "CAUSAL_BLOCKED"
+    assert result["status"] == "COMPARISON_INVALID"
 
 
 @pytest.mark.parametrize("mutator", [
