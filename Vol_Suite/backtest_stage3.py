@@ -327,6 +327,7 @@ def _build_day_records(ticker: str, expiry: str,
                         hist_greek_rows: List[dict], hist_oi_rows: List[dict],
                         hist_price_rows: List[dict],
                         forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
+                        accumulated_position: Optional[dict] = None,
                         ) -> List[DayRecord]:
     """Pure function over already-fetched historical rows -- the part
     tests/test_backtest_stage3.py exercises directly with synthetic data,
@@ -525,7 +526,15 @@ def _build_day_records(ticker: str, expiry: str,
         chain_iv = iv_by_date[d]
 
         net_v1 = _net_gamma_v1(gamma_map, oi_map)
-        net_v2 = _net_gamma_v2(gamma_map, oi_map, chain_iv, spot, forward, T)
+        if accumulated_position:
+            # v2_live accumulation: the accumulated position is a SIGNED dealer
+            # book (sign already baked in), so classify the v2 regime from it
+            # with pass-through sign=1.0 -- mirrors dealer_positioning's
+            # accumulate branch (position_by_strike, applied_sign=1.0).
+            net_v2 = sum(gamma * accumulated_position.get((k, right), 0.0)
+                         for (k, right), gamma in gamma_map.items())
+        else:
+            net_v2 = _net_gamma_v2(gamma_map, oi_map, chain_iv, spot, forward, T)
         net_v3 = _net_gamma_v3(gamma_map, oi_map, chain_iv, spot, forward, T)
         whale_bias, _whale_stats = whale_scanner.classify_whale_bias(
             whale_rows_by_date.get(d, []), price=spot)
@@ -587,9 +596,11 @@ def _run_backtest_from_history(ticker: str, expiry: str,
                                 hist_greek_rows: List[dict], hist_oi_rows: List[dict],
                                 hist_price_rows: List[dict],
                                 forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
+                                accumulated_position: Optional[dict] = None,
                                 ) -> BacktestResult:
     records = _build_day_records(ticker, expiry, hist_greek_rows, hist_oi_rows,
-                                  hist_price_rows, forward_window_days)
+                                  hist_price_rows, forward_window_days,
+                                  accumulated_position=accumulated_position)
     if not records:
         raise ValueError(
             f"No overlapping greeks/OI/price history for {ticker} {expiry} -- "
@@ -622,6 +633,7 @@ def _run_backtest_from_history(ticker: str, expiry: str,
 def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: float = 0.25,
                   lookback_days: int = DEFAULT_LOOKBACK_DAYS,
                   forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
+                  accumulate: bool = False,
                   ) -> BacktestResult:
     """Network-touching orchestrator: resolves the target expiry, pulls
     historical greeks/OI/price straight from ThetaData, and runs the pure
@@ -672,8 +684,28 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
     finally:
         td.close()
 
+    accumulated_position = None
+    if accumulate:
+        # v2_live: classify the v2 regime from the accumulated SIGNED dealer
+        # book (the live model runs with accumulation on) rather than the
+        # same-day OI snapshot. Reuse the proven live accumulation over the
+        # rows already fetched here (no re-fetch); fall back to same-day when
+        # it cannot produce a position for this data shape.
+        try:
+            _acc = replication_reference.compute_accumulated_position_for_expiry(
+                ticker, expiry, lookback_days=lookback_days, seed_mode='replication',
+                _hist_rows=(hist_greek_rows, hist_oi_rows, hist_price_rows))
+            if _acc.position_by_strike:
+                accumulated_position = dict(_acc.position_by_strike)
+        except Exception:
+            accumulated_position = None
+        if not accumulated_position:
+            print(f"  [backtest_stage3] accumulate produced no position for "
+                  f"{ticker} {expiry}; v2_live fell back to same-day snapshot")
+
     return _run_backtest_from_history(ticker, expiry, hist_greek_rows, hist_oi_rows,
-                                       hist_price_rows, forward_window_days)
+                                       hist_price_rows, forward_window_days,
+                                       accumulated_position=accumulated_position)
 
 
 def format_backtest_report(result: BacktestResult) -> str:

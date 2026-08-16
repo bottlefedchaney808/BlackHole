@@ -242,6 +242,27 @@ def test_build_day_records_excludes_neutral_whale_days():
     assert records[0].net_gamma_whale == 0.0
 
 
+def test_build_day_records_accumulated_position_drives_v2_regime():
+    """When an accumulated_position (signed dealer book) is supplied, the v2
+    regime must be classified from it (pass-through sign=1.0) -- net-short
+    accumulated book => short, net-long => long -- mirroring the live model."""
+    d = "20260901"
+    greek_rows, oi_rows = _make_day_rows(d, SPOT0, 1000, 1000)
+    price_rows = [_price_row(d, SPOT0)]
+
+    short_acc = {(k, right): -1.0 for (k, right) in _flat_smile_chain(SPOT0).keys()}
+    records_short = bt3._build_day_records(
+        "SYN", "20261231", greek_rows, oi_rows, price_rows,
+        accumulated_position=short_acc)
+    assert records_short[0].regime_v2 == "short"
+
+    long_acc = {(k, right): 1.0 for (k, right) in _flat_smile_chain(SPOT0).keys()}
+    records_long = bt3._build_day_records(
+        "SYN", "20261231", greek_rows, oi_rows, price_rows,
+        accumulated_position=long_acc)
+    assert records_long[0].regime_v2 == "long"
+
+
 @pytest.mark.unit
 def test_build_day_records_labels_bullish_whale_day():
     """A day with heavy call-side whale premium must classify as bullish
