@@ -30,6 +30,7 @@ The dashboard's "Options Strategy Tool" (`dashboard/templates/tools_options_stra
 - `--help` failing isn't a broken parser — it's the credential check above; check env vars first.
 - Empty `pricing_models` in a context-mode result is expected current behavior, not a bug to chase in `main.py`.
 - If you need actual pricing output, call `vol_manager.py`/`chain_evaluation.py` directly — they aren't reachable through `main.py`'s CLI surface yet.
+- **Pricing-model default: use Leisen-Reimer (LR), NOT CRR.** CRR's price oscillation at coarse steps makes LR the preferred default for the IV solve and the non-interactive/context path. When a run "tries to use CRR again", switch the model to LR — see `american_binomial.py` docstring and the `main.py` context-mode path that already uses LR sigma.
 
 ## Quick Reference
 

@@ -569,12 +569,18 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
 
     focus_vol, vol_source = _resolve_vol_and_quality(payload, tk)
 
-    spots, vols, rets = [], [], {}
+    spots, vols, rets, peer_vol_sources = [], [], {}, {}
     for t in tickers:
         spots.append(data_loader.fetch_spot(t))
         # Only the focus ticker has a context-supplied GARCH vol -- peers are
         # not covered by suite_context's `focus` block, so they refit.
-        vols.append(focus_vol if t == tk else (data_loader.estimate_garch_vol(t) or 0.25))
+        if t == tk:
+            vols.append(focus_vol)
+            peer_vol_sources[t] = vol_source
+        else:
+            _pv = data_loader.estimate_garch_vol(t)
+            vols.append(_pv if _pv is not None else 0.25)
+            peer_vol_sources[t] = "garch_fit" if _pv is not None else "fallback"
         try:
             rets[t] = data_loader.fetch_log_returns(t, start, end)
         except Exception:
@@ -625,8 +631,8 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         # assume "price" from the histogram field's name.
         "histogram_unit": "portfolio_value",
         "cholesky_ok": bool(r.cholesky_ok),
-        # vol_source describes the focus ticker only; peers always refit.
-        "data_quality": {"vol_source": vol_source, "expected_return_source": "not_applicable"},
+        # vol_source describes the focus ticker; peers always refit (per-ticker source tagged).
+        "data_quality": {"vol_source": vol_source, "expected_return_source": "not_applicable", "peer_vol_sources": peer_vol_sources},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -669,7 +675,9 @@ def _build_hedge_optimizer_from_context(payload: dict, ticker: str = None,
     if not peers:
         raise ContextModeError("Need at least one basket peer to build hedge-instrument candidates.")
 
-    tk_vol = data_loader.estimate_garch_vol(tk) or 0.25
+    _tkv = data_loader.estimate_garch_vol(tk)
+    tk_vol = _tkv if _tkv is not None else 0.25
+    tk_vol_source = "garch_fit" if _tkv is not None else "fallback"
     start, end = data_loader.default_date_range()
     try:
         tk_rets = data_loader.fetch_log_returns(tk, start, end)
@@ -677,8 +685,11 @@ def _build_hedge_optimizer_from_context(payload: dict, ticker: str = None,
         tk_rets = None
 
     hedge_instruments = []
+    peer_vol_sources = {}
     for p in peers:
-        p_vol = data_loader.estimate_garch_vol(p) or 0.25
+        _pv = data_loader.estimate_garch_vol(p)
+        p_vol = _pv if _pv is not None else 0.25
+        peer_vol_sources[p] = "garch_fit" if _pv is not None else "fallback"
         corr = 0.0
         try:
             p_rets = data_loader.fetch_log_returns(p, start, end)
@@ -711,6 +722,7 @@ def _build_hedge_optimizer_from_context(payload: dict, ticker: str = None,
         "base_var": float(out.base_var), "hedged_var": float(out.hedged_var),
         "var_reduction_pct": float(out.var_reduction_pct),
         "base_port_vol": float(out.base_port_vol), "hedged_port_vol": float(out.hedged_port_vol),
+        "data_quality": {"tk_vol_source": tk_vol_source, "peer_vol_sources": peer_vol_sources},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
