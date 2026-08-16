@@ -71,4 +71,8 @@ Pre-existing `.superpowers/sdd/progress.md` modification and untracked acquisiti
 
 ### Nested remediation commit
 
-Commit `a80ddf4` (`fix(vol): close nested event provenance gaps`); only `run_task4_evaluation.py`, Stage 3/core fixtures and regressions, and this report were committed.
+Commit `1e1065d` (`fix(vol): close nested event provenance gaps`); only `run_task4_evaluation.py`, Stage 3/core fixtures and regressions, and this report were committed.
+
+### Report correction (2026-08-15)
+
+- Corrected the nested remediation commit metadata from `a80ddf4` to the actual reviewed commit `1e1065d`; no implementation or test content changed.
