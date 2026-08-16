@@ -81,3 +81,21 @@ Only Task 2 implementation/tests/report should be committed. Existing unrelated 
 - `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_authorization_task2.py` — passed.
 - `git diff --check` — passed; Ruff unavailable.
 - No network/live/master/expiry-book acquisition was run.
+
+## Authorization Hardening Task 2 execution-boundary final closure (2026-08-15)
+
+- `_AdmissionContext.call()` now reserves units/call counters and `concurrency=1` atomically before dispatch, rejects a contending second thread without poisoning a live context, releases the slot in `finally`, and returns the finalized payload/wall-time usage snapshot after accounting.
+- `run_availability_probes()` now applies the shared strict `_authorized_executor()` validator before any probe dispatch; arbitrary callables are rejected with zero calls and exact executor ID/entrypoint/path/method/scope binding are required.
+- Acquisition and probe entry points require `approval is True`; integer, string, list, mapping, and other truthy values are rejected.
+- Expansion audit runtime usage is covered by a regression proving the stored snapshot includes finalized payload accounting.
+- Added regressions for two-thread concurrency, arbitrary probe executors, non-boolean approval, and finalized expansion usage.
+
+## Final closure verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py tests/test_dealer_exposure_authorization_task2.py` — **54 passed**.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q Vol_Suite/tests/test_opex_calendar.py Vol_Suite/tests/test_opex_calendar_stage3.py` — **44 passed**.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization_task2.py` — **33 passed**.
+- `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_authorization_task2.py` — passed.
+- `git diff --check` — passed.
+- Ruff unavailable (`ruff: command not found`).
+- Legacy acquisition/expansion tests were run and remain expected contract-transition failures because they invoke non-dry-run paths with boolean approval/arbitrary lambdas and no typed authorization; no network/live/master/expiry-book acquisition was run.

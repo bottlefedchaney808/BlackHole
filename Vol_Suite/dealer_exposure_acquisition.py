@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -138,12 +139,16 @@ class _AdmissionContext:
             if self.blocked:
                 raise AcquisitionGateError(self.blocked)
             if self.usage["concurrency"] >= self.limits["concurrency"]:
-                self.blocked = "authorization cost ceiling exceeded: concurrency"
-                raise AcquisitionGateError(self.blocked)
+                # A contending caller is rejected without poisoning the context;
+                # the in-flight call releases the slot in its finally block.
+                if self.limits["concurrency"] <= 0:
+                    self.blocked = "authorization cost ceiling exceeded: concurrency"
+                raise AcquisitionGateError("authorization cost ceiling exceeded: concurrency")
             projected = dict(self.usage)
             projected[f"{kind}_calls"] += 1
             projected["total_endpoint_calls"] += 1
             projected["units"] += 1
+            projected["concurrency"] = 1
             for field, limit in self.limits.items():
                 if field in projected and projected[field] > limit:
                     self.blocked = f"authorization cost ceiling exceeded: {field}"
@@ -153,9 +158,11 @@ class _AdmissionContext:
             self.usage.update(projected)
         started = time.perf_counter()
         value: Any = None
+        failure: tuple[type[BaseException], BaseException, Any] | None = None
         try:
             value = fn()
-            return value, dict(self.usage)
+        except BaseException:
+            failure = sys.exc_info()
         finally:
             elapsed = time.perf_counter() - started
             size = len(canonical_json_bytes(value)) if value is not None else 0
@@ -167,10 +174,13 @@ class _AdmissionContext:
                     self.blocked = "authorization cost ceiling exceeded: wall_seconds"
                 elif self.usage["payload_bytes"] > self.limits["payload_bytes"]:
                     self.blocked = "authorization cost ceiling exceeded: payload_bytes"
-                if self.blocked:
-                    # Raise after the adapter returns, so over-budget output is
-                    # never treated as an authorized result.
-                    raise AcquisitionGateError(self.blocked)
+                finalized = dict(self.usage)
+        if failure is not None:
+            _, exc, traceback = failure
+            raise exc.with_traceback(traceback)
+        if self.blocked:
+            raise AcquisitionGateError(self.blocked)
+        return value, finalized
 
 
 def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) -> _AdmissionContext | None:
@@ -814,10 +824,13 @@ def _probe_request(unit: Mapping[str, Any]) -> dict[str, Any]:
 def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, authorization: AcquisitionAuthorization | None = None, authorization_context: Any | None = None, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
     """Run sequential lightweight probes; never dispatches the heavy fetcher."""
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
-    if dry_run or probe_only or not approval or probe_fetcher is None:
-        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP" if probe_fetcher is None and approval and not (dry_run or probe_only) else "INELIGIBLE", "reason": "probe_not_run", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False} for u in ordered]
+    if dry_run or probe_only or approval is not True or probe_fetcher is None:
+        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP" if probe_fetcher is None and approval is True and not (dry_run or probe_only) else "INELIGIBLE", "reason": "probe_not_run", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False} for u in ordered]
     if not isinstance(authorization_context, _AdmissionContext) or authorization_context.authorization is not authorization:
         return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": "admitted authorization context is required; boolean approval is not authorization", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
+    executor_ok, _, executor_reason = _authorized_executor(probe_fetcher, authorization)
+    if not executor_ok:
+        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": f"authorized probe executor required: {executor_reason}", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
     results = []
     for unit in ordered:
         request = _probe_request(unit)
@@ -899,7 +912,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1": raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
     if not dry_run and (authorization is None or isinstance(authorization, bool)):
         raise AcquisitionGateError("validated authorization is required; boolean approval is not authorization")
-    if not dry_run and not approval: raise AcquisitionGateError("explicit authorization handoff is required")
+    if not dry_run and approval is not True: raise AcquisitionGateError("explicit authorization handoff is required")
     executor_identity: dict[str, Any] | None = None
     if not dry_run and not probe_only:
         executor_ok, executor_identity, executor_reason = _authorized_executor(fetcher, authorization)

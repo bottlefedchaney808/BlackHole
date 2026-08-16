@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import threading
 
 import pytest
 
@@ -13,6 +14,7 @@ from Vol_Suite.dealer_exposure_acquisition import (
     run_availability_probes,
 )
 from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization
+import Vol_Suite.dealer_exposure_expansion as expansion
 from Vol_Suite.dealer_exposure_expansion import run_expansion_plan
 from Vol_Suite.provenance_contract import canonical_sha256
 
@@ -208,3 +210,91 @@ def test_valid_authorized_adapter_matches_all_execution_identity_fields():
     assert ok is True
     assert reason == ""
     assert identity["scope_binding"] == "candidate keys"
+
+
+def test_concurrent_second_call_is_rejected_atomically_and_slot_is_released():
+    auth, manifest = _network_auth()
+    context = _AdmissionContext(auth, manifest)
+    context.limits.update(units=3, heavy_calls=3, total_endpoint_calls=3)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def first():
+        calls.append("first")
+        entered.set()
+        assert release.wait(2)
+        return {"payload": "first"}
+
+    worker = threading.Thread(target=lambda: context.call("heavy", first))
+    worker.start()
+    assert entered.wait(2)
+    with pytest.raises(Exception, match="concurrency"):
+        context.call("heavy", lambda: calls.append("second"))
+    assert calls == ["first"]
+    assert context.usage["concurrency"] == 1
+    release.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert context.usage["concurrency"] == 0
+    value, usage = context.call("heavy", lambda: {"payload": "third"})
+    assert value["payload"] == "third"
+    assert usage["concurrency"] == 0
+    assert usage["payload_bytes"] > 0
+    assert usage["wall_seconds"] > 0
+
+
+@pytest.mark.parametrize("approval", [1, "yes", [], {}])
+def test_probe_and_acquisition_require_boolean_true_approval(approval):
+    auth, manifest = _network_auth()
+    schedule = manifest["units"]
+    calls = []
+    probe = run_availability_probes(
+        schedule,
+        probe_fetcher=lambda request: calls.append(request),
+        approval=approval,
+        authorization=auth,
+        authorization_context=_AdmissionContext(auth, manifest),
+        dry_run=False,
+    )
+    assert calls == []
+    assert all(item["invoked"] is False for item in probe)
+    with pytest.raises(Exception, match="explicit authorization handoff"):
+        execute_sequential_acquisition(
+            schedule, fetcher=_adapter(), approval=approval, authorization=auth,
+            admission_evidence={}, registry={}, dry_run=False,
+        )
+
+
+def test_probe_arbitrary_callable_is_rejected_before_any_call():
+    auth, manifest = _network_auth()
+    calls = []
+    probe = run_availability_probes(
+        manifest["units"],
+        probe_fetcher=lambda request: calls.append(request),
+        approval=True,
+        authorization=auth,
+        authorization_context=_AdmissionContext(auth, manifest),
+        dry_run=False,
+    )
+    assert calls == []
+    assert probe[0]["invoked"] is False
+    assert "authorized probe executor required" in probe[0]["reason"]
+
+
+def test_expansion_audit_uses_finalized_usage_snapshot(monkeypatch):
+    auth, manifest = _network_auth()
+    context = _AdmissionContext(auth, manifest)
+    monkeypatch.setattr(expansion, "build_expansion_manifest", lambda *args, **kwargs: manifest)
+    monkeypatch.setattr(expansion, "admit_acquisition", lambda *args, **kwargs: (tuple(manifest["units"]), {"admitted": True, "blocked": []}))
+    monkeypatch.setattr(expansion, "_preflight_authorization", lambda *args, **kwargs: context)
+    monkeypatch.setattr(expansion, "candidate_manifest_projection", lambda *args, **kwargs: auth.candidate_manifest_projection())
+    result = run_expansion_plan(
+        [], dry_run=False, approve_network=True, executor=_adapter(),
+        authorization=auth, acquisition_evidence={"probes": []}, registry={},
+    )
+    usage = result["execution_audit"]["runtime_usage"]
+    assert result["execution_audit"]["invoked"] == [manifest["units"][0]["candidate_key"]]
+    assert usage["payload_bytes"] > 0
+    assert usage["wall_seconds"] >= 0
+    assert usage == result["runtime_usage"]
