@@ -777,8 +777,9 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
         except Exception:
             accumulated_position = None
         if not accumulated_position:
-            print(f"  [backtest_stage3] accumulate produced no position for "
-                  f"{ticker} {expiry}; v2_live fell back to same-day snapshot")
+            raise ValueError(
+                f"v2_live accumulation produced no position for {ticker} "
+                f"{expiry}; refusing to fall back to a same-day snapshot.")
 
     use_dealer_exposure = sign_model == 'dealer_exposure'
     if use_dealer_exposure and not _dealer_exposure_engine_available():
