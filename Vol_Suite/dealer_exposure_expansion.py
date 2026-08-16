@@ -30,6 +30,7 @@ LIVE_CONFIG = {
 
 from .dealer_exposure_acquisition import (
     _AdmissionContext,
+    _authorized_executor,
     _preflight_authorization,
     admit_acquisition,
     build_candidate_schedule,
@@ -512,32 +513,6 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
     return ([by_identity[u["candidate_key"]] for u in primary] if not reasons else []), reasons
 
 
-def _authorized_executor(executor: Any, authorization: Any) -> tuple[bool, dict[str, Any], str]:
-    """Require an attested named adapter; arbitrary callables are never accepted."""
-    if executor is None or not callable(executor) or not isinstance(authorization, AcquisitionAuthorization):
-        return False, {}, "typed named adapter and authorization are required"
-    policy = authorization.to_mapping()["executor_policy"]
-    identity = {
-        "executor_id": getattr(executor, "executor_id", None),
-        "entrypoint": getattr(executor, "entrypoint", None),
-        "endpoint": getattr(executor, "endpoint", None),
-        "request_method": getattr(executor, "request_method", None),
-    }
-    if any(not isinstance(value, str) or not value for value in identity.values()):
-        return False, identity, "executor identity is incomplete or untrusted"
-    if identity["executor_id"] != policy["allowed_executor_id"] or identity["entrypoint"] != policy["allowed_executor_entrypoint"]:
-        return False, identity, "executor identity is not authorized"
-    paths = tuple(policy["allowed_endpoint_paths"])
-    families = tuple(policy["allowed_endpoint_families"])
-    if identity["endpoint"] not in paths and not any(family in identity["endpoint"] for family in families):
-        return False, identity, "executor endpoint/path is outside authorization scope"
-    if identity["request_method"] not in tuple(policy["allowed_request_methods"]):
-        return False, identity, "executor request method is outside authorization scope"
-    if policy["network_fetch_allowed"] is not True:
-        return False, identity, "authorization does not permit network fetch"
-    return True, identity, ""
-
-
 def run_expansion_plan(
     candidates: Iterable[Mapping[str, Any]],
     *,
@@ -557,9 +532,14 @@ def run_expansion_plan(
 ) -> dict[str, Any]:
     if not dry_run and authorization is None:
         raise ExpansionApprovalError("a validated authorization is required; approve_network is not authorization")
+    result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
+    if not dry_run and approve_network is not True:
+        result["mode"] = "blocked"
+        result["network_fetch_allowed"] = False
+        result["execution_audit"] = {"invoked": [], "blocked": ["approve_network must be explicitly True"]}
+        return result
     if not dry_run and executor is None:
         raise ExpansionApprovalError("an injected restricted executor is required after admission")
-    result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
     if not dry_run:
         result["mode"] = "approved-execution"
         if not hasattr(authorization, "candidate_manifest_projection"):

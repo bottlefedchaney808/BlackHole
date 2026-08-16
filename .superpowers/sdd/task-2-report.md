@@ -61,3 +61,23 @@ Only Task 2 implementation/tests/report should be committed. Existing unrelated 
 - `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py` — passed.
 - `git diff --check` — passed.
 - Ruff was unavailable in the environment; no live/network acquisition was run.
+
+## Authorization Hardening Task 2 execution-boundary re-closure (2026-08-15)
+
+- `_AdmissionContext.call()` now atomically commits projected units plus probe/heavy/total endpoint reservations before dispatch; failed or repeated adapters cannot bypass a ceiling. Payload and wall-time accounting remains fail-closed after the call.
+- Added zero-unit and repeated-call regressions proving immediate stop and no second adapter invocation.
+- `run_expansion_plan()` now requires `approve_network is True`; false or omitted approval returns a blocked audit with zero executor invocations before admission/executor dispatch.
+- Consolidated the strict named-executor validator in acquisition and reused it from expansion. Arbitrary callables, wrong executor ID/entrypoint, non-enumerated endpoint paths, methods, or `scope_binding` are rejected; exact executor identity and scope binding are recorded in acquisition/expansion audits.
+- Authorization validation now requires non-empty executor identity, endpoint/method enumerations, absolute exact paths, and explicit scope binding. Endpoint-family strings are descriptive only and never authorize substring matches.
+- Added adversarial regressions for approval false, arbitrary fetchers, wrong scope/path/method, missing scope binding, and a valid fully identified adapter.
+
+## Re-closure verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization_task2.py` — **26 passed**.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py tests/test_dealer_exposure_authorization_task2.py` — **47 passed**.
+- Full legacy acquisition/expansion suites remain contract-transition failures because they intentionally call non-dry-run entry points with boolean approval/arbitrary lambdas and no typed authorization; these failures confirm the new boundary is enforced.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q Vol_Suite/tests/test_opex_calendar.py Vol_Suite/tests/test_opex_calendar_stage3.py` — **44 passed**.
+- `Backtests/tests/test_core.py` collection was blocked by the environment because `scipy` is not installed; no code failure was inferred from that dependency error.
+- `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_authorization_task2.py` — passed.
+- `git diff --check` — passed; Ruff unavailable.
+- No network/live/master/expiry-book acquisition was run.

@@ -126,6 +126,14 @@ class _AdmissionContext:
         self.blocked: str | None = None
 
     def call(self, kind: str, fn: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
+        """Permit exactly one call and commit all call counters before dispatch.
+
+        The reservation is made while holding the same lock used by every
+        caller.  A failing adapter therefore still consumes its authorization
+        unit and endpoint-call budget; retries cannot obtain a fresh projection.
+        """
+        if kind not in {"probe", "heavy"}:
+            raise ValueError("authorization runtime call kind must be probe or heavy")
         with self.lock:
             if self.blocked:
                 raise AcquisitionGateError(self.blocked)
@@ -135,29 +143,34 @@ class _AdmissionContext:
             projected = dict(self.usage)
             projected[f"{kind}_calls"] += 1
             projected["total_endpoint_calls"] += 1
+            projected["units"] += 1
             for field, limit in self.limits.items():
                 if field in projected and projected[field] > limit:
                     self.blocked = f"authorization cost ceiling exceeded: {field}"
                     raise AcquisitionGateError(self.blocked)
-            self.usage["concurrency"] = 1
+            # Atomic commit: no permitted call can be observed without its
+            # probe/heavy/total/unit reservation already present in usage.
+            self.usage.update(projected)
         started = time.perf_counter()
+        value: Any = None
         try:
             value = fn()
+            return value, dict(self.usage)
         finally:
             elapsed = time.perf_counter() - started
+            size = len(canonical_json_bytes(value)) if value is not None else 0
             with self.lock:
                 self.usage["wall_seconds"] += elapsed
+                self.usage["payload_bytes"] += size
                 self.usage["concurrency"] = 0
                 if self.usage["wall_seconds"] > self.limits["wall_seconds"]:
                     self.blocked = "authorization cost ceiling exceeded: wall_seconds"
-        size = len(canonical_json_bytes(value)) if value is not None else 0
-        with self.lock:
-            self.usage["payload_bytes"] += size
-            if self.usage["payload_bytes"] > self.limits["payload_bytes"]:
-                self.blocked = "authorization cost ceiling exceeded: payload_bytes"
-            if self.blocked:
-                raise AcquisitionGateError(self.blocked)
-        return value, dict(self.usage)
+                elif self.usage["payload_bytes"] > self.limits["payload_bytes"]:
+                    self.blocked = "authorization cost ceiling exceeded: payload_bytes"
+                if self.blocked:
+                    # Raise after the adapter returns, so over-budget output is
+                    # never treated as an authorized result.
+                    raise AcquisitionGateError(self.blocked)
 
 
 def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) -> _AdmissionContext | None:
@@ -173,6 +186,34 @@ def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) ->
         return _AdmissionContext(authorization, projection)
     except (TypeError, ValueError, KeyError):
         return None
+
+
+def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization) -> tuple[bool, dict[str, Any], str]:
+    """Validate one named adapter against the exact authorization policy."""
+    if executor is None or not callable(executor) or not isinstance(authorization, AcquisitionAuthorization):
+        return False, {}, "typed named adapter and authorization are required"
+    policy = authorization.to_mapping()["executor_policy"]
+    identity = {
+        "executor_id": getattr(executor, "executor_id", None),
+        "entrypoint": getattr(executor, "entrypoint", None),
+        "endpoint": getattr(executor, "endpoint", None),
+        "request_method": getattr(executor, "request_method", None),
+        "scope_binding": getattr(executor, "scope_binding", None),
+    }
+    if any(not isinstance(value, str) or not value.strip() for value in identity.values()):
+        return False, identity, "executor identity/scope binding is incomplete or untrusted"
+    if identity["executor_id"] != policy["allowed_executor_id"] or identity["entrypoint"] != policy["allowed_executor_entrypoint"]:
+        return False, identity, "executor identity is not authorized"
+    # Families are descriptive metadata only; require exact enumerated paths.
+    if identity["endpoint"] not in tuple(policy["allowed_endpoint_paths"]):
+        return False, identity, "executor endpoint path is outside authorization scope"
+    if identity["request_method"].upper() not in tuple(method.upper() for method in policy["allowed_request_methods"]):
+        return False, identity, "executor request method is outside authorization scope"
+    if identity["scope_binding"] != policy["scope_binding"]:
+        return False, identity, "executor scope binding is outside authorization scope"
+    if policy["network_fetch_allowed"] is not True:
+        return False, identity, "authorization does not permit network fetch"
+    return True, identity, ""
 
 
 def _immutable(value: Any) -> Any:
@@ -859,6 +900,11 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     if not dry_run and (authorization is None or isinstance(authorization, bool)):
         raise AcquisitionGateError("validated authorization is required; boolean approval is not authorization")
     if not dry_run and not approval: raise AcquisitionGateError("explicit authorization handoff is required")
+    executor_identity: dict[str, Any] | None = None
+    if not dry_run and not probe_only:
+        executor_ok, executor_identity, executor_reason = _authorized_executor(fetcher, authorization)
+        if not executor_ok:
+            raise AcquisitionGateError(f"authorized executor required: {executor_reason}")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     authorization_context = None
     if not dry_run and not probe_only:
@@ -990,7 +1036,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
     if isinstance(authorization_context, _AdmissionContext):
         runtime_usage = dict(authorization_context.usage)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": runtime_usage["heavy_calls"], "runtime_usage": runtime_usage, "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "admission_audit": admission_audit, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": runtime_usage["heavy_calls"], "runtime_usage": runtime_usage, "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "admission_audit": admission_audit, "executor": executor_identity, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)

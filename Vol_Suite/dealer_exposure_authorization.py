@@ -392,6 +392,19 @@ class AcquisitionAuthorization:
             raise ValueError("cost ceiling must be serial and stop on exceed")
         for field in ("network_fetch_allowed", "allow_new_candidate_keys", "allow_held_pairs", "allow_live_model_calls", "allow_scheduler_calls", "allow_writes_outside_artifact_root"):
             _strict_bool(executor[field], f"executor_policy.{field}")
+        for field in ("allowed_executor_id", "allowed_executor_entrypoint", "scope_binding"):
+            if not isinstance(executor[field], str) or not executor[field].strip():
+                raise ValueError(f"executor_policy.{field} must be a non-empty string")
+        for field in ("allowed_endpoint_families", "allowed_endpoint_paths", "allowed_request_methods"):
+            values = executor[field]
+            if not isinstance(values, list) or not values or any(not isinstance(item, str) or not item.strip() for item in values):
+                raise ValueError(f"executor_policy.{field} must be a non-empty string list")
+        if len(set(executor["allowed_endpoint_paths"])) != len(executor["allowed_endpoint_paths"]):
+            raise ValueError("executor_policy.allowed_endpoint_paths must be unique")
+        if any(not item.startswith("/") or "?" in item or "#" in item for item in executor["allowed_endpoint_paths"]):
+            raise ValueError("executor_policy.allowed_endpoint_paths must be exact absolute paths")
+        if any(item.upper() not in {"GET", "POST", "PUT", "PATCH", "DELETE"} for item in executor["allowed_request_methods"]):
+            raise ValueError("executor_policy.allowed_request_methods contains an unsupported method")
         if any(executor[field] is not False for field in ("allow_new_candidate_keys", "allow_held_pairs", "allow_live_model_calls", "allow_scheduler_calls", "allow_writes_outside_artifact_root")):
             raise ValueError("executor policy attempts an unsafe capability")
         if not isinstance(payload["stop_conditions"], list) or not payload["stop_conditions"]:

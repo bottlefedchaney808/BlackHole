@@ -6,11 +6,15 @@ import pytest
 
 from Vol_Suite.dealer_exposure_acquisition import (
     _AdmissionContext,
+    _authorized_executor,
     _strict_prewindow,
     admit_acquisition,
+    execute_sequential_acquisition,
     run_availability_probes,
 )
 from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization
+from Vol_Suite.dealer_exposure_expansion import run_expansion_plan
+from Vol_Suite.provenance_contract import canonical_sha256
 
 from test_dealer_exposure_authorization import _authorization, _manifest
 
@@ -110,3 +114,97 @@ def test_runtime_context_stops_at_each_authorization_ceiling(ceiling, kind):
     with pytest.raises(Exception, match="authorization cost ceiling exceeded"):
         context.call(kind, lambda: calls.append(1) or {"payload": "x"})
     assert calls == ([] if ceiling in {"max_probe_calls", "max_heavy_calls", "max_total_endpoint_calls", "concurrency"} else [1])
+    if calls:
+        assert context.usage["units"] == 1
+        assert context.usage[f"{kind}_calls"] == 1
+        assert context.usage["total_endpoint_calls"] == 1
+
+
+def test_runtime_counter_commit_blocks_repeated_calls_immediately():
+    auth, manifest = _auth_and_manifest()
+    context = _AdmissionContext(auth, manifest)
+    context.limits.update(units=1, probe_calls=10, total_endpoint_calls=10)
+    calls = []
+    context.call("probe", lambda: calls.append("first") or {})
+    with pytest.raises(Exception, match="authorization cost ceiling exceeded: units"):
+        context.call("probe", lambda: calls.append("second") or {})
+    assert calls == ["first"]
+    assert context.usage["units"] == 1
+    assert context.usage["probe_calls"] == 1
+    assert context.usage["total_endpoint_calls"] == 1
+
+
+def test_zero_unit_limit_stops_before_adapter_dispatch():
+    auth, manifest = _auth_and_manifest()
+    context = _AdmissionContext(auth, manifest)
+    context.limits["units"] = 0
+    calls = []
+    with pytest.raises(Exception, match="authorization cost ceiling exceeded: units"):
+        context.call("heavy", lambda: calls.append(1))
+    assert calls == []
+
+
+def test_executor_policy_requires_scope_binding_and_exact_path():
+    payload = _authorization()
+    del payload["executor_policy"]["scope_binding"]
+    with pytest.raises((ValueError, TypeError)):
+        AcquisitionAuthorization.from_mapping(payload, candidate_manifest=_manifest(), now="2026-08-15T12:30:00+00:00")
+
+
+def _network_auth():
+    manifest = _manifest()
+    payload = _authorization(manifest)
+    payload["executor_policy"]["network_fetch_allowed"] = True
+    payload["authorization_sha256"] = canonical_sha256({key: value for key, value in payload.items() if key != "authorization_sha256"})
+    return AcquisitionAuthorization.from_mapping(payload, candidate_manifest=manifest, now="2026-08-15T12:30:00+00:00"), manifest
+
+
+def _adapter(**overrides):
+    def adapter(_unit):
+        return {"status": "SUCCESS", "validated": True, "success": True}
+    values = {
+        "executor_id": "staged_historical_adapter_v1",
+        "entrypoint": "fixture",
+        "endpoint": "/hist/option/all_greeks",
+        "request_method": "GET",
+        "scope_binding": "candidate keys",
+    }
+    values.update(overrides)
+    for key, value in values.items():
+        setattr(adapter, key, value)
+    return adapter
+
+
+def test_approval_false_blocks_expansion_without_executor_calls():
+    auth, _ = _network_auth()
+    calls = []
+    result = run_expansion_plan([], dry_run=False, approve_network=False, authorization=auth,
+                                executor=lambda unit: calls.append(unit))
+    assert result["mode"] == "blocked"
+    assert result["execution_audit"]["invoked"] == []
+    assert calls == []
+
+
+def test_arbitrary_fetcher_is_rejected_before_acquisition_dispatch():
+    auth, _ = _network_auth()
+    calls = []
+    with pytest.raises(Exception, match="authorized executor required"):
+        execute_sequential_acquisition([], fetcher=lambda unit: calls.append(unit), approval=True,
+                                      authorization=auth, admission_evidence={}, registry={}, dry_run=False)
+    assert calls == []
+
+
+@pytest.mark.parametrize("field,value", [("scope_binding", "other scope"), ("endpoint", "/hist/option/all_greeks/extra"), ("request_method", "POST")])
+def test_wrong_executor_scope_path_or_method_is_rejected(field, value):
+    auth, _ = _network_auth()
+    ok, _, reason = _authorized_executor(_adapter(**{field: value}), auth)
+    assert ok is False
+    assert reason
+
+
+def test_valid_authorized_adapter_matches_all_execution_identity_fields():
+    auth, _ = _network_auth()
+    ok, identity, reason = _authorized_executor(_adapter(), auth)
+    assert ok is True
+    assert reason == ""
+    assert identity["scope_binding"] == "candidate keys"
