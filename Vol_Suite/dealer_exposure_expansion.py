@@ -33,6 +33,7 @@ from .dealer_exposure_acquisition import (
     build_candidate_schedule,
     select_primary_schedule,
 )
+from .dealer_exposure_authorization import candidate_manifest_projection, candidate_manifest_sha256
 from .dealer_exposure_universe import (
     DTE_STRATA,
     ProbeResult,
@@ -533,7 +534,25 @@ def run_expansion_plan(
     result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
     if not dry_run:
         result["mode"] = "approved-execution"
-        auth_manifest = authorization.candidate_manifest_projection() if hasattr(authorization, "candidate_manifest_projection") else result
+        if not hasattr(authorization, "candidate_manifest_projection"):
+            result["mode"] = "blocked"
+            result["network_fetch_allowed"] = False
+            result["execution_audit"] = {"invoked": [], "blocked": ["typed authorization is required before manifest comparison"]}
+            return result
+        auth_manifest = authorization.candidate_manifest_projection()
+        try:
+            constructed_projection = candidate_manifest_projection(result)
+            if (constructed_projection != auth_manifest or
+                    candidate_manifest_sha256(constructed_projection) != candidate_manifest_sha256(auth_manifest)):
+                result["mode"] = "blocked"
+                result["network_fetch_allowed"] = False
+                result["execution_audit"] = {"invoked": [], "blocked": ["constructed manifest projection/hash does not exactly match authorization"]}
+                return result
+        except (TypeError, ValueError, KeyError) as exc:
+            result["mode"] = "blocked"
+            result["network_fetch_allowed"] = False
+            result["execution_audit"] = {"invoked": [], "blocked": [f"constructed manifest projection is invalid: {exc}"]}
+            return result
         payload = acquisition_evidence if isinstance(acquisition_evidence, Mapping) else {}
         admitted, audit = admit_acquisition(
             authorization, auth_manifest, payload.get("probes", ()), payload,

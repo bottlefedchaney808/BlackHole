@@ -30,3 +30,19 @@ Implemented the atomic acquisition admission boundary. The implementation is net
 ## Scope
 
 Only Task 2 implementation/tests/report should be committed. Existing unrelated `.superpowers/sdd/progress.md` and untracked acquisition artifacts remain untouched.
+
+## Authorization Hardening Task 2 re-review fixes (2026-08-15)
+
+- Replaced role-only PRE_WINDOW acceptance with strict exactly-two observation validation: timezone-qualified ordered/distinct timestamps, both strictly before the breach on the declared local day, finite IVs, non-empty source identities, registry-present SHA-256 source hashes, explicit no-imputation, exact `iv_source_minus_iv_before` delta, and aggregation version `1`.
+- Probe admission now requires exact snapshot/calendar/policy/resolver/session/settlement/window/binding/source identities, `as_of`, candidate request identity, and authorization probe-code hash; detached or forged identities are hard gaps.
+- Admission requires all usage counters (`units`, probe/heavy/total endpoint calls, payload bytes, wall seconds, concurrency); absent counters are not zero and every configured ceiling is enforced.
+- Registry closure now binds source hashes, calendar/request/raw-payload identities, artifact hash/manifest, and evidence, rejecting shallow or cross-unit reuse.
+- `run_expansion_plan` compares the constructed manifest projection and canonical hash against authorization before calling admission or any executor.
+- Added adversarial Task 2 tests for incomplete PRE_WINDOW, forged probe identity, each missing cost counter, shallow registry, manifest mismatch, and a valid fully-evidenced PRE_WINDOW control.
+
+## Re-review verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py tests/test_dealer_exposure_authorization_task2.py tests/test_dealer_exposure_acquisition.py::test_boolean_approval_without_authorization_cannot_handoff tests/test_dealer_exposure_acquisition.py::test_output_dir_writes_auditable_artifact` — passed (33 tests).
+- `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py` — passed.
+- `git diff --check` — passed.
+- Ruff availability and the full legacy suite remain environment/contract-transition constrained; no network acquisition was executed.

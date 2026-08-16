@@ -41,6 +41,74 @@ class AcquisitionGateError(RuntimeError):
     """Raised when an approval, concurrency, or provenance gate fails."""
 
 
+def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any], registry_entry: Mapping[str, Any]) -> list[str]:
+    """Validate the complete, registered two-point PRE_WINDOW contract."""
+    errors: list[str] = []
+    observations = item.get("pre_window_observations")
+    if not isinstance(observations, list) or len(observations) != 2:
+        return ["exactly two PRE_WINDOW observations are required"]
+    cutoff = item.get("breach_window_start_prov")
+    timezone = item.get("declared_timezone")
+    try:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo(timezone) if isinstance(timezone, str) and timezone else None
+        if zone is None:
+            raise ValueError("declared_timezone is required")
+        cutoff_dt = _timestamp(cutoff)
+        day = str(manifest_unit.get("calendar_day"))
+        parsed: list[tuple[dt.datetime, float, Mapping[str, Any]]] = []
+        for index, observation in enumerate(observations):
+            if not isinstance(observation, Mapping) or observation.get("role") != _PREWINDOW:
+                errors.append(f"observation {index} must declare role PRE_WINDOW")
+                continue
+            try:
+                stamp = _timestamp(observation.get("timestamp"))
+                value = observation.get("iv")
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    raise ValueError("IV value must be finite")
+                identity = observation.get("source_identity")
+                source_hash = observation.get("source_hash")
+                if not isinstance(identity, str) or not identity.strip():
+                    raise ValueError("source identity is required")
+                if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
+                    raise ValueError("source hash must be SHA-256")
+                if stamp >= cutoff_dt:
+                    raise ValueError("observation must strictly precede breach_window_start_prov")
+                if stamp.astimezone(zone).date().isoformat() != day:
+                    raise ValueError("observation must be on the local calendar day")
+                parsed.append((stamp, float(value), observation))
+            except (TypeError, ValueError, OverflowError) as exc:
+                errors.append(f"observation {index}: {exc}")
+        if errors:
+            return errors
+        if parsed[0][0] >= parsed[1][0] or parsed[0][0] == parsed[1][0]:
+            return ["PRE_WINDOW observations must be ordered and distinct"]
+        try:
+            registered = set(validate_source_hashes(registry_entry.get("source_hashes")))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"registry source hashes are invalid: {exc}")
+            registered = set()
+        if any(obs[2]["source_hash"] not in registered for obs in parsed):
+            errors.append("PRE_WINDOW source hash is absent from the manifest/registry")
+        if item.get("imputed") is not False or item.get("no_imputation") is not True:
+            errors.append("PRE_WINDOW evidence must explicitly reject imputation")
+        if item.get("delta_iv_aggregation") != "iv_source_minus_iv_before" or str(item.get("delta_iv_aggregation_version")) != "1":
+            errors.append("PRE_WINDOW aggregation identity is unsupported")
+        delta = item.get("delta_iv_pre_window")
+        if isinstance(delta, bool) or not isinstance(delta, (int, float)) or not math.isfinite(float(delta)):
+            errors.append("delta_iv_pre_window must be finite")
+        elif not math.isclose(float(delta), parsed[1][1] - parsed[0][1], rel_tol=1e-12, abs_tol=1e-12):
+            errors.append("delta_iv_pre_window does not equal source-minus-before")
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        errors.append(str(exc))
+    return errors
+
+
+def _cost_usage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    usage = evidence.get("usage", evidence.get("cost_usage"))
+    return usage if isinstance(usage, Mapping) else None
+
+
 def _immutable(value: Any) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType({str(k): _immutable(v) for k, v in value.items()})
@@ -84,6 +152,19 @@ def admit_acquisition(
             reasons.append("candidate quota/cost ceiling exceeded")
         if cost.get("concurrency") != 1:
             reasons.append("concurrency must be exactly one")
+        usage = _cost_usage(evidence) if isinstance(evidence, Mapping) else None
+        required_usage = ("units", "probe_calls", "heavy_calls", "total_endpoint_calls", "payload_bytes", "wall_seconds", "concurrency")
+        if usage is None or any(field not in usage for field in required_usage):
+            reasons.append("complete authorization cost usage counters are required; missing is not zero")
+        else:
+            for field in required_usage:
+                value = usage[field]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    reasons.append(f"cost usage {field} is missing or invalid")
+            limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
+            for field, limit in limits.items():
+                if field in usage and usage[field] > limit:
+                    reasons.append(f"authorization cost ceiling exceeded: {field}")
         if any(u.get("held_pair_exclusion") or u.get("network") is True or u.get("imputed") is True for u in projection["units"]):
             reasons.append("held/new/live/scheduler/out-of-root or no-imputation permission violation")
         stages.append("exact candidate scope/hash/quota/cost/concurrency")
@@ -107,6 +188,21 @@ def admit_acquisition(
             expected_request["calendar_binding"] = unit.get("calendar_binding")
             if probe.get("request_parameters") != expected_request:
                 reasons.append(f"probe {key} request identity is detached")
+            evidence_identity = probe.get("evidence") if isinstance(probe.get("evidence"), Mapping) else {}
+            identity_fields = ("snapshot_hash", "calendar_hash", "calendar_policy_version", "resolver_code_hash", "session_id", "settlement_style", "window_policy", "calendar_binding_hash", "as_of", "source_hashes")
+            identity = probe.get("probe_identity") if isinstance(probe.get("probe_identity"), Mapping) else evidence_identity.get("probe_identity")
+            if not isinstance(identity, Mapping):
+                reasons.append(f"probe {key} exact identity is missing")
+            else:
+                for field in identity_fields:
+                    expected = unit.get(field)
+                    actual = identity.get(field)
+                    if expected in (None, "") or actual != expected:
+                        reasons.append(f"probe {key} identity mismatch: {field}")
+                if identity.get("request_identity", identity.get("request_parameters")) != expected_request:
+                    reasons.append(f"probe {key} candidate request identity is detached")
+            if probe.get("probe_code_hash") != expected_code_hash:
+                reasons.append(f"probe {key} code hash mismatch")
             for field in ("ticker", "expiry", "dte"):
                 if probe.get(field) != unit[field]:
                     reasons.append(f"probe {key} {field} identity mismatch")
@@ -146,18 +242,26 @@ def admit_acquisition(
                 continue
             if entry.get("candidate_key") != key or entry.get("artifact_hash") != artifact_hash or entry.get("artifact_manifest") != item.get("artifact_manifest"):
                 reasons.append(f"artifact registry closure mismatch for {key}")
-            if item.get("status") != "PASS" or item.get("imputed") is True or item.get("no_imputation") is not True:
+            closure_fields = ("source_hashes", "calendar_binding", "request_identity", "raw_payload_hash", "artifact_hash", "artifact_manifest", "evidence")
+            for field in closure_fields:
+                expected = item.get(field)
+                if field == "request_identity":
+                    expected = item.get("artifact_manifest", {}).get("request_identity")
+                if field not in entry or entry.get(field) != expected:
+                    reasons.append(f"registry closure is shallow or detached for {key}: {field}")
+            if item.get("status") != "PASS" or item.get("imputed") is not False or item.get("no_imputation") is not True:
                 reasons.append(f"evidence {key} is not an unimputed PASS")
             if item.get("calendar_binding") != manifest_unit.get("calendar_binding") or item.get("source_hashes") != manifest_unit.get("source_hashes"):
                 reasons.append(f"calendar/source hashes detached for {key}")
-            observations = item.get("pre_window_observations")
-            if not isinstance(observations, list) or len(observations) != 2 or any(not isinstance(obs, Mapping) or obs.get("role") != "PRE_WINDOW" for obs in observations):
-                reasons.append(f"incomplete PRE_WINDOW evidence for {key}")
+            for pre_reason in _strict_prewindow(item, manifest_unit, entry):
+                reasons.append(f"{key}: {pre_reason}")
             try:
                 if canonical_sha256(item.get("artifact_manifest")) != artifact_hash:
                     reasons.append(f"artifact hash mutated for {key}")
             except (TypeError, ValueError):
                 reasons.append(f"artifact manifest is not canonical for {key}")
+            if entry.get("payload_bytes") is None and not entry.get("raw_payload_hash"):
+                reasons.append(f"raw payload identity is missing for {key}")
             admitted.append(dict(item))
         stages.append("registry/source/artifact closure")
         if auth.authorization_sha256() != auth_data["authorization_sha256"]:
@@ -782,6 +886,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             "source_hashes": item.get("source_hashes"),
             "calendar_binding": item.get("calendar_binding"),
             "request_identity": item["artifact_manifest"].get("request_identity"),
+            "evidence": item,
             "payload_bytes": payloads.get(item["candidate_key"]),
             "ticker": item.get("ticker"),
             "expiry": item.get("expiry"),
