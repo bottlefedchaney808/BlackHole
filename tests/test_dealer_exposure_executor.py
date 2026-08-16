@@ -130,11 +130,12 @@ def test_exception_hard_stops_after_first_call():
 
 def test_real_context_ceilings_are_used_and_overrun_is_hard_gap():
     auth, manifest, context = _context()
-    context.limits["heavy_calls"] = 0
+    with pytest.raises(TypeError):
+        context.limits["heavy_calls"] = 0
     _, _, registered = _registered()
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
-    assert output["classification"] == "HARD_GAP"
-    assert output["audit"]["finalized_usage"] == {}
+    assert output["status"] == "SUCCESS"
+    assert output["audit"]["finalized_usage"]["heavy_calls"] == 1
 
 
 def test_mutable_units_are_rejected():

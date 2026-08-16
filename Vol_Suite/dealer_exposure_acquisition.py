@@ -41,6 +41,7 @@ _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
 _PREWINDOW = "PRE_WINDOW"
 _CONTEXT_CONSTRUCTION_TOKEN = object()
 _CONTEXT_OWNERS: dict[int, object] = {}
+_CONTEXT_STATES: dict[int, dict[str, Any]] = {}
 _CONTEXT_FIELDS = ("units", "probe_calls", "heavy_calls", "total_endpoint_calls", "payload_bytes", "wall_seconds", "concurrency")
 
 
@@ -131,26 +132,59 @@ class _AdmissionContext:
     object made with ``object.__new__`` is therefore not an admitted context.
     """
 
-    __slots__ = ("authorization", "manifest", "limits", "usage", "finalized_usage", "lock", "blocked")
+    __slots__ = ("_authorization", "_manifest")
 
     def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any], _token: object = _CONTEXT_CONSTRUCTION_TOKEN) -> None:
         if _token is not _CONTEXT_CONSTRUCTION_TOKEN:
             raise TypeError("invalid admission context construction token")
-        self.authorization = authorization
-        self.manifest = candidate_manifest_projection(manifest)
+        self._authorization = authorization
+        self._manifest = candidate_manifest_projection(manifest)
         cost = authorization.to_mapping()["cost_ceiling"]
-        self.limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
-        self.usage = {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
-        self.finalized_usage = dict(self.usage)
-        self.lock = threading.Lock()
-        self.blocked: str | None = None
+        limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
+        usage = {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
+        _CONTEXT_STATES[id(self)] = {"limits": limits, "usage": usage, "finalized_usage": dict(usage), "lock": threading.Lock(), "blocked": None, "authorization": authorization, "manifest": self._manifest}
         _CONTEXT_OWNERS[id(self)] = self
+
+    @property
+    def authorization(self) -> AcquisitionAuthorization:
+        return self._authorization
+
+    @property
+    def manifest(self) -> Mapping[str, Any]:
+        return self._manifest
+
+    def _state(self) -> dict[str, Any]:
+        state = _CONTEXT_STATES.get(id(self))
+        if not isinstance(state, dict) or state.get("authorization") is not self._authorization or state.get("manifest") != self._manifest:
+            raise AcquisitionGateError("authenticated runtime context provenance is invalid")
+        return state
+
+    @property
+    def limits(self) -> Mapping[str, Any]:
+        return MappingProxyType(dict(self._state()["limits"]))
+
+    @property
+    def usage(self) -> Mapping[str, Any]:
+        return MappingProxyType(dict(self._state()["usage"]))
+
+    @property
+    def finalized_usage(self) -> Mapping[str, Any]:
+        return MappingProxyType(dict(self._state()["finalized_usage"]))
+
+    @property
+    def lock(self) -> Any:
+        return self._state()["lock"]
+
+    @property
+    def blocked(self) -> str | None:
+        return self._state()["blocked"]
 
     def _reject(self, reason: str) -> None:
         """Raise an auditable gate error with the latest usage snapshot."""
-        self.finalized_usage = dict(self.usage)
+        state = self._state()
+        state["finalized_usage"] = dict(state["usage"])
         error = AcquisitionGateError(reason)
-        error.runtime_usage = dict(self.finalized_usage)
+        error.runtime_usage = dict(state["finalized_usage"])
         raise error
 
     def call(self, kind: str, fn: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
@@ -162,27 +196,28 @@ class _AdmissionContext:
         """
         if kind not in {"probe", "heavy"}:
             raise ValueError("authorization runtime call kind must be probe or heavy")
-        with self.lock:
-            if self.blocked:
-                self._reject(self.blocked)
-            if self.usage["concurrency"] >= self.limits["concurrency"]:
+        state = self._state()
+        with state["lock"]:
+            if state["blocked"]:
+                self._reject(state["blocked"])
+            if state["usage"]["concurrency"] >= state["limits"]["concurrency"]:
                 # A contending caller is rejected without poisoning the context;
                 # the in-flight call releases the slot in its finally block.
-                if self.limits["concurrency"] <= 0:
-                    self.blocked = "authorization cost ceiling exceeded: concurrency"
+                if state["limits"]["concurrency"] <= 0:
+                    state["blocked"] = "authorization cost ceiling exceeded: concurrency"
                 self._reject("authorization cost ceiling exceeded: concurrency")
-            projected = dict(self.usage)
+            projected = dict(state["usage"])
             projected[f"{kind}_calls"] += 1
             projected["total_endpoint_calls"] += 1
             projected["units"] += 1
             projected["concurrency"] = 1
-            for field, limit in self.limits.items():
+            for field, limit in state["limits"].items():
                 if field in projected and projected[field] > limit:
-                    self.blocked = f"authorization cost ceiling exceeded: {field}"
-                    self._reject(self.blocked)
+                    state["blocked"] = f"authorization cost ceiling exceeded: {field}"
+                    self._reject(state["blocked"])
             # Atomic commit: no permitted call can be observed without its
             # probe/heavy/total/unit reservation already present in usage.
-            self.usage.update(projected)
+            state["usage"].update(projected)
         started = time.perf_counter()
         value: Any = None
         failure: tuple[type[BaseException], BaseException, Any] | None = None
@@ -193,16 +228,16 @@ class _AdmissionContext:
         finally:
             elapsed = time.perf_counter() - started
             size = len(canonical_json_bytes(value)) if value is not None else 0
-            with self.lock:
-                self.usage["wall_seconds"] += elapsed
-                self.usage["payload_bytes"] += size
-                self.usage["concurrency"] = 0
-                if self.usage["wall_seconds"] > self.limits["wall_seconds"]:
-                    self.blocked = "authorization cost ceiling exceeded: wall_seconds"
-                elif self.usage["payload_bytes"] > self.limits["payload_bytes"]:
-                    self.blocked = "authorization cost ceiling exceeded: payload_bytes"
-                finalized = dict(self.usage)
-                self.finalized_usage = finalized
+            with state["lock"]:
+                state["usage"]["wall_seconds"] += elapsed
+                state["usage"]["payload_bytes"] += size
+                state["usage"]["concurrency"] = 0
+                if state["usage"]["wall_seconds"] > state["limits"]["wall_seconds"]:
+                    state["blocked"] = "authorization cost ceiling exceeded: wall_seconds"
+                elif state["usage"]["payload_bytes"] > state["limits"]["payload_bytes"]:
+                    state["blocked"] = "authorization cost ceiling exceeded: payload_bytes"
+                finalized = dict(state["usage"])
+                state["finalized_usage"] = finalized
         if failure is not None:
             _, exc, traceback = failure
             try:
@@ -210,8 +245,8 @@ class _AdmissionContext:
             except (AttributeError, TypeError):
                 pass
             raise exc.with_traceback(traceback)
-        if self.blocked:
-            self._reject(self.blocked)
+        if state["blocked"]:
+            self._reject(state["blocked"])
         return value, finalized
 
 
@@ -219,23 +254,24 @@ def _context_is_owned_and_initialized(context: Any, authorization: AcquisitionAu
     """Validate private provenance and the complete initialized runtime state."""
     if type(context) is not _AdmissionContext or _CONTEXT_OWNERS.get(id(context)) is not context:
         return False
-    if context.authorization is not authorization or not isinstance(context.lock, type(threading.Lock())):
+    state = _CONTEXT_STATES.get(id(context))
+    if not isinstance(state, dict) or state.get("authorization") is not authorization:
         return False
-    if not isinstance(context.manifest, Mapping) or context.manifest != authorization.candidate_manifest_projection():
+    if not isinstance(state.get("lock"), type(threading.Lock())):
         return False
-    if not isinstance(context.limits, dict) or not isinstance(context.usage, dict) or not isinstance(context.finalized_usage, dict):
+    if context.authorization is not authorization or context.manifest != authorization.candidate_manifest_projection():
         return False
     try:
         ceiling = authorization.to_mapping()["cost_ceiling"]
         expected_limits = {"units": ceiling["max_units"], "probe_calls": ceiling["max_probe_calls"], "heavy_calls": ceiling["max_heavy_calls"], "total_endpoint_calls": ceiling["max_total_endpoint_calls"], "payload_bytes": ceiling["max_payload_bytes"], "wall_seconds": ceiling["max_wall_seconds"], "concurrency": ceiling["concurrency"]}
-        if context.limits != expected_limits:
+        if state.get("limits") != expected_limits or state.get("manifest") != context.manifest:
             return False
-        for state in (context.usage, context.finalized_usage):
-            if set(state) != set(_CONTEXT_FIELDS) or any(type(value) not in (int, float) or value < 0 for value in state.values()):
+        for counters in (state.get("usage"), state.get("finalized_usage")):
+            if not isinstance(counters, dict) or set(counters) != set(_CONTEXT_FIELDS) or any(type(value) not in (int, float) or value < 0 for value in counters.values()):
                 return False
-        if context.usage["wall_seconds"] != float(context.usage["wall_seconds"]):
+        if state["usage"]["wall_seconds"] != float(state["usage"]["wall_seconds"]):
             return False
-        if context.blocked is not None and (not isinstance(context.blocked, str) or not context.blocked):
+        if state.get("blocked") is not None and (not isinstance(state["blocked"], str) or not state["blocked"]):
             return False
     except (TypeError, ValueError, KeyError, AttributeError):
         return False
@@ -258,43 +294,30 @@ def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) ->
 
 
 def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization) -> tuple[bool, dict[str, Any], str]:
-    """Validate one named adapter against the exact authorization policy."""
-    if executor is None or not callable(executor) or not isinstance(authorization, AcquisitionAuthorization):
-        return False, {}, "typed named adapter and authorization are required"
-    policy = authorization.to_mapping()["executor_policy"]
-    registration = getattr(executor, "_registration", None)
-    if registration is not None and all(hasattr(registration, field) for field in ("registry_key", "identity", "endpoint", "method", "scope", "family")):
+    """Validate only a registry-created opaque adapter handle.
+
+    Metadata on a caller-supplied callable is never authorization evidence.  The
+    full RestrictedExecutor constructor is the shared trust-boundary check used
+    by expansion and the legacy acquisition/probe entry points.
+    """
+    if executor is None or not isinstance(authorization, AcquisitionAuthorization):
+        return False, {}, "registered adapter handle and authorization are required"
+    try:
+        from .dealer_exposure_executor import RegisteredAdapter, RestrictedExecutor
+        if not isinstance(executor, RegisteredAdapter):
+            return False, {}, "unregistered adapter handle is forbidden"
+        RestrictedExecutor(executor, authorization)
+        registration = executor._registration
         identity = {"registry_key": registration.registry_key, "entrypoint": registration.identity, "endpoint": registration.endpoint, "request_method": registration.method, "scope_binding": registration.scope, "family": registration.family}
-        paths = tuple(policy["allowed_endpoint_paths"])
-        family_paths = {str(path).lstrip("/"): str(path) for path in paths}
-        if family_paths.get(identity["family"]) != identity["endpoint"] or identity["family"] not in tuple(policy["allowed_endpoint_families"]):
-            return False, identity, "registered endpoint family/path mapping is not exact"
-        if identity["endpoint"] not in paths or identity["request_method"] not in tuple(str(method).upper() for method in policy["allowed_request_methods"]):
-            return False, identity, "registered endpoint or method is outside authorization scope"
-        if identity["scope_binding"] != policy["scope_binding"]:
-            return False, identity, "registered scope binding is outside authorization scope"
-        return policy["network_fetch_allowed"] is True, identity, "authorization does not permit network fetch"
-    identity = {
-        "executor_id": getattr(executor, "executor_id", None),
-        "entrypoint": getattr(executor, "entrypoint", None),
-        "endpoint": getattr(executor, "endpoint", None),
-        "request_method": getattr(executor, "request_method", None),
-        "scope_binding": getattr(executor, "scope_binding", None),
-    }
-    if any(not isinstance(value, str) or not value.strip() for value in identity.values()):
-        return False, identity, "executor identity/scope binding is incomplete or untrusted"
-    if identity["executor_id"] != policy["allowed_executor_id"] or identity["entrypoint"] != policy["allowed_executor_entrypoint"]:
-        return False, identity, "executor identity is not authorized"
-    # Families are descriptive metadata only; require exact enumerated paths.
-    if identity["endpoint"] not in tuple(policy["allowed_endpoint_paths"]):
-        return False, identity, "executor endpoint path is outside authorization scope"
-    if identity["request_method"].upper() not in tuple(method.upper() for method in policy["allowed_request_methods"]):
-        return False, identity, "executor request method is outside authorization scope"
-    if identity["scope_binding"] != policy["scope_binding"]:
-        return False, identity, "executor scope binding is outside authorization scope"
-    if policy["network_fetch_allowed"] is not True:
-        return False, identity, "authorization does not permit network fetch"
-    return True, identity, ""
+        return True, identity, ""
+    except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
+        return False, {}, str(exc)[:200] or "registered adapter trust checks failed"
+
+
+def _attest_registered(executor: Any, authorization: AcquisitionAuthorization) -> None:
+    """Run the shared registry/policy/code-hash checks immediately before dispatch."""
+    from .dealer_exposure_executor import RestrictedExecutor
+    RestrictedExecutor(executor, authorization)._attest_entrypoint()
 
 
 def _immutable(value: Any) -> Any:
@@ -954,7 +977,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     if dry_run or probe_only or approval is not True or probe_fetcher is None:
         return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP" if probe_fetcher is None and approval is True and not (dry_run or probe_only) else "INELIGIBLE", "reason": "probe_not_run", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False} for u in ordered]
-    if not isinstance(authorization_context, _AdmissionContext) or authorization_context.authorization is not authorization:
+    if not _context_is_owned_and_initialized(authorization_context, authorization) or authorization_context.authorization is not authorization:
         return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": "admitted authorization context is required; boolean approval is not authorization", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
     executor_ok, _, executor_reason = _authorized_executor(probe_fetcher, authorization)
     if not executor_ok:
@@ -970,6 +993,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
             def dispatch_probe() -> Any:
                 nonlocal invoked
                 invoked = True
+                _attest_registered(probe_fetcher, authorization)
                 return probe_fetcher(request)
 
             response, runtime_usage = authorization_context.call("probe", dispatch_probe)
@@ -1112,6 +1136,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 # raised fetcher still proves that acquisition was attempted.
                 _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
                 network_executed = True
+                _attest_registered(fetcher, authorization)
                 payload, runtime_usage = authorization_context.call("heavy", lambda: fetcher(unit))
                 item = _unit_from_payload(unit, payload)
                 status, reason = item["status"], item["reason"]

@@ -71,3 +71,16 @@ Review-fix focused executor tests are green: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 p
 ## Commit
 
 The final Task 4-only commit is the commit carrying this report; its short hash is returned with the task status.
+
+## Trust-boundary bypass closure (2026-08-16)
+
+- Legacy `run_availability_probes` and `execute_sequential_acquisition` now reject every caller-supplied callable unless it is an `AdapterRegistry`-created opaque `RegisteredAdapter`; self-declared executor metadata is no longer inspected or accepted.
+- Those paths use the same RestrictedExecutor registration/policy validation and dispatch-time entrypoint code-hash attestation immediately before their atomic runtime-context dispatch. Expansion continues to use RestrictedExecutor directly, so all three paths share the boundary.
+- `_AdmissionContext` counters, finalized snapshots, limits, lock, and blocked state are held in module-private state and exposed only as immutable snapshots. Public reset/mutation attempts cannot alter dispatch state; ownership/provenance and authorization consistency are checked before probes or executor dispatch.
+- Added/updated regressions cover metadata-only probe/acquisition rejection, immutable counter/limit exposure, forged context rejection, post-registration code mutation, and valid registered control. Trusted adapters remain explicitly in-process and are not claimed to be sandboxed.
+
+## Closure verification (2026-08-16)
+
+- Plugin-isolated Task 4 executor + Task 2 authorization + calendar tests: **97 passed**.
+- Stage-2/backtest collection was attempted but blocked by the isolated runner's missing `scipy` dependency; no project `.venv` was present.
+- `py_compile` and `git diff --check`: **passed**. Ruff was attempted and is unavailable on PATH (`ruff: command not found`).

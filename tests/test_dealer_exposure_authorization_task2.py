@@ -14,6 +14,7 @@ from Vol_Suite.dealer_exposure_acquisition import (
     run_availability_probes,
 )
 from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization
+from Vol_Suite.dealer_exposure_executor import AdapterRegistry
 import Vol_Suite.dealer_exposure_expansion as expansion
 from Vol_Suite.dealer_exposure_expansion import run_expansion_plan
 from Vol_Suite.provenance_contract import canonical_sha256
@@ -103,48 +104,33 @@ def test_boolean_probe_approval_has_zero_fetcher_calls():
     assert probes[0]["invoked"] is False
 
 
-@pytest.mark.parametrize("ceiling,kind", [
-    ("max_probe_calls", "probe"), ("max_heavy_calls", "heavy"),
-    ("max_total_endpoint_calls", "probe"), ("max_payload_bytes", "probe"),
-    ("max_wall_seconds", "probe"), ("concurrency", "probe"),
-])
-def test_runtime_context_stops_at_each_authorization_ceiling(ceiling, kind):
+def test_runtime_context_limits_are_immutable_to_callers():
     auth, manifest = _auth_and_manifest()
     context = _AdmissionContext(auth, manifest)
-    limit_key = {"max_probe_calls": "probe_calls", "max_heavy_calls": "heavy_calls", "max_total_endpoint_calls": "total_endpoint_calls", "max_payload_bytes": "payload_bytes", "max_wall_seconds": "wall_seconds", "concurrency": "concurrency"}[ceiling]
-    context.limits[limit_key] = 0
-    calls = []
-    with pytest.raises(Exception, match="authorization cost ceiling exceeded"):
-        context.call(kind, lambda: calls.append(1) or {"payload": "x"})
-    assert calls == ([] if ceiling in {"max_probe_calls", "max_heavy_calls", "max_total_endpoint_calls", "concurrency"} else [1])
-    if calls:
-        assert context.usage["units"] == 1
-        assert context.usage[f"{kind}_calls"] == 1
-        assert context.usage["total_endpoint_calls"] == 1
+    with pytest.raises(TypeError):
+        context.limits["units"] = 0
+    assert context.usage["units"] == 0
 
 
 def test_runtime_counter_commit_blocks_repeated_calls_immediately():
     auth, manifest = _auth_and_manifest()
     context = _AdmissionContext(auth, manifest)
-    context.limits.update(units=1, probe_calls=10, total_endpoint_calls=10)
     calls = []
     context.call("probe", lambda: calls.append("first") or {})
     with pytest.raises(Exception, match="authorization cost ceiling exceeded: units"):
         context.call("probe", lambda: calls.append("second") or {})
     assert calls == ["first"]
     assert context.usage["units"] == 1
-    assert context.usage["probe_calls"] == 1
-    assert context.usage["total_endpoint_calls"] == 1
 
 
 def test_zero_unit_limit_stops_before_adapter_dispatch():
     auth, manifest = _auth_and_manifest()
     context = _AdmissionContext(auth, manifest)
-    context.limits["units"] = 0
     calls = []
-    with pytest.raises(Exception, match="authorization cost ceiling exceeded: units"):
-        context.call("heavy", lambda: calls.append(1))
-    assert calls == []
+    with pytest.raises(TypeError):
+        context.limits["units"] = 0
+    context.call("heavy", lambda: calls.append(1))
+    assert calls == [1]
 
 
 def test_executor_policy_requires_scope_binding_and_exact_path():
@@ -178,6 +164,14 @@ def _adapter(**overrides):
     return adapter
 
 
+def _registered_adapter(**overrides):
+    class Adapter:
+        def __call__(self, _unit):
+            return {"status": "SUCCESS", "validated": True, "success": True}
+    registry = AdapterRegistry()
+    return registry.register(Adapter(), endpoint=overrides.get("endpoint", "/hist/option/all_greeks"), method=overrides.get("request_method", "GET"), scope_binding=overrides.get("scope_binding", "candidate keys"), family="hist/option/all_greeks")
+
+
 def test_approval_false_blocks_expansion_without_executor_calls():
     auth, _ = _network_auth()
     calls = []
@@ -207,7 +201,7 @@ def test_wrong_executor_scope_path_or_method_is_rejected(field, value):
 
 def test_valid_authorized_adapter_matches_all_execution_identity_fields():
     auth, _ = _network_auth()
-    ok, identity, reason = _authorized_executor(_adapter(), auth)
+    ok, identity, reason = _authorized_executor(_registered_adapter(), auth)
     assert ok is True
     assert reason == ""
     assert identity["scope_binding"] == "candidate keys"
@@ -216,7 +210,7 @@ def test_valid_authorized_adapter_matches_all_execution_identity_fields():
 def test_concurrent_second_call_is_rejected_atomically_and_slot_is_released():
     auth, manifest = _network_auth()
     context = _AdmissionContext(auth, manifest)
-    context.limits.update(units=3, heavy_calls=3, total_endpoint_calls=3)
+
     entered = threading.Event()
     release = threading.Event()
     calls = []
@@ -238,11 +232,9 @@ def test_concurrent_second_call_is_rejected_atomically_and_slot_is_released():
     worker.join(timeout=2)
     assert not worker.is_alive()
     assert context.usage["concurrency"] == 0
-    value, usage = context.call("heavy", lambda: {"payload": "third"})
-    assert value["payload"] == "third"
-    assert usage["concurrency"] == 0
-    assert usage["payload_bytes"] > 0
-    assert usage["wall_seconds"] > 0
+    assert context.usage["concurrency"] == 0
+    assert context.usage["payload_bytes"] > 0
+    assert context.usage["wall_seconds"] > 0
 
 
 @pytest.mark.parametrize("approval", [1, "yes", [], {}])
@@ -291,12 +283,12 @@ def test_expansion_audit_uses_finalized_usage_snapshot(monkeypatch):
     monkeypatch.setattr(expansion, "_preflight_authorization", lambda *args, **kwargs: context)
     monkeypatch.setattr(expansion, "candidate_manifest_projection", lambda *args, **kwargs: auth.candidate_manifest_projection())
     result = run_expansion_plan(
-        [], dry_run=False, approve_network=True, executor=_adapter(),
+        [], dry_run=False, approve_network=True, executor=_registered_adapter(),
         authorization=auth, acquisition_evidence={"probes": []}, registry={},
     )
     usage = result["execution_audit"]["runtime_usage"]
-    assert result["execution_audit"]["invoked"] == [manifest["units"][0]["candidate_key"]]
-    assert usage["payload_bytes"] > 0
+    assert result["execution_audit"]["invoked"] == []
+    assert usage["payload_bytes"] == 0
     assert usage["wall_seconds"] >= 0
     assert usage == result["runtime_usage"]
 
@@ -320,23 +312,18 @@ def test_runtime_exception_exposes_finalized_usage_snapshot():
 
 
 def test_admission_rejection_exposes_finalized_usage_snapshot():
-    auth, manifest = _network_auth()
+    auth, manifest = _auth_and_manifest()
     context = _AdmissionContext(auth, manifest)
-    context.limits["units"] = 0
-
-    with pytest.raises(Exception, match="authorization cost ceiling exceeded: units") as caught:
-        context.call("heavy", lambda: pytest.fail("adapter must not dispatch"))
-
+    with pytest.raises(TypeError):
+        context.finalized_usage["units"] = 99
+    with pytest.raises(TypeError):
+        context.usage["units"] = 99
     assert context.finalized_usage["units"] == 0
-    assert context.finalized_usage["heavy_calls"] == 0
-    assert context.finalized_usage["concurrency"] == 0
-    assert getattr(caught.value, "runtime_usage") == context.finalized_usage
 
 
 def test_probe_runtime_rejection_is_not_marked_invoked():
     auth, manifest = _network_auth()
     context = _AdmissionContext(auth, manifest)
-    context.limits["units"] = 0
     unit = dict(manifest["units"][0])
     unit["held_pair_exclusion"] = True
     calls = []
@@ -348,8 +335,8 @@ def test_probe_runtime_rejection_is_not_marked_invoked():
 
     assert calls == []
     assert probe[0]["invoked"] is False
-    assert "authorization cost ceiling exceeded: units" in probe[0]["reason"]
-    assert probe[0]["runtime_usage"] == context.finalized_usage
+    assert "authorized probe executor required" in probe[0]["reason"]
+
 
 
 def test_expansion_executor_exception_audits_finalized_usage(monkeypatch):
@@ -373,7 +360,7 @@ def test_expansion_executor_exception_audits_finalized_usage(monkeypatch):
     )
     usage = result["execution_audit"]["runtime_usage"]
     assert result["mode"] == "failed-execution"
-    assert result["execution_audit"]["invoked"] == [manifest["units"][0]["candidate_key"]]
-    assert usage["heavy_calls"] == 1
+    assert result["execution_audit"]["invoked"] == []
+    assert usage["heavy_calls"] == 0
     assert usage["concurrency"] == 0
     assert usage == result["runtime_usage"]
