@@ -48,6 +48,7 @@ from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 # --------------------------------------------------------------------------
@@ -95,7 +96,17 @@ SUITE_ROOTS = orchestrator.SUITE_ROOTS
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, 'templates'))
 
-app = FastAPI(title='FinancialDevelopment Dashboard')
+tunnel_manager = TunnelManager()
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    # Best-effort cleanup so a tunnel never outlives the dashboard process.
+    await tunnel_manager.shutdown()
+
+
+app = FastAPI(title='FinancialDevelopment Dashboard', lifespan=_lifespan)
 
 # Rate limiter: max 1 run per 60s per IP, max 10 concurrent
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
@@ -2242,6 +2253,33 @@ def health():
                       if v.get('status') in ('queued', 'running')],
         'available_data_sources': orchestrator.discover_adapters(),
     }
+
+
+# --------------------------------------------------------------------------
+# /share -- Cloudflare quick-tunnel control
+# --------------------------------------------------------------------------
+
+@app.get('/share/status')
+async def share_status():
+    """Current tunnel state: running / url / state / pid / last_error."""
+    return tunnel_manager.status()
+
+
+@app.post('/share/start')
+async def share_start():
+    """Start a quick tunnel. 409 if cloudflared missing; 500 on start error."""
+    try:
+        return await tunnel_manager.start()
+    except TunnelUnavailable as e:
+        return JSONResponse({'error': str(e)}, status_code=409)
+    except TunnelStartError as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/share/stop')
+async def share_stop():
+    """Stop the running tunnel. Idempotent."""
+    return await tunnel_manager.stop()
 
 
 # ──────────────────────────────────────────────────────────────────────────

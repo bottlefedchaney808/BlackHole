@@ -211,3 +211,99 @@ def test_concurrent_start_spawns_exactly_one_subprocess(monkeypatch):
 
     assert calls["count"] == 1
     assert results[0]["url"] == results[1]["url"]
+
+
+# ---------------------------------------------------------------------------
+# Route tests (FastAPI TestClient with a fake TunnelManager)
+# ---------------------------------------------------------------------------
+
+from fastapi.testclient import TestClient
+
+import dashboard.app as app_module
+
+
+class _FakeManager:
+    def __init__(self):
+        self.status_result = {
+            "running": False, "url": None, "state": "idle",
+            "started_at": None, "pid": None, "last_error": None,
+        }
+        self.start_exc = None
+        self.started = 0
+        self.stopped = 0
+
+    def status(self):
+        return dict(self.status_result)
+
+    async def start(self):
+        self.started += 1
+        if self.start_exc is not None:
+            raise self.start_exc
+        self.status_result = {
+            "running": True,
+            "url": "https://foo.example.trycloudflare.com",
+            "state": "running",
+            "started_at": "2026-08-15T00:00:00+00:00",
+            "pid": 1,
+            "last_error": None,
+        }
+        return self.status()
+
+    async def stop(self):
+        self.stopped += 1
+        self.status_result["running"] = False
+        self.status_result["state"] = "idle"
+        self.status_result["url"] = None
+        return self.status()
+
+
+@pytest.fixture
+def fake_mgr(monkeypatch):
+    mgr = _FakeManager()
+    monkeypatch.setattr(app_module, "tunnel_manager", mgr)
+    return mgr
+
+
+def test_share_status_shape(fake_mgr):
+    client = TestClient(app_module.app)
+    resp = client.get("/share/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["running"] is False
+    assert body["url"] is None
+    assert body["state"] == "idle"
+
+
+def test_share_start_returns_200_and_url(fake_mgr):
+    client = TestClient(app_module.app)
+    resp = client.post("/share/start")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["running"] is True
+    assert body["url"] == "https://foo.example.trycloudflare.com"
+
+
+def test_share_start_409_when_unavailable(fake_mgr):
+    fake_mgr.start_exc = TunnelUnavailable("cloudflared not found on PATH.")
+    client = TestClient(app_module.app)
+    resp = client.post("/share/start")
+    assert resp.status_code == 409
+    assert "cloudflared" in resp.json()["error"]
+
+
+def test_share_start_500_when_start_error(fake_mgr):
+    fake_mgr.start_exc = TunnelStartError("fatal: boom")
+    client = TestClient(app_module.app)
+    resp = client.post("/share/start")
+    assert resp.status_code == 500
+    assert "boom" in resp.json()["error"]
+
+
+def test_share_stop_idempotent(fake_mgr):
+    client = TestClient(app_module.app)
+    r1 = client.post("/share/stop")
+    r2 = client.post("/share/stop")
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r1.json()["running"] is False
+    assert fake_mgr.stopped == 2
