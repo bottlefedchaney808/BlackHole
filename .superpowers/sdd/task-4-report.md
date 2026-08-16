@@ -44,7 +44,7 @@ Unrelated pre-existing worktree artifacts were not staged.
 ## Review-fix closure (2026-08-15)
 
 - Replaced metadata-only adapter admission with `AdapterRegistry`/opaque `RegisteredAdapter` handles. Registration attests the exact `type(adapter).__call__` identity and marshalled code hash; unregistered callables, functions, methods, and malicious self-declared metadata fail closed. The controlled adapter remains in-process and is not represented as a sandbox against side effects inside trusted code.
-- RestrictedExecutor now accepts only the exact sealed `_AdmissionContext` class, verifies ownership, seal, atomic `call` implementation, lock, counters, and ceilings. Duck-typed/fabricated contexts return `FAILED_EXECUTION`/`HARD_GAP` before dispatch.
+- RestrictedExecutor now accepts only the exact privately owned `_AdmissionContext` class, verifies ownership, atomic `call` implementation, lock, counters, and ceilings. Duck-typed/fabricated contexts return `FAILED_EXECUTION`/`HARD_GAP` before dispatch.
 - Exact family-to-path mapping, method, and scope binding are enforced. Adapter-returned `calls` are not authorization evidence; the executor emits a receipt for each successful dispatch.
 - Successful receipts require source hashes, artifact hash, registry key, authorization hash, manifest hash, PRE_WINDOW evidence hashes, request/response hashes, and the registered entrypoint code hash. Missing prerequisites fail closed. Exceptions and ceiling overruns remain hard stops.
 - Added adversarial coverage for forged contexts, unregistered callables, metadata mismatch, missing receipt prerequisites, family/path/method/scope mismatches, hash audit, malicious self-reporting, and a valid registered fake adapter.
@@ -53,6 +53,20 @@ Unrelated pre-existing worktree artifacts were not staged.
 
 Review-fix focused executor tests are green: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_executor.py` = **17 passed**. The requested combined executor/Task 2/calendar/stage2 slice produced **69 passed, 4 failed**: two Task 2 assertions still expect metadata-only adapters to dispatch, and two calendar tests exercise the pre-existing authorization-required gate without an authorization object. These are fail-closed transition failures, not weakened. `py_compile` and `git diff --check` passed; Ruff is unavailable on PATH.
 
+## Final trust-boundary closure (2026-08-15)
+
+- Removed the public `_AdmissionContext._SEAL` marker. Context provenance is now recorded in a private module owner registry keyed to object identity; the exact initialized lock, manifest, cost ceilings, usage counters, finalized snapshot, and blocking state are revalidated against the authorization before dispatch. An `object.__new__(_AdmissionContext)` context has no owner entry and hard-fails before `context.call`, producing zero adapter dispatch.
+- `_Registration` construction requires a private module token and an `AdapterRegistry` owner. `RegisteredAdapter` handles are recorded in a private owner registry and `RestrictedExecutor` requires both handle membership and exact registration membership in the owning registry. Directly fabricated handles therefore fail during executor construction with zero dispatch.
+- Immediately before every adapter dispatch, the executor recomputes the current `type(adapter).__call__.__code__` hash and exact entrypoint identity and compares them with registration. Post-registration callable mutation hard-fails before reservation/dispatch.
+- The trusted adapter boundary remains in-process. These controls authenticate the registered boundary and its receipts; they do not claim to sandbox malicious behavior inside a trusted adapter.
+- New adversarial/control regressions cover object construction forgery, direct handle fabrication, post-registration entrypoint mutation, and valid registry/context dispatch.
+
+## Final verification
+
+- `PYTHONPATH=. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_executor.py -p no:cacheprovider` — **21 passed**.
+- Task 2/calendar slice: **63 passed, 2 expected legacy transition failures** (both stale tests expect direct metadata-only adapter dispatch).
+- The broader executor/Task 2/calendar/expansion slice remains fail-closed with legacy expansion tests that omit required authorization; those failures are not authorization bypasses.
+- `py_compile`, Ruff availability, and `git diff --check` status are reported with the final task status.
 
 ## Commit
 

@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from .dealer_exposure_acquisition import _AdmissionContext
+from .dealer_exposure_acquisition import _AdmissionContext, _context_is_owned_and_initialized
 from .dealer_exposure_authorization import AcquisitionAuthorization
 from .provenance_contract import canonical_json_bytes, sha256_bytes, validate_source_hashes
 
@@ -24,10 +24,17 @@ class ExecutorFailure(RuntimeError):
     """A static executor-policy or immutable-handoff violation."""
 
 
+_REGISTRY_CONSTRUCTION_TOKEN = object()
+_REGISTRATION_OWNERS: dict[int, "AdapterRegistry"] = {}
+_HANDLE_OWNERS: dict[int, "AdapterRegistry"] = {}
+
+
 class _Registration:
     __slots__ = ("adapter", "registry_key", "code_hash", "identity", "endpoint", "method", "scope", "family", "_token")
 
-    def __init__(self, adapter: Any, *, endpoint: str, method: str, scope: str, family: str) -> None:
+    def __init__(self, adapter: Any, *, endpoint: str, method: str, scope: str, family: str, _token: object = None, _owner: "AdapterRegistry" = None) -> None:
+        if _token is not _REGISTRY_CONSTRUCTION_TOKEN or _owner is None:
+            raise ExecutorFailure("registration construction is private to AdapterRegistry")
         if not callable(adapter) or inspect.isfunction(adapter) or inspect.ismethod(adapter):
             raise ExecutorFailure("only callable adapter objects may be registered")
         if not all(isinstance(v, str) and v.strip() for v in (endpoint, method, scope, family)):
@@ -41,16 +48,20 @@ class _Registration:
         self.endpoint, self.method, self.scope, self.family = endpoint, method.upper(), scope, family
         self.registry_key = secrets.token_hex(32)
         self._token = object()
+        _REGISTRATION_OWNERS[id(self)] = _owner
 
 
 class RegisteredAdapter:
     """Opaque handle returned by :meth:`AdapterRegistry.register`."""
     __slots__ = ("_registration",)
 
-    def __init__(self, registration: _Registration, token: object) -> None:
+    def __init__(self, registration: _Registration, token: object, owner: "AdapterRegistry") -> None:
+        if not isinstance(registration, _Registration) or _REGISTRATION_OWNERS.get(id(registration)) is not owner:
+            raise ExecutorFailure("registration is not owned by AdapterRegistry")
         if token is not registration._token:
             raise ExecutorFailure("invalid adapter registration token")
         self._registration = registration
+        _HANDLE_OWNERS[id(self)] = owner
 
     def __call__(self, unit: Mapping[str, Any]) -> Any:
         return self._registration.adapter(unit)
@@ -64,9 +75,9 @@ class AdapterRegistry:
         self._entries: dict[str, _Registration] = {}
 
     def register(self, adapter: Any, *, endpoint: str, method: str, scope_binding: str, family: str) -> RegisteredAdapter:
-        entry = _Registration(adapter, endpoint=endpoint, method=method, scope=scope_binding, family=family)
+        entry = _Registration(adapter, endpoint=endpoint, method=method, scope=scope_binding, family=family, _token=_REGISTRY_CONSTRUCTION_TOKEN, _owner=self)
         self._entries[entry.registry_key] = entry
-        return RegisteredAdapter(entry, entry._token)
+        return RegisteredAdapter(entry, entry._token, self)
 
 
 def _valid_hash(value: Any) -> bool:
@@ -83,6 +94,11 @@ class RestrictedExecutor:
             raise ExecutorFailure("authenticated authorization is required")
         if not isinstance(adapter, RegisteredAdapter) or not isinstance(adapter._registration, _Registration):
             raise ExecutorFailure("unregistered adapter is forbidden; register it at the controlled boundary")
+        if _HANDLE_OWNERS.get(id(adapter)) is None:
+            raise ExecutorFailure("fabricated adapter handle is forbidden")
+        owner = _HANDLE_OWNERS[id(adapter)]
+        if _REGISTRATION_OWNERS.get(id(adapter._registration)) is not owner or owner._entries.get(adapter._registration.registry_key) is not adapter._registration:
+            raise ExecutorFailure("adapter handle is not registry-owned")
         self.registration = adapter._registration
         policy = authorization.to_mapping()["executor_policy"]
         paths = tuple(policy["allowed_endpoint_paths"])
@@ -113,17 +129,20 @@ class RestrictedExecutor:
         return True
 
     def _check_context(self, context: Any) -> None:
-        # Exact type and exact method implementation close the duck-typing gap.
-        if type(context) is not _AdmissionContext or getattr(context, "_executor_seal", None) is not _AdmissionContext._SEAL:
+        if not _context_is_owned_and_initialized(context, self.authorization):
             raise ExecutorFailure("authenticated runtime context is required")
-        if context.authorization is not self.authorization:
-            raise ExecutorFailure("runtime context ownership is detached")
-        if context.manifest != self.authorization.candidate_manifest_projection():
-            raise ExecutorFailure("runtime context manifest is detached")
         if context.call.__func__ is not _AdmissionContext.call:
             raise ExecutorFailure("runtime context atomic call implementation is detached")
-        if not isinstance(context.limits, dict) or not isinstance(context.usage, dict) or not hasattr(context, "lock"):
-            raise ExecutorFailure("runtime context atomic counters are incomplete")
+
+    def _attest_entrypoint(self) -> None:
+        entrypoint = getattr(type(self.registration.adapter), "__call__", None)
+        code = getattr(entrypoint, "__code__", None)
+        if code is None:
+            raise ExecutorFailure("registered adapter entrypoint is no longer attestable")
+        identity = f"{type(self.registration.adapter).__module__}:{type(self.registration.adapter).__qualname__}.__call__"
+        live_hash = hashlib.sha256(marshal.dumps(code)).hexdigest()
+        if identity != self.registration.identity or live_hash != self.registration.code_hash:
+            raise ExecutorFailure("registered adapter entrypoint attestation changed")
 
     def _check_units(self, units: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
         if not isinstance(units, tuple) or not self._immutable(units):
@@ -176,6 +195,7 @@ class RestrictedExecutor:
             audit["requests"].append(request)
             try:
                 audit["invocations"].append(unit["candidate_key"])
+                self._attest_entrypoint()
                 result, _ = context.call("heavy", lambda u=unit: self.adapter(u))
                 if not isinstance(result, Mapping):
                     raise ExecutorFailure("adapter response is not a mapping")

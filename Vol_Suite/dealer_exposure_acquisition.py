@@ -39,6 +39,9 @@ from .dealer_exposure_authorization import AcquisitionAuthorization, candidate_m
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
 _PREWINDOW = "PRE_WINDOW"
+_CONTEXT_CONSTRUCTION_TOKEN = object()
+_CONTEXT_OWNERS: dict[int, object] = {}
+_CONTEXT_FIELDS = ("units", "probe_calls", "heavy_calls", "total_endpoint_calls", "payload_bytes", "wall_seconds", "concurrency")
 
 
 class AcquisitionGateError(RuntimeError):
@@ -121,13 +124,18 @@ def _cost_usage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
 
 class _AdmissionContext:
-    """Opaque token minted only after static authorization preflight."""
+    """Runtime authorization state owned by this module's admission factory.
 
-    _SEAL = object()
-    __slots__ = ("authorization", "manifest", "limits", "usage", "finalized_usage", "lock", "blocked", "_executor_seal")
+    The construction token and owner table are deliberately module-private.  The
+    executor never treats a public marker attribute as provenance; an exact-type
+    object made with ``object.__new__`` is therefore not an admitted context.
+    """
 
-    def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any]) -> None:
-        self._executor_seal = self._SEAL
+    __slots__ = ("authorization", "manifest", "limits", "usage", "finalized_usage", "lock", "blocked")
+
+    def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any], _token: object = _CONTEXT_CONSTRUCTION_TOKEN) -> None:
+        if _token is not _CONTEXT_CONSTRUCTION_TOKEN:
+            raise TypeError("invalid admission context construction token")
         self.authorization = authorization
         self.manifest = candidate_manifest_projection(manifest)
         cost = authorization.to_mapping()["cost_ceiling"]
@@ -136,6 +144,7 @@ class _AdmissionContext:
         self.finalized_usage = dict(self.usage)
         self.lock = threading.Lock()
         self.blocked: str | None = None
+        _CONTEXT_OWNERS[id(self)] = self
 
     def _reject(self, reason: str) -> None:
         """Raise an auditable gate error with the latest usage snapshot."""
@@ -204,6 +213,33 @@ class _AdmissionContext:
         if self.blocked:
             self._reject(self.blocked)
         return value, finalized
+
+
+def _context_is_owned_and_initialized(context: Any, authorization: AcquisitionAuthorization) -> bool:
+    """Validate private provenance and the complete initialized runtime state."""
+    if type(context) is not _AdmissionContext or _CONTEXT_OWNERS.get(id(context)) is not context:
+        return False
+    if context.authorization is not authorization or not isinstance(context.lock, type(threading.Lock())):
+        return False
+    if not isinstance(context.manifest, Mapping) or context.manifest != authorization.candidate_manifest_projection():
+        return False
+    if not isinstance(context.limits, dict) or not isinstance(context.usage, dict) or not isinstance(context.finalized_usage, dict):
+        return False
+    try:
+        ceiling = authorization.to_mapping()["cost_ceiling"]
+        expected_limits = {"units": ceiling["max_units"], "probe_calls": ceiling["max_probe_calls"], "heavy_calls": ceiling["max_heavy_calls"], "total_endpoint_calls": ceiling["max_total_endpoint_calls"], "payload_bytes": ceiling["max_payload_bytes"], "wall_seconds": ceiling["max_wall_seconds"], "concurrency": ceiling["concurrency"]}
+        if context.limits != expected_limits:
+            return False
+        for state in (context.usage, context.finalized_usage):
+            if set(state) != set(_CONTEXT_FIELDS) or any(type(value) not in (int, float) or value < 0 for value in state.values()):
+                return False
+        if context.usage["wall_seconds"] != float(context.usage["wall_seconds"]):
+            return False
+        if context.blocked is not None and (not isinstance(context.blocked, str) or not context.blocked):
+            return False
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return False
+    return True
 
 
 def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) -> _AdmissionContext | None:

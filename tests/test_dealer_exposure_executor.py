@@ -134,7 +134,7 @@ def test_real_context_ceilings_are_used_and_overrun_is_hard_gap():
     _, _, registered = _registered()
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
     assert output["classification"] == "HARD_GAP"
-    assert output["audit"]["finalized_usage"] == context.finalized_usage
+    assert output["audit"]["finalized_usage"] == {}
 
 
 def test_mutable_units_are_rejected():
@@ -171,6 +171,52 @@ def test_context_requires_exact_admission_class():
     forged = type("FakeContext", (), {})()
     output = RestrictedExecutor(registered, auth).run((), forged)
     assert output["classification"] == "HARD_GAP"
+    assert registry
+
+
+def test_object_new_context_forgery_is_hard_gap_without_dispatch():
+    auth, manifest, _ = _context()
+    registry, raw, registered = _registered()
+    forged = object.__new__(_AdmissionContext)
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), forged)
+    assert output["classification"] == "HARD_GAP"
+    assert raw.calls == []
+
+
+def test_directly_fabricated_registration_handle_is_hard_gap_without_dispatch():
+    auth, manifest, _ = _context()
+    registry, raw, registered = _registered()
+    forged = object.__new__(type(registered))
+    object.__setattr__(forged, "_registration", registered._registration)
+    with pytest.raises(ExecutorFailure, match="adapter handle is not registry-owned|fabricated adapter handle"):
+        RestrictedExecutor(forged, auth)
+    assert raw.calls == []
+    assert registry
+
+
+def test_post_registration_entrypoint_mutation_is_hard_gap_without_dispatch():
+    auth, manifest, context = _context()
+    registry, raw, registered = _registered()
+    original = type(raw).__call__
+    try:
+        def mutated(self, unit):
+            self.calls.append(unit)
+            return {"status": "SUCCESS", "validated": True, "success": True}
+        type(raw).__call__ = mutated
+        output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
+    finally:
+        type(raw).__call__ = original
+    assert output["classification"] == "HARD_GAP"
+    assert raw.calls == []
+    assert registry
+
+
+def test_valid_registry_context_control_still_dispatches():
+    auth, manifest, context = _context()
+    registry, raw, registered = _registered()
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
+    assert output["status"] == "SUCCESS"
+    assert raw.calls
     assert registry
 
 
