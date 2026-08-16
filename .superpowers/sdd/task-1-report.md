@@ -160,3 +160,26 @@ exit 0
 ```
 
 No live model, acquisition data, or unrelated untracked corpora were modified.
+
+## Authorization Hardening Task 1 (2026-08-15)
+
+Implemented `Vol_Suite/dealer_exposure_authorization.py` and `tests/test_dealer_exposure_authorization.py` without acquisition, network, live-model, scheduler, master, expiry-book, or existing packet changes.
+
+- Added immutable `AcquisitionAuthorization` with strict `from_mapping()` parsing, timezone-aware issued/expiry validation, authorization self-hash, and immutable round trips.
+- Added strict calendar-enriched candidate-manifest projection/hash using `canonical_json_bytes()` and `sha256_bytes()` from `Vol_Suite/provenance_contract.py`.
+- Enforced mandatory calendar hash/policy/resolver/session/binding identity, exact sorted candidate-key scope, binding equality, unknown-field rejection, strict booleans, finite canonical JSON, bounded cost policy, concurrency `1`, no held/new candidates, no live-model/scheduler calls, and no writes outside artifact root.
+- Added tests for missing/mutated calendar identity, scope mismatch, expiry, unknown fields, non-boolean policy values, cost/concurrency violations, pre-calendar/duplicate manifests, and deterministic/self-hash round trips.
+
+### Authorization verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py -p no:cacheprovider
+..........                                                               [100%]
+10 passed in 0.04s
+
+python -m py_compile Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py
+git diff --check -- Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py
+exit 0
+```
+
+Ruff was unavailable. The repository `.venv/Scripts/python.exe` was unavailable in this worker; the available runner reported Python 3.11, so a repository Python 3.12 execution could not be performed here. The observed dry-run digest remains an audit reference only; no XLE/XLF/AAPL/META packet was authorized or acquired.
