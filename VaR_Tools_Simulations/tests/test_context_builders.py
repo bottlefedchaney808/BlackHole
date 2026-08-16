@@ -309,3 +309,85 @@ def test_corr_sim_peer_exposes_terminal_portfolio_histogram(stub_market, capture
     # the unit label must say so for Task 11's renderer.
     assert result["histogram_unit"] == "portfolio_value"
     assert hist[0]["low"] < result["portfolio_value"] < hist[-1]["high"]
+
+
+# ── horizon/n_sims/confidence/seed overrides on context sim builders ──────
+# The builders previously hardcoded 252/10_000(or 50_000)/0.99/context-seed;
+# callers (e.g. dashboard "run with custom horizon") now need to override
+# them per-call while every existing caller that omits them keeps the exact
+# old default behavior.
+
+def test_price_dist_builder_accepts_horizon_override(monkeypatch):
+    from var_engine import data_loader as _dl
+    monkeypatch.setattr(_dl, 'fetch_spot', lambda tk: 100.0)
+    payload = {'focus': {'ticker': 'SPY'}, 'var': {'seed': 7}}
+    out = var_main._build_price_dist_from_context(payload, horizon_days=126)
+    assert out['horizon_days'] == 126
+
+
+def test_price_dist_builder_defaults_unchanged_when_overrides_omitted(stub_market):
+    result = var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    assert result["horizon_days"] == 252
+    assert result["n_sims"] == 10_000
+
+
+def test_price_dist_builder_accepts_n_sims_and_seed_override(stub_market):
+    result = var_main._build_price_dist_from_context(
+        _base_payload(garch_vol=0.30), "AAPL", n_sims=500, seed=99)
+    assert result["n_sims"] == 500
+    assert result["seed"] == 99
+    assert sum(b["count"] for b in result["terminal_price_histogram"]) == 500
+
+
+def test_mc_sim_builder_accepts_all_overrides(stub_market):
+    result = var_main._build_mc_sim_from_context(
+        _base_payload(garch_vol=0.30), "AAPL",
+        horizon_days=63, n_sims=1000, seed=11, confidence=0.95)
+    assert result["horizon_days"] == 63
+    assert result["n_sims"] == 1000
+    assert result["seed"] == 11
+
+
+def test_mc_sim_builder_defaults_unchanged_when_overrides_omitted(stub_market):
+    result = var_main._build_mc_sim_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    assert result["horizon_days"] == 252
+    assert result["n_sims"] == 10_000
+
+
+def test_copula_builder_accepts_all_overrides(stub_market):
+    result = var_main._build_copula_from_context(
+        _base_payload(garch_vol=0.30), "AAPL",
+        horizon_days=63, n_sims=2000, seed=11, confidence=0.95)
+    assert result["horizon_days"] == 63
+    assert result["n_sims"] == 2000
+    assert result["seed"] == 11
+
+
+def test_copula_builder_defaults_unchanged_when_overrides_omitted(stub_market):
+    result = var_main._build_copula_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    assert result["horizon_days"] == 252
+    assert result["n_sims"] == 50_000
+
+
+def test_corr_sim_peer_builder_accepts_all_overrides(stub_market, capture_corr_inputs):
+    stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: 0.30)
+    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
+    stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
+
+    payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
+    result = var_main._build_corr_sim_peer_from_context(
+        payload, "AAPL", horizon_days=63, n_sims=500, seed=11, confidence=0.95)
+    assert result["horizon_days"] == 63
+    assert result["n_sims"] == 500
+    assert result["seed"] == 11
+
+
+def test_corr_sim_peer_builder_defaults_unchanged_when_overrides_omitted(stub_market, capture_corr_inputs):
+    stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: 0.30)
+    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
+    stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
+
+    payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
+    result = var_main._build_corr_sim_peer_from_context(payload, "AAPL")
+    assert result["horizon_days"] == 252
+    assert result["n_sims"] == 10_000

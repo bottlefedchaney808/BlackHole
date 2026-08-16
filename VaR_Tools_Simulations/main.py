@@ -339,6 +339,16 @@ def _context_seed(payload: dict, default: int = 42) -> int:
     return default
 
 
+def _ctx_int(payload: dict, key: str, default: int) -> int:
+    var_cfg = payload.get('var') if isinstance(payload.get('var'), dict) else {}
+    raw = var_cfg.get(key)
+    if raw is None:
+        raw = payload.get(key)
+    if raw is None:
+        return default
+    return int(raw)
+
+
 def _histogram_bins(values: np.ndarray, n_bins: int = 20) -> list:
     """Bucket *values* into n_bins equal-width bins for chart rendering.
 
@@ -389,7 +399,9 @@ def _resolve_drift_and_quality(payload: dict, tk: str) -> tuple:
     return float(drift), "computed"
 
 
-def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
+def _build_mc_sim_from_context(payload: dict, ticker: str = None, *,
+                                horizon_days: int = None, n_sims: int = None,
+                                seed: int = None, confidence: float = None) -> dict:
     """Non-interactive 1-year-out MC price-distribution sim, seeded from
     live spot + GARCH vol + historical geometric drift."""
     from var_engine import data_loader
@@ -401,17 +413,19 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
     vol, vol_source = _resolve_vol_and_quality(payload, tk)
     drift, drift_source = _resolve_drift_and_quality(payload, tk)
-    seed = _context_seed(payload)
-    n_sims = 10_000
+    seed = int(seed if seed is not None else _context_seed(payload))
+    n_sims = int(n_sims if n_sims is not None else _ctx_int(payload, 'n_sims', 10_000))
+    days = int(horizon_days if horizon_days is not None else _ctx_int(payload, 'horizon_days', 252))
+    confidence = float(confidence) if confidence is not None else 0.99
 
     r = run(MCSimInputs(
         market_ids=[tk],
         spot_prices=np.array([spot]),
         volatilities=np.array([vol]),
         corr_matrix=np.array([[1.0]]),
-        var_days=252,
+        var_days=days,
         trading_days=252,
-        confidence=0.99,
+        confidence=confidence,
         n_sims=n_sims,
         seed=seed,
         positions=[Position(pos_type=1, market_id=tk, quantity=1.0)],
@@ -421,7 +435,7 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     return {
         "suite": "var", "status": "ok", "module": "mc_sim_1yr",
         "ticker": tk, "spot": float(spot), "vol": float(vol), "expected_return": float(drift),
-        "seed": seed, "horizon_days": 252, "n_sims": n_sims,
+        "seed": seed, "horizon_days": days, "n_sims": n_sims,
         "terminal_price_mean": float(terminal.mean()),
         "terminal_price_median": float(np.median(terminal)),
         "terminal_price_p5": float(np.quantile(terminal, 0.05)),
@@ -434,7 +448,9 @@ def _build_mc_sim_from_context(payload: dict, ticker: str = None) -> dict:
     }
 
 
-def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
+def _build_price_dist_from_context(payload: dict, ticker: str = None, *,
+                                    horizon_days: int = None, n_sims: int = None,
+                                    seed: int = None) -> dict:
     """Non-interactive 1-year-out price-distribution table + MC terminal
     histogram, same seed/vol/spot/drift inputs as _build_mc_sim_from_context.
 
@@ -452,9 +468,9 @@ def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
     vol, vol_source = _resolve_vol_and_quality(payload, tk)
     drift, drift_source = _resolve_drift_and_quality(payload, tk)
-    seed = _context_seed(payload)
-    n_sims = 10_000
-    days = 252
+    seed = int(seed if seed is not None else _context_seed(payload))
+    n_sims = int(n_sims if n_sims is not None else _ctx_int(payload, 'n_sims', 10_000))
+    days = int(horizon_days if horizon_days is not None else _ctx_int(payload, 'horizon_days', 252))
     # One annualization convention for the analytic table, the MC probability
     # engine and the histogram draw below, so they can't silently diverge.
     trading_days = 252.0
@@ -499,7 +515,9 @@ def _build_price_dist_from_context(payload: dict, ticker: str = None) -> dict:
     }
 
 
-def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
+def _build_copula_from_context(payload: dict, ticker: str = None, *,
+                                horizon_days: int = None, n_sims: int = None,
+                                seed: int = None, confidence: float = None) -> dict:
     """Non-interactive 1-year-out Student-T copula price-distribution sim,
     same seed/vol/spot/drift inputs as _build_mc_sim_from_context."""
     from var_engine import data_loader
@@ -511,8 +529,10 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
         raise ContextModeError(f"Could not fetch live spot for {tk}.")
     vol, vol_source = _resolve_vol_and_quality(payload, tk)
     drift, drift_source = _resolve_drift_and_quality(payload, tk)
-    seed = _context_seed(payload)
-    n_sims = 50_000
+    seed = int(seed if seed is not None else _context_seed(payload))
+    n_sims = int(n_sims if n_sims is not None else _ctx_int(payload, 'n_sims', 50_000))
+    days = int(horizon_days if horizon_days is not None else _ctx_int(payload, 'horizon_days', 252))
+    confidence = float(confidence) if confidence is not None else 0.99
 
     r = run(CopulaInputs(
         tickers=[tk],
@@ -521,9 +541,9 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
         corr_matrix=np.array([[1.0]]),
         copula_type="student_t",
         student_df=5.0,
-        var_days=252,
+        var_days=days,
         trading_days=252,
-        confidence=0.99,
+        confidence=confidence,
         n_sims=n_sims,
         seed=seed,
         spot_prices=np.array([spot]),
@@ -533,7 +553,7 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
     return {
         "suite": "var", "status": "ok", "module": "copula_1yr",
         "ticker": tk, "spot": float(spot), "vol": float(vol), "expected_return": float(drift),
-        "seed": seed, "horizon_days": 252, "n_sims": n_sims,
+        "seed": seed, "horizon_days": days, "n_sims": n_sims,
         "copula_type": "student_t",
         "terminal_price_mean": float(terminal.mean()),
         "terminal_price_median": float(np.median(terminal)),
@@ -547,7 +567,9 @@ def _build_copula_from_context(payload: dict, ticker: str = None) -> dict:
     }
 
 
-def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_peers: int = 2) -> dict:
+def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, *, max_peers: int = 2,
+                                       horizon_days: int = None, n_sims: int = None,
+                                       seed: int = None, confidence: float = None) -> dict:
     """Non-interactive 1-year-out correlation sim between the focus ticker and
     up to *max_peers* Vol_Suite basket peers, using the same GARCH-vol
     methodology and seed as the MC/copula sims above."""
@@ -564,7 +586,10 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         raise ContextModeError("Need at least one basket peer distinct from the focus ticker for corr_sim.")
 
     tickers = [tk] + peers
-    seed = _context_seed(payload)
+    seed = int(seed if seed is not None else _context_seed(payload))
+    days = int(horizon_days if horizon_days is not None else _ctx_int(payload, 'horizon_days', 252))
+    n_sims = int(n_sims if n_sims is not None else _ctx_int(payload, 'n_sims', 10_000))
+    confidence = float(confidence) if confidence is not None else 0.99
     start, end = data_loader.default_date_range()
 
     focus_vol, vol_source = _resolve_vol_and_quality(payload, tk)
@@ -599,16 +624,15 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
         raise ContextModeError(f"Could not fetch live spot for one of: {', '.join(tickers)}.")
     vols = np.array(vols, dtype=float)
     n_shares = np.ones(len(tickers))
-    n_sims = 10_000
 
     r = run(CorrSimInputs(
         current_prices=spots,
         n_shares=n_shares,
         volatilities=vols,
         corr_matrix=corr_matrix,
-        var_days=252,
+        var_days=days,
         trading_days=252,
-        confidence=0.99,
+        confidence=confidence,
         n_sims=n_sims,
         seed=seed,
         asset_names=tickers,
@@ -620,7 +644,7 @@ def _build_corr_sim_peer_from_context(payload: dict, ticker: str = None, max_pee
     terminal = r.portfolio_value + np.asarray(r.pnl_distribution, dtype=float)
     return {
         "suite": "var", "status": "ok", "module": "corr_sim_1yr",
-        "tickers": tickers, "seed": seed, "horizon_days": 252, "n_sims": n_sims,
+        "tickers": tickers, "seed": seed, "horizon_days": days, "n_sims": n_sims,
         "correlation_matrix": corr_matrix.tolist(),
         "sim_vols": r.sim_vols.tolist(), "sim_corr": r.sim_corr.tolist(),
         "var_1yr": float(r.var), "cvar_1yr": float(r.cvar),
