@@ -26,16 +26,6 @@
           {% endfor %}
         </select>
       </div>
-      {% if tool.slug == 'whale-flow' %}
-      <div class="field">
-        <label for="min_premium">Min premium ($, optional)</label>
-        <input id="min_premium" name="min_premium" value="{{ min_premium }}" placeholder="25000" size="10" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="threshold_bps">Threshold (bps, optional)</label>
-        <input id="threshold_bps" name="threshold_bps" value="{{ threshold_bps }}" placeholder="premium-relative bar" size="14" autocomplete="off">
-      </div>
-      {% endif %}
       <button type="submit">Run tool</button>
     </form>
   </div>

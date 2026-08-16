@@ -65,41 +65,6 @@ def test_get_tool_raises_keyerror_for_unknown_slug_and_lists_valid_ones():
 
 
 @pytest.mark.unit
-def test_whale_flow_tool_is_registered():
-    tool = get_tool("whale-flow")
-    assert tool.slug == "whale-flow"
-    assert tool.name == "Whale Flow Tool"
-
-
-@pytest.mark.unit
-def test_elliott_wave_tool_is_registered():
-    tool = get_tool("elliott-wave")
-    assert tool.slug == "elliott-wave"
-    assert tool.name == "Elliott Wave Tool"
-
-
-@pytest.mark.unit
-def test_bollinger_tool_is_registered():
-    tool = get_tool("bollinger")
-    assert tool.slug == "bollinger"
-    assert tool.name == "Bollinger Bands Tool"
-
-
-@pytest.mark.unit
-def test_trend_engine_tool_is_registered():
-    tool = get_tool("trend-engine")
-    assert tool.slug == "trend-engine"
-    assert tool.name == "Trend Engine Tool"
-
-
-@pytest.mark.unit
-def test_liquidity_map_tool_is_registered():
-    tool = get_tool("liquidity-map")
-    assert tool.slug == "liquidity-map"
-    assert tool.name == "Liquidity Map Tool"
-
-
-@pytest.mark.unit
 def test_direction_signal_tool_is_registered():
     tool = get_tool("directional-engine")
     assert tool.slug == "directional-engine"
@@ -128,14 +93,18 @@ def test_price_dist_tool_is_registered():
 
 
 @pytest.mark.unit
-def test_all_six_direction_tools_and_original_two_are_registered():
+def test_registered_tool_slugs_are_expected():
     slugs = {tool.slug for tool in TOOLS}
     expected = {
-        "options-strategy", "backtesting", "whale-flow", "elliott-wave",
-        "bollinger", "trend-engine", "liquidity-map", "directional-engine",
+        "options-strategy", "backtesting", "directional-engine",
+        "hedge-optimizer", "vrp-term-structure", "simulations",
     }
     assert expected.issubset(slugs)
-    assert len(TOOLS) >= 8
+    # The five Direction sub-signals are NOT standalone tools anymore -- they
+    # live inside directional-engine (whale/elliott/bollinger/trend/liquidity
+    # modes) and must not appear as separate entries on the Tools screen.
+    assert not ({'whale-flow', 'elliott-wave', 'bollinger',
+                 'trend-engine', 'liquidity-map'} & slugs)
 
 
 def test_social_sentiment_removed():

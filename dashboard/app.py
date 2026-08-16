@@ -2018,6 +2018,7 @@ def tools_directional_form(request: Request):
         'active': 'tools', 'tool': get_tool('directional-engine'),
         'contexts': contexts, 'contexts_error': contexts_error,
         'selected_path': '', 'selected_mode': 'unified',
+        'min_premium': '', 'threshold_bps': '',
         'result': None, 'result_json': None, 'error': None,
     })
 
@@ -2028,10 +2029,19 @@ async def tools_directional_run(request: Request):
     contexts, contexts_error = _tools_contexts()
     context_path = str(body.get('context_path') or '').strip()
     mode = str(body.get('mode') or 'unified').strip().lower()
+    min_premium = str(body.get('min_premium') or '').strip()
+    threshold_bps = str(body.get('threshold_bps') or '').strip()
     context, error = _load_selected_context(context_path)
     result = None
     if context is not None:
         context['mode'] = mode
+        # whale-mode numeric overrides (min_premium / threshold_bps), the same
+        # the old standalone whale-flow tool accepted -- now folded into the
+        # Directional Engine's whale sub-signal.
+        if min_premium:
+            context['min_premium'] = min_premium
+        if threshold_bps:
+            context['threshold_bps'] = threshold_bps
         result, run_error = _run_tool_safe('directional-engine', context)
         if run_error:
             error = run_error
@@ -2040,17 +2050,18 @@ async def tools_directional_run(request: Request):
         'active': 'tools', 'tool': get_tool('directional-engine'),
         'contexts': contexts, 'contexts_error': contexts_error,
         'selected_path': context_path, 'selected_mode': mode,
+        'min_premium': min_premium, 'threshold_bps': threshold_bps,
         'result': result, 'result_json': result_json, 'error': error,
     })
 
 
-# Tools whose UI is just "pick a context, run" (plus, for whale-flow, two
-# optional numeric overrides) -- everything registered in Tools.registry
-# except options-strategy and backtesting, which have bespoke forms above
-# because their run() takes extra required/structured inputs.
+# Tools whose UI is just "pick a context, run" -- everything registered in
+# Tools.registry except options-strategy and backtesting, which have bespoke
+# forms above because their run() takes extra required/structured inputs.
+# whale-flow / elliott-wave / bollinger / trend-engine / liquidity-map are NOT
+# listed: they moved inside Directional Engine as per-module modes.
 GENERIC_TOOL_SLUGS = {
-    'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
-    'liquidity-map', 'directional-engine', 'hedge-optimizer',
+    'directional-engine', 'hedge-optimizer',
     'vrp-term-structure', 'simulations',
 }
 
@@ -2090,11 +2101,6 @@ async def tools_generic_run(slug: str, request: Request):
     context, error = _load_selected_context(context_path)
     result = None
     if context is not None:
-        if slug == 'whale-flow':
-            if min_premium:
-                context['min_premium'] = min_premium
-            if threshold_bps:
-                context['threshold_bps'] = threshold_bps
         result, run_error = _run_tool_safe(slug, context)
         if run_error:
             error = run_error

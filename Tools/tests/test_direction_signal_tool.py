@@ -1,5 +1,6 @@
 """test_direction_signal_tool.py -- covers the Directional Engine tool
-(Tools/tools/direction_signal_tool.py): unified + per-module modes, slug."""
+(Tools/tools/direction_signal_tool.py): unified + per-module modes, slug,
+and whale-mode numeric overrides."""
 import sys
 import types
 from pathlib import Path
@@ -32,6 +33,39 @@ def test_run_individual_trend_mode(monkeypatch):
     monkeypatch.setitem(sys.modules, "Direction.trend_engine", fake_trend)
     ctx = {"focus": {"ticker": "SPY"}, "mode": "trend"}
     assert direction_signal_tool.run(ctx)["signal"] is True
+
+
+@pytest.mark.unit
+def test_run_whale_mode_passes_min_premium_and_threshold_bps(monkeypatch):
+    fake_whale = types.ModuleType("Direction.whale_scanner")
+    captured = {}
+
+    def fake_scan(tk, **kw):
+        captured.update(kw)
+        return {"bias": "bullish", "ticker": tk}
+    fake_whale.scan = fake_scan
+    monkeypatch.setitem(sys.modules, "Direction.whale_scanner", fake_whale)
+
+    ctx = {"focus": {"ticker": "SPY"}, "mode": "whale",
+           "min_premium": "30000", "threshold_bps": "5"}
+    assert direction_signal_tool.run(ctx)["bias"] == "bullish"
+    assert captured == {"min_premium": 30000.0, "threshold_bps": 5.0}
+
+
+@pytest.mark.unit
+def test_run_whale_mode_without_overrides_calls_scan_with_defaults(monkeypatch):
+    fake_whale = types.ModuleType("Direction.whale_scanner")
+    captured = {}
+
+    def fake_scan(tk, **kw):
+        captured.update(kw)
+        return {"bias": "neutral", "ticker": tk}
+    fake_whale.scan = fake_scan
+    monkeypatch.setitem(sys.modules, "Direction.whale_scanner", fake_whale)
+
+    ctx = {"focus": {"ticker": "SPY"}, "mode": "whale"}
+    direction_signal_tool.run(ctx)
+    assert captured == {}
 
 
 @pytest.mark.unit

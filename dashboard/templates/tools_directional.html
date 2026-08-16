@@ -32,8 +32,24 @@
           {% endfor %}
         </select>
       </div>
+      <div class="field" id="whale-params" {% if selected_mode != 'whale' %}style="display:none;"{% endif %}>
+        <label for="min_premium">Min premium ($, optional, whale mode)</label>
+        <input id="min_premium" name="min_premium" value="{{ min_premium }}" placeholder="25000" size="10" autocomplete="off">
+        <label for="threshold_bps" style="margin-left:10px;">Threshold (bps, optional)</label>
+        <input id="threshold_bps" name="threshold_bps" value="{{ threshold_bps }}" placeholder="premium-relative bar" size="14" autocomplete="off">
+      </div>
       <button type="submit">Run</button>
     </form>
+    <script>
+      var modeSel = document.getElementById('mode');
+      var whaleParams = document.getElementById('whale-params');
+      function toggleWhaleParams() {
+        if (modeSel && whaleParams) {
+          whaleParams.style.display = (modeSel.value === 'whale') ? '' : 'none';
+        }
+      }
+      if (modeSel) { modeSel.addEventListener('change', toggleWhaleParams); }
+    </script>
   </div>
 </div>
 

@@ -53,6 +53,17 @@ def run(context: Dict[str, Any]) -> Dict[str, Any]:
     if mode not in _MODULES:
         raise ValueError(
             f"mode must be one of {{'unified', *{sorted(_MODULES)}}}; got {mode!r}")
+    if mode == 'whale':
+        # whale is the one sub-signal with numeric overrides (min_premium /
+        # threshold_bps); thread them through from context like the old
+        # standalone whale-flow tool did.
+        from Direction import whale_scanner
+        kwargs: Dict[str, Any] = {}
+        if context.get('min_premium') is not None:
+            kwargs['min_premium'] = float(context['min_premium'])
+        if context.get('threshold_bps') is not None:
+            kwargs['threshold_bps'] = float(context['threshold_bps'])
+        return whale_scanner.scan(ticker, **kwargs)
     mod_name, fn = _MODULES[mode]
     module = __import__(f'Direction.{mod_name}', fromlist=[fn])
     return getattr(module, fn)(ticker)
