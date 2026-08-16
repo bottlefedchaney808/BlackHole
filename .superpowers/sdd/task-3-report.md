@@ -268,4 +268,10 @@ No acquisition/live/master/secrets changes were made.
 
 ### Commit
 
-Task 3 commit: `22a6a72`.
+Task 3 implementation commit: `e4660ea`.
+
+### Review cleanup correction (2026-08-15)
+
+- Corrected the stale implementation commit reference above from `22a6a72` to `e4660ea`.
+- Updated the two Task 3-owned control fixtures to provide complete registry, source-hash, payload, unit, and PRE_WINDOW evidence required by the strict admission contract; production validation was unchanged.
+- Focused controls: `test_admission_valid_control_returns_immutable_units_and_exact_keys` and `test_strict_prewindow_rejects_role_only_and_accepts_fully_evidenced_control`.

@@ -452,35 +452,75 @@ def test_admission_valid_control_returns_immutable_units_and_exact_keys():
     from Vol_Suite.provenance_contract import canonical_sha256
 
     manifest = _manifest()
+    unit = manifest["units"][0]
+    key = unit["candidate_key"]
+    H1, H2 = "a" * 64, "b" * 64
+    manifest["selection_provenance"]["source_registry"]["fixture"]["source_hashes"] = [H1, H2]
+    unit.update({
+        "source_hashes": [H1, H2], "snapshot_hash": H1, "as_of": "2026-07-06T12:00:00Z",
+        "window_policy": "OPEX_DAY", "calendar_hash": H1, "resolver_code_hash": H1,
+        "session_id": "session-20260706", "settlement_style": "PM_CLOSE",
+    })
+    request_identity = {name: unit[name] for name in (
+        "ticker", "calendar_day", "expiry", "dte", "habitat", "sector", "candidate_source"
+    )}
+    request_identity["calendar_binding"] = unit.get("calendar_binding")
+    payload = {"fixture": "complete-registered-evidence"}
+    raw_payload_hash = canonical_sha256(payload)
+    pre_window = [
+        {"role": "PRE_WINDOW", "timestamp": "2026-07-06T13:00:00Z", "iv": 0.2,
+         "source_identity": "before", "source_hash": H1},
+        {"role": "PRE_WINDOW", "timestamp": "2026-07-06T14:00:00Z", "iv": 0.3,
+         "source_identity": "source", "source_hash": H2},
+    ]
+    artifact_manifest = {
+        "candidate_key": key, "ticker": unit["ticker"], "calendar_day": unit["calendar_day"],
+        "canonical_input_hash": unit.get("canonical_input_hash"), "raw_payload_hash": raw_payload_hash,
+        "status": "PASS", "expiry": unit["expiry"], "dte": unit["dte"],
+        "request_identity": request_identity, "calendar_binding": unit.get("calendar_binding"),
+        "source_hashes": unit["source_hashes"], "imputed": False, "no_imputation": True,
+        "snapshot_hash": unit["snapshot_hash"], "as_of": unit["as_of"],
+        "calendar_hash": unit["calendar_hash"], "resolver_code_hash": unit["resolver_code_hash"],
+        "session_id": unit["session_id"], "settlement_style": unit["settlement_style"],
+        "window_policy": unit["window_policy"],
+    }
+    artifact_hash = canonical_sha256(artifact_manifest)
+    evidence_unit = dict(unit)
+    evidence_unit.update({
+        "artifact_hash": artifact_hash, "artifact_manifest": artifact_manifest,
+        "raw_payload_hash": raw_payload_hash, "payload": payload,
+        "payload_bytes": payload, "request_parameters": request_identity,
+        "status": "PASS", "breach_eligible": True, "acquisition_decision": "PASS",
+        "imputed": False, "no_imputation": True, "declared_timezone": "UTC",
+        "breach_window_start_prov": "2026-07-06T15:00:00Z", "delta_iv_pre_window": 0.3 - 0.2,
+        "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1",
+        "pre_window_observations": pre_window, "evidence": {"kind": "fixture"},
+    })
+    registry_entry = dict(evidence_unit)
+    registry_entry.update({"request_identity": request_identity, "calendar_binding": unit.get("calendar_binding")})
+    registry = {artifact_hash: registry_entry}
     auth = AcquisitionAuthorization.from_mapping(
         _authorization(manifest), candidate_manifest=manifest,
         now="2026-08-15T12:30:00+00:00",
     )
-    unit = manifest["units"][0]
-    key = unit["candidate_key"]
     probe = {
         "candidate_key": key, "ticker": unit["ticker"], "day": unit["calendar_day"],
         "expiry": unit["expiry"], "dte": unit["dte"], "habitat": unit["habitat"],
         "sector": unit["sector"], "candidate_source": unit["candidate_source"],
-        "request_parameters": {"ticker": unit["ticker"], "calendar_day": unit["calendar_day"],
-                               "expiry": unit["expiry"], "dte": unit["dte"],
-                               "habitat": unit["habitat"], "sector": unit["sector"],
-                               "candidate_source": unit["candidate_source"], "calendar_binding": None},
-        "probe_code_hash": auth.to_mapping()["probe_policy"]["probe_code_hash"],
-        "status": "PASS", "validated": True, "invoked": True,
-        "checks": {"chain": "PASS"},
+        "request_parameters": request_identity, "probe_code_hash": auth.to_mapping()["probe_policy"]["probe_code_hash"],
+        "status": "PASS", "validated": True, "invoked": True, "checks": {"chain": "PASS"},
+        "calendar_binding": unit.get("calendar_binding"),
+        "probe_identity": {field: unit.get(field) for field in (
+            "snapshot_hash", "calendar_hash", "calendar_policy_version", "resolver_code_hash",
+            "session_id", "settlement_style", "window_policy", "calendar_binding_hash", "as_of", "source_hashes"
+        )},
     }
-    artifact_manifest = {}
-    artifact_hash = canonical_sha256(artifact_manifest)
-    evidence_unit = {"candidate_key": key, "artifact_hash": artifact_hash,
-                     "artifact_manifest": artifact_manifest, "source_hashes": unit["source_hashes"],
-                     "calendar_binding": None, "status": "PASS", "imputed": False,
-                     "no_imputation": True,
-                     "pre_window_observations": [{"role": "PRE_WINDOW"}, {"role": "PRE_WINDOW"}]}
-    registry = {artifact_hash: {"candidate_key": key, "artifact_hash": artifact_hash,
-                               "artifact_manifest": artifact_manifest}}
+    probe["probe_identity"]["request_identity"] = request_identity
     admitted, audit = admit_acquisition(auth, manifest, [probe],
-                                        {"units": [evidence_unit], "artifact_registry": registry}, registry)
+                                        {"units": [evidence_unit], "artifact_registry": registry,
+                                         "usage": {"units": 0, "probe_calls": 0, "heavy_calls": 0,
+                                                    "total_endpoint_calls": 0, "payload_bytes": 0,
+                                                    "wall_seconds": 0, "concurrency": 0}}, registry)
     assert [item["candidate_key"] for item in admitted] == [key]
     assert audit["admitted"] is True
     with pytest.raises(TypeError):

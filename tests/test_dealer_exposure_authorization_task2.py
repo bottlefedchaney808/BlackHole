@@ -42,9 +42,10 @@ def _prewindow():
         "breach_window_start_prov": "2026-07-06T15:00:00Z",
         "imputed": False,
         "no_imputation": True,
-        "delta_iv_pre_window": 0.1,
+        "delta_iv_pre_window": 0.3 - 0.2,
         "delta_iv_aggregation": "iv_source_minus_iv_before",
         "delta_iv_aggregation_version": "1",
+        "source_hashes": [H1, H2],
         "pre_window_observations": [
             {"role": "PRE_WINDOW", "timestamp": "2026-07-06T13:00:00Z", "iv": 0.2, "source_identity": "before", "source_hash": H1},
             {"role": "PRE_WINDOW", "timestamp": "2026-07-06T14:00:00Z", "iv": 0.3, "source_identity": "source", "source_hash": H2},
