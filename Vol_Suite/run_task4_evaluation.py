@@ -235,35 +235,61 @@ def _validate_calendar_metadata(row: Mapping[str, Any], manifest: Mapping[str, A
     if not isinstance(windows, Mapping) or set(windows) != set(event_ids):
         raise EvaluationInvalid("calendar event windows are detached from event IDs")
     event_types = []
-    event_metadata = binding.get("event_metadata", {})
-    if not isinstance(event_metadata, Mapping):
-        raise EvaluationInvalid("calendar event metadata is invalid")
+    event_metadata = binding.get("event_metadata")
+    source_registry = binding.get("source_registry")
+    if not isinstance(event_metadata, Mapping) or set(event_metadata) != set(event_ids):
+        raise EvaluationInvalid("calendar top-level event metadata must cover every event ID")
+    if not isinstance(source_registry, Mapping) or not source_registry:
+        raise EvaluationInvalid("calendar event source registry is required")
+    source_hash_set = set(source_hashes)
+    allowed_status = {"NOT_APPLICABLE": False, "DESCRIPTIVE-HABITAT": False,
+                      "OPERATIONAL": True, "OPERATIONAL-NO-EVENT": True}
     for event_id in event_ids:
         window = windows[event_id]
-        if not isinstance(window, Mapping):
-            raise EvaluationInvalid("calendar event window entry is invalid")
-        for field in ("window_id", "window_start", "window_end", "window_policy", "event_type"):
+        metadata = event_metadata[event_id]
+        if not isinstance(window, Mapping) or not isinstance(metadata, Mapping):
+            raise EvaluationInvalid("calendar event window/metadata entry is invalid")
+        identity_fields = ("event_id", "event_type", "source_ref", "surprise_status",
+                           "causal_surprise_eligible")
+        for field in identity_fields:
             if field not in window or window[field] in (None, ""):
-                raise EvaluationInvalid(f"calendar event window missing {field}")
-        metadata = event_metadata.get(event_id, {})
-        if metadata is None:
-            metadata = {}
-        if not isinstance(metadata, Mapping):
-            raise EvaluationInvalid("calendar event metadata entry is invalid")
-        for field in ("event_id", "event_type", "source", "status"):
-            expected = metadata.get(field, binding.get(f"event_{field}"))
-            if expected is not None and window.get(field, event_id if field == "event_id" else None) != expected:
-                raise EvaluationInvalid(f"calendar event {field} does not match nested window")
-        if window.get("event_id", event_id) != event_id:
-            raise EvaluationInvalid("calendar nested event ID is inconsistent")
-        event_types.append(str(window["event_type"]))
-        if window["event_type"] not in {"OPEX", "FOMC", "EARNINGS"}:
-            raise EvaluationInvalid("calendar event types are incomplete")
-        if window["event_type"] not in [str(value) for value in binding.get("event_types", event_types)]:
-            raise EvaluationInvalid("calendar nested event type is detached")
+                raise EvaluationInvalid(f"calendar nested event missing {field} provenance")
+            if field not in metadata or metadata[field] in (None, ""):
+                raise EvaluationInvalid(f"calendar top-level event missing {field} identity")
+            if window[field] != metadata[field]:
+                raise EvaluationInvalid(f"calendar event {field} does not match top-level event record")
+        for field in ("window_id", "window_start", "window_end", "window_policy"):
+            if field not in window or window[field] in (None, ""):
+                raise EvaluationInvalid(f"calendar nested event missing {field} provenance")
         for field in ("window_start", "window_end", "window_policy"):
-            if window[field] != binding[field]:
+            if field not in metadata or metadata[field] in (None, "") or window[field] != metadata[field]:
+                raise EvaluationInvalid(f"calendar event {field} does not match top-level event record")
+        if metadata["event_id"] != event_id or window["event_id"] != event_id:
+            raise EvaluationInvalid("calendar nested event ID is not bound to top-level event identity")
+        event_parts = str(event_id).split(":", 1)
+        if len(event_parts) != 2 or event_parts[0] != metadata["event_type"] or event_parts[1] != str(binding["calendar_day"]):
+            raise EvaluationInvalid("calendar event ID/type/day is not an exact top-level identity")
+        if metadata["event_type"] not in {"OPEX", "FOMC", "EARNINGS"}:
+            raise EvaluationInvalid("calendar event types are incomplete")
+        event_types.append(str(metadata["event_type"]))
+        if metadata.get("event_day") != binding["calendar_day"]:
+            raise EvaluationInvalid("calendar event day is detached from calendar identity")
+        source_ref = metadata["source_ref"]
+        source_entry = source_registry.get(source_ref)
+        if not isinstance(source_entry, Mapping) or source_entry.get("source_hash") not in source_hash_set:
+            raise EvaluationInvalid("calendar nested event source is not registry-bound")
+        status = metadata["surprise_status"]
+        eligible = metadata["causal_surprise_eligible"]
+        if not isinstance(eligible, bool) or status not in allowed_status or eligible is not allowed_status[status]:
+            raise EvaluationInvalid("calendar event surprise status/causal eligibility is invalid")
+        if metadata["window_start"] >= metadata["window_end"]:
+            raise EvaluationInvalid("calendar event window bounds are reversed")
+        for field in ("window_start", "window_end", "window_policy"):
+            if metadata[field] != binding[field]:
                 raise EvaluationInvalid(f"calendar event window {field} disagrees with top-level metadata")
+    top_level_event_types = binding.get("event_types", row.get("event_types", []))
+    if sorted(event_types) != [str(value) for value in top_level_event_types]:
+        raise EvaluationInvalid("calendar nested event types are detached from top-level event records")
     if bool(binding.get("event_overlap")) != (len(event_ids) > 1):
         raise EvaluationInvalid("calendar overlap flag is inconsistent")
     selected = next((window for window in windows.values() if window.get("window_id") == binding["event_window_id"]), None)

@@ -23,17 +23,28 @@ def row(day, ticker, y=0.02, v=2.0, div=0.1, *, daily=-0.01, breach=0.02):
     calendar_hash = hashlib.sha256(f"calendar:{day}".encode()).hexdigest()
     resolver_hash = hashlib.sha256(f"resolver:{day}".encode()).hexdigest()
     event_id = f"OPEX:{day}"
+    event_source_ref = f"calendar-source:{day}"
+    event_metadata = {
+        event_id: {
+            "event_id": event_id, "event_type": "OPEX", "event_day": day,
+            "window_start": f"{day}T09:30:00-05:00", "window_end": f"{day}T16:00:00-05:00",
+            "window_policy": "OPEX_DAY", "source_ref": event_source_ref,
+            "surprise_status": "NOT_APPLICABLE", "causal_surprise_eligible": False,
+        }
+    }
     binding = {
         "ticker": ticker, "calendar_day": day, "nominal_date": day,
         "observed_expiry": day, "observed_expiry_date": day, "expiry": day,
         "dte": 1, "exact_dte": 1, "session_id": f"NYSE:{day}",
         "observed_session_id": f"NYSE:{day}", "session_status": "OPEN",
         "regular_open": f"{day}T09:30:00-05:00", "regular_close": f"{day}T16:00:00-05:00",
-        "early_close": False, "close_reason": None, "settlement_style": "PM_CLOSE",
+        "early_close": False, "close_reason": None, "settlement_style": "PM_CLOSE", "event_metadata": event_metadata,
+        "source_registry": {event_source_ref: {"source_hash": source_hash}},
         "settlement_timestamp": f"{day}T16:00:00-05:00", "event_ids": [event_id],
-        "event_windows": {event_id: {"event_type": "OPEX", "window_id": f"{event_id}:OPEX_DAY",
+        "event_windows": {event_id: {"event_id": event_id, "event_type": "OPEX", "window_id": f"{event_id}:OPEX_DAY",
                                        "window_start": f"{day}T09:30:00-05:00", "window_end": f"{day}T16:00:00-05:00",
-                                       "window_policy": "OPEX_DAY"}}, "event_window_id": f"{event_id}:OPEX_DAY",
+                                       "window_policy": "OPEX_DAY", "source_ref": event_source_ref,
+                                       "surprise_status": "NOT_APPLICABLE", "causal_surprise_eligible": False}}, "event_window_id": f"{event_id}:OPEX_DAY",
         "window_id": f"{event_id}:OPEX_DAY", "window_start": f"{day}T09:30:00-05:00",
         "window_end": f"{day}T16:00:00-05:00", "window_policy": "OPEX_DAY", "timezone": "America/New_York",
         "as_of": f"{day}T23:59:00-05:00", "snapshot_hash": calendar_hash, "calendar_hash": calendar_hash,

@@ -53,3 +53,22 @@ Pre-existing `.superpowers/sdd/progress.md` modification and untracked acquisiti
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_opex_calendar_stage3.py Vol_Suite/tests/test_task4_evaluation.py Vol_Suite/tests/test_opex_calendar.py`: **74 passed**.
 - The broader Stage 3/core/acquisition-adjacent slice produced **172 passed, 7 pre-existing legacy contract-transition failures** in `test_common_input_live_vs_expiry_book.py`; those failures are outside Stage 3 and were not weakened.
+
+## Stage 3 nested provenance remediation (2026-08-15)
+
+- `_validate_calendar_metadata()` now requires every nested event window to carry `event_id`, `event_type`, `source_ref`, `surprise_status`, `causal_surprise_eligible`, and exact window identity. Each field is compared to a required top-level event record keyed by the exact event ID; event ID prefix/day must also agree with type/calendar day.
+- Nested source references must resolve through the supplied source registry and bind to a declared source hash. Surprise status and causal eligibility are validated as a closed combination. Event day, bounds, policy, selected window, and top-level event-type union are checked before fitting.
+- Rehashed relabeled OPEX→FOMC and detached event-ID regressions now hard-gap. Missing nested source/status regressions and a valid provenance control were added. Same-day event union, resolver non-invocation, and existing no-firing/strata/clocks/CI/power/falsifier/no-promotion coverage remain intact.
+
+### Nested remediation verification
+
+- Plugin-isolated Python 3.12 Stage 3 slice: **16 passed**.
+- Plugin-isolated Python 3.12 Stage 3/core/acquisition-adjacent slice: **169 passed, 7 pre-existing legacy contract-transition failures** in `test_common_input_live_vs_expiry_book.py`; no Stage 3 failure.
+- Python 3.12 `py_compile`: passed.
+- Python 3.12 Ruff on touched files: **All checks passed**.
+- `git diff --check`: passed; only normal Windows LF-to-CRLF warnings.
+- No network/live/master/expiry-book changes were made.
+
+### Nested remediation commit
+
+Commit `a80ddf4` (`fix(vol): close nested event provenance gaps`); only `run_task4_evaluation.py`, Stage 3/core fixtures and regressions, and this report were committed.

@@ -17,10 +17,20 @@ def _rebind(record, event_types):
     binding["event_ids"] = sorted(event_ids)
     binding["event_overlap"] = len(event_ids) > 1
     binding["event_window_id"] = f"{event_ids[0]}:OPEX_DAY"
+    source_ref = next(iter(binding["source_registry"]))
+    binding["event_metadata"] = {
+        event_id: {"event_id": event_id, "event_type": event_id.split(":", 1)[0],
+                   "event_day": day, "window_start": binding["window_start"],
+                   "window_end": binding["window_end"], "window_policy": binding["window_policy"],
+                   "source_ref": source_ref, "surprise_status": "NOT_APPLICABLE",
+                   "causal_surprise_eligible": False}
+        for event_id in event_ids
+    }
     binding["event_windows"] = {
-        event_id: {"event_type": event_id.split(":", 1)[0], "window_id": f"{event_id}:OPEX_DAY",
+        event_id: {"event_id": event_id, "event_type": event_id.split(":", 1)[0], "window_id": f"{event_id}:OPEX_DAY",
                    "window_start": binding["window_start"], "window_end": binding["window_end"],
-                   "window_policy": binding["window_policy"]}
+                   "window_policy": binding["window_policy"], "source_ref": source_ref,
+                   "surprise_status": "NOT_APPLICABLE", "causal_surprise_eligible": False}
         for event_id in event_ids
     }
     binding["window_id"] = binding["event_window_id"]
@@ -88,6 +98,42 @@ def test_rehashed_nested_event_window_must_match_top_level_window_metadata():
     ))
     with pytest.raises(EvaluationInvalid, match="event window|window|policy"):
         evaluate_task4([bad], min_days=1)
+
+
+def test_rehashed_nested_opex_window_cannot_be_relabelled_fomc():
+    record = row("2026-06-01", "SPY")
+    event_id = record["calendar_binding"]["event_ids"][0]
+    bad = _reattest_binding(record, lambda binding: (
+        binding["event_windows"][event_id].update(event_type="FOMC"),
+        binding["event_metadata"][event_id].update(event_type="FOMC"),
+        binding.update(event_types=["FOMC"]),
+    ))
+    with pytest.raises(EvaluationInvalid, match="event (type|identity)|top-level|metadata"):
+        evaluate_task4([bad], min_days=1)
+
+
+def test_rehashed_nested_event_id_cannot_be_detached_from_top_level_record():
+    record = row("2026-06-01", "SPY")
+    event_id = record["calendar_binding"]["event_ids"][0]
+    bad = _reattest_binding(record, lambda binding: (
+        binding["event_windows"][event_id].update(event_id="FOMC:2026-06-01"),
+        binding["event_metadata"][event_id].update(event_id="FOMC:2026-06-01"),
+    ))
+    with pytest.raises(EvaluationInvalid, match="event ID|identity|metadata"):
+        evaluate_task4([bad], min_days=1)
+
+
+@pytest.mark.parametrize("field", ["source_ref", "surprise_status"])
+def test_nested_event_provenance_fields_are_required(field):
+    record = row("2026-06-01", "SPY")
+    event_id = record["calendar_binding"]["event_ids"][0]
+    bad = _reattest_binding(record, lambda binding: binding["event_windows"][event_id].pop(field))
+    with pytest.raises(EvaluationInvalid, match="source|status|provenance"):
+        evaluate_task4([bad], min_days=1)
+
+
+def test_nested_event_provenance_valid_control_is_accepted():
+    assert evaluate_task4([row("2026-06-01", "SPY")], min_days=1)["status"] == "VALID"
 
 
 def test_missing_calendar_binding_invalidates_before_fitting():
