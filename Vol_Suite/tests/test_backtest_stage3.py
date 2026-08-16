@@ -264,6 +264,34 @@ def test_build_day_records_accumulated_position_drives_v2_regime():
 
 
 @pytest.mark.unit
+def test_dealer_exposure_engine_guard():
+    """The dealer-frame engine lives on the Dealer-Exposure-Dev worktree, not
+    master. It must load when present and raise a clear error when absent."""
+    if bt3._dealer_exposure_engine_available():
+        eng = bt3._load_dealer_exposure_engine()
+        assert hasattr(eng, "build_net_exposure")
+    else:
+        with pytest.raises(FileNotFoundError):
+            bt3._load_dealer_exposure_engine()
+
+
+@pytest.mark.unit
+def test_build_day_records_dealer_exposure_series():
+    """When use_dealer_exposure=True and the engine is available, each day gets
+    a regime_dealer_exposure from the dealer-frame GEX sign."""
+    if not bt3._dealer_exposure_engine_available():
+        pytest.skip("Dealer-Exposure-Dev worktree not present")
+    d = "20260901"
+    # Call-dominated OI -> dealer-frame gex should read net long.
+    greek_rows, oi_rows = _make_day_rows(d, SPOT0, 1000, 400)
+    price_rows = [_price_row(d, SPOT0)]
+    records = bt3._build_day_records(
+        "SYN", "20261231", greek_rows, oi_rows, price_rows,
+        use_dealer_exposure=True)
+    assert records[0].regime_dealer_exposure in ("long", "short")
+
+
+@pytest.mark.unit
 def test_build_day_records_labels_bullish_whale_day():
     """A day with heavy call-side whale premium must classify as bullish
     and produce a real (non-None) regime_whale."""

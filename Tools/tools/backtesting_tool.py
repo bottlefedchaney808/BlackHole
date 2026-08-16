@@ -122,6 +122,7 @@ def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
         lookback_days=lookback_days,
         forward_window_days=forward_window_days,
         accumulate=(sign_model == "v2_live"),
+        sign_model=sign_model,
     )
     return {
         "mode": "dealer_gamma_study",
