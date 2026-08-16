@@ -10,7 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .opex_calendar import CalendarGapError, calendar_for_probe
+from .opex_calendar import CalendarGapError, calendar_for_probe, resolver_code_hash
+from .provenance_contract import canonical_sha256
 
 DTE_STRATA = ((1, 3), (4, 7), (8, 10))
 EVENT_HABITATS = ("FOMC", "EARNINGS", "OPEX")
@@ -83,25 +84,51 @@ def _plain(value: Any) -> Any:
     return value
 
 
-_CALENDAR_HASH_FIELDS = ("snapshot_hash", "calendar_hash", "calendar_policy_version", "resolver_code_version", "calendar_binding_hash")
-_CALENDAR_VALUE_FIELDS = ("as_of", "calendar_day", "nominal_date", "observed_expiry", "session_id", "session_status", "settlement_style", "timezone", "exact_dte", "event_ids", "event_windows", "window_id", "window_start", "window_end", "window_policy")
+_CALENDAR_HASH_FIELDS = ("snapshot_hash", "calendar_hash", "calendar_policy_version", "resolver_code_version", "resolver_code_hash", "calendar_binding_hash")
+_CALENDAR_VALUE_FIELDS = ("as_of", "calendar_day", "nominal_date", "observed_expiry", "observed_expiry_date", "session_id", "observed_session_id", "session_status", "settlement_style", "settlement_timestamp", "timezone", "exact_dte", "event_ids", "event_windows", "event_window_id", "window_id", "window_start", "window_end", "window_policy", "source_hashes")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def _validate_calendar_binding(binding: Any, *, ticker: str, day: str, expiry: str, dte: int, expected: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    if not isinstance(binding, Mapping):
-        raise ValueError("calendar binding is required")
-    value = _plain(binding)
+def _validate_calendar_binding(binding: Any, *, ticker: str, day: str, expiry: str, dte: int, expected: Mapping[str, Any] | None = None, calendar_snapshot: Any | None = None) -> dict[str, Any]:
+    """Validate a binding by recomputing it from the frozen OpEx snapshot.
+
+    A caller-provided mapping is evidence only; it is never a source of truth.
+    """
+    if dte <= 0 or _stratum(dte) is None:
+        raise ValueError("calendar binding DTE mismatch or zero-DTE")
+    if calendar_snapshot is not None:
+        try:
+            resolved = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=(binding or {}).get("as_of"), window_policy=(binding or {}).get("window_policy", "OPEX_DAY"))
+        except (AttributeError, CalendarGapError, TypeError, ValueError) as exc:
+            raise ValueError(f"calendar binding cannot be resolved: {exc}") from exc
+        if not isinstance(binding, Mapping) or _plain(binding) != _plain(resolved):
+            raise ValueError("calendar binding does not match the injected snapshot")
+        value = _plain(resolved)
+    else:
+        if not isinstance(binding, Mapping):
+            raise ValueError("calendar binding is required")
+        value = _plain(binding)
     for key in (*_CALENDAR_HASH_FIELDS, *_CALENDAR_VALUE_FIELDS):
         if key not in value or value[key] in (None, ""):
             raise ValueError(f"calendar binding is missing {key}")
-    if str(value.get("ticker", ticker)).upper() != ticker.upper() or value["calendar_day"] != day or value["observed_expiry"] != expiry:
+    for key in ("snapshot_hash", "calendar_hash", "resolver_code_hash", "calendar_binding_hash", *["source_hashes"]):
+        if key != "source_hashes" and (not isinstance(value[key], str) or not _HEX64.fullmatch(value[key])):
+            raise ValueError(f"calendar binding {key} is not a lowercase SHA-256 identity")
+    if value["snapshot_hash"] != value["calendar_hash"]:
+        raise ValueError("calendar hash does not match snapshot hash")
+    if calendar_snapshot is not None:
+        if value["snapshot_hash"] != calendar_snapshot.snapshot_hash or value["resolver_code_hash"] != resolver_code_hash(calendar_snapshot):
+            raise ValueError("calendar binding snapshot/resolver identity mismatch")
+    if value["calendar_binding_hash"] != canonical_sha256({k: v for k, v in value.items() if k != "calendar_binding_hash"}):
+        raise ValueError("calendar_binding_hash does not match canonical binding")
+    if str(value.get("ticker", ticker)).upper() != ticker.upper() or value["calendar_day"] != day or value["observed_expiry"] != expiry or value["observed_expiry_date"] != expiry:
         raise ValueError("calendar binding identity mismatch")
     if value.get("exact_dte") != dte or value.get("dte", dte) != dte or dte <= 0 or _stratum(dte) is None:
         raise ValueError("calendar binding DTE mismatch or zero-DTE")
-    if value["timezone"] != "America/New_York":
-        raise ValueError("calendar binding timezone mismatch")
-    if value["session_status"] not in {"OPEN", "EARLY_CLOSE"}:
-        raise ValueError("calendar binding has unknown session status")
+    if value["timezone"] != "America/New_York" or value["session_status"] not in {"OPEN", "EARLY_CLOSE"}:
+        raise ValueError("calendar binding has unknown timezone or session status")
+    if not isinstance(value["source_hashes"], list) or not value["source_hashes"] or any(not isinstance(h, str) or not _HEX64.fullmatch(h) for h in value["source_hashes"]):
+        raise ValueError("calendar binding source hashes are incomplete")
     if not isinstance(value["event_ids"], list) or not value["event_ids"] or not isinstance(value["event_windows"], Mapping):
         raise ValueError("calendar binding event identity is required")
     if expected is not None and value != _plain(expected):
@@ -425,6 +452,8 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
     rows = list(candidates); target = intended_units if intended_units is not None else len(rows)
     if target < 0: raise ValueError("intended_units cannot be negative")
     held = {(str(t).upper(), _date(d)) for t, d in held_pairs}
+    if rows and calendar_snapshot is None and any(not ((str(r.get("ticker", "")).upper(), _date(r.get("day", r.get("date")))) in held) for r in rows):
+        raise ValueError("calendar snapshot is required for acquisition-eligible manifest candidates")
     validated_probes = tuple(sorted((validate_probe_result(p) for p in probe_results), key=lambda p: (p.ticker, p.day, p.expiry, p.dte, p.status, tuple(p.reasons))))
     by_key: defaultdict[tuple[str, str, str | None, int], list[ProbeResult]] = defaultdict(list)
     for p in validated_probes: by_key[(p.ticker, p.day, p.expiry, p.dte)].append(p)
@@ -455,13 +484,12 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
         if matches[0].status != "PASS": exclusions[key] = f"probe_{matches[0].status.lower()}"; continue
         try:
             binding = _validate_calendar_binding(matches[0].evidence.get("calendar_binding"), ticker=ticker, day=day, expiry=expiry, dte=dte)
-            if raw.get("calendar_binding") is not None:
-                _validate_calendar_binding(raw["calendar_binding"], ticker=ticker, day=day, expiry=expiry, dte=dte, expected=binding)
-            elif calendar_snapshot is not None:
-                generated = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
-                _validate_calendar_binding(generated, ticker=ticker, day=day, expiry=expiry, dte=dte, expected=binding)
-            else:
+            if calendar_snapshot is None:
                 raise ValueError("calendar snapshot is required for manifest binding")
+            generated = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
+            _validate_calendar_binding(generated, ticker=ticker, day=day, expiry=expiry, dte=dte, expected=binding, calendar_snapshot=calendar_snapshot)
+            if raw.get("calendar_binding") is not None:
+                _validate_calendar_binding(raw["calendar_binding"], ticker=ticker, day=day, expiry=expiry, dte=dte, expected=binding, calendar_snapshot=calendar_snapshot)
         except (TypeError, ValueError, CalendarGapError) as exc:
             exclusions[key] = f"calendar_binding:{exc}"; continue
         try: candidate = normalize_candidate(raw, selection_date=manifest_selection_date, source_list=manifest_source_list)

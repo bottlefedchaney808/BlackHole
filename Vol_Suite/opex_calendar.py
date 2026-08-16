@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .provenance_contract import canonical_json_bytes
+from .provenance_contract import canonical_json_bytes, canonical_sha256
 
 _HEX64 = set("0123456789abcdefABCDEF")
 _ALLOWED_EVENTS = {"OPEX", "FOMC", "EARNINGS"}
@@ -274,6 +274,11 @@ def calendar_hash(snapshot: CalendarSnapshot) -> str:
     return snapshot.snapshot_hash
 
 
+def resolver_code_hash(snapshot: CalendarSnapshot) -> str:
+    """Return the shared canonical identity of the frozen resolver version."""
+    return canonical_sha256({"resolver_code_version": snapshot.resolver_code_version})
+
+
 def standard_monthly_candidate(year: int, month: int) -> date:
     if not 1 <= month <= 12:
         raise ValueError("month must be between 1 and 12")
@@ -460,9 +465,10 @@ def calendar_for_probe(snapshot: CalendarSnapshot, *, ticker: str, calendar_day:
     event_windows = {event.event_id: {"window_id": event.window_id, "window_start": event.window_start, "window_end": event.window_end, "window_policy": window_policy} for event in resolved_events}
     first_window = resolved_events[0]
     event_source_hashes = [source_hash for event in resolved_events for source_hash in event.source_hashes]
-    binding = {"ticker": ticker, "calendar_day": calendar_day, "nominal_date": opex.nominal_date, "observed_expiry": opex.observed_expiry_date, "expiry": expiry, "dte": dte, "exact_dte": (observed - day).days, "session_id": opex.session_id, "session_status": opex.session_status, "regular_open": opex.regular_open, "regular_close": opex.regular_close, "early_close": opex.early_close, "close_reason": opex.close_reason, "settlement_style": opex.settlement_style, "settlement_timestamp": opex.settlement_timestamp, "event_ids": event_ids, "event_windows": event_windows, "window_id": first_window.window_id, "window_start": first_window.window_start, "window_end": first_window.window_end, "timezone": snapshot.timezone, "as_of": as_of, "snapshot_hash": snapshot.snapshot_hash, "calendar_hash": snapshot.snapshot_hash, "source_hashes": sorted({*opex.source_hashes, *event_source_hashes, str(session_source["content_sha256"])}), "calendar_policy_version": snapshot.calendar_policy_version, "resolver_code_version": snapshot.resolver_code_version, "window_policy": window_policy}
+    source_hashes = sorted({*opex.source_hashes, *event_source_hashes, str(session_source["content_sha256"])})
+    binding = {"ticker": ticker, "calendar_day": calendar_day, "nominal_date": opex.nominal_date, "observed_expiry": opex.observed_expiry_date, "observed_expiry_date": opex.observed_expiry_date, "expiry": expiry, "dte": dte, "exact_dte": (observed - day).days, "session_id": opex.session_id, "observed_session_id": opex.session_id, "session_status": opex.session_status, "regular_open": opex.regular_open, "regular_close": opex.regular_close, "early_close": opex.early_close, "close_reason": opex.close_reason, "settlement_style": opex.settlement_style, "settlement_timestamp": opex.settlement_timestamp, "event_ids": event_ids, "event_windows": event_windows, "event_window_id": first_window.window_id, "window_id": first_window.window_id, "window_start": first_window.window_start, "window_end": first_window.window_end, "timezone": snapshot.timezone, "as_of": as_of, "snapshot_hash": snapshot.snapshot_hash, "calendar_hash": snapshot.snapshot_hash, "source_hashes": source_hashes, "calendar_policy_version": snapshot.calendar_policy_version, "resolver_code_version": snapshot.resolver_code_version, "resolver_code_hash": resolver_code_hash(snapshot), "window_policy": window_policy}
     binding["calendar_binding_hash"] = _hash(binding)
     return MappingProxyType({k: _freeze(v) for k, v in binding.items()})
 
 
-__all__ = ["CalendarGapError", "CalendarSnapshot", "EventWindow", "OpExRecord", "calendar_for_probe", "calendar_hash", "canonical_calendar_bytes", "load_snapshot", "resolve_event_window", "resolve_opex", "standard_monthly_candidate"]
+__all__ = ["CalendarGapError", "CalendarSnapshot", "EventWindow", "OpExRecord", "calendar_for_probe", "calendar_hash", "canonical_calendar_bytes", "load_snapshot", "resolve_event_window", "resolve_opex", "resolver_code_hash", "standard_monthly_candidate"]

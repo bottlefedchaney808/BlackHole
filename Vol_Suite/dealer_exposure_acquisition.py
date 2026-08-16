@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .dealer_exposure_universe import DTE_STRATA, EVENT_HABITATS, held_pairs_from_paths
+from .dealer_exposure_universe import DTE_STRATA, EVENT_HABITATS, _validate_calendar_binding, held_pairs_from_paths, validate_probe_result
 from .provenance_contract import (
     canonical_json_bytes,
     canonical_sha256,
@@ -113,12 +113,23 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
         pair = (ticker, day)
         excluded = pair in held
         binding = raw.get("calendar_binding")
-        if binding is None and calendar_snapshot is not None and not excluded:
-            try:
-                binding = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
-            except (AttributeError, CalendarGapError, TypeError, ValueError) as exc:
-                raise ValueError(f"calendar binding: {exc}") from exc
-        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair), "calendar_binding": dict(binding) if isinstance(binding, Mapping) else binding, **({"declared_timezone": raw["declared_timezone"]} if raw.get("declared_timezone") is not None else {})}
+        if not excluded:
+            if calendar_snapshot is None:
+                if isinstance(binding, Mapping):
+                    raise ValueError("calendar snapshot is required to validate a caller calendar binding")
+                # Legacy census construction remains network-free, but this
+                # unbound row is never eligible for non-dry-run acquisition.
+                binding = None
+            else:
+                try:
+                    if not isinstance(binding, Mapping):
+                        binding = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
+                    binding = _validate_calendar_binding(binding, ticker=ticker, day=day, expiry=expiry, dte=dte, calendar_snapshot=calendar_snapshot)
+                except (AttributeError, CalendarGapError, TypeError, ValueError) as exc:
+                    raise ValueError(f"calendar binding: {exc}") from exc
+        elif isinstance(binding, Mapping):
+            binding = _validate_calendar_binding(binding, ticker=ticker, day=day, expiry=expiry, dte=dte)
+        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair), "calendar_binding": binding, **({"declared_timezone": raw["declared_timezone"]} if raw.get("declared_timezone") is not None else {})}
         previous = result_by_key.get(key)
         if previous is None or canonical_json_bytes(item) < canonical_json_bytes(previous):
             result_by_key[key] = item
@@ -363,6 +374,8 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
                 "calendar_day": unit.get("calendar_day"), "canonical_input_hash": unit.get("canonical_input_hash"),
                 "raw_payload_hash": raw_hash, "status": status,
                 "expiry": unit.get("expiry"), "dte": unit.get("dte"),
+                "request_identity": _probe_request(unit), "calendar_binding": unit.get("calendar_binding"),
+                "source_hashes": artifact.get("source_hashes"),
                 "imputed": False, "no_imputation": True}
     artifact["artifact_manifest"] = manifest
     artifact["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
@@ -403,7 +416,9 @@ def cluster_same_day(units: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, 
 
 
 def _probe_request(unit: Mapping[str, Any]) -> dict[str, Any]:
-    return {k: unit[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")}
+    request = {k: unit[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")}
+    request["calendar_binding"] = unit.get("calendar_binding")
+    return request
 
 
 def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None) -> list[dict[str, Any]]:
@@ -424,23 +439,54 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
             response_status = response.get("response_status", response.get("status_code"))
             response_counts = dict(response.get("response_counts", response.get("counts", {})) or {})
             source_counts = dict(response.get("source_counts", {}) or {})
+            evidence = dict(response.get("evidence", {}) or {})
+            if "calendar_binding" in response:
+                evidence["calendar_binding"] = response["calendar_binding"]
             validated = status == "PASS" and response_status is not None and bool(response_counts) and bool(source_counts)
-            results.append({"candidate_key": unit["candidate_key"], "status": status, "reason": response.get("reason"), "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True})
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": response.get("reason"), "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
             results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True})
     return results
 
 
 def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Admit candidates only when their corresponding validated probe is PASS."""
-    by_key = {p.get("candidate_key"): p for p in probes if p.get("status") == "PASS" and p.get("validated") is True and p.get("invoked") is True}
-    return [dict(u) for u in sorted(schedule, key=lambda x: x["candidate_key"]) if u.get("candidate_key") in by_key and not u.get("held_pair_exclusion")]
+    """Admit only PASS probes with a recomputed, exact calendar binding."""
+    by_key: dict[str, Mapping[str, Any]] = {}
+    for probe in probes:
+        if probe.get("status") != "PASS" or probe.get("validated") is not True or probe.get("invoked") is not True:
+            continue
+        key = probe.get("candidate_key")
+        evidence = probe.get("evidence")
+        binding = evidence.get("calendar_binding") if isinstance(evidence, Mapping) else None
+        if isinstance(key, str) and isinstance(binding, Mapping):
+            try:
+                checked = _validate_calendar_binding(binding, ticker=str(probe.get("ticker", "")), day=str(probe.get("day", "")), expiry=str(probe.get("expiry", "")), dte=int(probe.get("dte")))
+                if checked == dict(binding):
+                    by_key[key] = probe
+            except (TypeError, ValueError):
+                continue
+    admitted = []
+    for unit in sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"]):
+        probe = by_key.get(unit.get("candidate_key")); schedule_binding = unit.get("calendar_binding")
+        if unit.get("held_pair_exclusion") or probe is None or not isinstance(schedule_binding, Mapping):
+            continue
+        if dict(probe["evidence"]["calendar_binding"]) != dict(schedule_binding):
+            continue
+        admitted.append(unit)
+    return admitted
 
 
 def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None) -> dict[str, Any]:
     if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1": raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
     if not dry_run and not approval: raise AcquisitionGateError("explicit approval is required")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
+    if not (dry_run or probe_only):
+        for unit in ordered:
+            if not unit.get("held_pair_exclusion"):
+                try:
+                    _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit.get("ticker")), day=str(unit.get("calendar_day")), expiry=str(unit.get("expiry")), dte=int(unit.get("dte")))
+                except (TypeError, ValueError) as exc:
+                    raise AcquisitionGateError(f"calendar binding gate failed before probes: {exc}") from exc
     probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash)
     primary_schedule = select_primary_schedule(ordered, probes)
     primary_keys = {u["candidate_key"] for u in primary_schedule}
@@ -477,9 +523,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 item = _unit_from_payload(unit, payload)
         item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
         payloads[unit["candidate_key"]] = payload
-        manifest = {"candidate_key": unit["candidate_key"], "raw_payload_hash": item["raw_payload_hash"], "status": status,
-                    "expiry": unit.get("expiry"), "dte": unit.get("dte"),
-                    "imputed": False, "no_imputation": True}
+        manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "request_identity": _probe_request(unit), "calendar_binding": unit.get("calendar_binding"), "raw_payload_hash": item["raw_payload_hash"], "source_hashes": item.get("source_hashes"), "status": status, "imputed": False, "no_imputation": True}
         item["artifact_manifest"] = manifest
         item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
         item["artifact_hash"] = _hash(manifest)
@@ -503,7 +547,8 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                     "chain_source_identity", "chain_source_hash", "iv_source_ts",
                     "breach_window_start_prov", "source_hashes", "pre_window_observations", "same_day_cluster", "iv_before_ts",
                     "iv_before_value", "iv_source_value", "delta_iv_aggregation",
-                    "delta_iv_aggregation_version", "expiry", "dte", "imputed", "no_imputation")}
+                    "delta_iv_aggregation_version", "expiry", "dte", "calendar_binding", "imputed", "no_imputation")}
+                manifest["request_identity"] = _probe_request(item)
                 item["artifact_manifest"] = manifest
                 item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
                 item["artifact_hash"] = _hash(manifest)
@@ -516,6 +561,8 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             "status": item.get("status"),
             "artifact_manifest": item["artifact_manifest"],
             "source_hashes": item.get("source_hashes"),
+            "calendar_binding": item.get("calendar_binding"),
+            "request_identity": item["artifact_manifest"].get("request_identity"),
             "payload_bytes": payloads.get(item["candidate_key"]),
             "ticker": item.get("ticker"),
             "expiry": item.get("expiry"),

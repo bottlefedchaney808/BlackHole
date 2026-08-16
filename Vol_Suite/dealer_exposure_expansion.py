@@ -84,6 +84,8 @@ def build_expansion_manifest(
     raw_rows = [dict(row) for row in candidates]
     held = {(str(t).strip().lstrip("$").upper(), str(d)) for t, d in held_pairs}
     held |= held_pairs_from_paths(held_paths)
+    if raw_rows and calendar_snapshot is None and any((str(row.get("ticker", "")).strip().lstrip("$").upper(), str(row.get("calendar_day", row.get("day", row.get("date"))))) not in held for row in raw_rows):
+        raise ExpansionApprovalError("calendar snapshot is required for acquisition-eligible manifest")
     held_refs = {pair: "held-reference" for pair in held}
     for path in held_paths:
         path_name = Path(path).name
@@ -517,12 +519,15 @@ def run_expansion_plan(
     executor: Callable[[Mapping[str, Any]], Any] | None = None,
     write_manifest: bool = False,
     acquisition_evidence: Mapping[str, Any] | None = None,
+    calendar_snapshot: Any | None = None,
+    as_of: str | None = None,
+    window_policy: str = "OPEX_DAY",
 ) -> dict[str, Any]:
     if not dry_run and not approve_network:
         raise ExpansionApprovalError("explicit --approve-network approval is required")
     if not dry_run and executor is None:
         raise ExpansionApprovalError("an injected executor is required after --approve-network")
-    result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root)
+    result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
     if not dry_run:
         result["mode"] = "approved-execution"
         admitted, reasons = _execution_gate(result, acquisition_evidence)

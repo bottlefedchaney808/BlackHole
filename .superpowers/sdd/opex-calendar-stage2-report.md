@@ -28,3 +28,18 @@ Added `Vol_Suite/tests/test_task1_opex_binding.py` with focused network-free fix
 ## Out of scope
 
 Authorization, Task 4 calendar consumption, source adapters, live acquisition, and expiry-selector compatibility were not implemented.
+
+## Stage 2 review remediation (2026-08-15)
+
+- Calendar-bound acquisition candidates now resolve from an injected validated `CalendarSnapshot`; caller-supplied bindings are evidence only and are rejected unless they exactly match a recomputed OpEx binding.
+- OpEx bindings now include and hash `resolver_code_hash`, observed-expiry/session/window aliases, settlement identity, source hashes, exact DTE, and point-in-time `as_of`; `calendar_binding_hash` is recomputed with the shared canonical SHA-256 primitive.
+- PASS probe selection requires complete calendar evidence, strict binding equality to the candidate schedule, and validated/invoked markers. Unbound PASS probes cannot bypass the selector, and the heavy executor gate validates every non-held unit before invoking an injected fetcher.
+- Artifact manifests and registry entries persist the complete calendar binding and request identity alongside exact expiry/DTE and source/raw hashes.
+- Legacy held-pair extraction and dry-run/probe-only paths remain network-free; unbound legacy census rows are never eligible for non-dry-run acquisition.
+
+### Verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest Vol_Suite/tests/test_task1_opex_binding.py Vol_Suite/tests/test_opex_calendar.py -q`: **34 passed**.
+- `python -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/dealer_exposure_universe.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py`: passed.
+- `git diff --check`: passed.
+- Ruff was not available on this host (`ruff: command not found`). The pre-existing legacy acquisition/universe tests still encode the pre-calendar contract and fail when run unchanged; the destructive Stage 2 regressions cover the new fail-closed contract.
