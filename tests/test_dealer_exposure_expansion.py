@@ -467,3 +467,24 @@ def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):
     assert result["network_fetch_allowed"] is True
     assert result["execution_audit"]["blocked"] == []
     assert result["execution_audit"]["invoked"] == [u["candidate_key"] for u in plan["units"]]
+
+
+def test_expansion_prewindow_rejects_extra_observation_and_wrong_cutoff_day():
+    unit = {
+        "declared_timezone": "America/New_York", "calendar_day": "2026-08-17",
+        "breach_window_start_prov": "2026-08-17T15:00:00Z",
+        "pre_window_observations": [
+            {"role": "PRE_WINDOW", "timestamp": "2026-08-17T13:00:00Z", "iv": 0.2,
+             "source_identity": "before", "source_hash": "a" * 64},
+            {"role": "PRE_WINDOW", "timestamp": "2026-08-17T14:00:00Z", "iv": 0.3,
+             "source_identity": "source", "source_hash": "b" * 64},
+            {"role": "PRE_WINDOW", "timestamp": "2026-08-17T14:30:00Z", "iv": 0.4,
+             "source_identity": "extra", "source_hash": "c" * 64},
+        ],
+        "delta_iv_aggregation": "iv_source_minus_iv_before",
+        "delta_iv_aggregation_version": "1", "delta_iv_pre_window": 0.1,
+    }
+    assert expansion._validate_pre_window_observations(unit)
+    unit["pre_window_observations"] = unit["pre_window_observations"][:2]
+    unit["breach_window_start_prov"] = "2026-08-18T15:00:00Z"
+    assert expansion._validate_pre_window_observations(unit)

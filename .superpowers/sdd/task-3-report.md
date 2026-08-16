@@ -249,3 +249,23 @@ No acquisition, live-model/master, or secrets changes were made.
 - `git diff --check` — passed
 
 No acquisition/live/master/secrets changes were made.
+
+
+## Task 3 hardening implementation (2026-08-15)
+
+- Admission-side PRE_WINDOW now requires exactly two ordered timezone-qualified observations strictly before a local-day breach cutoff, source hashes bound to both unit and registry, explicit no-imputation, and exact finite IV subtraction/version.
+- Registry admission recomputes canonical artifact/payload hashes using shared provenance primitives, closes duplicated request/calendar/source identities, rejects payload/artifact mutation and cross-unit reuse, blocks raw ineligible/HARD_GAP evidence, and preserves immutable admitted evidence in the audit.
+- Expansion-side PRE_WINDOW validation rejects extra observations, wrong-day cutoffs, and non-exact delta arithmetic.
+- Added focused regressions in the acquisition and expansion test modules.
+
+### Verification
+
+- Focused Task 3 tests: `2 passed`.
+- `python -m py_compile Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py Vol_Suite/provenance_contract.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_expansion.py`: passed.
+- `git diff --check`: passed.
+- Ruff unavailable (`ruff: command not found`).
+- Plugin-isolated affected run: `85 passed, 7 failed`; the seven failures are existing common-input provenance fixture incompatibilities in the untouched Task 6 validator module.
+
+### Commit
+
+Task 3 commit: `22a6a72`.

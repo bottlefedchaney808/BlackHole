@@ -14,6 +14,7 @@ from Vol_Suite.dealer_exposure_acquisition import (
     cluster_same_day,
     execute_sequential_acquisition,
 )
+from Vol_Suite.dealer_exposure_acquisition import _strict_prewindow
 
 
 def row(ticker="AAPL", day="2026-08-17", expiry="2026-08-21", dte=4, sector="Tech"):
@@ -502,3 +503,24 @@ def test_output_dir_writes_auditable_artifact(tmp_path):
     assert saved["artifact_registry"]
     for entry in saved["artifact_registry"].values():
         assert {"artifact_hash", "raw_payload_hash", "artifact_manifest", "payload_bytes"} <= set(entry)
+
+
+def test_admission_prewindow_requires_exact_two_and_exact_delta():
+    unit = {
+        "pre_window_observations": [
+            {"role": "PRE_WINDOW", "timestamp": "2026-08-17T13:00:00Z", "iv": 0.2,
+             "source_identity": "before", "source_hash": "a" * 64},
+            {"role": "PRE_WINDOW", "timestamp": "2026-08-17T14:00:00Z", "iv": 0.3,
+             "source_identity": "source", "source_hash": "b" * 64},
+        ],
+        "declared_timezone": "UTC", "breach_window_start_prov": "2026-08-17T15:00:00Z",
+        "imputed": False, "no_imputation": True, "source_hashes": ["a" * 64, "b" * 64],
+        "delta_iv_aggregation": "iv_source_minus_iv_before",
+        "delta_iv_aggregation_version": "1", "delta_iv_pre_window": 0.10000000000001,
+    }
+    registry = {"source_hashes": ["a" * 64, "b" * 64]}
+    assert _strict_prewindow(unit, {"calendar_day": "2026-08-17"}, registry)
+    unit["delta_iv_pre_window"] = 0.3 - 0.2
+    assert _strict_prewindow(unit, {"calendar_day": "2026-08-17"}, registry) == []
+    unit["pre_window_observations"].append(dict(unit["pre_window_observations"][-1]))
+    assert _strict_prewindow(unit, {"calendar_day": "2026-08-17"}, registry)

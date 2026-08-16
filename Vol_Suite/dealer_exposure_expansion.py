@@ -322,8 +322,8 @@ _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 def _validate_pre_window_observations(unit: Mapping[str, Any]) -> list[str]:
     observations = unit.get("pre_window_observations")
-    if not isinstance(observations, list) or len(observations) < 2:
-        return ["two PRE_WINDOW observations are required"]
+    if not isinstance(observations, list) or len(observations) != 2:
+        return ["exactly two PRE_WINDOW observations are required"]
     timezone = unit.get("declared_timezone")
     try:
         zone = ZoneInfo(timezone) if isinstance(timezone, str) and timezone else None
@@ -337,6 +337,8 @@ def _validate_pre_window_observations(unit: Mapping[str, Any]) -> list[str]:
         if cutoff.tzinfo is None or cutoff.utcoffset() is None:
             raise ValueError("PRE_WINDOW cutoff must be timezone-qualified")
         cutoff = cutoff.astimezone(dt.UTC)
+        if cutoff.astimezone(zone).date().isoformat() != str(unit.get("calendar_day")):
+            return ["PRE_WINDOW breach/cutoff timestamp is wrong-day in declared timezone"]
         parsed: list[tuple[dt.datetime, float]] = []
         errors: list[str] = []
         for index, observation in enumerate(observations):
@@ -386,7 +388,7 @@ def _validate_pre_window_observations(unit: Mapping[str, Any]) -> list[str]:
             if delta is None or not math.isfinite(float(delta)):
                 return ["delta_iv_pre_window must be finite"]
             expected = parsed[-1][1] - parsed[0][1]
-            if not math.isclose(float(delta), expected, rel_tol=1e-12, abs_tol=1e-12):
+            if float(delta) != expected:
                 return ["delta_iv_pre_window does not bind ordered observations"]
     except (ZoneInfoNotFoundError, KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
         return [str(exc)]

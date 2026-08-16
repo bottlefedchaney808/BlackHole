@@ -31,6 +31,7 @@ from .opex_calendar import CalendarGapError, calendar_for_probe
 from .provenance_contract import (
     canonical_json_bytes,
     canonical_sha256,
+    sha256_bytes,
     validate_source_hashes,
 )
 from .dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_projection
@@ -59,6 +60,8 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
             raise ValueError("declared_timezone is required")
         cutoff_dt = _timestamp(cutoff)
         day = str(manifest_unit.get("calendar_day"))
+        if cutoff_dt.astimezone(zone).date().isoformat() != day:
+            raise ValueError("breach_window_start_prov must be on the local calendar day")
         parsed: list[tuple[dt.datetime, float, Mapping[str, Any]]] = []
         for index, observation in enumerate(observations):
             if not isinstance(observation, Mapping) or observation.get("role") != _PREWINDOW:
@@ -91,7 +94,12 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
         except (TypeError, ValueError) as exc:
             errors.append(f"registry source hashes are invalid: {exc}")
             registered = set()
-        if any(obs[2]["source_hash"] not in registered for obs in parsed):
+        try:
+            declared = set(validate_source_hashes(item.get("source_hashes")))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"unit source hashes are invalid: {exc}")
+            declared = set()
+        if any(obs[2]["source_hash"] not in registered or obs[2]["source_hash"] not in declared for obs in parsed):
             errors.append("PRE_WINDOW source hash is absent from the manifest/registry")
         if item.get("imputed") is not False or item.get("no_imputation") is not True:
             errors.append("PRE_WINDOW evidence must explicitly reject imputation")
@@ -100,7 +108,7 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
         delta = item.get("delta_iv_pre_window")
         if isinstance(delta, bool) or not isinstance(delta, (int, float)) or not math.isfinite(float(delta)):
             errors.append("delta_iv_pre_window must be finite")
-        elif not math.isclose(float(delta), parsed[1][1] - parsed[0][1], rel_tol=1e-12, abs_tol=1e-12):
+        elif float(delta) != parsed[1][1] - parsed[0][1]:
             errors.append("delta_iv_pre_window does not equal source-minus-before")
     except (TypeError, ValueError, OverflowError, OSError) as exc:
         errors.append(str(exc))
@@ -247,6 +255,48 @@ def _immutable(value: Any) -> Any:
     return value
 
 
+def _canonical_payload_sha256(entry: Mapping[str, Any]) -> str:
+    """Hash the exact registered payload bytes using shared canonical semantics."""
+    payload = entry.get("payload_bytes", entry.get("payload"))
+    if payload is None:
+        raise ValueError("registry entry lacks canonical payload")
+    if isinstance(payload, bytes):
+        return sha256_bytes(payload)
+    if isinstance(payload, str):
+        return sha256_bytes(payload.encode("utf-8"))
+    return canonical_sha256(payload)
+
+
+def _validate_registry_attestation(item: Mapping[str, Any], entry: Mapping[str, Any], artifact_hash: str) -> None:
+    """Recompute and close every artifact, payload, request, calendar, and source identity."""
+    if str(entry.get("artifact_hash", "")).lower() != artifact_hash.lower():
+        raise ValueError("registry artifact binding does not match")
+    manifest = entry.get("artifact_manifest")
+    if not isinstance(manifest, Mapping):
+        raise ValueError("registry entry lacks canonical artifact manifest")
+    if canonical_sha256(manifest) != artifact_hash.lower():
+        raise ValueError("artifact hash does not match canonical registry manifest")
+    payload_hash = _canonical_payload_sha256(entry)
+    if payload_hash != str(entry.get("raw_payload_hash", "")).lower() or payload_hash != str(item.get("raw_payload_hash", "")).lower():
+        raise ValueError("raw payload hash does not match canonical registered payload")
+    if str(manifest.get("raw_payload_hash", "")).lower() != payload_hash:
+        raise ValueError("artifact manifest raw payload hash is detached")
+    if entry.get("artifact_basis") is not None and entry.get("artifact_basis") != canonical_json_bytes(manifest).decode("utf-8"):
+        raise ValueError("artifact basis is not canonical")
+    for field in ("candidate_key", "ticker", "calendar_day", "expiry", "dte", "status", "canonical_input_hash", "source_hashes", "calendar_binding"):
+        if entry.get(field) != manifest.get(field) or entry.get(field) != item.get(field):
+            raise ValueError(f"registry {field} identity is detached")
+    if entry.get("request_identity", manifest.get("request_identity")) != manifest.get("request_identity"):
+        raise ValueError("registry request identity is detached")
+    if item.get("request_parameters") != manifest.get("request_identity"):
+        raise ValueError("request identity is detached from artifact manifest")
+    validate_source_hashes(entry.get("source_hashes"))
+    if validate_source_hashes(entry["source_hashes"]) != validate_source_hashes(item.get("source_hashes")):
+        raise ValueError("source hashes are detached from registry")
+    if item.get("breach_eligible") is not True or str(item.get("acquisition_decision", "")).upper() == "HARD_GAP":
+        raise ValueError("raw acquisition is not breach eligible")
+
+
 def _admission_failure(reasons: list[str], stages: list[str]) -> tuple[tuple[Any, ...], Mapping[str, Any]]:
     return (), _immutable({"admitted": False, "stages": stages, "admitted_keys": [], "blocked": reasons})
 
@@ -360,6 +410,8 @@ def admit_acquisition(
         if not isinstance(registry, Mapping) or not registry or (evidence.get("artifact_registry") is not None and evidence.get("artifact_registry") != registry):
             reasons.append("artifact registry is missing or detached")
         admitted: list[dict[str, Any]] = []
+        registry_artifacts: dict[str, str] = {}
+        registry_payloads: dict[str, str] = {}
         for item in raw_units:
             if not isinstance(item, Mapping):
                 continue
@@ -370,6 +422,18 @@ def admit_acquisition(
             if manifest_unit is None or not isinstance(entry, Mapping):
                 reasons.append(f"artifact/source closure missing for {key}")
                 continue
+            try:
+                normalized_artifact_hash = str(artifact_hash).lower()
+                if normalized_artifact_hash in registry_artifacts and registry_artifacts[normalized_artifact_hash] != key:
+                    raise ValueError("artifact registry entry is reused across candidate units")
+                _validate_registry_attestation(item, entry, normalized_artifact_hash)
+                payload_digest = _canonical_payload_sha256(entry)
+                if payload_digest in registry_payloads and registry_payloads[payload_digest] != key:
+                    raise ValueError("canonical payload is reused across candidate units")
+                registry_artifacts[normalized_artifact_hash] = key
+                registry_payloads[payload_digest] = key
+            except (TypeError, ValueError, KeyError) as exc:
+                reasons.append(f"artifact/source closure invalid for {key}: {exc}")
             if entry.get("candidate_key") != key or entry.get("artifact_hash") != artifact_hash or entry.get("artifact_manifest") != item.get("artifact_manifest"):
                 reasons.append(f"artifact registry closure mismatch for {key}")
             closure_fields = ("source_hashes", "calendar_binding", "request_identity", "raw_payload_hash", "artifact_hash", "artifact_manifest", "evidence")
@@ -390,9 +454,10 @@ def admit_acquisition(
                     reasons.append(f"artifact hash mutated for {key}")
             except (TypeError, ValueError):
                 reasons.append(f"artifact manifest is not canonical for {key}")
-            if entry.get("payload_bytes") is None and not entry.get("raw_payload_hash"):
+            if entry.get("payload_bytes") is None and entry.get("payload") is None:
                 reasons.append(f"raw payload identity is missing for {key}")
-            admitted.append(dict(item))
+            if not any(str(reason).endswith(f"for {key}") and "closure invalid" in str(reason) for reason in reasons):
+                admitted.append(dict(item))
         stages.append("registry/source/artifact closure")
         if auth.authorization_sha256() != auth_data["authorization_sha256"]:
             reasons.append("authorization self-hash is invalid")
@@ -404,7 +469,7 @@ def admit_acquisition(
             return _admission_failure(sorted(set(reasons)), stages)
         admitted.sort(key=lambda item: item["candidate_key"])
         frozen = tuple(_immutable(item) for item in admitted)
-        return frozen, _immutable({"admitted": True, "stages": stages + ["restricted executor handoff"], "admitted_keys": [item["candidate_key"] for item in admitted], "blocked": []})
+        return frozen, _immutable({"admitted": True, "stages": stages + ["restricted executor handoff"], "admitted_keys": [item["candidate_key"] for item in admitted], "blocked": [], "evidence": [dict(item) for item in admitted]})
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
         return _admission_failure([str(exc)], stages)
 
