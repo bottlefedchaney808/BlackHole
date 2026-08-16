@@ -186,6 +186,14 @@ pre.json {
 /* Live-run banner (dashboard/templates/suite.html) */
 .banner-live { border-color: var(--accent); box-shadow: 0 0 20px -4px var(--accent-glow); }
 .banner-live .body { display: flex; align-items: center; gap: 10px; }
+
+/* Share (quick-tunnel) control -- dashboard/templates/base.html */
+.share { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.share .label { color: var(--muted); font-size: 12px; }
+.share .status { color: var(--ok); font-size: 12px; font-weight: 600; }
+.share .status.idle { color: var(--muted); }
+.share .status.error { color: var(--err); }
+.share a.shareurl { font-family: var(--mono); font-size: 12px; word-break: break-all; max-width: 320px; }
 </style>
 </head>
 <body>
@@ -198,10 +206,91 @@ pre.json {
     <a href="/suites/options" class="{{ 'on' if active == 'suites' else '' }}">Suite output</a>
     <a href="/tools" class="{{ 'on' if active == 'tools' else '' }}">Tools</a>
   </nav>
+  <div class="share" id="shareControl">
+    <span class="label">Share:</span>
+    <span class="status idle" id="shareStatus">Not sharing</span>
+    <a class="shareurl" id="shareUrl" href="#" target="_blank" rel="noopener" style="display:none"></a>
+    <button type="button" id="shareBtn" class="ghost">Start sharing</button>
+  </div>
 </header>
 <main>
 {% block content %}{% endblock %}
 </main>
 {% block scripts %}{% endblock %}
+<script>
+(function () {
+  var control = document.getElementById('shareControl');
+  if (!control) return;
+  var statusEl = document.getElementById('shareStatus');
+  var urlEl = document.getElementById('shareUrl');
+  var btn = document.getElementById('shareBtn');
+
+  function render(s) {
+    if (s.state === 'running') {
+      statusEl.textContent = 'Sharing';
+      statusEl.className = 'status';
+      urlEl.textContent = s.url;
+      urlEl.href = s.url;
+      urlEl.style.display = '';
+      btn.textContent = 'Stop sharing';
+      btn.disabled = false;
+    } else if (s.state === 'connecting') {
+      statusEl.textContent = 'Connecting…';
+      statusEl.className = 'status';
+      urlEl.style.display = 'none';
+      btn.textContent = 'Starting…';
+      btn.disabled = true;
+    } else {
+      statusEl.textContent = s.last_error ? 'Error' : 'Not sharing';
+      statusEl.className = 'status ' + (s.last_error ? 'error' : 'idle');
+      urlEl.style.display = 'none';
+      btn.textContent = 'Start sharing';
+      btn.disabled = false;
+      if (s.last_error) console.warn('share:', s.last_error);
+    }
+  }
+
+  function poll() {
+    fetch('/share/status')
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function (e) { console.error('share poll failed', e); });
+  }
+
+  btn.addEventListener('click', function () {
+    if (btn.textContent === 'Start sharing') {
+      var ok = window.confirm(
+        'This exposes your dashboard publicly with NO password. ' +
+        'Only share the link with people you trust. Continue?'
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      fetch('/share/start', { method: 'POST' })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+        .then(function (res) {
+          if (!res.ok) {
+            statusEl.textContent = 'Error';
+            statusEl.className = 'status error';
+            btn.textContent = 'Start sharing';
+            btn.disabled = false;
+            console.error('share start failed:', res.body);
+            return;
+          }
+          render(res.body);
+        })
+        .catch(function (e) { console.error('share start error', e); });
+    } else if (btn.textContent === 'Stop sharing') {
+      fetch('/share/stop', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(render)
+        .catch(function (e) { console.error('share stop error', e); });
+    }
+  });
+
+  poll();
+  setInterval(poll, 4000);
+})();
+</script>
 </body>
 </html>
