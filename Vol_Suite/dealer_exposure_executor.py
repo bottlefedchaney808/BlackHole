@@ -84,6 +84,26 @@ def _valid_hash(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value.lower())
 
 
+def _json_plain(value: Any) -> Any:
+    """Recursively convert frozen Mapping/tuple wrappers to plain dict/list.
+
+    Admitted units are deeply frozen to ``MappingProxyType``/``tuple`` before
+    reaching the executor (see ``_immutable`` in ``dealer_exposure_acquisition``).
+    ``canonical_json_bytes`` uses the stdlib ``json`` module, which cannot
+    serialize ``MappingProxyType`` directly, so any field that may itself be a
+    nested mapping (e.g. a real ``calendar_binding``) must be converted back to
+    plain JSON types before it is embedded in signed request/receipt material.
+    This is a pure representation conversion, not a trust boundary: it changes
+    nothing about which values are permitted, only how a permitted value is
+    serialized.
+    """
+    if isinstance(value, Mapping):
+        return {str(k): _json_plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_plain(v) for v in value]
+    return value
+
+
 class RestrictedExecutor:
     """Run one exact registered adapter over one exact admitted candidate scope."""
 
@@ -134,6 +154,23 @@ class RestrictedExecutor:
         if context.call.__func__ is not _AdmissionContext.call:
             raise ExecutorFailure("runtime context atomic call implementation is detached")
 
+    def _check_executor_identity(self) -> None:
+        """Enforce the authorized executor identity/entrypoint on every dispatch path.
+
+        A registry adapter with a merely allowed ``path``/``method``/``scope`` is not
+        sufficient authorization to dispatch: the authorization must also name this
+        exact registered executor.  This is checked here, inside ``run()``'s
+        fail-closed try block, rather than in the constructor, so that a mismatch is
+        always surfaced as a structured ``FAILED_EXECUTION``/``HARD_GAP`` audit with
+        zero adapter dispatch and never as an uncaught exception, regardless of
+        whether the caller pre-validated construction via ``_authorized_executor``.
+        """
+        policy = self.authorization.to_mapping()["executor_policy"]
+        if policy.get("allowed_executor_id") != self.registration.identity:
+            raise ExecutorFailure("registered adapter identity is outside the authorized executor id")
+        if policy.get("allowed_executor_entrypoint") != self.registration.endpoint:
+            raise ExecutorFailure("registered adapter entrypoint is outside the authorized executor entrypoint")
+
     def _attest_entrypoint(self) -> None:
         entrypoint = getattr(type(self.registration.adapter), "__call__", None)
         code = getattr(entrypoint, "__code__", None)
@@ -183,7 +220,44 @@ class RestrictedExecutor:
         # Keep the complete candidate/request identity in the signed request
         # material.  In particular, habitat/sector/source must not be inferred
         # later from a candidate key or from an adapter response.
-        return {"registry_key": self.registration.registry_key, "entrypoint": self.registration.identity, "entrypoint_code_hash": self.registration.code_hash, "family": self.registration.family, "path": self.registration.endpoint, "method": self.registration.method, "scope_binding": self.registration.scope, "candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "habitat": unit.get("habitat"), "sector": unit.get("sector"), "candidate_source": unit.get("candidate_source"), "calendar_binding": unit.get("calendar_binding"), "calendar_binding_hash": unit.get("calendar_binding_hash"), "canonical_input_hash": unit.get("canonical_input_hash")}
+        return {"registry_key": self.registration.registry_key, "entrypoint": self.registration.identity, "entrypoint_code_hash": self.registration.code_hash, "family": self.registration.family, "path": self.registration.endpoint, "method": self.registration.method, "scope_binding": self.registration.scope, "candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "habitat": unit.get("habitat"), "sector": unit.get("sector"), "candidate_source": unit.get("candidate_source"), "calendar_binding": _json_plain(unit.get("calendar_binding")), "calendar_binding_hash": unit.get("calendar_binding_hash"), "canonical_input_hash": unit.get("canonical_input_hash")}
+
+    def _build_receipt(self, unit: Mapping[str, Any], request: Mapping[str, Any], response: Mapping[str, Any]) -> dict[str, Any]:
+        receipt = {"candidate_key": unit["candidate_key"], "request_sha256": request["request_sha256"], "response_payload_sha256": response["payload_sha256"], "source_hashes": list(validate_source_hashes(unit["source_hashes"])), "artifact_hash": unit["artifact_hash"], "manifest_hash": unit["manifest_hash"], "authorization_hash": unit["authorization_hash"], "registry_key": self.registration.registry_key, "entrypoint_code_hash": self.registration.code_hash, "pre_window_evidence_hashes": list(unit["pre_window_evidence_hashes"])}
+        required = ("source_hashes", "artifact_hash", "registry_key", "authorization_hash", "manifest_hash", "pre_window_evidence_hashes")
+        if any(not receipt.get(k) for k in required):
+            raise ExecutorFailure("generated call receipt is incomplete")
+        receipt["receipt_sha256"] = sha256_bytes(canonical_json_bytes(receipt))
+        return receipt
+
+    _PROBE_RECEIPT_PASSING_STATUSES = frozenset({"PASS"})
+
+    def build_post_validated_probe_receipt(self, unit: Mapping[str, Any], request: Mapping[str, Any], response: Mapping[str, Any]) -> dict[str, Any]:
+        """Mint a probe receipt strictly after the caller's post-dispatch validation.
+
+        ``unit``, ``request``, and ``response`` must be the exact admitted unit and
+        the matching ``request``/``response`` audit entries returned by a prior
+        ``run(..., call_kind="probe")`` dispatch for this candidate.  Callers must
+        invoke this only once their own post-dispatch validation (status/success/
+        source/count/calendar evidence -- see ``run_availability_probes``) has fully
+        passed.  A raw probe response is never receipt-eligible on its own; missing
+        or incomplete post-validation evidence must fail closed with no receipt.
+
+        This contract is not enforced purely by caller convention/docstring: the
+        method itself also inspects ``response["status"]`` (the same evidence field
+        every caller already has, from the executor's own dispatch audit) and
+        refuses to mint a receipt unless it is in the allowed passing set.  This is
+        deliberately in addition to, not a replacement for, the caller's own fuller
+        post-dispatch validation (response_status/counts/source_counts/calendar
+        binding) -- a caller that skips its own validation and passes through a
+        HARD_GAP/INELIGIBLE response's audit entries still gets no receipt.
+        """
+        if request.get("candidate_key") != unit.get("candidate_key") or response.get("candidate_key") != unit.get("candidate_key"):
+            raise ExecutorFailure("post-validated probe receipt request/response identity is detached")
+        status = str(response.get("status", "")).upper()
+        if status not in self._PROBE_RECEIPT_PASSING_STATUSES:
+            raise ExecutorFailure("post-validated probe receipt requires a passing dispatch status")
+        return self._build_receipt(unit, request, response)
 
     def run(self, units: Sequence[Mapping[str, Any]], context: Any, *, call_kind: str = "heavy") -> dict[str, Any]:
         audit: dict[str, Any] = {"invocations": [], "requests": [], "responses": [], "receipts": [], "finalized_usage": {}}
@@ -192,6 +266,7 @@ class RestrictedExecutor:
         results: list[Mapping[str, Any]] = []
         try:
             self._check_context(context)
+            self._check_executor_identity()
             admitted = self._check_units(units)
         except BaseException as exc:
             return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
@@ -216,17 +291,18 @@ class RestrictedExecutor:
                 response = {"candidate_key": unit["candidate_key"], "status": status, "payload_sha256": sha256_bytes(canonical_json_bytes(result))}
                 audit["responses"].append(response)
                 results.append(result)
-                # A raw probe response is deliberately not receipt-eligible.
-                # The acquisition validator may classify it as a hard gap.
-                # Heavy responses, and explicitly post-validated probe
-                # responses, are the only responses that receive a receipt.
-                receipt_eligible = call_kind == "heavy" or (result.get("validated") is True and result.get("success") is True)
-                if receipt_eligible:
-                    receipt = {"candidate_key": unit["candidate_key"], "request_sha256": request["request_sha256"], "response_payload_sha256": response["payload_sha256"], "source_hashes": list(validate_source_hashes(unit["source_hashes"])), "artifact_hash": unit["artifact_hash"], "manifest_hash": unit["manifest_hash"], "authorization_hash": unit["authorization_hash"], "registry_key": self.registration.registry_key, "entrypoint_code_hash": self.registration.code_hash, "pre_window_evidence_hashes": list(unit["pre_window_evidence_hashes"])}
-                    required = ("source_hashes", "artifact_hash", "registry_key", "authorization_hash", "manifest_hash", "pre_window_evidence_hashes")
-                    if any(not receipt.get(k) for k in required):
-                        raise ExecutorFailure("generated call receipt is incomplete")
-                    receipt["receipt_sha256"] = sha256_bytes(canonical_json_bytes(receipt))
+                # A raw probe response -- including one that self-reports
+                # validated=True/success=True -- is never receipt-eligible on
+                # its own.  Adapter-returned flags are not authorization
+                # evidence.  Probe receipts may only be minted afterwards, by
+                # the caller, via build_post_validated_probe_receipt(), once
+                # the caller's own post-dispatch validation (status/success/
+                # source/count/calendar evidence) has fully passed.  Heavy
+                # responses keep the stricter in-line success check above and
+                # receive their receipt immediately, since heavy execution has
+                # no further post-dispatch validation stage.
+                if call_kind == "heavy":
+                    receipt = self._build_receipt(unit, request, response)
                     audit["receipts"].append(receipt)
                 audit["finalized_usage"] = dict(context.finalized_usage)
             except BaseException as exc:

@@ -14,10 +14,26 @@ from test_dealer_exposure_authorization import _authorization, _manifest
 H = "d" * 64
 
 
-def _context():
+def _context(registered=None, *, executor_id=None, executor_entrypoint=None):
+    """Build an authorization/context pair.
+
+    By default, ``allowed_executor_id``/``allowed_executor_entrypoint`` are set to
+    match ``registered``'s actual registration identity/endpoint exactly, so a
+    "happy path" caller that passes its registered adapter here gets a matching,
+    dispatch-eligible authorization.  Explicit ``executor_id``/``executor_entrypoint``
+    overrides let adversarial tests force a mismatch.
+    """
     manifest = _manifest()
     payload = _authorization(manifest)
     payload["executor_policy"]["network_fetch_allowed"] = True
+    if executor_id is not None:
+        payload["executor_policy"]["allowed_executor_id"] = executor_id
+    elif registered is not None:
+        payload["executor_policy"]["allowed_executor_id"] = registered._registration.identity
+    if executor_entrypoint is not None:
+        payload["executor_policy"]["allowed_executor_entrypoint"] = executor_entrypoint
+    elif registered is not None:
+        payload["executor_policy"]["allowed_executor_entrypoint"] = registered._registration.endpoint
     payload["authorization_sha256"] = canonical_sha256({k: v for k, v in payload.items() if k != "authorization_sha256"})
     auth = AcquisitionAuthorization.from_mapping(payload, candidate_manifest=manifest, now="2026-08-15T12:30:00+00:00")
     return auth, manifest, _AdmissionContext(auth, manifest)
@@ -76,8 +92,8 @@ def test_self_declared_metadata_mismatch_cannot_authorize_callable():
 
 
 def test_valid_registered_fake_adapter_emits_executor_receipt_and_all_hashes():
-    auth, manifest, context = _context()
     registry, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
     assert output["status"] == "SUCCESS"
     assert raw.calls
@@ -89,8 +105,8 @@ def test_valid_registered_fake_adapter_emits_executor_receipt_and_all_hashes():
 
 
 def test_missing_receipt_prerequisite_fails_closed_without_uncaught_exception():
-    auth, manifest, context = _context()
     _, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     unit = dict(_admitted(manifest, auth, registered)[0])
     unit.pop("artifact_hash")
     output = RestrictedExecutor(registered, auth).run((_immutable(unit),), context)
@@ -124,8 +140,8 @@ def test_exception_hard_stops_after_first_call():
             self.calls.append(unit)
             raise RuntimeError("boom")
 
-    auth, manifest, context = _context()
     _, raw, registered = _registered(Failing())
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
     assert output["status"] == "FAILED_EXECUTION"
     assert output["network_fetch_allowed"] is False
@@ -133,18 +149,18 @@ def test_exception_hard_stops_after_first_call():
 
 
 def test_real_context_ceilings_are_used_and_overrun_is_hard_gap():
-    auth, manifest, context = _context()
+    _, _, registered = _registered()
+    auth, manifest, context = _context(registered)
     with pytest.raises(TypeError):
         context.limits["heavy_calls"] = 0
-    _, _, registered = _registered()
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
     assert output["status"] == "SUCCESS"
     assert output["audit"]["finalized_usage"]["heavy_calls"] == 1
 
 
 def test_mutable_units_are_rejected_without_uncaught_exception():
-    auth, manifest, context = _context()
     _, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run([dict(manifest["units"][0])], context)
     assert output["status"] == "FAILED_EXECUTION"
     assert output["classification"] == "HARD_GAP"
@@ -158,8 +174,8 @@ def test_mutable_units_are_rejected_without_uncaught_exception():
     ("candidate_key", "candidate scope"),
 ])
 def test_malformed_held_or_detached_units_fail_closed_without_uncaught_exception(mutation, expected):
-    auth, manifest, context = _context()
     _, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     unit = dict(_admitted(manifest, auth, registered)[0])
     if mutation == "held_pair_exclusion":
         unit[mutation] = True
@@ -175,8 +191,8 @@ def test_malformed_held_or_detached_units_fail_closed_without_uncaught_exception
 
 
 def test_probe_accepts_raw_response_before_post_validation_and_emits_no_premature_receipt():
-    auth, manifest, context = _context()
     _, raw, registered = _registered(FakeAdapter({"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}))
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind="probe")
     assert output["status"] == "SUCCESS"
     assert output["results"][0]["status"] == "PASS"
@@ -185,8 +201,8 @@ def test_probe_accepts_raw_response_before_post_validation_and_emits_no_prematur
 
 
 def test_invalid_non_mapping_probe_response_is_structured_failure_without_dispatch_leak():
-    auth, manifest, context = _context()
     _, raw, registered = _registered(FakeAdapter(["invalid"]))
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind="probe")
     assert output["status"] == "FAILED_EXECUTION"
     assert output["classification"] == "HARD_GAP"
@@ -198,8 +214,8 @@ def test_missing_adapter_receipt_self_report_does_not_bypass_executor_audit():
         def __call__(self, unit):
             return {"status": "SUCCESS", "validated": True, "success": True, "calls": [{"path": "/evil", "method": "POST"}]}
 
-    auth, manifest, context = _context()
     _, _, registered = _registered(SelfReporting())
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
     assert output["status"] == "SUCCESS"
     assert output["audit"]["receipts"]
@@ -244,8 +260,8 @@ def test_directly_fabricated_registration_handle_is_hard_gap_without_dispatch():
 
 
 def test_post_registration_entrypoint_mutation_is_hard_gap_without_dispatch():
-    auth, manifest, context = _context()
     registry, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     original = type(raw).__call__
     try:
         def mutated(self, unit):
@@ -261,12 +277,52 @@ def test_post_registration_entrypoint_mutation_is_hard_gap_without_dispatch():
 
 
 def test_valid_registry_context_control_still_dispatches():
-    auth, manifest, context = _context()
     registry, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
     assert output["status"] == "SUCCESS"
     assert raw.calls
     assert registry
+
+
+def test_mismatched_allowed_executor_id_is_structured_failure_with_zero_dispatch():
+    # Review finding 1 (CRITICAL): a registry adapter with a merely allowed
+    # path/method/scope must not be able to dispatch when the authorization
+    # names a different executor id.  This must come back as a structured
+    # FAILED_EXECUTION/HARD_GAP audit, not an uncaught exception, and the
+    # adapter must never be invoked.
+    _, raw, registered = _registered()
+    auth, manifest, context = _context(registered, executor_id="some-other-executor-id")
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert output["network_fetch_allowed"] is False
+    assert "executor id" in output["reason"]
+    assert raw.calls == []
+    assert output["audit"]["receipts"] == []
+
+
+def test_mismatched_allowed_executor_entrypoint_is_structured_failure_with_zero_dispatch():
+    # Review finding 1 (CRITICAL), entrypoint half of the identity check.
+    _, raw, registered = _registered()
+    auth, manifest, context = _context(registered, executor_entrypoint="/some/other/endpoint")
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert output["network_fetch_allowed"] is False
+    assert "executor entrypoint" in output["reason"]
+    assert raw.calls == []
+    assert output["audit"]["receipts"] == []
+
+
+@pytest.mark.parametrize("call_kind", ["probe", "heavy"])
+def test_mismatched_executor_identity_blocks_both_probe_and_heavy_dispatch(call_kind):
+    _, raw, registered = _registered()
+    auth, manifest, context = _context(registered, executor_id="wrong-id")
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind=call_kind)
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert raw.calls == []
 
 
 @pytest.mark.parametrize("mutation", ["reset", "rollback", "lock", "limits", "blocked"])
@@ -295,13 +351,41 @@ def test_backing_context_state_tamper_is_hard_gap_before_dispatch(mutation):
     assert raw.calls == []
 
 
-def test_probe_call_kind_uses_same_receipt_contract_and_registered_control():
-    auth, manifest, context = _context()
+def test_probe_call_kind_self_reported_success_is_not_receipt_eligible_and_registered_control_still_dispatches():
+    # Contract-transition update (review finding 2): a probe adapter that
+    # self-reports validated=True/success=True -- the same default FakeAdapter
+    # result used for heavy dispatch -- must NOT receive a receipt from run()
+    # alone.  This replaces the prior version of this test, which asserted the
+    # opposite (a receipt was emitted directly off that adapter self-report);
+    # that assertion exercised exactly the broken trust behavior finding 2
+    # closes, so it is corrected rather than kept as coverage.
     registry, raw, registered = _registered()
+    auth, manifest, context = _context(registered)
     output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind="probe")
     assert output["status"] == "SUCCESS"
-    assert output["audit"]["receipts"][0]["receipt_sha256"]
+    assert output["audit"]["receipts"] == []
     assert raw.calls and registry
+
+
+def test_build_post_validated_probe_receipt_succeeds_only_after_caller_validation():
+    _, _, registered = _registered(FakeAdapter({"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}))
+    auth, manifest, context = _context(registered)
+    executor = RestrictedExecutor(registered, auth)
+    admitted = _admitted(manifest, auth, registered)
+    output = executor.run(admitted, context, call_kind="probe")
+    assert output["status"] == "SUCCESS"
+    assert output["audit"]["receipts"] == []
+    unit = admitted[0]
+    request = output["audit"]["requests"][0]
+    response = output["audit"]["responses"][0]
+    # Only after this stands in for the caller's own post-dispatch validation
+    # (status/success/source/count/calendar evidence, done in
+    # run_availability_probes) may a receipt be minted.
+    receipt = executor.build_post_validated_probe_receipt(unit, request, response)
+    assert len(receipt["receipt_sha256"]) == 64
+    assert receipt["candidate_key"] == unit["candidate_key"]
+    with pytest.raises(ExecutorFailure, match="detached"):
+        executor.build_post_validated_probe_receipt(unit, {**request, "candidate_key": "other"}, response)
 
 
 def test_mapping_proxy_is_deeply_immutable():

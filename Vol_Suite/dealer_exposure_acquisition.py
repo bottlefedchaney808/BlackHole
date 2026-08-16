@@ -356,7 +356,13 @@ def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization)
 
     Metadata on a caller-supplied callable is never authorization evidence.  The
     full RestrictedExecutor constructor is the shared trust-boundary check used
-    by expansion and the legacy acquisition/probe entry points.
+    by expansion and the legacy acquisition/probe entry points.  This also
+    enforces the authorized executor identity/entrypoint match (review finding
+    1): a registered adapter with an otherwise allowed path/method/scope is
+    still rejected here, before any dispatch, if the authorization names a
+    different executor id/entrypoint.  ``RestrictedExecutor.run()`` enforces
+    the identical check again immediately before dispatch, so this pre-check
+    being bypassed or stale can never itself authorize a call.
     """
     if executor is None or not isinstance(authorization, AcquisitionAuthorization):
         return False, {}, "registered adapter handle and authorization are required"
@@ -364,7 +370,8 @@ def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization)
         from .dealer_exposure_executor import RegisteredAdapter, RestrictedExecutor
         if not isinstance(executor, RegisteredAdapter):
             return False, {}, "unregistered adapter handle is forbidden"
-        RestrictedExecutor(executor, authorization)
+        instance = RestrictedExecutor(executor, authorization)
+        instance._check_executor_identity()
         registration = executor._registration
         identity = {"registry_key": registration.registry_key, "entrypoint": registration.identity, "endpoint": registration.endpoint, "request_method": registration.method, "scope_binding": registration.scope, "family": registration.family}
         return True, identity, ""
@@ -1043,7 +1050,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
     # Probe dispatch uses the exact same RestrictedExecutor boundary as heavy
     # acquisition.  The adapter handle is passed through unchanged; no caller
     # callable is invoked after the registry/policy checks.
-    from .dealer_exposure_executor import RestrictedExecutor
+    from .dealer_exposure_executor import ExecutorFailure, RestrictedExecutor
     executor = RestrictedExecutor(probe_fetcher, authorization)
     dispatch_units = []
     skipped: dict[str, dict[str, Any]] = {}
@@ -1062,6 +1069,14 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
     execution = executor.run(tuple(dispatch_units), authorization_context, call_kind="probe")
     response_by_key = {item.get("candidate_key"): item for item in execution.get("results", ()) if isinstance(item, Mapping)}
     usage = execution.get("audit", {}).get("finalized_usage", {})
+    # Raw probe responses are never receipt-eligible on their own; the executor
+    # deliberately withholds a probe receipt at dispatch time.  A receipt may
+    # only be minted below, via build_post_validated_probe_receipt(), once this
+    # function's own post-dispatch validation (status/response_status/counts/
+    # calendar evidence) has fully passed for that exact candidate.
+    dispatch_by_key = {item.get("candidate_key"): item for item in dispatch_units if isinstance(item, Mapping)}
+    request_audit_by_key = {item.get("candidate_key"): item for item in execution.get("audit", {}).get("requests", ()) if isinstance(item, Mapping)}
+    response_audit_by_key = {item.get("candidate_key"): item for item in execution.get("audit", {}).get("responses", ()) if isinstance(item, Mapping)}
     results = []
     for unit in ordered:
         request = _probe_request(unit)
@@ -1102,9 +1117,23 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
                 if status == "PASS" and unit.get("held_pair_exclusion"):
                     status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
                     reason = reason or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": usage, "executor_receipts": execution.get("audit", {}).get("receipts", ())})
+            executor_receipts: tuple[Mapping[str, Any], ...] = ()
+            if status == "PASS" and validated:
+                dispatch_unit = dispatch_by_key.get(unit["candidate_key"])
+                request_audit = request_audit_by_key.get(unit["candidate_key"])
+                response_audit = response_audit_by_key.get(unit["candidate_key"])
+                if dispatch_unit is None or request_audit is None or response_audit is None:
+                    status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
+                    reason = "COMPARISON_INVALID: post-validated receipt evidence is missing"
+                else:
+                    try:
+                        executor_receipts = (executor.build_post_validated_probe_receipt(dispatch_unit, request_audit, response_audit),)
+                    except ExecutorFailure as exc:
+                        status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
+                        reason = f"COMPARISON_INVALID: {exc}"
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": usage, "executor_receipts": executor_receipts})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
-            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID", "runtime_usage": dict(getattr(exc, "runtime_usage", usage)), "executor_receipts": execution.get("audit", {}).get("receipts", ())})
+            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID", "runtime_usage": dict(getattr(exc, "runtime_usage", usage)), "executor_receipts": ()})
     return results
 
 

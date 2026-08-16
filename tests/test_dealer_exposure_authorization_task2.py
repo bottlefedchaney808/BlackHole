@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 import threading
 
@@ -13,10 +14,11 @@ from Vol_Suite.dealer_exposure_acquisition import (
     execute_sequential_acquisition,
     run_availability_probes,
 )
-from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization
+from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_sha256
 from Vol_Suite.dealer_exposure_executor import AdapterRegistry
 import Vol_Suite.dealer_exposure_expansion as expansion
 from Vol_Suite.dealer_exposure_expansion import run_expansion_plan
+from Vol_Suite.opex_calendar import calendar_for_probe, load_snapshot
 from Vol_Suite.provenance_contract import canonical_sha256
 
 from test_dealer_exposure_authorization import _authorization, _manifest
@@ -140,10 +142,23 @@ def test_executor_policy_requires_scope_binding_and_exact_path():
         AcquisitionAuthorization.from_mapping(payload, candidate_manifest=_manifest(), now="2026-08-15T12:30:00+00:00")
 
 
-def _network_auth():
+def _network_auth(executor_id=None, executor_entrypoint=None):
+    """Build a network-enabled authorization.
+
+    ``executor_id``/``executor_entrypoint`` let a caller align
+    ``allowed_executor_id``/``allowed_executor_entrypoint`` with the actual
+    identity/endpoint of a ``_registered_adapter()`` handle it intends to
+    dispatch, since ``RestrictedExecutor.run()`` now enforces that match
+    (review finding 1).  Left unset, the fixture's placeholder values are kept,
+    which is fine for tests that never reach a successful dispatch.
+    """
     manifest = _manifest()
     payload = _authorization(manifest)
     payload["executor_policy"]["network_fetch_allowed"] = True
+    if executor_id is not None:
+        payload["executor_policy"]["allowed_executor_id"] = executor_id
+    if executor_entrypoint is not None:
+        payload["executor_policy"]["allowed_executor_entrypoint"] = executor_entrypoint
     payload["authorization_sha256"] = canonical_sha256({key: value for key, value in payload.items() if key != "authorization_sha256"})
     return AcquisitionAuthorization.from_mapping(payload, candidate_manifest=manifest, now="2026-08-15T12:30:00+00:00"), manifest
 
@@ -200,11 +215,23 @@ def test_wrong_executor_scope_path_or_method_is_rejected(field, value):
 
 
 def test_valid_authorized_adapter_matches_all_execution_identity_fields():
-    auth, _ = _network_auth()
-    ok, identity, reason = _authorized_executor(_registered_adapter(), auth)
+    registered = _registered_adapter()
+    auth, _ = _network_auth(executor_id=registered._registration.identity, executor_entrypoint=registered._registration.endpoint)
+    ok, identity, reason = _authorized_executor(registered, auth)
     assert ok is True
     assert reason == ""
     assert identity["scope_binding"] == "candidate keys"
+
+
+def test_mismatched_authorized_executor_id_is_rejected_before_dispatch():
+    # Review finding 1 (CRITICAL): a registered adapter with a fully allowed
+    # path/method/scope must still be rejected if the authorization names a
+    # different executor id.
+    registered = _registered_adapter()
+    auth, _ = _network_auth(executor_id="a-different-executor-id", executor_entrypoint=registered._registration.endpoint)
+    ok, _, reason = _authorized_executor(registered, auth)
+    assert ok is False
+    assert "executor id" in reason
 
 
 def test_concurrent_second_call_is_rejected_atomically_and_slot_is_released():
@@ -257,6 +284,325 @@ def test_probe_and_acquisition_require_boolean_true_approval(approval):
             schedule, fetcher=_adapter(), approval=approval, authorization=auth,
             admission_evidence={}, registry={}, dry_run=False,
         )
+
+
+def test_probe_self_reported_success_without_post_dispatch_evidence_has_no_receipt():
+    # Review finding 2 (IMPORTANT), exercised through the real
+    # run_availability_probes caller: a probe adapter self-reporting
+    # validated=True/success=True, with no response_status/counts evidence,
+    # must not be admitted and must not carry an executor receipt.
+    class SelfReporting:
+        def __call__(self, _unit):
+            return {"status": "SUCCESS", "validated": True, "success": True}
+
+    registry = AdapterRegistry()
+    registered = registry.register(SelfReporting(), endpoint="/hist/option/all_greeks", method="GET", scope_binding="candidate keys", family="hist/option/all_greeks")
+    auth, manifest = _network_auth(executor_id=registered._registration.identity, executor_entrypoint=registered._registration.endpoint)
+    context = _AdmissionContext(auth, manifest)
+    probes = run_availability_probes(
+        manifest["units"], probe_fetcher=registered, approval=True, authorization=auth,
+        authorization_context=context, dry_run=False, calendar_snapshot=object(),
+    )
+    probe = probes[0]
+    assert probe["status"] != "PASS"
+    assert probe["validated"] is False
+    assert probe["executor_receipts"] == ()
+
+
+def _plain(value):
+    """Recursively convert Mapping/tuple wrappers to plain dict/list for JSON hashing."""
+    if isinstance(value, Mapping):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return value
+
+
+def _real_calendar_snapshot_and_binding():
+    """Build a real ``CalendarSnapshot`` and a real, recomputable probe binding.
+
+    Mirrors the ``payload()`` fixture in ``Vol_Suite/tests/test_opex_calendar.py``
+    (kept local rather than imported across test roots) but adds a second event
+    record on 2025-01-16 so a real probe binding can be resolved one DTE before
+    the observed monthly expiry on 2025-01-17.
+    """
+    payload = {
+        "schema_version": 1,
+        "calendar_policy_version": "us-options-v1",
+        "resolver_code_version": "test-v1",
+        "knowledge_cutoff": "2026-01-01T00:00:00Z",
+        "timezone": "America/New_York",
+        "venue_scope": "US_OPTIONS_REGULAR",
+        "source_records": [{
+            "source_id": "rule", "source_kind": "venue_rule", "publisher": "test",
+            "source_version": "1", "effective_start": None, "effective_end": None,
+            "retrieved_at": "2025-01-01T00:00:00Z", "available_at": "2025-01-01T00:00:00Z",
+            "content_sha256": "a" * 64, "parser_version": "1", "selection_reason": "authoritative",
+        }, {
+            "source_id": "listing", "source_kind": "listing", "publisher": "test",
+            "source_version": "1", "available_at": "2025-01-01T00:00:00Z",
+            "content_sha256": "b" * 64, "selection_reason": "authoritative listing",
+        }],
+        "holidays": [],
+        "sessions": [{
+            "session_id": "S-2025-01-17", "session_date": "2025-01-17", "status": "OPEN",
+            "regular_open": "2025-01-17T09:30:00-05:00", "regular_close": "2025-01-17T16:00:00-05:00",
+            "early_close": False, "close_reason": None, "source_ref": "rule",
+        }, {
+            "session_id": "S-2025-01-16", "session_date": "2025-01-16", "status": "OPEN",
+            "regular_open": "2025-01-16T09:30:00-05:00", "regular_close": "2025-01-16T16:00:00-05:00",
+            "early_close": False, "close_reason": None, "source_ref": "rule",
+        }, {
+            "session_id": "S-2025-01-20", "session_date": "2025-01-20", "status": "OPEN",
+            "regular_open": "2025-01-20T09:30:00-05:00", "regular_close": "2025-01-20T16:00:00-05:00",
+            "early_close": False, "close_reason": None, "source_ref": "rule",
+        }],
+        "monthly_rules": [{
+            "product_family": "EQUITY_ETF", "nominal_date": "2025-01-17",
+            "observed_expiry_date": "2025-01-17", "settlement_style": "PM_CLOSE",
+            "settlement_timestamp": "2025-01-17T16:00:00-05:00", "source_ref": "rule",
+            "listing_source_ref": "listing", "venue_rule_date": "2025-01-17", "listing_expiry_date": "2025-01-17",
+        }],
+        "event_records": [{
+            "event_id": "fomc-1", "event_type": "FOMC", "event_day": "2025-01-17",
+            "window_start": "2025-01-17T09:30:00-05:00", "window_end": "2025-01-17T16:00:00-05:00",
+            "anchor": "SCHEDULED", "source_ref": "rule", "surprise_status": "NOT_APPLICABLE",
+            "causal_surprise_eligible": False,
+        }, {
+            "event_id": "fomc-0", "event_type": "FOMC", "event_day": "2025-01-16",
+            "window_start": "2025-01-16T09:30:00-05:00", "window_end": "2025-01-16T16:00:00-05:00",
+            "anchor": "SCHEDULED", "source_ref": "rule", "surprise_status": "NOT_APPLICABLE",
+            "causal_surprise_eligible": False,
+        }],
+    }
+    snapshot = load_snapshot(payload)
+    binding = calendar_for_probe(
+        snapshot, ticker="XLE", calendar_day="2025-01-16", expiry="2025-01-17",
+        dte=1, as_of="2025-01-01T00:00:00Z", window_policy="OPEX_DAY",
+    )
+    return snapshot, _plain(binding)
+
+
+_REAL_PROBE_KEY = "XLE|2025-01-16|2025-01-17|1"
+_REAL_CAL_H = "d" * 64
+_REAL_BINDING_H = "e" * 64
+_REAL_SRC_H = "c" * 64
+_REAL_PROBE_H = "f" * 64
+
+
+def _real_probe_unit():
+    # These calendar_hash/session_id/calendar_binding_hash values are the
+    # authorization-manifest's own internal identity fields (checked for
+    # self-consistency between the manifest unit and the dispatched schedule
+    # unit by RestrictedExecutor._check_units).  They are deliberately
+    # independent of the *real* recomputed calendar_binding object below,
+    # which is validated separately by run_availability_probes against the
+    # real CalendarSnapshot -- the manifest schema (_UNIT_FIELDS) has no
+    # "calendar_binding" field, only "calendar_binding_hash".
+    return {
+        "candidate_key": _REAL_PROBE_KEY,
+        "ticker": "XLE",
+        "calendar_day": "2025-01-16",
+        "expiry": "2025-01-17",
+        "dte": 1,
+        "habitat": "OPEX",
+        "sector": "ENERGY",
+        "candidate_source": "fixture",
+        "source_hashes": [_REAL_SRC_H],
+        "calendar_hash": _REAL_CAL_H,
+        "calendar_policy_version": "opex-calendar-v1",
+        "resolver_code_version": "resolver-v1",
+        "resolver_code_hash": _REAL_CAL_H,
+        "observed_expiry_date": "2025-01-17",
+        "session_id": "session-dummy",
+        "session_status": "OPEN",
+        "regular_open": "2025-01-16T09:30:00-05:00",
+        "regular_close": "2025-01-16T16:00:00-05:00",
+        "early_close": False,
+        "settlement_style": "PM_CLOSE",
+        "settlement_timestamp": "2025-01-17T16:00:00-05:00",
+        "event_window_id": "window-dummy",
+        "window_start": "2025-01-16T09:30:00-05:00",
+        "window_end": "2025-01-16T16:00:00-05:00",
+        "calendar_binding_hash": _REAL_BINDING_H,
+    }
+
+
+def _real_probe_observed_binding():
+    return {
+        "candidate_key": _REAL_PROBE_KEY,
+        "observed_expiry_date": "2025-01-17",
+        "session_id": "session-dummy",
+        "session_status": "OPEN",
+        "settlement_style": "PM_CLOSE",
+        "settlement_timestamp": "2025-01-17T16:00:00-05:00",
+        "event_window_id": "window-dummy",
+        "window_start": "2025-01-16T09:30:00-05:00",
+        "window_end": "2025-01-16T16:00:00-05:00",
+        "calendar_binding_hash": _REAL_BINDING_H,
+    }
+
+
+def _real_probe_manifest():
+    unit = _real_probe_unit()
+    return {
+        "schema_version": 1,
+        "manifest_schema": "candidate_manifest_calendar_enriched_v2",
+        "calendar_enriched": True,
+        "units": [unit],
+        "exclusions": [],
+        "selection_provenance": {"source": "fixture", "source_registry": {"fixture": {"source_hashes": [_REAL_SRC_H]}}},
+        "quota": {"max_units": 1},
+        "held_pair_evidence_hash": _REAL_CAL_H,
+        "probe_policy": {"required_status": "PASS"},
+        "executor_policy": {"allowed_executor_id": "staged_historical_adapter_v1"},
+        "cost_ceiling": {
+            "max_units": 1, "max_probe_calls": 2, "max_heavy_calls": 4,
+            "max_total_endpoint_calls": 6, "max_payload_bytes": 20000,
+            "max_wall_seconds": 30, "concurrency": 1,
+        },
+        "calendar": {
+            "calendar_hash": _REAL_CAL_H,
+            "calendar_policy_version": "opex-calendar-v1",
+            "resolver_code_version": "resolver-v1",
+            "resolver_code_hash": _REAL_CAL_H,
+            "observed_session_id": "session-dummy",
+            "calendar_binding_hash": _REAL_BINDING_H,
+        },
+    }
+
+
+def _real_probe_authorization(manifest, *, executor_id, executor_entrypoint):
+    digest = candidate_manifest_sha256(manifest)
+    payload = {
+        "schema_version": 1,
+        "authorization_id": "auth-real-probe-1",
+        "issued_at": "2026-08-15T12:00:00+00:00",
+        "expires_at": "2026-08-15T13:00:00+00:00",
+        "issued_by": "pm-fixture",
+        "purpose": "staged-dealer-exposure-acquisition",
+        "environment": "offline-test",
+        "candidate_manifest_sha256": digest,
+        "candidate_manifest_projection": "candidate_manifest_calendar_enriched_v2",
+        "calendar": manifest["calendar"],
+        "scope": {
+            "candidate_keys": [_REAL_PROBE_KEY],
+            "calendar_hash": _REAL_CAL_H,
+            "calendar_policy_version": "opex-calendar-v1",
+            "resolver_code_version": "resolver-v1",
+            "resolver_code_hash": _REAL_CAL_H,
+            "observed_bindings": [_real_probe_observed_binding()],
+            "ticker_day_pairs": [["XLE", "2025-01-16"]],
+            "dte_strata": [[1, 3], [4, 7], [8, 10]],
+            "event_habitats": ["OPEX"],
+            "event_fraction": 1.0,
+            "control_fraction": 0.0,
+            "max_arm_ratio": 2.0,
+            "held_pair_policy": "reject",
+            "no_imputation": True,
+            "same_day_aggregation": "preserve_ticker_values_v1",
+            "calendar_binding_hash": _REAL_BINDING_H,
+        },
+        "probe_policy": {
+            "required_status": "PASS",
+            "required_validated": True,
+            "required_invoked": True,
+            "required_checks": ["chain"],
+            "pre_window_observations_exact": 2,
+            "probe_code_hash": _REAL_PROBE_H,
+        },
+        "cost_ceiling": {
+            "max_units": 1, "max_probe_calls": 2, "max_heavy_calls": 4,
+            "max_total_endpoint_calls": 6, "max_payload_bytes": 20000,
+            "max_wall_seconds": 30, "concurrency": 1, "on_exceed": "stop_and_hard_gap",
+        },
+        "executor_policy": {
+            "allowed_executor_id": executor_id,
+            "allowed_executor_entrypoint": executor_entrypoint,
+            "allowed_endpoint_families": ["hist/option/all_greeks"],
+            "allowed_endpoint_paths": ["/hist/option/all_greeks"],
+            "allowed_request_methods": ["GET"],
+            "scope_binding": "candidate keys",
+            "network_fetch_allowed": True,
+            "allow_new_candidate_keys": False,
+            "allow_held_pairs": False,
+            "allow_live_model_calls": False,
+            "allow_scheduler_calls": False,
+            "allow_writes_outside_artifact_root": False,
+        },
+        "stop_conditions": ["hard gap"],
+    }
+    payload["authorization_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "authorization_sha256"}
+    )
+    return AcquisitionAuthorization.from_mapping(payload, candidate_manifest=manifest, now="2026-08-15T12:30:00+00:00")
+
+
+def test_run_availability_probes_real_end_to_end_positive_control_emits_receipt():
+    # Review finding 2 positive control (d), exercised through the real,
+    # unmodified run_availability_probes caller -- not just RestrictedExecutor
+    # directly.  The prior attempt at this test was abandoned because someone
+    # tried to put "calendar_binding" on an AUTHORIZATION MANIFEST unit, which
+    # is genuinely rejected (manifest units only carry "calendar_binding_hash";
+    # see Vol_Suite/dealer_exposure_authorization.py::_UNIT_FIELDS). But the
+    # *schedule* item passed as run_availability_probes' `schedule` argument is
+    # a separate object that is never validated against that manifest schema,
+    # and it is exactly where production code (dealer_exposure_universe.py's
+    # candidate-schedule builder) already puts the full calendar_binding
+    # mapping for the same reason. So a real fixture is possible without
+    # touching production schema/logic: build a real CalendarSnapshot, resolve
+    # a real probe binding from it, and thread the recomputed binding through
+    # the schedule item's "calendar_binding" field (and the adapter's returned
+    # evidence) -- exactly the shape run_availability_probes already expects.
+    snapshot, binding = _real_calendar_snapshot_and_binding()
+
+    class RealisticProbeAdapter:
+        def __init__(self, calendar_binding):
+            self._calendar_binding = calendar_binding
+
+        def __call__(self, unit):
+            # run_availability_probes matches each dispatched adapter result back
+            # to its unit by response["candidate_key"] (see response_by_key in
+            # run_availability_probes); a raw adapter response omitting it is
+            # never matched to any unit and the probe becomes a HARD_GAP.
+            return {
+                "candidate_key": unit["candidate_key"],
+                "status": "PASS",
+                "response_status": 200,
+                "counts": {"rows": 1},
+                "source_counts": {"theta": 1},
+                "calendar_binding": self._calendar_binding,
+            }
+
+    registry = AdapterRegistry()
+    registered = registry.register(
+        RealisticProbeAdapter(binding), endpoint="/hist/option/all_greeks", method="GET",
+        scope_binding="candidate keys", family="hist/option/all_greeks",
+    )
+    manifest = _real_probe_manifest()
+    auth = _real_probe_authorization(
+        manifest, executor_id=registered._registration.identity,
+        executor_entrypoint=registered._registration.endpoint,
+    )
+    context = _AdmissionContext(auth, manifest)
+    schedule_unit = {**_real_probe_unit(), "calendar_binding": binding}
+
+    probes = run_availability_probes(
+        [schedule_unit], probe_fetcher=registered, approval=True, authorization=auth,
+        authorization_context=context, dry_run=False, calendar_snapshot=snapshot,
+    )
+
+    assert len(probes) == 1
+    probe = probes[0]
+    assert probe["status"] == "PASS", probe.get("reason")
+    assert probe["validated"] is True
+    assert probe["invoked"] is True
+    assert probe["comparison_status"] == "COMPARISON_VALID"
+    assert probe["executor_receipts"] != ()
+    assert len(probe["executor_receipts"]) == 1
+    receipt = probe["executor_receipts"][0]
+    assert receipt["candidate_key"] == _REAL_PROBE_KEY
+    assert len(receipt["receipt_sha256"]) == 64
 
 
 def test_probe_arbitrary_callable_is_rejected_before_any_call():
