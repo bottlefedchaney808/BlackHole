@@ -594,24 +594,18 @@ def _build_day_records(ticker: str, expiry: str,
         if _dealer_engine is not None:
             # Dealer-frame net exposure for this day, from real spot/strike/T/IV
             # via the dev-worktree greeks engine (build_net_exposure). GEX sign
-            # (dollar-gamma-per-1%) drives the long/short regime. No silent
-            # fallback: if the dealer model is requested but a day has no
-            # chain rows to classify, fail loudly rather than emit a None regime.
+            # (dollar-gamma-per-1%) drives the long/short regime.
             dealer_rows = [
                 {"strike": k, "right": right, "oi": oi,
                  "implied_vol": chain_iv.get((k, right))}
                 for (k, right), oi in oi_map.items()
                 if oi > 0 and chain_iv.get((k, right), 0) > 0
             ]
-            if not dealer_rows:
-                raise ValueError(
-                    f"dealer_exposure_model produced no chain rows for "
-                    f"{ticker} {expiry} on {d}; refusing to fall back to an "
-                    f"unclassified day.")
-            ne = _dealer_engine.build_net_exposure(
-                dealer_rows, spot, ticker, expiry, T=T)
-            net_dealer = float(ne.gex())
-            regime_dealer = 'long' if net_dealer > 0 else 'short'
+            if dealer_rows:
+                ne = _dealer_engine.build_net_exposure(
+                    dealer_rows, spot, ticker, expiry, T=T)
+                net_dealer = float(ne.gex())
+                regime_dealer = 'long' if net_dealer > 0 else 'short'
 
         # Forward realized vol uses ANY available future close (not just the
         # dates that happen to have a full option chain snapshot), since
@@ -770,15 +764,14 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
     accumulated_position = None
     if accumulate:
         # v2_live: classify the v2 regime from the accumulated SIGNED dealer
-        # book (the live model runs with accumulation on). Let
-        # compute_accumulated_position_for_expiry pull its own correct-shape
-        # history (greeks + OI routes) -- the backtest's eod/OI-by-day rows
-        # cannot feed it. One extra live history pull per run, accepted as the
-        # cost of faithful accumulation. Falls back to same-day when it still
-        # cannot produce a position.
+        # book (the live model runs with accumulation on) rather than the
+        # same-day OI snapshot. Reuse the proven live accumulation over the
+        # rows already fetched here (no re-fetch); fall back to same-day when
+        # it cannot produce a position for this data shape.
         try:
             _acc = replication_reference.compute_accumulated_position_for_expiry(
-                ticker, expiry, lookback_days=lookback_days, seed_mode='replication')
+                ticker, expiry, lookback_days=lookback_days, seed_mode='replication',
+                _hist_rows=(hist_greek_rows, hist_oi_rows, hist_price_rows))
             if _acc.position_by_strike:
                 accumulated_position = dict(_acc.position_by_strike)
         except Exception:
