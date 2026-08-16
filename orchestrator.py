@@ -312,12 +312,26 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             ('unusual_oi', scan_unusual_oi, format_unusual_oi),
         ):
             try:
-                if key == 'max_pain':
+                _focus = context.get('focus') or {}
+                _garch_dec = _focus.get('garch_conditional_vol')
+                _fair_pct = _focus.get('fair_vol_pct')
+                _garch_pct = (float(_garch_dec * 100.0)
+                              if isinstance(_garch_dec, (int, float))
+                              and not isinstance(_garch_dec, bool) else None)
+                _fair_val = (float(_fair_pct)
+                             if isinstance(_fair_pct, (int, float))
+                             and not isinstance(_fair_pct, bool) else None)
+                if key == 'iv_rank':
+                    scan = scan_fn(ticker, garch_cond_vol_pct=_garch_pct,
+                                   fair_vol_pct=_fair_val)
+                elif key == 'max_pain':
                     # Pin Max Pain to the expiry this run is analyzing instead
-                    # of letting it self-select its own nearest-~30DTE one.
+                    # of letting it self-select its own nearest-~30DTE one, and
+                    # pass the context's GARCH/fair vol for its narrative.
                     scan = scan_fn(
                         ticker,
-                        expiry=(context.get('focus') or {}).get('expiration_date'),
+                        expiry=_focus.get('expiration_date'),
+                        garch_cond_vol_pct=_garch_pct, fair_vol_pct=_fair_val,
                     )
                 else:
                     scan = scan_fn(ticker)
@@ -1082,6 +1096,34 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
     garch_vol = ((vol_result or {}).get('vol_surface') or {}).get('garch_conditional_vol')
     if isinstance(garch_vol, (int, float)) and not isinstance(garch_vol, bool) and garch_vol > 0:
         context.setdefault('focus', {})['garch_conditional_vol'] = float(garch_vol)
+
+    # Fair variance-strike vol for the focus leg (vol_surface block). The
+    # IV-rank scanner reads fair_vol_pct to compute the RICH/CHEAP regime and
+    # VRP; without it the scanner silently degrades to 0.0 and reports UNKNOWN.
+    focus_surface = ((vol_result or {}).get('vol_surface') or {})
+    fair_vol_pct = focus_surface.get('fair_vol_pct')
+    if fair_vol_pct is None:
+        fair_vol_pct = focus_surface.get('fair_variance_swap_strike_vol_pct')
+    if isinstance(fair_vol_pct, (int, float)) and not isinstance(fair_vol_pct, bool):
+        context.setdefault('focus', {})['fair_vol_pct'] = float(fair_vol_pct)
+
+    # Expected return for the focus leg. Prefer a Vol_Suite-published value;
+    # else the correlation engine's basket expected return; else fall back to
+    # VaR's realized geometric annualized return for the focus ticker so the
+    # 1yr-out sims' `_resolve_drift_and_quality` reports source="context".
+    expected_return = focus_surface.get('expected_return')
+    if expected_return is None:
+        expected_return = ((vol_result or {}).get('correlation_engine') or {}).get('basket_expected_return')
+    if expected_return is None:
+        try:
+            from var_engine import data_loader  # VaR's drift estimator
+            _tk = (context.get('focus') or {}).get('ticker')
+            if _tk:
+                expected_return = data_loader.estimate_geometric_return(_tk)
+        except Exception:
+            expected_return = None
+    if isinstance(expected_return, (int, float)) and not isinstance(expected_return, bool):
+        context.setdefault('focus', {})['expected_return'] = float(expected_return)
 
 
 def run_unified(focus: Dict[str, Any],

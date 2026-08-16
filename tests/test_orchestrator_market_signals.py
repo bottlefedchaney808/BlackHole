@@ -144,9 +144,15 @@ def test_only_max_pain_is_pinned_to_the_run_expiry(monkeypatch):
 
     mp_args, mp_kwargs = scanners.calls['max_pain']
     assert mp_args == ('NVDA',)
-    assert mp_kwargs == {'expiry': '2026-10-16'}
+    assert mp_kwargs == {'expiry': '2026-10-16',
+                         'garch_cond_vol_pct': None, 'fair_vol_pct': None}
 
-    for key in ('iv_rank', 'skew', 'unusual_oi'):
+    # iv_rank now takes the context GARCH/fair-vol kwargs (None here); skew and
+    # unusual_oi stay bare.
+    ir_args, ir_kwargs = scanners.calls['iv_rank']
+    assert ir_args == ('NVDA',)
+    assert ir_kwargs == {'garch_cond_vol_pct': None, 'fair_vol_pct': None}
+    for key in ('skew', 'unusual_oi'):
         args, kwargs = scanners.calls[key]
         assert args == ('NVDA',), f"{key} should be called with just the ticker"
         assert kwargs == {}, f"{key} takes no expiry, got {kwargs}"
@@ -166,7 +172,8 @@ def test_max_pain_self_selects_when_the_context_carries_no_expiry(monkeypatch):
 
     orchestrator.run_market_signals_stage('NVDA', _context())
 
-    assert scanners.calls['max_pain'] == (('NVDA',), {'expiry': None})
+    assert scanners.calls['max_pain'] == (
+        ('NVDA',), {'expiry': None, 'garch_cond_vol_pct': None, 'fair_vol_pct': None})
 
 
 def test_stage_never_mutates_the_context_vol(isolated_stage):
@@ -183,3 +190,22 @@ def test_stage_never_mutates_the_context_vol(isolated_stage):
     assert context['focus']['garch_conditional_vol'] == pytest.approx(0.29)
     for _name, payload in fake_var.calls:
         assert payload['focus']['garch_conditional_vol'] == pytest.approx(0.29)
+
+
+def test_thread_vol_stats_populates_fair_vol_and_expected_return(monkeypatch):
+    """Vol_Suite's fair vol and (basket) expected return are threaded into the
+    market-signals context so the IV-rank scanner and VaR sims consume them."""
+    # Avoid the VaR data_loader network fallback.
+    monkeypatch.setattr(orchestrator, '_import_var_engine_builders', lambda: None)
+    context = {'focus': {'ticker': 'SPY'}, 'basket': {'tickers': ['SPY']}}
+    vol_result = {
+        'vol_surface': {
+            'garch_conditional_vol': 0.31,
+            'fair_vol_pct': 26.5,
+        },
+        'correlation_engine': {'basket_expected_return': 0.09},
+    }
+    orchestrator._thread_vol_stats_into_context(context, vol_result)
+    assert context['focus']['garch_conditional_vol'] == pytest.approx(0.31)
+    assert context['focus']['fair_vol_pct'] == pytest.approx(26.5)
+    assert context['focus']['expected_return'] == pytest.approx(0.09)
