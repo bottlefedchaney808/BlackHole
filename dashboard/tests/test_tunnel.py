@@ -225,8 +225,12 @@ import dashboard.app as app_module
 class _FakeManager:
     def __init__(self):
         self.status_result = {
-            "running": False, "url": None, "state": "idle",
-            "started_at": None, "pid": None, "last_error": None,
+            "running": False,
+            "url": None,
+            "state": "idle",
+            "started_at": None,
+            "pid": None,
+            "last_error": None,
         }
         self.start_exc = None
         self.started = 0
