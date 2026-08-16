@@ -2006,13 +2006,46 @@ async def tools_simulations_run(request: Request):
     })
 
 
+@app.get('/tools/directional-engine', response_class=HTMLResponse)
+def tools_directional_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_directional.html', {
+        'active': 'tools', 'tool': get_tool('directional-engine'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': '', 'selected_mode': 'unified',
+        'result': None, 'result_json': None, 'error': None,
+    })
+
+
+@app.post('/tools/directional-engine', response_class=HTMLResponse)
+async def tools_directional_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+    context_path = str(body.get('context_path') or '').strip()
+    mode = str(body.get('mode') or 'unified').strip().lower()
+    context, error = _load_selected_context(context_path)
+    result = None
+    if context is not None:
+        context['mode'] = mode
+        result, run_error = _run_tool_safe('directional-engine', context)
+        if run_error:
+            error = run_error
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_directional.html', {
+        'active': 'tools', 'tool': get_tool('directional-engine'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': context_path, 'selected_mode': mode,
+        'result': result, 'result_json': result_json, 'error': error,
+    })
+
+
 # Tools whose UI is just "pick a context, run" (plus, for whale-flow, two
 # optional numeric overrides) -- everything registered in Tools.registry
 # except options-strategy and backtesting, which have bespoke forms above
 # because their run() takes extra required/structured inputs.
 GENERIC_TOOL_SLUGS = {
     'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
-    'liquidity-map', 'direction-signal', 'hedge-optimizer',
+    'liquidity-map', 'directional-engine', 'hedge-optimizer',
     'vrp-term-structure', 'simulations',
 }
 

@@ -1,11 +1,11 @@
 # Tools/tools/direction_signal_tool.py
-"""direction_signal_tool.py
+"""direction_signal_tool.py -> Directional Engine.
 
-Wraps Direction/signal_generator.py's generate() -- the GROUP tool. Runs
-all five Direction modules (whale flow, Elliott Wave, Bollinger, trend,
-liquidity) against a suite context's focus ticker in one call and returns
-the combined conviction call, using one shared 300s Direction.data cache
-across all five fetches instead of five separate tool invocations.
+Container for the five Direction sub-signals plus a unified run.
+mode='unified' (default): signal_generator.generate(ticker) -- runs all five
+  (whale, elliott, bollinger, trend, liquidity) and returns one conviction.
+mode in {'whale','elliott','bollinger','trend','liquidity'}: the single
+  module's output dict for that sub-signal.
 """
 from __future__ import annotations
 
@@ -20,33 +20,51 @@ if str(_REPO_ROOT) not in sys.path:
 
 from Tools.registry import ToolSpec  # noqa: E402
 
+_MODULES = {
+    'whale': ('whale_scanner', 'scan'),
+    'elliott': ('elliott_wave', 'analyze'),
+    'bollinger': ('bollinger_analyzer', 'analyze'),
+    'trend': ('trend_engine', 'analyze_trend'),
+    'liquidity': ('liquidity_map', 'get_liquidity'),
+}
+
+
+def _signal_generator():
+    from Direction import signal_generator
+    return signal_generator
+
 
 def run(context: Dict[str, Any]) -> Dict[str, Any]:
     """context: a validated suite_context.json dict. Requires
-    context.focus.ticker (or context['ticker']). Returns
-    Direction.signal_generator.generate()'s dict verbatim: ticker, price,
-    signals (per-module booleans), score (0-5), conviction
-    (HIGH|MEDIUM|NONE), details (each module's full output dict).
+    context.focus.ticker (or context['ticker']). mode:
+      - 'unified' (default) -> signal_generator.generate(ticker) verbatim
+        (all five Direction modules incl. trend, combined into one conviction)
+      - 'whale'|'elliott'|'bollinger'|'trend'|'liquidity' -> that single
+        module's output dict.
     """
-    from Direction import signal_generator
-
-    focus = context.get("focus") or {}
-    ticker = context.get("ticker") or focus.get("ticker")
+    focus = context.get('focus') or {}
+    ticker = context.get('ticker') or focus.get('ticker')
     if not ticker:
-        raise ValueError("direction-signal tool requires a ticker (context['ticker'] or context.focus.ticker)")
-
-    return signal_generator.generate(ticker)
+        raise ValueError('Directional Engine requires a ticker '
+                         '(context.ticker or context.focus.ticker)')
+    mode = str(context.get('mode') or 'unified').strip().lower()
+    if mode == 'unified':
+        return _signal_generator().generate(ticker)
+    if mode not in _MODULES:
+        raise ValueError(
+            f"mode must be one of {{'unified', *{sorted(_MODULES)}}}; got {mode!r}")
+    mod_name, fn = _MODULES[mode]
+    module = __import__(f'Direction.{mod_name}', fromlist=[fn])
+    return getattr(module, fn)(ticker)
 
 
 TOOL_SPEC = ToolSpec(
-    name="Direction Signal Tool",
-    slug="direction-signal",
+    name="Directional Engine",
+    slug="directional-engine",
     description=(
-        "Runs all five Direction signals (whale flow, Elliott Wave, "
-        "Bollinger, multi-timeframe trend, liquidity zones) against a "
-        "suite context's focus ticker and combines them into one "
-        "conviction call (HIGH/MEDIUM/NONE) -- the group entry point "
-        "alongside the five individual Direction tools."
+        "Five Direction signals -- whale flow, Elliott Wave, Bollinger, "
+        "multi-timeframe trend, liquidity -- run individually or as one "
+        "unified conviction call for a context's focus ticker. Select via mode."
     ),
     run=run,
 )
