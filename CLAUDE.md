@@ -183,12 +183,17 @@ summary.
   to cross-source UPIs via `shared.identifiers`. The screener's two historical failure modes (missing
   realized vol silently becoming `0.0`; a blanket `except` dropping tickers unmarked) are **fixed**
   (NaN + `data_quality` + `INSUFFICIENT DATA` signal + `skipped` reporting) — see README Phase 11.
+  **Dealer-sign convention = "whales as change of sign"** — before analyzing/editing dealer
+  positioning, read `Vol_Suite/docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md`
+  and `established_findings_20260811_session.md`, and the workstream memory
+  `dealer_positioning_whale_sign.md`; use that whale/change-of-sign implementation, not a naive reading.
 - **VaR_Tools_Simulations** — a Python port of a legacy Excel VaR toolkit (`VaRtools Samples.xls` is
   the source spec), one `var_engine/` module per original sheet: `corr_sim.py` (correlated GBM Monte
   Carlo), `mc_sim.py`, `hist_sim.py` (basic/Hull-White/FHS-GARCH), `copulas.py` (Gaussian/Student-T/
   Clayton), `forex_var.py`, `cashflow_map.py`, `stress_test.py`, `var_agg.py` (EWMA + PCA + Euler
-  allocation), plus `hedge_optimizer.py` and `price_dist.py`. `main.py` supports `--demo all` /
-  `--demo <module>` for network-free canned runs. Its only `shared/` touchpoint is
+  allocation), plus `hedge_optimizer.py` and `price_dist.py`. `main.py`'s CLI is `--module N`
+  (interactive) or `--context/--context-out` (context mode); canned demo runs go through
+  `python -m var_engine.<module>` (there is NO `--demo` flag). Its only `shared/` touchpoint is
   `var_engine/data_loader.py` (via `shared.cache`/`shared.config`/`shared.thetadata`) — no swaps-DB
   integration yet.
 - **sentiment-scanner** — contested-narrative sentiment (StockTwits, Reddit, YouTube transcripts)
