@@ -64,7 +64,7 @@ class RegisteredAdapter:
         _HANDLE_OWNERS[id(self)] = owner
 
     def __call__(self, unit: Mapping[str, Any]) -> Any:
-        return self._registration.adapter(unit)
+        raise ExecutorFailure("registered adapter dispatch is restricted to RestrictedExecutor")
 
 
 class AdapterRegistry:
@@ -180,18 +180,21 @@ class RestrictedExecutor:
         return tuple(checked)
 
     def _request(self, unit: Mapping[str, Any]) -> dict[str, Any]:
-        return {"registry_key": self.registration.registry_key, "entrypoint": self.registration.identity, "entrypoint_code_hash": self.registration.code_hash, "family": self.registration.family, "path": self.registration.endpoint, "method": self.registration.method, "scope_binding": self.registration.scope, "candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "calendar_binding_hash": unit.get("calendar_binding_hash")}
+        # Keep the complete candidate/request identity in the signed request
+        # material.  In particular, habitat/sector/source must not be inferred
+        # later from a candidate key or from an adapter response.
+        return {"registry_key": self.registration.registry_key, "entrypoint": self.registration.identity, "entrypoint_code_hash": self.registration.code_hash, "family": self.registration.family, "path": self.registration.endpoint, "method": self.registration.method, "scope_binding": self.registration.scope, "candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "habitat": unit.get("habitat"), "sector": unit.get("sector"), "candidate_source": unit.get("candidate_source"), "calendar_binding": unit.get("calendar_binding"), "calendar_binding_hash": unit.get("calendar_binding_hash"), "canonical_input_hash": unit.get("canonical_input_hash")}
 
     def run(self, units: Sequence[Mapping[str, Any]], context: Any, *, call_kind: str = "heavy") -> dict[str, Any]:
-        if call_kind not in {"probe", "heavy"}:
-            raise ExecutorFailure("executor call kind must be probe or heavy")
         audit: dict[str, Any] = {"invocations": [], "requests": [], "responses": [], "receipts": [], "finalized_usage": {}}
+        if call_kind not in {"probe", "heavy"}:
+            return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": "executor call kind must be probe or heavy", "audit": audit}
         results: list[Mapping[str, Any]] = []
         try:
             self._check_context(context)
-        except ExecutorFailure as exc:
+            admitted = self._check_units(units)
+        except BaseException as exc:
             return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
-        admitted = self._check_units(units)
         for unit in admitted:
             request = self._request(unit)
             request["request_sha256"] = sha256_bytes(canonical_json_bytes(request))
@@ -199,21 +202,32 @@ class RestrictedExecutor:
             try:
                 audit["invocations"].append(unit["candidate_key"])
                 self._attest_entrypoint()
-                result, _ = context.call(call_kind, lambda u=unit: self.adapter(u))
+                result, _ = context.call(call_kind, lambda u=unit: self.registration.adapter(u))
                 if not isinstance(result, Mapping):
                     raise ExecutorFailure("adapter response is not a mapping")
                 status = str(result.get("status", "")).upper()
-                if status not in {"SUCCESS", "SUCCEEDED", "PASS", "OK"} or type(result.get("validated")) is not bool or result["validated"] is not True or type(result.get("success")) is not bool or result["success"] is not True:
+                # Probe adapters return the raw provider response.  Validation
+                # (status/count/source/calendar evidence) belongs to the probe
+                # contract in acquisition and therefore happens after this
+                # dispatch.  Heavy adapters retain the stricter execution
+                # contract here.
+                if call_kind == "heavy" and (status not in {"SUCCESS", "SUCCEEDED", "PASS", "OK"} or type(result.get("validated")) is not bool or result["validated"] is not True or type(result.get("success")) is not bool or result["success"] is not True):
                     raise ExecutorFailure("adapter returned non-success execution evidence")
                 response = {"candidate_key": unit["candidate_key"], "status": status, "payload_sha256": sha256_bytes(canonical_json_bytes(result))}
                 audit["responses"].append(response)
                 results.append(result)
-                receipt = {"candidate_key": unit["candidate_key"], "request_sha256": request["request_sha256"], "response_payload_sha256": response["payload_sha256"], "source_hashes": list(validate_source_hashes(unit["source_hashes"])), "artifact_hash": unit["artifact_hash"], "manifest_hash": unit["manifest_hash"], "authorization_hash": unit["authorization_hash"], "registry_key": self.registration.registry_key, "entrypoint_code_hash": self.registration.code_hash, "pre_window_evidence_hashes": list(unit["pre_window_evidence_hashes"])}
-                required = ("source_hashes", "artifact_hash", "registry_key", "authorization_hash", "manifest_hash", "pre_window_evidence_hashes")
-                if any(not receipt.get(k) for k in required):
-                    raise ExecutorFailure("generated call receipt is incomplete")
-                receipt["receipt_sha256"] = sha256_bytes(canonical_json_bytes(receipt))
-                audit["receipts"].append(receipt)
+                # A raw probe response is deliberately not receipt-eligible.
+                # The acquisition validator may classify it as a hard gap.
+                # Heavy responses, and explicitly post-validated probe
+                # responses, are the only responses that receive a receipt.
+                receipt_eligible = call_kind == "heavy" or (result.get("validated") is True and result.get("success") is True)
+                if receipt_eligible:
+                    receipt = {"candidate_key": unit["candidate_key"], "request_sha256": request["request_sha256"], "response_payload_sha256": response["payload_sha256"], "source_hashes": list(validate_source_hashes(unit["source_hashes"])), "artifact_hash": unit["artifact_hash"], "manifest_hash": unit["manifest_hash"], "authorization_hash": unit["authorization_hash"], "registry_key": self.registration.registry_key, "entrypoint_code_hash": self.registration.code_hash, "pre_window_evidence_hashes": list(unit["pre_window_evidence_hashes"])}
+                    required = ("source_hashes", "artifact_hash", "registry_key", "authorization_hash", "manifest_hash", "pre_window_evidence_hashes")
+                    if any(not receipt.get(k) for k in required):
+                        raise ExecutorFailure("generated call receipt is incomplete")
+                    receipt["receipt_sha256"] = sha256_bytes(canonical_json_bytes(receipt))
+                    audit["receipts"].append(receipt)
                 audit["finalized_usage"] = dict(context.finalized_usage)
             except BaseException as exc:
                 audit["finalized_usage"] = dict(getattr(exc, "runtime_usage", context.finalized_usage))

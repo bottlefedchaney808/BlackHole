@@ -99,3 +99,24 @@ The final Task 4-only commit is the commit carrying this report; its short hash 
 - `git diff --check`: **passed**.
 - Ruff: unavailable on PATH (`ruff: command not found`).
 - The combined legacy Task 2/calendar/expansion collection remains fail-closed with pre-existing transition tests that directly supply unbound lambdas or omit the required typed authorization; these are expected legacy failures under the frozen authorization boundary and were not weakened.
+
+## Review-finding closure (2026-08-16)
+
+- `RestrictedExecutor.run(..., call_kind="probe")` now dispatches the registered adapter and returns its raw mapping before probe-contract validation. Probe status/count/source/calendar validation remains in `run_availability_probes`; heavy execution still requires explicit successful/validated evidence in the executor.
+- Receipts are not emitted for raw or invalid probe responses. A receipt is emitted only for strict heavy success or a probe result already carrying explicit post-validation success evidence. The request hash now covers the complete request identity, including habitat, sector, candidate source, calendar binding, and canonical input identity.
+- `_check_units`, context checks, call-kind checks, and all other pre-dispatch checks now return structured `FAILED_EXECUTION`/`HARD_GAP` results. Malformed, held, detached, mutable, or incomplete units therefore produce zero adapter dispatch and no uncaught `ExecutorFailure`.
+- `RegisteredAdapter.__call__` is guarded against direct bypass; production dispatch uses the private registered adapter through `RestrictedExecutor` only. The trusted adapter boundary remains explicitly in-process and is not a sandbox.
+- Added regressions for raw probe responses, invalid probe responses, malformed/held/detached units, receipt prerequisites, direct-handle dispatch, and no-uncaught-exception behavior.
+
+## Review-fix verification
+
+- `PYTHONPATH=. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_executor.py -p no:cacheprovider`: **32 passed**.
+- `PYTHONPATH=. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q Vol_Suite/tests/test_opex_calendar.py Vol_Suite/tests/test_opex_calendar_stage3.py -p no:cacheprovider`: **44 passed**.
+- Task 2 isolated slice: **30 passed, 2 pre-existing failures** (`test_runtime_counter_commit_blocks_repeated_calls_immediately`, `test_expansion_audit_uses_finalized_usage_snapshot`) caused by existing state-seal/empty-usage expectations; no new Task 4 failure was introduced.
+- `python -m py_compile Vol_Suite/dealer_exposure_executor.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_executor.py`: **passed**.
+- `git diff --check`: **passed**. Ruff is unavailable (`ruff: command not found`).
+- No network/acquisition/live/master/expiry-book implementation files were changed; only executor, executor regressions, and this report are in the Task 4 change set.
+
+## Commit
+
+Pending final Task 4-only verification and commit.

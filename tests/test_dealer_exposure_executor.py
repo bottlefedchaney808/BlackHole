@@ -88,13 +88,16 @@ def test_valid_registered_fake_adapter_emits_executor_receipt_and_all_hashes():
     assert "calls" not in output["audit"]["requests"][0]
 
 
-def test_missing_receipt_prerequisite_fails_closed():
+def test_missing_receipt_prerequisite_fails_closed_without_uncaught_exception():
     auth, manifest, context = _context()
-    _, _, registered = _registered()
+    _, raw, registered = _registered()
     unit = dict(_admitted(manifest, auth, registered)[0])
     unit.pop("artifact_hash")
-    with pytest.raises(ExecutorFailure, match="artifact_hash"):
-        RestrictedExecutor(registered, auth).run((_immutable(unit),), context)
+    output = RestrictedExecutor(registered, auth).run((_immutable(unit),), context)
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert "artifact_hash" in output["reason"]
+    assert raw.calls == []
 
 
 @pytest.mark.parametrize("field,value", [("endpoint", "/hist/option/all_greeks/extra"), ("method", "POST"), ("family", "hist/option/other")])
@@ -139,11 +142,55 @@ def test_real_context_ceilings_are_used_and_overrun_is_hard_gap():
     assert output["audit"]["finalized_usage"]["heavy_calls"] == 1
 
 
-def test_mutable_units_are_rejected():
+def test_mutable_units_are_rejected_without_uncaught_exception():
     auth, manifest, context = _context()
-    _, _, registered = _registered()
-    with pytest.raises(ExecutorFailure, match="immutable"):
-        RestrictedExecutor(registered, auth).run([dict(manifest["units"][0])], context)
+    _, raw, registered = _registered()
+    output = RestrictedExecutor(registered, auth).run([dict(manifest["units"][0])], context)
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert "immutable" in output["reason"]
+    assert raw.calls == []
+
+
+@pytest.mark.parametrize("mutation,expected", [
+    ("held_pair_exclusion", "held"),
+    ("registry_key", "registry key"),
+    ("candidate_key", "candidate scope"),
+])
+def test_malformed_held_or_detached_units_fail_closed_without_uncaught_exception(mutation, expected):
+    auth, manifest, context = _context()
+    _, raw, registered = _registered()
+    unit = dict(_admitted(manifest, auth, registered)[0])
+    if mutation == "held_pair_exclusion":
+        unit[mutation] = True
+    elif mutation == "registry_key":
+        unit[mutation] = "e" * 64
+    else:
+        unit[mutation] = "detached-candidate"
+    output = RestrictedExecutor(registered, auth).run((_immutable(unit),), context)
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert expected in output["reason"]
+    assert raw.calls == []
+
+
+def test_probe_accepts_raw_response_before_post_validation_and_emits_no_premature_receipt():
+    auth, manifest, context = _context()
+    _, raw, registered = _registered(FakeAdapter({"status": "PASS", "response_status": 200, "counts": {"rows": 1}, "source_counts": {"theta": 1}}))
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind="probe")
+    assert output["status"] == "SUCCESS"
+    assert output["results"][0]["status"] == "PASS"
+    assert output["audit"]["receipts"] == []
+    assert raw.calls
+
+
+def test_invalid_non_mapping_probe_response_is_structured_failure_without_dispatch_leak():
+    auth, manifest, context = _context()
+    _, raw, registered = _registered(FakeAdapter(["invalid"]))
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind="probe")
+    assert output["status"] == "FAILED_EXECUTION"
+    assert output["classification"] == "HARD_GAP"
+    assert raw.calls
 
 
 def test_missing_adapter_receipt_self_report_does_not_bypass_executor_audit():
