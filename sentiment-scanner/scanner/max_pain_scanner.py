@@ -79,7 +79,9 @@ def _resolve_given_expiry(expiry: str) -> Tuple[str, float]:
     return exp_norm, T_years
 
 
-def scan_max_pain(ticker: str, expiry: Optional[str] = None) -> MaxPainScan:
+def scan_max_pain(ticker: str, expiry: Optional[str] = None, *,
+                  garch_cond_vol_pct: Optional[float] = None,
+                  fair_vol_pct: Optional[float] = None) -> MaxPainScan:
     """Run max pain detection for one ticker.
 
     Parameters
