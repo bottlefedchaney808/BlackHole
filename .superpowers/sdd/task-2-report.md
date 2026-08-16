@@ -99,3 +99,18 @@ Only Task 2 implementation/tests/report should be committed. Existing unrelated 
 - `git diff --check` — passed.
 - Ruff unavailable (`ruff: command not found`).
 - Legacy acquisition/expansion tests were run and remain expected contract-transition failures because they invoke non-dry-run paths with boolean approval/arbitrary lambdas and no typed authorization; no network/live/master/expiry-book acquisition was run.
+
+## Authorization Hardening Task 2 audit-integrity closure (2026-08-15)
+
+- `_AdmissionContext` now retains a finalized runtime-usage snapshot after every attempted call, including executor exceptions, post-dispatch cost-ceiling rejection, and pre-dispatch admission rejection; gate errors expose the same snapshot as `runtime_usage`.
+- Expansion execution audits capture the finalized usage snapshot in success, executor exception, and ceiling-failure paths; executor dispatch is recorded only from the immediate dispatch wrapper.
+- Probe audit `invoked` is now set only inside the adapter-dispatch wrapper. Reservation/admission/runtime rejection before dispatch remains `invoked: false` with the blocking reason and finalized usage attached.
+- Added regressions for executor exceptions, zero-unit admission rejection, pre-dispatch probe rejection, and valid authorized execution controls.
+
+## Audit-integrity verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 env -u PYTHONPATH -u VIRTUAL_ENV python -m pytest -q tests/test_dealer_exposure_authorization.py tests/test_dealer_exposure_authorization_task2.py` — **58 passed**.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 env -u PYTHONPATH -u VIRTUAL_ENV python -m pytest -q Vol_Suite/tests/test_opex_calendar.py Vol_Suite/tests/test_opex_calendar_stage3.py` — **44 passed**.
+- `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_authorization_task2.py` — passed.
+- Ruff unavailable (`ruff: command not found`); `git diff --check` passed.
+- No network/acquisition/live/master/expiry-book operation was run.

@@ -298,3 +298,81 @@ def test_expansion_audit_uses_finalized_usage_snapshot(monkeypatch):
     assert usage["payload_bytes"] > 0
     assert usage["wall_seconds"] >= 0
     assert usage == result["runtime_usage"]
+
+
+def test_runtime_exception_exposes_finalized_usage_snapshot():
+    auth, manifest = _network_auth()
+    context = _AdmissionContext(auth, manifest)
+
+    def failing_executor():
+        raise RuntimeError("executor exploded")
+
+    with pytest.raises(RuntimeError, match="executor exploded"):
+        context.call("heavy", failing_executor)
+
+    usage = context.finalized_usage
+    assert usage["units"] == 1
+    assert usage["heavy_calls"] == 1
+    assert usage["total_endpoint_calls"] == 1
+    assert usage["concurrency"] == 0
+    assert usage["wall_seconds"] >= 0
+
+
+def test_admission_rejection_exposes_finalized_usage_snapshot():
+    auth, manifest = _network_auth()
+    context = _AdmissionContext(auth, manifest)
+    context.limits["units"] = 0
+
+    with pytest.raises(Exception, match="authorization cost ceiling exceeded: units") as caught:
+        context.call("heavy", lambda: pytest.fail("adapter must not dispatch"))
+
+    assert context.finalized_usage["units"] == 0
+    assert context.finalized_usage["heavy_calls"] == 0
+    assert context.finalized_usage["concurrency"] == 0
+    assert getattr(caught.value, "runtime_usage") == context.finalized_usage
+
+
+def test_probe_runtime_rejection_is_not_marked_invoked():
+    auth, manifest = _network_auth()
+    context = _AdmissionContext(auth, manifest)
+    context.limits["units"] = 0
+    unit = dict(manifest["units"][0])
+    unit["held_pair_exclusion"] = True
+    calls = []
+
+    probe = run_availability_probes(
+        [unit], probe_fetcher=_adapter(), approval=True, authorization=auth,
+        authorization_context=context, dry_run=False,
+    )
+
+    assert calls == []
+    assert probe[0]["invoked"] is False
+    assert "authorization cost ceiling exceeded: units" in probe[0]["reason"]
+    assert probe[0]["runtime_usage"] == context.finalized_usage
+
+
+def test_expansion_executor_exception_audits_finalized_usage(monkeypatch):
+    auth, manifest = _network_auth()
+    context = _AdmissionContext(auth, manifest)
+    monkeypatch.setattr(expansion, "build_expansion_manifest", lambda *args, **kwargs: manifest)
+    monkeypatch.setattr(expansion, "admit_acquisition", lambda *args, **kwargs: (tuple(manifest["units"]), {"admitted": True, "blocked": []}))
+    monkeypatch.setattr(expansion, "_preflight_authorization", lambda *args, **kwargs: context)
+    monkeypatch.setattr(expansion, "candidate_manifest_projection", lambda *args, **kwargs: auth.candidate_manifest_projection())
+
+    def failing_executor(_unit):
+        raise RuntimeError("executor exploded")
+
+    authorized = _adapter()
+    for name in ("executor_id", "entrypoint", "endpoint", "request_method", "scope_binding"):
+        setattr(failing_executor, name, getattr(authorized, name))
+
+    result = run_expansion_plan(
+        [], dry_run=False, approve_network=True, executor=failing_executor,
+        authorization=auth, acquisition_evidence={"probes": []}, registry={},
+    )
+    usage = result["execution_audit"]["runtime_usage"]
+    assert result["mode"] == "failed-execution"
+    assert result["execution_audit"]["invoked"] == [manifest["units"][0]["candidate_key"]]
+    assert usage["heavy_calls"] == 1
+    assert usage["concurrency"] == 0
+    assert usage == result["runtime_usage"]

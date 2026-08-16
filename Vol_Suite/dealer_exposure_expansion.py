@@ -584,10 +584,19 @@ def run_expansion_plan(
                 result["network_fetch_allowed"] = False
                 result["execution_audit"]["blocked"].append({"classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": "runtime authorization context unavailable"})
                 admitted = ()
+            else:
+                result["execution_audit"]["runtime_usage"] = dict(runtime_context.finalized_usage)
             for unit in admitted:
+                invoked = False
                 try:
-                    execution, usage = runtime_context.call("heavy", lambda: executor(unit))
-                    result["execution_audit"]["runtime_usage"] = usage
+                    def dispatch_heavy() -> Any:
+                        nonlocal invoked
+                        invoked = True
+                        result["execution_audit"]["invoked"].append(unit["candidate_key"])
+                        return executor(unit)
+
+                    execution, usage = runtime_context.call("heavy", dispatch_heavy)
+                    result["execution_audit"]["runtime_usage"] = dict(usage)
                     status = str(execution.get("status", "")).upper() if isinstance(execution, Mapping) else ""
                     failure_marker = (isinstance(execution, Mapping) and (status in {"FAILED", "FAIL", "ERROR", "BLOCKED", "HARD_GAP", "FAILED_EXECUTION"} or any(execution.get(name) not in (None, False, "") for name in ("error", "failure", "failure_marker"))))
                     boolean_fields_valid = isinstance(execution, Mapping) and all(type(execution[field]) is bool for field in ("validated", "success") if field in execution) and ("ok" not in execution or type(execution["ok"]) is bool)
@@ -597,9 +606,9 @@ def run_expansion_plan(
                         result["mode"] = "failed-execution"
                         result["network_fetch_allowed"] = False
                         break
-                    result["execution_audit"]["invoked"].append(unit["candidate_key"])
                 except Exception as exc:
-                    result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(exc)[:200]})
+                    result["execution_audit"]["runtime_usage"] = dict(getattr(exc, "runtime_usage", runtime_context.finalized_usage))
+                    result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(exc)[:200], "invoked": invoked})
                     result["mode"] = "failed-execution"
                     result["network_fetch_allowed"] = False
                     break

@@ -115,7 +115,7 @@ def _cost_usage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:
 class _AdmissionContext:
     """Opaque token minted only after static authorization preflight."""
 
-    __slots__ = ("authorization", "manifest", "limits", "usage", "lock", "blocked")
+    __slots__ = ("authorization", "manifest", "limits", "usage", "finalized_usage", "lock", "blocked")
 
     def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any]) -> None:
         self.authorization = authorization
@@ -123,8 +123,16 @@ class _AdmissionContext:
         cost = authorization.to_mapping()["cost_ceiling"]
         self.limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
         self.usage = {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
+        self.finalized_usage = dict(self.usage)
         self.lock = threading.Lock()
         self.blocked: str | None = None
+
+    def _reject(self, reason: str) -> None:
+        """Raise an auditable gate error with the latest usage snapshot."""
+        self.finalized_usage = dict(self.usage)
+        error = AcquisitionGateError(reason)
+        error.runtime_usage = dict(self.finalized_usage)
+        raise error
 
     def call(self, kind: str, fn: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
         """Permit exactly one call and commit all call counters before dispatch.
@@ -137,13 +145,13 @@ class _AdmissionContext:
             raise ValueError("authorization runtime call kind must be probe or heavy")
         with self.lock:
             if self.blocked:
-                raise AcquisitionGateError(self.blocked)
+                self._reject(self.blocked)
             if self.usage["concurrency"] >= self.limits["concurrency"]:
                 # A contending caller is rejected without poisoning the context;
                 # the in-flight call releases the slot in its finally block.
                 if self.limits["concurrency"] <= 0:
                     self.blocked = "authorization cost ceiling exceeded: concurrency"
-                raise AcquisitionGateError("authorization cost ceiling exceeded: concurrency")
+                self._reject("authorization cost ceiling exceeded: concurrency")
             projected = dict(self.usage)
             projected[f"{kind}_calls"] += 1
             projected["total_endpoint_calls"] += 1
@@ -152,7 +160,7 @@ class _AdmissionContext:
             for field, limit in self.limits.items():
                 if field in projected and projected[field] > limit:
                     self.blocked = f"authorization cost ceiling exceeded: {field}"
-                    raise AcquisitionGateError(self.blocked)
+                    self._reject(self.blocked)
             # Atomic commit: no permitted call can be observed without its
             # probe/heavy/total/unit reservation already present in usage.
             self.usage.update(projected)
@@ -175,11 +183,16 @@ class _AdmissionContext:
                 elif self.usage["payload_bytes"] > self.limits["payload_bytes"]:
                     self.blocked = "authorization cost ceiling exceeded: payload_bytes"
                 finalized = dict(self.usage)
+                self.finalized_usage = finalized
         if failure is not None:
             _, exc, traceback = failure
+            try:
+                exc.runtime_usage = dict(finalized)
+            except (AttributeError, TypeError):
+                pass
             raise exc.with_traceback(traceback)
         if self.blocked:
-            raise AcquisitionGateError(self.blocked)
+            self._reject(self.blocked)
         return value, finalized
 
 
@@ -837,8 +850,14 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
         if not unit.get("held_pair_exclusion") and calendar_snapshot is None:
             results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": "HARD_GAP", "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required", "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "evidence": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"})
             continue
+        invoked = False
         try:
-            response, runtime_usage = authorization_context.call("probe", lambda: probe_fetcher(request))
+            def dispatch_probe() -> Any:
+                nonlocal invoked
+                invoked = True
+                return probe_fetcher(request)
+
+            response, runtime_usage = authorization_context.call("probe", dispatch_probe)
             if not isinstance(response, Mapping):
                 raise TypeError("probe response must be a mapping")
             status = str(response.get("status", "HARD_GAP")).upper()
@@ -869,9 +888,10 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
                 if status == "PASS" and unit.get("held_pair_exclusion"):
                     status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
                     reason = reason or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": runtime_usage})
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": invoked, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": runtime_usage})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
-            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True, "comparison_status": "COMPARISON_INVALID"})
+            runtime_usage = getattr(exc, "runtime_usage", authorization_context.finalized_usage)
+            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": invoked, "comparison_status": "COMPARISON_INVALID", "runtime_usage": dict(runtime_usage)})
     return results
 
 
