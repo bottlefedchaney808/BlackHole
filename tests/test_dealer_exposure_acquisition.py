@@ -312,6 +312,30 @@ def test_probe_schema_and_pass_only_primary_schedule():
     assert [u["ticker"] for u in result["primary_schedule"]] == ["AAPL"]
 
 
+@pytest.mark.parametrize("response", [
+    {"status": "PASS"},
+    {"status": "PASS", "response_status": 200, "counts": {"rows": 1}},
+    {"status": "PASS", "response_status": 200, "source_counts": {"theta": 1}},
+])
+def test_pass_probe_with_incomplete_evidence_is_not_admitted(response):
+    from Vol_Suite.dealer_exposure_acquisition import run_availability_probes
+
+    schedule = build_candidate_schedule([row()], held_pairs=[("AAPL", "2026-08-17")])
+    probe = run_availability_probes(
+        schedule,
+        probe_fetcher=lambda _: response,
+        approval=True,
+        dry_run=False,
+    )[0]
+
+    assert probe["status"] in {"HARD_GAP", "COMPARISON_INVALID"}
+    assert probe["status"] != "PASS"
+    assert probe["validated"] is False
+    assert probe["network_executed"] is False
+    assert probe["admitted"] is False
+    assert "incomplete" in probe["reason"]
+
+
 def test_heavy_fetcher_is_called_only_for_validated_pass_schedule():
     schedule = build_candidate_schedule([row("AAPL"), row("MSFT"), row("TSLA")])
     fetched = []

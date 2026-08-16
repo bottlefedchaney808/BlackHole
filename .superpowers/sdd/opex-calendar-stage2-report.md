@@ -59,3 +59,17 @@ Authorization, Task 4 calendar consumption, source adapters, live acquisition, a
 - `git diff --check`: passed.
 - Ruff unavailable: `python -m ruff` reported `No module named ruff`.
 - The legacy root acquisition suite was run plugin-isolated; **15 failures** are expected stale pre-calendar-contract assertions (they build unbound schedules and expect heavy admission), while the Stage 2/core slice is green.
+
+## Stage 2 status-integrity closure (2026-08-15)
+
+- `run_availability_probes()` now downgrades a response that claims `PASS` without a complete response status, response-count, and source-count evidence set to `HARD_GAP`, with `validated=false`, `comparison_status=COMPARISON_INVALID`, an auditable `COMPARISON_INVALID: incomplete probe evidence` reason, and network/admission markers false.
+- Valid snapshot-bound PASS behavior remains unchanged: complete probe evidence still requires exact calendar-binding validation against the injected `CalendarSnapshot` before selector admission or heavy acquisition.
+- Added `tests/test_dealer_exposure_acquisition.py::test_pass_probe_with_incomplete_evidence_is_not_admitted`, covering empty and partial count/evidence responses; the regression passed 3/3 after the fix and was red 3/3 before it.
+
+### Status-integrity verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest Vol_Suite/tests/test_task1_opex_binding.py Vol_Suite/tests/test_opex_calendar.py -q`: **36 passed**.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_dealer_exposure_acquisition.py -q`: **26 passed, 15 pre-existing stale-contract failures**; failures are from unbound legacy schedules expecting heavy admission and are unrelated to this status-integrity change.
+- `python -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/dealer_exposure_universe.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py Vol_Suite/tests/test_task1_opex_binding.py`: passed.
+- `git diff --check`: passed.
+- Ruff unavailable: `python -m ruff` reported `No module named ruff`.
