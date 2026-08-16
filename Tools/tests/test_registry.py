@@ -136,3 +136,8 @@ def test_all_six_direction_tools_and_original_two_are_registered():
     }
     assert expected.issubset(slugs)
     assert len(TOOLS) >= 8
+
+
+def test_social_sentiment_removed():
+    from Tools.registry import TOOLS
+    assert all(t.slug != 'social-sentiment' for t in TOOLS)
