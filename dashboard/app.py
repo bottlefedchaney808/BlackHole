@@ -71,6 +71,7 @@ from db_loader import SwapsLoader  # noqa: E402
 from swaps_query import SwapsQuery  # noqa: E402
 from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary  # noqa: E402
 from dashboard.auth import get_client_ip  # noqa: E402
+from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
 from shared.schemas import validate_quant_summary  # noqa: E402
 from shared.summary import build_run_summary  # noqa: E402
@@ -1954,6 +1955,7 @@ async def tools_backtest_run(request: Request):
 GENERIC_TOOL_SLUGS = {
     'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
     'liquidity-map', 'direction-signal', 'hedge-optimizer',
+    'vrp-term-structure', 'price-distribution',
 }
 
 
