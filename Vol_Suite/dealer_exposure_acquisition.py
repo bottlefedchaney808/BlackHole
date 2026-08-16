@@ -12,6 +12,8 @@ import json
 import math
 import os
 import re
+import threading
+import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -107,6 +109,70 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
 def _cost_usage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:
     usage = evidence.get("usage", evidence.get("cost_usage"))
     return usage if isinstance(usage, Mapping) else None
+
+
+class _AdmissionContext:
+    """Opaque token minted only after static authorization preflight."""
+
+    __slots__ = ("authorization", "manifest", "limits", "usage", "lock", "blocked")
+
+    def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any]) -> None:
+        self.authorization = authorization
+        self.manifest = candidate_manifest_projection(manifest)
+        cost = authorization.to_mapping()["cost_ceiling"]
+        self.limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
+        self.usage = {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
+        self.lock = threading.Lock()
+        self.blocked: str | None = None
+
+    def call(self, kind: str, fn: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
+        with self.lock:
+            if self.blocked:
+                raise AcquisitionGateError(self.blocked)
+            if self.usage["concurrency"] >= self.limits["concurrency"]:
+                self.blocked = "authorization cost ceiling exceeded: concurrency"
+                raise AcquisitionGateError(self.blocked)
+            projected = dict(self.usage)
+            projected[f"{kind}_calls"] += 1
+            projected["total_endpoint_calls"] += 1
+            for field, limit in self.limits.items():
+                if field in projected and projected[field] > limit:
+                    self.blocked = f"authorization cost ceiling exceeded: {field}"
+                    raise AcquisitionGateError(self.blocked)
+            self.usage["concurrency"] = 1
+        started = time.perf_counter()
+        try:
+            value = fn()
+        finally:
+            elapsed = time.perf_counter() - started
+            with self.lock:
+                self.usage["wall_seconds"] += elapsed
+                self.usage["concurrency"] = 0
+                if self.usage["wall_seconds"] > self.limits["wall_seconds"]:
+                    self.blocked = "authorization cost ceiling exceeded: wall_seconds"
+        size = len(canonical_json_bytes(value)) if value is not None else 0
+        with self.lock:
+            self.usage["payload_bytes"] += size
+            if self.usage["payload_bytes"] > self.limits["payload_bytes"]:
+                self.blocked = "authorization cost ceiling exceeded: payload_bytes"
+            if self.blocked:
+                raise AcquisitionGateError(self.blocked)
+        return value, dict(self.usage)
+
+
+def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) -> _AdmissionContext | None:
+    """Validate the calendar-enriched manifest and authorization before any call."""
+    if not isinstance(authorization, AcquisitionAuthorization):
+        return None
+    try:
+        projection = candidate_manifest_projection(manifest)
+        if authorization.candidate_manifest_projection() != projection:
+            return None
+        if authorization.authorization_sha256() != authorization.to_mapping()["authorization_sha256"]:
+            return None
+        return _AdmissionContext(authorization, projection)
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def _immutable(value: Any) -> Any:
@@ -704,11 +770,13 @@ def _probe_request(unit: Mapping[str, Any]) -> dict[str, Any]:
     return request
 
 
-def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
+def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, authorization: AcquisitionAuthorization | None = None, authorization_context: Any | None = None, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
     """Run sequential lightweight probes; never dispatches the heavy fetcher."""
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     if dry_run or probe_only or not approval or probe_fetcher is None:
         return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP" if probe_fetcher is None and approval and not (dry_run or probe_only) else "INELIGIBLE", "reason": "probe_not_run", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False} for u in ordered]
+    if not isinstance(authorization_context, _AdmissionContext) or authorization_context.authorization is not authorization:
+        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": "admitted authorization context is required; boolean approval is not authorization", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
     results = []
     for unit in ordered:
         request = _probe_request(unit)
@@ -716,7 +784,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
             results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": "HARD_GAP", "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required", "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "evidence": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"})
             continue
         try:
-            response = probe_fetcher(request)
+            response, runtime_usage = authorization_context.call("probe", lambda: probe_fetcher(request))
             if not isinstance(response, Mapping):
                 raise TypeError("probe response must be a mapping")
             status = str(response.get("status", "HARD_GAP")).upper()
@@ -747,7 +815,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
                 if status == "PASS" and unit.get("held_pair_exclusion"):
                     status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
                     reason = reason or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False})
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": runtime_usage})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
             results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True, "comparison_status": "COMPARISON_INVALID"})
     return results
@@ -792,8 +860,24 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         raise AcquisitionGateError("validated authorization is required; boolean approval is not authorization")
     if not dry_run and not approval: raise AcquisitionGateError("explicit authorization handoff is required")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
-    probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash, calendar_snapshot=calendar_snapshot)
-    admission_audit = None
+    authorization_context = None
+    if not dry_run and not probe_only:
+        if not isinstance(admission_evidence, Mapping) or not isinstance(registry, Mapping):
+            raise AcquisitionGateError("evidence and artifact registry are required before probe admission")
+        authorization_context = _preflight_authorization(authorization, authorization.candidate_manifest_projection())
+        if authorization_context is None:
+            raise AcquisitionGateError("calendar-enriched manifest and authorization preflight failed")
+        pre_admitted, pre_audit = admit_acquisition(
+            authorization, authorization_context.manifest,
+            admission_evidence.get("probes", ()), admission_evidence, registry,
+        )
+        if not pre_admitted:
+            raise AcquisitionGateError("acquisition admission failed before probe dispatch")
+        probes = list(admission_evidence.get("probes", ()))
+    else:
+        pre_audit = None
+        probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, authorization=authorization, authorization_context=authorization_context, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash, calendar_snapshot=calendar_snapshot)
+    admission_audit = pre_audit
     if not dry_run and not probe_only:
         if not hasattr(authorization, "candidate_manifest_projection"):
             admission_audit = _immutable({"admitted": False, "stages": (), "admitted_keys": (), "blocked": ["typed AcquisitionAuthorization is required at acquisition handoff"]})
@@ -811,6 +895,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     units = []
     payloads: dict[str, Any] = {}
     network_executed = False
+    runtime_usage = dict(authorization_context.usage) if isinstance(authorization_context, _AdmissionContext) else {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
     for unit in ordered:
         if unit.get("held_pair_exclusion"):
             payload, status, reason = {"mode": "held-exclusion", "candidate_key": unit["candidate_key"], "network": False}, "INELIGIBLE", "held_pair_exclusion"
@@ -833,7 +918,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 # raised fetcher still proves that acquisition was attempted.
                 _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
                 network_executed = True
-                payload = fetcher(unit)
+                payload, runtime_usage = authorization_context.call("heavy", lambda: fetcher(unit))
                 item = _unit_from_payload(unit, payload)
                 status, reason = item["status"], item["reason"]
             except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
@@ -903,7 +988,9 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         for item in units
     }
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": int(network_executed), "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "admission_audit": admission_audit, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
+    if isinstance(authorization_context, _AdmissionContext):
+        runtime_usage = dict(authorization_context.usage)
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": runtime_usage["heavy_calls"], "runtime_usage": runtime_usage, "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "admission_audit": admission_audit, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)

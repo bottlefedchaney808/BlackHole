@@ -4,7 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from Vol_Suite.dealer_exposure_acquisition import _strict_prewindow, admit_acquisition
+from Vol_Suite.dealer_exposure_acquisition import (
+    _AdmissionContext,
+    _strict_prewindow,
+    admit_acquisition,
+    run_availability_probes,
+)
 from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization
 
 from test_dealer_exposure_authorization import _authorization, _manifest
@@ -78,3 +83,30 @@ def test_manifest_projection_mismatch_is_rejected_before_admission():
     _, audit = admit_acquisition(auth, altered, [], {}, {})
     assert not audit["admitted"]
     assert audit["blocked"]
+
+
+def test_boolean_probe_approval_has_zero_fetcher_calls():
+    calls = []
+    schedule = [{"candidate_key": "x", "ticker": "X", "calendar_day": "2026-07-06", "expiry": "2026-07-06", "dte": 1,
+                 "habitat": "OPEX", "sector": "ENERGY", "candidate_source": "fixture", "calendar_binding": {}}]
+    probes = run_availability_probes(schedule, approval=True, dry_run=False,
+                                     probe_fetcher=lambda request: calls.append(request))
+    assert calls == []
+    assert probes[0]["status"] == "HARD_GAP"
+    assert probes[0]["invoked"] is False
+
+
+@pytest.mark.parametrize("ceiling,kind", [
+    ("max_probe_calls", "probe"), ("max_heavy_calls", "heavy"),
+    ("max_total_endpoint_calls", "probe"), ("max_payload_bytes", "probe"),
+    ("max_wall_seconds", "probe"), ("concurrency", "probe"),
+])
+def test_runtime_context_stops_at_each_authorization_ceiling(ceiling, kind):
+    auth, manifest = _auth_and_manifest()
+    context = _AdmissionContext(auth, manifest)
+    limit_key = {"max_probe_calls": "probe_calls", "max_heavy_calls": "heavy_calls", "max_total_endpoint_calls": "total_endpoint_calls", "max_payload_bytes": "payload_bytes", "max_wall_seconds": "wall_seconds", "concurrency": "concurrency"}[ceiling]
+    context.limits[limit_key] = 0
+    calls = []
+    with pytest.raises(Exception, match="authorization cost ceiling exceeded"):
+        context.call(kind, lambda: calls.append(1) or {"payload": "x"})
+    assert calls == ([] if ceiling in {"max_probe_calls", "max_heavy_calls", "max_total_endpoint_calls", "concurrency"} else [1])

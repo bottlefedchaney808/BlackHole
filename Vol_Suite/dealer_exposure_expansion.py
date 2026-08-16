@@ -29,11 +29,13 @@ LIVE_CONFIG = {
 }
 
 from .dealer_exposure_acquisition import (
+    _AdmissionContext,
+    _preflight_authorization,
     admit_acquisition,
     build_candidate_schedule,
     select_primary_schedule,
 )
-from .dealer_exposure_authorization import candidate_manifest_projection, candidate_manifest_sha256
+from .dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_projection, candidate_manifest_sha256
 from .dealer_exposure_universe import (
     DTE_STRATA,
     ProbeResult,
@@ -86,8 +88,8 @@ def build_expansion_manifest(
     raw_rows = [dict(row) for row in candidates]
     held = {(str(t).strip().lstrip("$").upper(), str(d)) for t, d in held_pairs}
     held |= held_pairs_from_paths(held_paths)
-    if raw_rows and calendar_snapshot is None and any((str(row.get("ticker", "")).strip().lstrip("$").upper(), str(row.get("calendar_day", row.get("day", row.get("date"))))) not in held for row in raw_rows):
-        raise ExpansionApprovalError("calendar snapshot is required for acquisition-eligible manifest")
+    # Dry-run manifests may remain unbound and are network-free; non-dry-run
+    # admission requires the resulting calendar-enriched projection to match authorization.
     held_refs = {pair: "held-reference" for pair in held}
     for path in held_paths:
         path_name = Path(path).name
@@ -510,6 +512,32 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
     return ([by_identity[u["candidate_key"]] for u in primary] if not reasons else []), reasons
 
 
+def _authorized_executor(executor: Any, authorization: Any) -> tuple[bool, dict[str, Any], str]:
+    """Require an attested named adapter; arbitrary callables are never accepted."""
+    if executor is None or not callable(executor) or not isinstance(authorization, AcquisitionAuthorization):
+        return False, {}, "typed named adapter and authorization are required"
+    policy = authorization.to_mapping()["executor_policy"]
+    identity = {
+        "executor_id": getattr(executor, "executor_id", None),
+        "entrypoint": getattr(executor, "entrypoint", None),
+        "endpoint": getattr(executor, "endpoint", None),
+        "request_method": getattr(executor, "request_method", None),
+    }
+    if any(not isinstance(value, str) or not value for value in identity.values()):
+        return False, identity, "executor identity is incomplete or untrusted"
+    if identity["executor_id"] != policy["allowed_executor_id"] or identity["entrypoint"] != policy["allowed_executor_entrypoint"]:
+        return False, identity, "executor identity is not authorized"
+    paths = tuple(policy["allowed_endpoint_paths"])
+    families = tuple(policy["allowed_endpoint_families"])
+    if identity["endpoint"] not in paths and not any(family in identity["endpoint"] for family in families):
+        return False, identity, "executor endpoint/path is outside authorization scope"
+    if identity["request_method"] not in tuple(policy["allowed_request_methods"]):
+        return False, identity, "executor request method is outside authorization scope"
+    if policy["network_fetch_allowed"] is not True:
+        return False, identity, "authorization does not permit network fetch"
+    return True, identity, ""
+
+
 def run_expansion_plan(
     candidates: Iterable[Mapping[str, Any]],
     *,
@@ -563,51 +591,44 @@ def run_expansion_plan(
         if not admitted:
             result["mode"] = "blocked"
         else:
+            executor_ok, executor_identity, executor_reason = _authorized_executor(executor, authorization)
+            result["execution_audit"]["executor"] = executor_identity
+            if not executor_ok:
+                result["mode"] = "blocked"
+                result["network_fetch_allowed"] = False
+                result["execution_audit"]["blocked"].append({"classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": executor_reason})
+                admitted = ()
+            runtime_context = _preflight_authorization(authorization, auth_manifest)
+            if runtime_context is None:
+                result["mode"] = "blocked"
+                result["network_fetch_allowed"] = False
+                result["execution_audit"]["blocked"].append({"classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": "runtime authorization context unavailable"})
+                admitted = ()
             for unit in admitted:
                 try:
-                    execution = executor(unit)  # type: ignore[misc]
+                    execution, usage = runtime_context.call("heavy", lambda: executor(unit))
+                    result["execution_audit"]["runtime_usage"] = usage
                     status = str(execution.get("status", "")).upper() if isinstance(execution, Mapping) else ""
-                    failure_marker = (
-                        isinstance(execution, Mapping)
-                        and (
-                            status in {"FAILED", "FAIL", "ERROR", "BLOCKED", "HARD_GAP", "FAILED_EXECUTION"}
-                            or any(execution.get(name) not in (None, False, "")
-                                   for name in ("error", "failure", "failure_marker"))
-                        )
-                    )
-                    boolean_fields_valid = (
-                        isinstance(execution, Mapping)
-                        and all(
-                            type(execution[field]) is bool
-                            for field in ("validated", "success")
-                            if field in execution
-                        )
-                        and ("ok" not in execution or type(execution["ok"]) is bool)
-                    )
-                    validated_success = (
-                        boolean_fields_valid
-                        and not failure_marker
-                        and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"}
-                        and execution.get("validated") is True
-                        and execution.get("success") is True
-                        and ("ok" not in execution or execution.get("ok") is True)
-                    )
+                    failure_marker = (isinstance(execution, Mapping) and (status in {"FAILED", "FAIL", "ERROR", "BLOCKED", "HARD_GAP", "FAILED_EXECUTION"} or any(execution.get(name) not in (None, False, "") for name in ("error", "failure", "failure_marker"))))
+                    boolean_fields_valid = isinstance(execution, Mapping) and all(type(execution[field]) is bool for field in ("validated", "success") if field in execution) and ("ok" not in execution or type(execution["ok"]) is bool)
+                    validated_success = boolean_fields_valid and not failure_marker and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"} and execution.get("validated") is True and execution.get("success") is True and ("ok" not in execution or execution.get("ok") is True)
                     if not validated_success:
-                        result["execution_audit"]["blocked"].append({
-                            "candidate_key": unit["candidate_key"],
-                            "classification": "HARD_GAP",
-                            "status": "FAILED_EXECUTION",
-                            "reason": str(execution.get("reason", execution))[:200],
-                        })
+                        result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(execution.get("reason", execution))[:200]})
                         result["mode"] = "failed-execution"
                         result["network_fetch_allowed"] = False
                         break
                     result["execution_audit"]["invoked"].append(unit["candidate_key"])
-                except Exception as exc:  # noqa: BLE001 - executor failures are audit evidence
+                except Exception as exc:
                     result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(exc)[:200]})
                     result["mode"] = "failed-execution"
                     result["network_fetch_allowed"] = False
                     break
+            # The legacy loop below is intentionally unreachable; retain its
+            # structured result semantics without permitting a second call.
+            admitted = ()
+        if result.get("execution_audit", {}).get("runtime_usage"):
+            result["runtime_usage"] = result["execution_audit"]["runtime_usage"]
+
     if write_manifest:
         path = Path(output_root) / "expansion_manifest.json"
         path.parent.mkdir(parents=True, exist_ok=True)

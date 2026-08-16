@@ -46,3 +46,18 @@ Only Task 2 implementation/tests/report should be committed. Existing unrelated 
 - `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py` — passed.
 - `git diff --check` — passed.
 - Ruff availability and the full legacy suite remain environment/contract-transition constrained; no network acquisition was executed.
+
+## Authorization Hardening Task 2 execution-boundary closure (2026-08-15)
+
+- Moved non-dry-run acquisition behind calendar-enriched authorization preflight; missing/forged authorization, evidence, or registry stops before `run_availability_probes`, with no injected probe call.
+- `run_availability_probes` now requires the opaque preflight authorization context for network-capable operation; `approval=True` alone is a hard gap and invokes zero calls.
+- Added an atomic runtime accounting context around probe, heavy, and executor calls. It records probe/heavy/total calls, payload bytes, wall seconds, and concurrency; ceilings stop execution at the first overrun and report a hard gap.
+- Expansion executor handoff now requires a named adapter with authorized executor ID, entrypoint, endpoint/path, and method; arbitrary caller callables and wrong adapters are rejected and identity is recorded.
+- Removed malformed annotation tokens and added regressions for boolean bypass, zero-call failed probe admission, runtime ceilings, and authorization-bound execution.
+
+## Closure verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py tests/test_dealer_exposure_authorization_task2.py` — **38 passed**.
+- `python -m py_compile Vol_Suite/dealer_exposure_authorization.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py` — passed.
+- `git diff --check` — passed.
+- Ruff was unavailable in the environment; no live/network acquisition was run.
