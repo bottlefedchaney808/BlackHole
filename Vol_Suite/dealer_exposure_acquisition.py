@@ -452,7 +452,7 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
                 status = "HARD_GAP"
                 comparison_status = "COMPARISON_INVALID"
                 reason = reason or "COMPARISON_INVALID: incomplete probe evidence"
-            if validated and not unit.get("held_pair_exclusion"):
+            if validated:
                 supplied = evidence.get("calendar_binding")
                 try:
                     checked = _validate_calendar_binding(supplied, ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), expected=unit.get("calendar_binding"), calendar_snapshot=calendar_snapshot)
@@ -461,6 +461,9 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
                 except (TypeError, ValueError) as exc:
                     status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
                     reason = f"COMPARISON_INVALID: {exc}"
+                if status == "PASS" and unit.get("held_pair_exclusion"):
+                    status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
+                    reason = reason or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
             results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
             results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True, "comparison_status": "COMPARISON_INVALID"})

@@ -73,3 +73,20 @@ Authorization, Task 4 calendar consumption, source adapters, live acquisition, a
 - `python -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/dealer_exposure_universe.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py Vol_Suite/tests/test_task1_opex_binding.py`: passed.
 - `git diff --check`: passed.
 - Ruff unavailable: `python -m ruff` reported `No module named ruff`.
+
+## Stage 2 held-pair status-integrity closure (2026-08-15)
+
+- `run_availability_probes()` now applies calendar-binding validation to held-pair PASS responses instead of exempting that branch. Empty/incomplete calendar evidence is downgraded to `HARD_GAP` with `validated=false`, `comparison_status=COMPARISON_INVALID`, false network/admission markers, and an auditable calendar reason.
+- Even a complete held-pair PASS cannot remain validated/admission-valid: held-pair exclusions are retained visibly but forced non-admission with `HARD_GAP`/`COMPARISON_INVALID`.
+- Added `test_held_pair_pass_with_status_counts_but_empty_calendar_evidence_is_invalid`, reproducing the reviewer case (held schedule, `evidence={}`, PASS response with status/count/source evidence); the test was red before the fix and passed after it.
+
+### Held-pair closure verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest Vol_Suite/tests/test_task1_opex_binding.py Vol_Suite/tests/test_opex_calendar.py -q`: **36 passed**.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_dealer_exposure_acquisition.py -q`: **27 passed, 15 pre-existing stale-contract failures**; failures are unbound legacy schedules expecting pre-calendar-contract heavy admission.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_dealer_exposure_universe.py tests/test_dealer_exposure_expansion.py -q`: **40 passed, 60 pre-existing stale-contract failures**; failures expect the superseded unbound calendar behavior.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest Vol_Suite/tests/test_universe_causal_comparison_integration.py -q`: **6 passed**.
+- `python -m pytest tests/test_dealer_exposure_acquisition.py::test_held_pair_pass_with_status_counts_but_empty_calendar_evidence_is_invalid -q -p no:cacheprovider`: **1 passed**.
+- `python -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py`: passed.
+- `git diff --check`: passed.
+- Ruff unavailable: `python -m ruff` reported `No module named ruff`; `ruff` is not installed.

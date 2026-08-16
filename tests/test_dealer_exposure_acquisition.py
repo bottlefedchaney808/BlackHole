@@ -336,6 +336,32 @@ def test_pass_probe_with_incomplete_evidence_is_not_admitted(response):
     assert "incomplete" in probe["reason"]
 
 
+def test_held_pair_pass_with_status_counts_but_empty_calendar_evidence_is_invalid():
+    from Vol_Suite.dealer_exposure_acquisition import run_availability_probes
+
+    schedule = build_candidate_schedule([row()], held_pairs=[("AAPL", "2026-08-17")])
+    probe = run_availability_probes(
+        schedule,
+        probe_fetcher=lambda _: {
+            "status": "PASS",
+            "response_status": 200,
+            "counts": {"rows": 1},
+            "source_counts": {"theta": 1},
+            "evidence": {},
+        },
+        approval=True,
+        dry_run=False,
+    )[0]
+
+    assert probe["status"] in {"HARD_GAP", "COMPARISON_INVALID"}
+    assert probe["status"] != "PASS"
+    assert probe["validated"] is False
+    assert probe["comparison_status"] == "COMPARISON_INVALID"
+    assert probe["network"] is False
+    assert probe["admission"] is False
+    assert "calendar" in str(probe["reason"]).lower()
+
+
 def test_heavy_fetcher_is_called_only_for_validated_pass_schedule():
     schedule = build_candidate_schedule([row("AAPL"), row("MSFT"), row("TSLA")])
     fetched = []
