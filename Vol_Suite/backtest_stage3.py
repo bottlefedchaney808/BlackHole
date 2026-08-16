@@ -749,13 +749,22 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
 
         # Route choice is a cost decision, not a preference. Measured
         # 2026-07-24 (diagnostics/diagnose_range_route_hunt.py):
-        #   option_bulk_hist_greeks  -> ~47,000 requests (one DAY per call)
-        #   option_bulk_hist_eod     ->     ~430 requests (full range per call)
-        #   option_bulk_hist_oi_by_day ->   ~110 requests (whole chain per day)
-        # The EOD route carries no greeks, so _build_day_records inverts IV
-        # from the prices and derives gamma. See implied_vol.py for the
-        # provenance caveat that buys.
-        hist_greek_rows = td.option_bulk_hist_eod(ticker, expiry, start_str, end_str)
+        #   option_bulk_hist_greeks     -> ~47,000 requests (one DAY per call)
+        #   option_bulk_hist_eod        ->     ~430 requests (full range per call)
+        #   option_bulk_hist_eod_greeks -> one request per expiry, dense range,
+        #                                   OHLC + implied_vol + full greeks
+        #   option_bulk_hist_oi_by_day  ->    ~110 requests (whole chain per day)
+        # Since 2026-08-16 we use option_bulk_hist_eod_greeks (the "untapped"
+        # dense route) instead of option_bulk_hist_eod: it returns real
+        # implied_vol + gamma over the full range in one request per expiry,
+        # which _build_day_records uses verbatim (falling back to price
+        # inversion only when IV is missing) and which the v2_live accumulation
+        # needs to seed + accumulate -- option_bulk_hist_eod prices carry no
+        # IV, so feeding them to the accumulation left its IV map empty and it
+        # could not build a position. Same convention as oi_by_day (string
+        # YYYYMMDD 'date', right 'C'/'P', strike cents-int); _build_day_records
+        # auto-detects strike scale and normalizes right.
+        hist_greek_rows = td.option_bulk_hist_eod_greeks(ticker, expiry, start_str, end_str)
         hist_oi_rows = td.option_bulk_hist_oi_by_day(ticker, expiry, start_str, end_str)
         hist_price_rows = td.hist_stock_eod(ticker, start_str, end_str)
     finally:
