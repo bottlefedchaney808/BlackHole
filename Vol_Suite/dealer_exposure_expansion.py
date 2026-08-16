@@ -37,6 +37,7 @@ from .dealer_exposure_acquisition import (
     select_primary_schedule,
 )
 from .dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_projection, candidate_manifest_sha256
+from .dealer_exposure_executor import ExecutorFailure, RestrictedExecutor
 from .dealer_exposure_universe import (
     DTE_STRATA,
     ProbeResult,
@@ -588,34 +589,21 @@ def run_expansion_plan(
                 admitted = ()
             else:
                 result["execution_audit"]["runtime_usage"] = dict(runtime_context.finalized_usage)
-            for unit in admitted:
-                invoked = False
-                try:
-                    def dispatch_heavy() -> Any:
-                        nonlocal invoked
-                        invoked = True
-                        result["execution_audit"]["invoked"].append(unit["candidate_key"])
-                        return executor(unit)
-
-                    execution, usage = runtime_context.call("heavy", dispatch_heavy)
-                    result["execution_audit"]["runtime_usage"] = dict(usage)
-                    status = str(execution.get("status", "")).upper() if isinstance(execution, Mapping) else ""
-                    failure_marker = (isinstance(execution, Mapping) and (status in {"FAILED", "FAIL", "ERROR", "BLOCKED", "HARD_GAP", "FAILED_EXECUTION"} or any(execution.get(name) not in (None, False, "") for name in ("error", "failure", "failure_marker"))))
-                    boolean_fields_valid = isinstance(execution, Mapping) and all(type(execution[field]) is bool for field in ("validated", "success") if field in execution) and ("ok" not in execution or type(execution["ok"]) is bool)
-                    validated_success = boolean_fields_valid and not failure_marker and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"} and execution.get("validated") is True and execution.get("success") is True and ("ok" not in execution or execution.get("ok") is True)
-                    if not validated_success:
-                        result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(execution.get("reason", execution))[:200]})
-                        result["mode"] = "failed-execution"
-                        result["network_fetch_allowed"] = False
-                        break
-                except Exception as exc:
-                    result["execution_audit"]["runtime_usage"] = dict(getattr(exc, "runtime_usage", runtime_context.finalized_usage))
-                    result["execution_audit"]["blocked"].append({"candidate_key": unit["candidate_key"], "classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(exc)[:200], "invoked": invoked})
+            try:
+                execution = RestrictedExecutor(executor, authorization).run(admitted, runtime_context)
+                result["execution_audit"].update(execution.get("audit", {}))
+                result["execution_audit"]["runtime_usage"] = dict(execution.get("audit", {}).get("finalized_usage", runtime_context.finalized_usage))
+                result["execution_audit"]["executor_result"] = {key: value for key, value in execution.items() if key != "audit"}
+                if execution.get("status") != "SUCCESS":
+                    result["execution_audit"]["blocked"].append({"classification": execution.get("classification", "HARD_GAP"), "status": execution.get("status", "FAILED_EXECUTION"), "reason": execution.get("reason", "restricted executor failure")})
                     result["mode"] = "failed-execution"
                     result["network_fetch_allowed"] = False
-                    break
-            # The legacy loop below is intentionally unreachable; retain its
-            # structured result semantics without permitting a second call.
+                else:
+                    result["mode"] = "approved-execution"
+            except (ExecutorFailure, TypeError, ValueError) as exc:
+                result["execution_audit"]["blocked"].append({"classification": "HARD_GAP", "status": "FAILED_EXECUTION", "reason": str(exc)[:200]})
+                result["mode"] = "failed-execution"
+                result["network_fetch_allowed"] = False
             admitted = ()
         if result.get("execution_audit", {}).get("runtime_usage"):
             result["runtime_usage"] = result["execution_audit"]["runtime_usage"]

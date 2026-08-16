@@ -1,116 +1,50 @@
-# Task 4 — Evaluation/falsifier harness
+# Authorization Hardening Task 4 Report
 
-## Status
+## Scope
 
-Implemented a network-free, fail-closed evaluator. It consumes Task 3 `comparison` artifacts and per-row causal/provenance records; descriptive agreement is kept separate from predictive/causal evidence. It never acquires data, changes the locked live model, promotes the expiry-book model, or imputes missing values.
+Implemented the Task 4 restricted executor boundary only. No network acquisition, live model, scheduler, master, or expiry-book code was changed. The executor accepts a deeply immutable admitted-unit tuple and the authenticated runtime context minted by the existing authorization/admission path.
 
 ## Implementation
 
-- `Vol_Suite/run_task4_evaluation.py`
-  - one independent unit per unique calendar day; same-day tickers are deterministically collapsed and never counted twice;
-  - fixed daily close-to-close and from-breach clocks, with expected negative/positive directions and counts;
-  - required `gamma_burst`, `delta_s`, `market`, `a6_reflexivity`, and `cross_family_spillover` controls plus event/no-firing strata;
-  - residualized `Vanna_orth × ΔIV_PRE_WINDOW` primary target and explicit causal-provenance gate;
-  - placebo and reverse lead/lag falsifiers, with best-lag selection disabled;
-  - opposite-convention sensitivity labeled sensitivity only;
-  - rank, condition, VIF, beta SE, power, and `n_for_80` diagnostics; `n=29` remains correlational context and beta target is `n=257`;
-  - explicit `BETTER` / `WORSE` / `INDETERMINATE` decision ladder; underpowered or causally blocked evidence cannot yield causal acceptance;
-  - invalid comparison/common-input coverage, missing outcome/control/event, blocked provenance, and non-finite data fail closed.
-- `Vol_Suite/tests/test_task4_evaluation.py`
-  - deterministic tests for zero-outcome prevention, same-day de-duplication, blocked provenance, placebo/reverse registration, power interpretation, decision ladder, invalid artifacts, opposite-convention sensitivity, and underpowered decisions.
+- Added `Vol_Suite/dealer_exposure_executor.py`.
+  - Requires a typed `AcquisitionAuthorization` and the matching authenticated `_AdmissionContext`.
+  - Rejects plain arbitrary functions/methods and incomplete adapter identity.
+  - Enforces exact executor ID, entrypoint, endpoint path, HTTP method, and scope binding.
+  - Rejects query/fragment/dynamic endpoints and unsafe live/scheduler/out-of-root/new/held permissions.
+  - Requires a deeply immutable tuple of units, exact authorized candidate scope, and calendar-bound identity fields.
+  - Dispatches through the existing atomic `context.call("heavy", ...)` reservation, preserving units/heavy/total-call, payload-byte, wall-time, and concurrency ceilings with finalized usage.
+  - Stops on the first adapter exception, malformed response, unauthorized request, non-success evidence, or ceiling breach.
+  - Audits invocations, requests, request hashes, response status, payload hashes, and finalized counters.
+  - Returns `FAILED_EXECUTION` / `HARD_GAP` with `network_fetch_allowed: false` for execution failures.
+- Modified `Vol_Suite/dealer_exposure_expansion.py` to hand admitted units to `RestrictedExecutor` instead of directly invoking a caller executor. Legacy boolean approval/arbitrary-callable paths remain fail-closed.
+- Added `tests/test_dealer_exposure_executor.py` covering immutable handoff, authenticated context, exact endpoint policy, candidate scope, exception hard-stop, cost ceilings, audit hashes, and arbitrary callable rejection.
 
 ## Verification
 
-Fresh focused commands (network-free, with `PYTHONPATH` unset because the ambient Hermes path contains an incompatible NumPy build):
+- `pytest -q tests/test_dealer_exposure_executor.py`
+  - **10 passed**.
+- `python -m py_compile Vol_Suite/dealer_exposure_executor.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_executor.py`
+  - **passed**.
+- `git diff --check`
+  - **passed**.
+- `ruff check ...`
+  - Not run successfully: `ruff` is not installed/on PATH in this plugin-isolated environment.
+- Project `.venv/Scripts/python.exe` (requested Python 3.12 plugin environment) was absent. The available isolated Hermes Python 3.11 runner executed the focused tests successfully.
+- The combined legacy authorization/expansion slice was run. Existing pre-Task-4 tests that directly pass unbound manifests, boolean approval, plain lambdas, or stale mutable adapter APIs fail at the new fail-closed transition boundary; these are expected transition failures per the Task 4 brief and were not weakened.
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **9 passed**
-- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
-- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — **All checks passed**
-- `git diff --check` — passed
+## Files in Task 4 commit
 
-No acquisition/network-heavy call was made. `dealer_positioning.py`, live config, master, secrets, and unrelated untracked corpora were not modified.
+- `Vol_Suite/dealer_exposure_executor.py`
+- `Vol_Suite/dealer_exposure_expansion.py`
+- `tests/test_dealer_exposure_executor.py`
+- `.superpowers/sdd/task-4-report.md`
 
-## Limitations
+Unrelated pre-existing worktree artifacts were not staged.
 
-This task provides the evaluation boundary only; no model-selection or promotion claim is made. Real-data causal evidence remains blocked until a complete, registry-bound Task 3 corpus passes the strict provenance contract and reaches the locked beta-power target.
+## Status
+
+Focused Task 4 executor tests and syntax verification are green. Ruff/Python 3.12 verification is environment-blocked as documented. Commit is created after final diff and status checks.
 
 ## Commit
 
-Task 4 commit was created on branch `Dealer-Exposure-Dev`; its final hash is reported in the handback.
-
-## Review-fix retry (2026-08-15)
-
-- Primary remains the all-eligible unique-calendar-day analysis; same-day ticker records are deterministically sorted/collapsed and never counted as independent observations.
-- Added deterministic `equal-family/day` balanced-panel weighting as a separately labeled sensitivity; it cannot replace or auto-promote the all-eligible primary.
-- Added event-only, control-only, and pooled strata with the same descriptive, daily-clock, from-breach-clock, causal, power, coverage, `n`, and status diagnostics. Pooled explicitly retains no-firing days in its denominator.
-- Added strict Task 3 artifact validation: `VALID` requires complete coverage (`live/new/common/total`), SHA-256 input/artifact/source identities, and record/provenance/artifact identity agreement. Minimal `{"status":"VALID"}`, incomplete coverage, source/hash mismatches, and record-artifact mismatches fail closed.
-- Missing placebo or reverse lead-lag evidence is `NOT_AVAILABLE` with `INDETERMINATE` interpretation and `drives_decision=False`; only observed falsifier failures can drive `WORSE`.
-- Preserved fixed clocks, controls, unique-day unit/cluster, `n_for_80` power interpretation, no auto-promotion, and no acquisition/live/master/secrets changes.
-- Added focused regressions covering balanced sensitivity determinism, all strata/no-firing denominator, strict schema/provenance identity, missing-falsifier handling, and observed falsifier failure.
-
-Verification for this retry:
-
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **18 passed**
-- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
-- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
-- `git diff --check` — passed
-
-Only `Vol_Suite/run_task4_evaluation.py`, `Vol_Suite/tests/test_task4_evaluation.py`, and this report were changed for the retry.
-
-## Important evaluator review closure (2026-08-15)
-
-- Task 3 registry binding is now mandatory at Task 4 evaluation: every record must carry a verified registry, resolve its artifact entry, and match the registry manifest/payload for raw payload hash, source hashes, canonical input hash, candidate identity, ticker/day, and record artifact hash. Missing, incomplete, detached, or forged registry evidence raises structured `EvaluationInvalid` rather than entering analysis.
-- Restored top-level fixed-clock diagnostics and extended every event-only/control-only/pooled stratum with daily and from-breach negative/positive/zero day counts, coverage, and means. Regression tests assert the counts and means.
-- Falsifier failure can drive `WORSE` only for an identifiable, finite, beta-bearing fit whose declared power threshold is reached and whose primary comparison is identifiable. Missing data, missing beta, non-identifiable, or underpowered fits are `NOT_AVAILABLE`/`INDETERMINATE` and neutral. Removed fallback `or 0.0` semantics; regression covers non-identifiable primary and placebo neutrality.
-
-Verification:
-
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **21 passed**
-- Python 3.12 `py_compile` — passed
-- Python 3.12 Ruff check — passed
-- `git diff --check` — passed
-
-Only Task 4 evaluator, focused tests, and this report were changed; no production/live model or acquisition code was modified.
-
-## Final provenance strictness fix (2026-08-15)
-
-- Missing, `None`, or non-mapping `provenance` now raises `EvaluationInvalid` with machine-readable `status=COMPARISON_INVALID` before a record can enter `_collapse` or receive a `VALID` result.
-- Mapping provenance is still required to pass complete registry/hash identity binding and `no_imputation`; causal status must be explicitly `CAUSAL_ELIGIBLE`, or an explicit `ASSOCIATIONAL`/`NON_CAUSAL` appendix with non-empty structured reasons. `CAUSAL_BLOCKED` without that explicit appendix declaration is invalid.
-- Added regressions for absent, `None`, and wrong-type provenance plus a complete explicit associational appendix. Existing registry binding, balanced sensitivity, strata clocks, falsifier neutrality, and network-free/no-live-master scope remain unchanged.
-
-Final verification:
-
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **25 passed in 0.11s**
-- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — passed
-- `C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m ruff check Vol_Suite/run_task4_evaluation.py Vol_Suite/tests/test_task4_evaluation.py` — **All checks passed**
-- `git diff --check` — passed (Git emitted only the normal LF→CRLF working-copy warning)
-
-## Task 4 specification-gap closure (2026-08-15)
-
-- `_fit()` now publishes same-day clustered finite-sample diagnostics: `ci_low`, `ci_high`, `ci_level`, `cluster_count`, `ci_status`, `ci_method`, and an explicit reason. The method is a CR1 clustered sandwich correction with finite-sample correction; intervals are unavailable/INDETERMINATE when the fit or same-day cluster count is insufficient. No pooled-observation interval is fabricated.
-- Primary, event/control/pooled stratum, and balanced-panel fits carry the same CI fields; top-level primary diagnostics expose the CI fields as well.
-- Added a deterministic event/control acceptance gate: minimum 2 unique days per arm, minimum 20% coverage per arm, and maximum 2:1 arm-size imbalance. Event-only, control-only, and pooled strata remain descriptive/reportable, but missing or materially imbalanced mix forces `INDETERMINATE` and cannot produce a winner.
-- Added regressions for known clustered data with published CI, insufficient same-day clusters, balanced mix, missing event, missing control, and imbalanced mix.
-
-Verification for this closure:
-
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **32 passed**
-- Python 3.12 `py_compile` — passed
-- Python 3.12 Ruff check — passed
-- `git diff --check` — passed
-
-## Statistical review closure (2026-08-15)
-
-- Primary fit gates now run before every decision comparison: identifiability, finite beta/SE, available robust CI, and the declared primary power target are required before either `BETTER` or `WORSE`. Falsifier prerequisites also require a finite, identifiable, powered primary; underpowered-primary plus powered-falsifier regression remains `INDETERMINATE` and cannot drive `WORSE`.
-- Replaced the Normal critical value with a dependency-free finite-sample Student-t inverse based on the regularized beta function. CI output exposes `ci_df=cluster_count-1`, `ci_critical_value`, and `ci_method=CR1_CLUSTERED_STUDENT_T_FINITE_SAMPLE`.
-- Robust variance is validated as finite and strictly positive before deriving SE/CI. Non-finite, negative, zero, or insufficient variance returns `status=INDETERMINATE`, `ci_status=UNAVAILABLE`, and null interval bounds; no NaN CI is emitted.
-- Fixed the balanced-mix regression's tautological assertion to require `INDETERMINATE` because the primary target remains 257 days.
-
-Verification:
-
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_task4_evaluation.py` — **35 passed**
-- Python 3.12 `py_compile` — passed
-- Python 3.12 Ruff check — **All checks passed**
-- `git diff --check` — passed
-
-Only the Task 4 evaluator, focused tests, and this report were changed for this closure; acquisition/live/master/secrets files were not touched.
+The final Task 4-only commit is the commit carrying this report; its short hash is returned with the task status.
