@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from math import isfinite
 from types import MappingProxyType
 from typing import Any
@@ -113,6 +113,12 @@ def _strict_bool(value: Any, label: str) -> bool:
     return value
 
 
+def _strict_schema_version(value: Any, label: str) -> int:
+    if type(value) is not int or value != SCHEMA_VERSION:
+        raise ValueError(f"{label} must be supported schema_version {SCHEMA_VERSION}")
+    return value
+
+
 def _hash(value: Any, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None or value != value.lower():
         raise ValueError(f"{label} must be a lowercase SHA-256 hash")
@@ -174,7 +180,8 @@ def _manifest_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
     required = tuple(_MANIFEST_FIELDS)
     if any(field not in manifest for field in required):
         raise ValueError("candidate manifest is missing required calendar-enriched fields")
-    if manifest["schema_version"] != SCHEMA_VERSION or manifest["manifest_schema"] != MANIFEST_PROJECTION:
+    _strict_schema_version(manifest["schema_version"], "candidate manifest.schema_version")
+    if manifest["manifest_schema"] != MANIFEST_PROJECTION:
         raise ValueError("only the calendar-enriched manifest projection is admissible")
     _strict_bool(manifest["calendar_enriched"], "calendar_enriched")
     if manifest["calendar_enriched"] is not True:
@@ -286,8 +293,7 @@ class AcquisitionAuthorization:
         missing = sorted(required - set(payload))
         if missing:
             raise ValueError(f"authorization is missing required fields: {missing}")
-        if payload["schema_version"] != SCHEMA_VERSION:
-            raise ValueError("unsupported authorization schema_version")
+        _strict_schema_version(payload["schema_version"], "authorization.schema_version")
         for field in ("authorization_id", "issued_by", "purpose", "environment", "candidate_manifest_projection"):
             if not isinstance(payload[field], str) or not payload[field]:
                 raise ValueError(f"{field} must be a non-empty string")
@@ -297,12 +303,16 @@ class AcquisitionAuthorization:
         expires = _aware(payload["expires_at"], "expires_at")
         if expires <= issued:
             raise ValueError("expires_at must be later than issued_at")
-        if now is not None:
+        if now is None:
+            current = datetime.now(timezone.utc)
+        else:
             current = _aware(now, "now") if isinstance(now, str) else now
             if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
                 raise TypeError("now must be timezone-aware")
-            if current >= expires:
-                raise ValueError("authorization is expired")
+        if issued > current:
+            raise ValueError("issued_at cannot be in the future")
+        if current >= expires:
+            raise ValueError("authorization is expired")
 
         manifest_digest = _hash(payload["candidate_manifest_sha256"], "candidate_manifest_sha256")
         if candidate_manifest is None:

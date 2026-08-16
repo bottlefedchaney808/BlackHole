@@ -257,5 +257,39 @@ def test_authorization_requires_independent_valid_self_hash(mutator):
 def test_valid_source_and_calendar_binding_control_is_admitted():
     manifest = _manifest()
     payload = _authorization(manifest)
-    auth = AcquisitionAuthorization.from_mapping(payload, candidate_manifest=manifest)
+    auth = AcquisitionAuthorization.from_mapping(
+        payload, candidate_manifest=manifest, now="2026-08-15T12:30:00+00:00"
+    )
     assert auth.to_mapping()["authorization_sha256"] == payload["authorization_sha256"]
+
+
+def test_authorization_schema_version_rejects_boolean_true():
+    payload = _authorization()
+    payload["schema_version"] = True
+    payload["authorization_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "authorization_sha256"}
+    )
+    with pytest.raises((ValueError, TypeError), match="schema_version"):
+        AcquisitionAuthorization.from_mapping(
+            payload, candidate_manifest=_manifest(), now="2026-08-15T12:30:00+00:00"
+        )
+
+
+def test_manifest_schema_version_rejects_boolean_true():
+    manifest = _manifest()
+    manifest["schema_version"] = True
+    with pytest.raises((ValueError, TypeError), match="schema_version"):
+        candidate_manifest_projection(manifest)
+
+
+def test_future_issued_authorization_is_rejected_at_injected_validation_time():
+    payload = _authorization()
+    payload["issued_at"] = "2026-08-15T13:00:01+00:00"
+    payload["expires_at"] = "2026-08-15T14:00:00+00:00"
+    payload["authorization_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "authorization_sha256"}
+    )
+    with pytest.raises(ValueError, match="issued_at"):
+        AcquisitionAuthorization.from_mapping(
+            payload, candidate_manifest=_manifest(), now="2026-08-15T12:30:00+00:00"
+        )

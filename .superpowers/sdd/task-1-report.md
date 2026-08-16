@@ -210,3 +210,21 @@ exit 0
 ```
 
 Ruff was unavailable. No acquisition, network, live-model, scheduler, master, expiry-book, or unrelated worktree artifacts were modified.
+
+## Authorization Task 1 follow-up review remediation (2026-08-15)
+
+Closed the remaining strict validation defects:
+
+- Authorization and calendar-enriched manifest `schema_version` values now require an actual `int` with the exact supported value `1`; JSON booleans such as `true` are rejected rather than relying on Python's `bool`-is-an-`int` equality.
+- Authorization validation now uses an injected timezone-aware `now` when supplied, or the current UTC instant by default. It rejects `issued_at` values later than validation time and retains the existing timezone-aware expiry check.
+- Added regressions for authorization `schema_version: true`, manifest `schema_version: true`, future-issued authorization, and the valid authorization control with deterministic validation time.
+
+### Follow-up verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py -p no:cacheprovider
+.....................                                                    [100%]
+21 passed in 0.04s
+```
+
+No acquisition, network, live-model, scheduler, master, expiry-book, or unrelated worktree artifacts were modified.
