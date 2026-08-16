@@ -23,6 +23,7 @@ from .provenance_contract import (
     canonical_sha256,
     validate_source_hashes,
 )
+from .opex_calendar import CalendarGapError, calendar_for_probe
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -79,7 +80,7 @@ def _held_references(paths: Iterable[str | Path]) -> dict[tuple[str, str], str]:
     return refs
 
 
-def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_paths: Iterable[str | Path] = (), held_pairs: Iterable[tuple[str, str]] = ()) -> list[dict[str, Any]]:
+def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_paths: Iterable[str | Path] = (), held_pairs: Iterable[tuple[str, str]] = (), calendar_snapshot: Any | None = None, as_of: str | None = None, window_policy: str = "OPEX_DAY") -> list[dict[str, Any]]:
     """Normalize and deterministically sort candidate ticker x day requests.
 
     Held rows remain in the census schedule and are marked, never silently
@@ -111,7 +112,13 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
         key = "|".join((day, ticker, expiry, str(dte), habitat, sector, source))
         pair = (ticker, day)
         excluded = pair in held
-        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair), **({"declared_timezone": raw["declared_timezone"]} if raw.get("declared_timezone") is not None else {})}
+        binding = raw.get("calendar_binding")
+        if binding is None and calendar_snapshot is not None and not excluded:
+            try:
+                binding = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
+            except (AttributeError, CalendarGapError, TypeError, ValueError) as exc:
+                raise ValueError(f"calendar binding: {exc}") from exc
+        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair), "calendar_binding": dict(binding) if isinstance(binding, Mapping) else binding, **({"declared_timezone": raw["declared_timezone"]} if raw.get("declared_timezone") is not None else {})}
         previous = result_by_key.get(key)
         if previous is None or canonical_json_bytes(item) < canonical_json_bytes(previous):
             result_by_key[key] = item

@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from .opex_calendar import CalendarGapError, calendar_for_probe
+
 DTE_STRATA = ((1, 3), (4, 7), (8, 10))
 EVENT_HABITATS = ("FOMC", "EARNINGS", "OPEX")
 PROBE_STATUSES = {"PASS", "INELIGIBLE", "HARD_GAP"}
@@ -73,6 +75,40 @@ def _stratum(dte: int) -> tuple[int, int] | None:
     return next((s for s in DTE_STRATA if s[0] <= dte <= s[1]), None)
 
 
+def _plain(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return value
+
+
+_CALENDAR_HASH_FIELDS = ("snapshot_hash", "calendar_hash", "calendar_policy_version", "resolver_code_version", "calendar_binding_hash")
+_CALENDAR_VALUE_FIELDS = ("as_of", "calendar_day", "nominal_date", "observed_expiry", "session_id", "session_status", "settlement_style", "timezone", "exact_dte", "event_ids", "event_windows", "window_id", "window_start", "window_end", "window_policy")
+
+
+def _validate_calendar_binding(binding: Any, *, ticker: str, day: str, expiry: str, dte: int, expected: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(binding, Mapping):
+        raise ValueError("calendar binding is required")
+    value = _plain(binding)
+    for key in (*_CALENDAR_HASH_FIELDS, *_CALENDAR_VALUE_FIELDS):
+        if key not in value or value[key] in (None, ""):
+            raise ValueError(f"calendar binding is missing {key}")
+    if str(value.get("ticker", ticker)).upper() != ticker.upper() or value["calendar_day"] != day or value["observed_expiry"] != expiry:
+        raise ValueError("calendar binding identity mismatch")
+    if value.get("exact_dte") != dte or value.get("dte", dte) != dte or dte <= 0 or _stratum(dte) is None:
+        raise ValueError("calendar binding DTE mismatch or zero-DTE")
+    if value["timezone"] != "America/New_York":
+        raise ValueError("calendar binding timezone mismatch")
+    if value["session_status"] not in {"OPEN", "EARLY_CLOSE"}:
+        raise ValueError("calendar binding has unknown session status")
+    if not isinstance(value["event_ids"], list) or not value["event_ids"] or not isinstance(value["event_windows"], Mapping):
+        raise ValueError("calendar binding event identity is required")
+    if expected is not None and value != _plain(expected):
+        raise ValueError("calendar binding conflicts with schedule/probe identity")
+    return value
+
+
 @dataclass(frozen=True, order=True)
 class Candidate:
     ticker: str
@@ -112,10 +148,13 @@ class ManifestUnit:
     dte: int
     event_habitat: str
     dte_stratum: tuple[int, int]
+    calendar_binding: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["dte_stratum"] = list(self.dte_stratum)
+        if self.calendar_binding is not None:
+            data["calendar_binding"] = _plain(self.calendar_binding)
         return data
 
 
@@ -284,6 +323,7 @@ def _validate_probe_evidence(result: ProbeResult) -> None:
                   "expiry": _date(identity.get("expiry")), "dte": identity.get("dte")}
         if actual != expected:
             raise ValueError("probe evidence identity does not match probe")
+    _validate_calendar_binding(evidence.get("calendar_binding"), ticker=result.ticker, day=_date(result.day), expiry=_date(result.expiry), dte=result.dte)
     spot = evidence["spot_ohlc_coverage"]
     # Coverage is evidence, not a set of truthy labels: every required window
     # must contain a timestamp and real positive spot/OHLC values.
@@ -377,7 +417,8 @@ def _key(ticker: str, day: str, occurrence: int = 0) -> str:
 
 def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Iterable[tuple[str, str]] = (), intended_units: int | None = None,
                    sector_cap: float = 0.20, ticker_cap: float = 0.10, probe_results: Iterable[ProbeResult] = (),
-                   selection_date: str | None = None, source_list: str | None = None) -> UniverseManifest:
+                   selection_date: str | None = None, source_list: str | None = None, calendar_snapshot: Any | None = None,
+                   as_of: str | None = None, window_policy: str = "OPEX_DAY") -> UniverseManifest:
     # Provenance is manifest metadata, never an optional display default.
     manifest_selection_date = _selection_date(selection_date)
     manifest_source_list = _source_list(source_list)
@@ -412,20 +453,31 @@ def build_manifest(candidates: Iterable[Mapping[str, Any]], *, held_pairs: Itera
         matches = by_key.get((ticker, day, expiry, dte), []) if expiry is not None else []
         if len(matches) != 1: exclusions[key] = "missing_probe" if not matches else "ambiguous_probe"; continue
         if matches[0].status != "PASS": exclusions[key] = f"probe_{matches[0].status.lower()}"; continue
+        try:
+            binding = _validate_calendar_binding(matches[0].evidence.get("calendar_binding"), ticker=ticker, day=day, expiry=expiry, dte=dte)
+            if raw.get("calendar_binding") is not None:
+                _validate_calendar_binding(raw["calendar_binding"], ticker=ticker, day=day, expiry=expiry, dte=dte, expected=binding)
+            elif calendar_snapshot is not None:
+                generated = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
+                _validate_calendar_binding(generated, ticker=ticker, day=day, expiry=expiry, dte=dte, expected=binding)
+            else:
+                raise ValueError("calendar snapshot is required for manifest binding")
+        except (TypeError, ValueError, CalendarGapError) as exc:
+            exclusions[key] = f"calendar_binding:{exc}"; continue
         try: candidate = normalize_candidate(raw, selection_date=manifest_selection_date, source_list=manifest_source_list)
         except ValueError as exc:
             if "conflicts with manifest provenance" in str(exc):
                 raise
             exclusions[key] = f"invalid_candidate:{exc}"; continue
-        normalized.append((key, day, candidate, dte, event))
+        normalized.append((key, day, candidate, dte, event, binding))
     normalized.sort(key=lambda item: (item[1], item[2].ticker, item[3], item[0]))
     max_sector = max(1, int(target * sector_cap)) if target else 0; max_ticker = max(1, int(target * ticker_cap)) if target else 0
     sector_counts: Counter[str] = Counter(); ticker_counts: Counter[str] = Counter(); units = []
-    for key, day, candidate, dte, event in normalized:
+    for key, day, candidate, dte, event, binding in normalized:
         if sector_counts[candidate.sector] >= max_sector: exclusions[key] = "sector_cap"; continue
         if ticker_counts[candidate.ticker] >= max_ticker: exclusions[key] = "ticker_cap"; continue
         sector_counts[candidate.sector] += 1; ticker_counts[candidate.ticker] += 1
-        units.append(ManifestUnit(candidate.ticker, day, candidate.sector, candidate.asset_type, dte, event, _stratum(dte)))
+        units.append(ManifestUnit(candidate.ticker, day, candidate.sector, candidate.asset_type, dte, event, _stratum(dte), binding))
     quota_schema = {"dte_strata": [list(s) for s in DTE_STRATA], "event_habitats": list(EVENT_HABITATS), "event_habitat_target": 1 / 3, "control_target": 2 / 3, "sector_cap_fraction": sector_cap, "ticker_cap_fraction": ticker_cap, "max_sector_units": max_sector, "max_ticker_units": max_ticker, "event_surprise_required_for_causal_claim": True}
     return UniverseManifest(manifest_selection_date, manifest_source_list, target, tuple(units), dict(sorted(exclusions.items())), quota_schema, tuple(sorted({u.day for u in units})), dict(sorted(sector_counts.items())), dict(sorted(ticker_counts.items())), validated_probes)
 

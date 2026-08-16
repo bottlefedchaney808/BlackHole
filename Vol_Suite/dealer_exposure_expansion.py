@@ -74,6 +74,9 @@ def build_expansion_manifest(
     held_pairs: Iterable[tuple[str, str]] = (),
     held_paths: Iterable[str | Path] = (),
     output_root: str | Path = "Vol_Suite/_causal_acquisition_20260815",
+    calendar_snapshot: Any | None = None,
+    as_of: str | None = None,
+    window_policy: str = "OPEX_DAY",
 ) -> dict[str, Any]:
     """Build a stable, serializable acquisition plan without endpoint calls."""
     if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1":
@@ -92,7 +95,7 @@ def build_expansion_manifest(
     exclusions: list[dict[str, Any]] = []
     for raw in raw_rows:
         try:
-            schedule = build_candidate_schedule([raw], held_pairs=held)
+            schedule = build_candidate_schedule([raw], held_pairs=held, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
         except (TypeError, ValueError) as exc:
             exclusions.append(_exclusion(raw, "invalid_dte" if "DTE" in str(exc) or "dte" in str(exc) else f"invalid_candidate:{exc}"))
             continue
@@ -410,8 +413,15 @@ def _validate_probe_contract(probe: Mapping[str, Any], schedule_by_key: Mapping[
         validate_probe_result(result)
     except (TypeError, ValueError, OverflowError) as exc:
         return key, f"probe contract invalid: {exc}"
-    if result.status == "PASS" and not (probe.get("validated") is True and probe.get("invoked") is True):
-        return key, "PASS probe must be explicitly validated and invoked"
+    if result.status == "PASS":
+        schedule_binding = schedule.get("calendar_binding")
+        probe_binding = result.evidence.get("calendar_binding")
+        if not isinstance(schedule_binding, Mapping) or not isinstance(probe_binding, Mapping):
+            return key, "PASS probe and schedule require calendar binding"
+        if dict(probe_binding) != dict(schedule_binding):
+            return key, "PASS probe calendar binding does not exactly match candidate schedule"
+        if not (probe.get("validated") is True and probe.get("invoked") is True):
+            return key, "PASS probe must be explicitly validated and invoked"
     return key, None
 
 
