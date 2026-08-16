@@ -66,13 +66,17 @@ Run these from Git Bash at the repo root when you need a quick workflow check:
 
 ## Sharing the dashboard publicly
 
-`cloudflared tunnel --url http://127.0.0.1:8787` gives a public HTTPS link
-(e.g. `https://<random-words>.trycloudflare.com`) that proxies to your local
-dashboard for as long as your machine and that command stay running — no
-port forwarding, no exposing your real IP. It's a free, account-less
-"quick tunnel"; the URL changes each time you start a new one.
+The dashboard has a built-in **Share** control in the top bar. Start the
+dashboard, click **Start sharing**, and confirm — a public HTTPS link
+(e.g. `https://<random-words>.trycloudflare.com`) appears that proxies to your
+local dashboard for as long as your machine and the dashboard stay running.
+Click **Stop sharing** (or close the dashboard) to take it down.
+
+Under the hood it runs Cloudflare's free, account-less "quick tunnel"
+(`cloudflared tunnel --url http://127.0.0.1:8787`). The URL changes each time
+you start a new one, and `cloudflared` must be installed and on PATH.
 
 **There is no password on the dashboard.** Anyone with the link can see all
 swap data and trigger orchestrator runs (which call real, billed ThetaData
 API requests). Only share the link with people you trust, and stop the
-tunnel (Ctrl+C) when you're done.
+tunnel when you're done.
