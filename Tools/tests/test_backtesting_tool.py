@@ -35,3 +35,36 @@ def test_resolve_strategies_reads_chain_strategies_artifact(tmp_path):
 def test_resolve_strategies_empty_when_no_source(tmp_path):
     ctx = {"focus": {"ticker": "SPY"}, "_output_dir_override": str(tmp_path)}
     assert backtesting_tool._resolve_strategies(ctx) == []
+
+
+@pytest.mark.unit
+def test_dealer_gamma_study_exposes_sign_model(monkeypatch):
+    import dataclasses
+    import types
+
+    @dataclasses.dataclass
+    class _Result:
+        v1_diff: float = 0.1
+
+    fake_bs3 = types.ModuleType("backtest_stage3")
+    fake_bs3.DEFAULT_LOOKBACK_DAYS = 90
+    fake_bs3.DEFAULT_FORWARD_WINDOW_DAYS = 5
+    fake_bs3.run_backtest = lambda ticker, **kw: _Result()
+    fake_bs3.format_backtest_report = lambda r: "REPORT"
+    monkeypatch.setitem(sys.modules, "backtest_stage3", fake_bs3)
+    ctx = {"focus": {"ticker": "SPY"}, "sign_model": "v1"}
+    out = backtesting_tool.run_dealer_gamma_study(ctx)
+    assert out["sign_model"] == "v1"
+    assert out["report"] == "REPORT"
+
+
+@pytest.mark.unit
+def test_dealer_gamma_study_rejects_unknown_sign_model(monkeypatch):
+    import types
+    fake_bs3 = types.ModuleType("backtest_stage3")
+    fake_bs3.DEFAULT_LOOKBACK_DAYS = 90
+    fake_bs3.DEFAULT_FORWARD_WINDOW_DAYS = 5
+    monkeypatch.setitem(sys.modules, "backtest_stage3", fake_bs3)
+    with pytest.raises(ValueError):
+        backtesting_tool.run_dealer_gamma_study(
+            {"focus": {"ticker": "SPY"}, "sign_model": "bogus"})

@@ -1884,6 +1884,7 @@ def tools_backtest_form(request: Request):
         'strategy_map_json': _strategy_map(contexts),
         'selected_path': '',
         'selected_mode': 'dealer_gamma_study',
+        'selected_sign_model': 'all',
         'entry_date': '',
         'exit_date': '',
         'expiry': '',
@@ -1907,6 +1908,7 @@ async def tools_backtest_run(request: Request):
     expiry = str(body.get('expiry') or '').strip()
     contract_multiplier = str(body.get('contract_multiplier') or '100').strip()
     strategy_index_raw = str(body.get('strategy_index') or '0').strip()
+    sign_model = str(body.get('sign_model') or 'all').strip().lower()
 
     context, error = _load_selected_context(context_path)
     result = None
@@ -1914,6 +1916,8 @@ async def tools_backtest_run(request: Request):
 
     if context is not None:
         context['mode'] = mode
+        if mode == 'dealer_gamma_study':
+            context['sign_model'] = sign_model
         if expiry:
             context['expiry'] = expiry
         if contract_multiplier:
@@ -1948,6 +1952,7 @@ async def tools_backtest_run(request: Request):
         'strategy_map_json': _strategy_map(contexts),
         'selected_path': context_path,
         'selected_mode': mode,
+        'selected_sign_model': sign_model,
         'entry_date': entry_date,
         'exit_date': exit_date,
         'expiry': expiry,
