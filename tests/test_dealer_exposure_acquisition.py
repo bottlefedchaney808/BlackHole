@@ -8,6 +8,7 @@ RAW_CAPTURE = Path(__file__).parents[1] / "Vol_Suite" / "_bounded_heavy_acquisit
 
 from Vol_Suite.dealer_exposure_acquisition import (
     AcquisitionGateError,
+    admit_acquisition,
     build_candidate_schedule,
     build_provenance_census,
     cluster_same_day,
@@ -431,6 +432,58 @@ def test_plain_exception_probe_records_invocation_and_hard_gap():
     assert probes[0]["invoked"] is True
     assert probes[0]["status"] == "HARD_GAP"
     assert "plain probe outage" in probes[0]["reason"]
+
+
+def test_boolean_approval_without_authorization_cannot_handoff():
+    calls = []
+    from test_dealer_exposure_authorization import _manifest
+    admitted, audit = admit_acquisition(True, _manifest(), [], {}, {})
+    calls.append("executor would be here") if admitted else None
+    assert admitted == ()
+    assert calls == []
+    assert audit["admitted"] is False
+    assert any("boolean approval" in reason for reason in audit["blocked"])
+
+
+def test_admission_valid_control_returns_immutable_units_and_exact_keys():
+    from test_dealer_exposure_authorization import _authorization, _manifest
+    from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization
+    from Vol_Suite.provenance_contract import canonical_sha256
+
+    manifest = _manifest()
+    auth = AcquisitionAuthorization.from_mapping(
+        _authorization(manifest), candidate_manifest=manifest,
+        now="2026-08-15T12:30:00+00:00",
+    )
+    unit = manifest["units"][0]
+    key = unit["candidate_key"]
+    probe = {
+        "candidate_key": key, "ticker": unit["ticker"], "day": unit["calendar_day"],
+        "expiry": unit["expiry"], "dte": unit["dte"], "habitat": unit["habitat"],
+        "sector": unit["sector"], "candidate_source": unit["candidate_source"],
+        "request_parameters": {"ticker": unit["ticker"], "calendar_day": unit["calendar_day"],
+                               "expiry": unit["expiry"], "dte": unit["dte"],
+                               "habitat": unit["habitat"], "sector": unit["sector"],
+                               "candidate_source": unit["candidate_source"], "calendar_binding": None},
+        "probe_code_hash": auth.to_mapping()["probe_policy"]["probe_code_hash"],
+        "status": "PASS", "validated": True, "invoked": True,
+        "checks": {"chain": "PASS"},
+    }
+    artifact_manifest = {}
+    artifact_hash = canonical_sha256(artifact_manifest)
+    evidence_unit = {"candidate_key": key, "artifact_hash": artifact_hash,
+                     "artifact_manifest": artifact_manifest, "source_hashes": unit["source_hashes"],
+                     "calendar_binding": None, "status": "PASS", "imputed": False,
+                     "no_imputation": True,
+                     "pre_window_observations": [{"role": "PRE_WINDOW"}, {"role": "PRE_WINDOW"}]}
+    registry = {artifact_hash: {"candidate_key": key, "artifact_hash": artifact_hash,
+                               "artifact_manifest": artifact_manifest}}
+    admitted, audit = admit_acquisition(auth, manifest, [probe],
+                                        {"units": [evidence_unit], "artifact_registry": registry}, registry)
+    assert [item["candidate_key"] for item in admitted] == [key]
+    assert audit["admitted"] is True
+    with pytest.raises(TypeError):
+        admitted[0]["candidate_key"] = "mutate"
 
 
 def test_output_dir_writes_auditable_artifact(tmp_path):

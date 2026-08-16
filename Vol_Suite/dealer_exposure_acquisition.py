@@ -15,6 +15,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .dealer_exposure_universe import (
@@ -29,6 +30,7 @@ from .provenance_contract import (
     canonical_sha256,
     validate_source_hashes,
 )
+from .dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_projection
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -37,6 +39,140 @@ _PREWINDOW = "PRE_WINDOW"
 
 class AcquisitionGateError(RuntimeError):
     """Raised when an approval, concurrency, or provenance gate fails."""
+
+
+def _immutable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(k): _immutable(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_immutable(v) for v in value)
+    return value
+
+
+def _admission_failure(reasons: list[str], stages: list[str]) -> tuple[tuple[Any, ...], Mapping[str, Any]]:
+    return (), _immutable({"admitted": False, "stages": stages, "admitted_keys": [], "blocked": reasons})
+
+
+def admit_acquisition(
+    authorization: AcquisitionAuthorization | Mapping[str, Any] | None,
+    manifest: Mapping[str, Any],
+    probes: Iterable[Mapping[str, Any]],
+    evidence: Mapping[str, Any],
+    registry: Mapping[str, Any],
+) -> tuple[tuple[Mapping[str, Any], ...], Mapping[str, Any]]:
+    """Atomically validate acquisition evidence before restricted handoff."""
+    stages: list[str] = []
+    reasons: list[str] = []
+    try:
+        projection = candidate_manifest_projection(manifest)
+        stages.append("calendar-enriched manifest")
+        if authorization is None or isinstance(authorization, bool):
+            return _admission_failure(["authorization is mandatory; boolean approval is not authorization"], stages)
+        auth = authorization if isinstance(authorization, AcquisitionAuthorization) else AcquisitionAuthorization.from_mapping(authorization, candidate_manifest=projection)
+        if auth.candidate_manifest_projection() != projection:
+            return _admission_failure(["authorization manifest projection is detached or mutated"], stages)
+        auth_data = auth.to_mapping()
+        keys = tuple(unit["candidate_key"] for unit in projection["units"])
+        scope = auth_data["scope"]
+        if list(scope["candidate_keys"]) != list(keys):
+            reasons.append("authorization candidate scope is not exact")
+        quota = manifest.get("quota")
+        cost = auth_data["cost_ceiling"]
+        if not isinstance(quota, Mapping) or type(quota.get("max_units")) is not int:
+            reasons.append("manifest quota.max_units is required")
+        elif len(keys) > quota["max_units"] or len(keys) > cost["max_units"]:
+            reasons.append("candidate quota/cost ceiling exceeded")
+        if cost.get("concurrency") != 1:
+            reasons.append("concurrency must be exactly one")
+        if any(u.get("held_pair_exclusion") or u.get("network") is True or u.get("imputed") is True for u in projection["units"]):
+            reasons.append("held/new/live/scheduler/out-of-root or no-imputation permission violation")
+        stages.append("exact candidate scope/hash/quota/cost/concurrency")
+
+        raw_probes = list(probes) if isinstance(probes, Iterable) and not isinstance(probes, (str, bytes, Mapping)) else []
+        probe_keys = [p.get("candidate_key") for p in raw_probes if isinstance(p, Mapping)]
+        if len(raw_probes) != len(probe_keys) or len(set(probe_keys)) != len(probe_keys):
+            reasons.append("probe identities are malformed or duplicated")
+        if set(probe_keys) != set(keys):
+            reasons.append("probe coverage is not exact; unknown or missing probe")
+        expected_code_hash = auth_data["probe_policy"]["probe_code_hash"]
+        required_checks = auth_data["probe_policy"]["required_checks"]
+        for probe in raw_probes:
+            if not isinstance(probe, Mapping):
+                continue
+            key = probe.get("candidate_key")
+            unit = next((u for u in projection["units"] if u["candidate_key"] == key), None)
+            if unit is None:
+                continue
+            expected_request = {name: unit[name] for name in ("ticker", "calendar_day", "expiry", "dte", "habitat", "sector", "candidate_source")}
+            expected_request["calendar_binding"] = unit.get("calendar_binding")
+            if probe.get("request_parameters") != expected_request:
+                reasons.append(f"probe {key} request identity is detached")
+            for field in ("ticker", "expiry", "dte"):
+                if probe.get(field) != unit[field]:
+                    reasons.append(f"probe {key} {field} identity mismatch")
+            if probe.get("day") != unit["calendar_day"] or any(probe.get(f) != unit.get(f) for f in ("habitat", "sector", "candidate_source")):
+                reasons.append(f"probe {key} ticker/day/expiry/DTE/habitat/sector/source identity mismatch")
+            binding = probe.get("calendar_binding") or (probe.get("evidence") or {}).get("calendar_binding")
+            if binding != unit.get("calendar_binding"):
+                reasons.append(f"probe {key} calendar identity detached")
+            if probe.get("probe_code_hash") != expected_code_hash:
+                reasons.append(f"probe {key} code hash mismatch")
+            if probe.get("status") != "PASS" or probe.get("validated") is not True or probe.get("invoked") is not True:
+                reasons.append(f"probe {key} is not a validated invoked PASS")
+            checks = probe.get("checks")
+            if not isinstance(checks, Mapping) or any(checks.get(check) != "PASS" for check in required_checks):
+                reasons.append(f"probe {key} checks are incomplete")
+        stages.append("complete Task 1 probe contract")
+
+        raw_units = evidence.get("units") if isinstance(evidence, Mapping) else None
+        if not isinstance(raw_units, list) or len(raw_units) != len(keys):
+            reasons.append("evidence unit coverage is incomplete")
+            raw_units = []
+        evidence_keys = [u.get("candidate_key") for u in raw_units if isinstance(u, Mapping)]
+        if len(evidence_keys) != len(raw_units) or len(set(evidence_keys)) != len(evidence_keys) or set(evidence_keys) != set(keys):
+            reasons.append("evidence contains duplicate, unknown, or missing candidates")
+        if not isinstance(registry, Mapping) or not registry or (evidence.get("artifact_registry") is not None and evidence.get("artifact_registry") != registry):
+            reasons.append("artifact registry is missing or detached")
+        admitted: list[dict[str, Any]] = []
+        for item in raw_units:
+            if not isinstance(item, Mapping):
+                continue
+            key = item.get("candidate_key")
+            manifest_unit = next((u for u in projection["units"] if u["candidate_key"] == key), None)
+            artifact_hash = item.get("artifact_hash")
+            entry = registry.get(artifact_hash) if isinstance(artifact_hash, str) else None
+            if manifest_unit is None or not isinstance(entry, Mapping):
+                reasons.append(f"artifact/source closure missing for {key}")
+                continue
+            if entry.get("candidate_key") != key or entry.get("artifact_hash") != artifact_hash or entry.get("artifact_manifest") != item.get("artifact_manifest"):
+                reasons.append(f"artifact registry closure mismatch for {key}")
+            if item.get("status") != "PASS" or item.get("imputed") is True or item.get("no_imputation") is not True:
+                reasons.append(f"evidence {key} is not an unimputed PASS")
+            if item.get("calendar_binding") != manifest_unit.get("calendar_binding") or item.get("source_hashes") != manifest_unit.get("source_hashes"):
+                reasons.append(f"calendar/source hashes detached for {key}")
+            observations = item.get("pre_window_observations")
+            if not isinstance(observations, list) or len(observations) != 2 or any(not isinstance(obs, Mapping) or obs.get("role") != "PRE_WINDOW" for obs in observations):
+                reasons.append(f"incomplete PRE_WINDOW evidence for {key}")
+            try:
+                if canonical_sha256(item.get("artifact_manifest")) != artifact_hash:
+                    reasons.append(f"artifact hash mutated for {key}")
+            except (TypeError, ValueError):
+                reasons.append(f"artifact manifest is not canonical for {key}")
+            admitted.append(dict(item))
+        stages.append("registry/source/artifact closure")
+        if auth.authorization_sha256() != auth_data["authorization_sha256"]:
+            reasons.append("authorization self-hash is invalid")
+        policy = auth_data["executor_policy"]
+        if any(policy[field] for field in ("allow_new_candidate_keys", "allow_held_pairs", "allow_live_model_calls", "allow_scheduler_calls", "allow_writes_outside_artifact_root")):
+            reasons.append("executor policy contains restricted permission")
+        stages.append("authorization self-hash/scope/expiry")
+        if reasons:
+            return _admission_failure(sorted(set(reasons)), stages)
+        admitted.sort(key=lambda item: item["candidate_key"])
+        frozen = tuple(_immutable(item) for item in admitted)
+        return frozen, _immutable({"admitted": True, "stages": stages + ["restricted executor handoff"], "admitted_keys": [item["candidate_key"] for item in admitted], "blocked": []})
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        return _admission_failure([str(exc)], stages)
 
 
 def _date(value: Any) -> str:
@@ -546,12 +682,26 @@ def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Itera
     return admitted
 
 
-def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None, calendar_snapshot: Any | None = None) -> dict[str, Any]:
+def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, authorization: AcquisitionAuthorization | Mapping[str, Any] | None = None, admission_evidence: Mapping[str, Any] | None = None, registry: Mapping[str, Any] | None = None, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None, calendar_snapshot: Any | None = None) -> dict[str, Any]:
     if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1": raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
-    if not dry_run and not approval: raise AcquisitionGateError("explicit approval is required")
+    if not dry_run and (authorization is None or isinstance(authorization, bool)):
+        raise AcquisitionGateError("validated authorization is required; boolean approval is not authorization")
+    if not dry_run and not approval: raise AcquisitionGateError("explicit authorization handoff is required")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash, calendar_snapshot=calendar_snapshot)
-    primary_schedule = select_primary_schedule(ordered, probes, calendar_snapshot=calendar_snapshot)
+    admission_audit = None
+    if not dry_run and not probe_only:
+        if not hasattr(authorization, "candidate_manifest_projection"):
+            admission_audit = _immutable({"admitted": False, "stages": (), "admitted_keys": (), "blocked": ["typed AcquisitionAuthorization is required at acquisition handoff"]})
+            primary_schedule = []
+        else:
+            admitted, admission_audit = admit_acquisition(
+                authorization, authorization.candidate_manifest_projection(), probes,
+                admission_evidence or {}, registry or {},
+            )
+            primary_schedule = [dict(unit) for unit in admitted]
+    else:
+        primary_schedule = select_primary_schedule(ordered, probes, calendar_snapshot=calendar_snapshot)
     primary_keys = {u["candidate_key"] for u in primary_schedule}
     probe_by_key = {p["candidate_key"]: p for p in probes}
     units = []
@@ -648,7 +798,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         for item in units
     }
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": int(network_executed), "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": int(network_executed), "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "admission_audit": admission_audit, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -658,4 +808,4 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
     return result
 
 
-__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "execute_sequential_acquisition", "run_availability_probes", "select_primary_schedule"]
+__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "admit_acquisition", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "execute_sequential_acquisition", "run_availability_probes", "select_primary_schedule"]

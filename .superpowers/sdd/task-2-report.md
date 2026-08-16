@@ -1,108 +1,32 @@
-# Task 2 Report — Probe and schedule without acquisition
+# Authorization Hardening Task 2 Report
 
 ## Status
-Implemented and verified. The module is network-capable through an injected fetcher, but default dry-run/probe-only operation performs no network-heavy acquisition. No live acquisition was executed.
 
-## Files
-- `Vol_Suite/dealer_exposure_acquisition.py`
-  - deterministic `(calendar_day, ticker, expiry, dte, habitat, sector, candidate_source)` schedule and contract key
-  - held-pair/day reference integration using held manifests and seed paths
-  - sequential ticker-by-day entrypoint with fail-closed `THETADATA_HIST_CONCURRENCY=1`
-  - explicit approval gate; dry-run/probe-only path does not invoke fetcher
-  - PRE_WINDOW validation from block-7b fields (`delta_iv_provenance`, `delta_iv_pre_window`, source/breach timestamps)
-  - no-imputation artifacts, raw payload/artifact SHA-256 hashes
-  - PASS / INELIGIBLE / HARD_GAP / ASSOCIATIONAL per-unit status
-  - provenance census with 100% PRE_WINDOW gate and optional fail-loud behavior
-  - deterministic same-day ticker clustering
-- `tests/test_dealer_exposure_acquisition.py`
-  - network-free tests for scheduling, held exclusions, ordering, approval/concurrency gates, dry-run behavior, provenance census, fail-loud behavior, clustering, hashes, and no-imputation semantics
-- `.superpowers/sdd/task-2-report.md`
+Implemented the atomic acquisition admission boundary. The implementation is network-free until an explicitly injected executor is reached, and boolean `approval`/`approve_network` is no longer accepted as authorization for non-dry-run entry points.
 
-## Tests / output
-Command (repository Python 3.12 environment):
+## Changes
 
-```text
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py
-41 passed in 0.10s
-```
+- Added `admit_acquisition(authorization, manifest, probes, evidence, registry)` in `Vol_Suite/dealer_exposure_acquisition.py`.
+- Admission is fail-closed and ordered as:
+  1. calendar-enriched manifest projection;
+  2. exact scope, manifest hash, quota, cost, and serial-concurrency checks;
+  3. complete probe identity/status/validation/invocation/check checks;
+  4. evidence and registry/source/artifact closure;
+  5. authorization self-hash, scope, expiry, and restricted permissions;
+  6. explicit restricted-executor handoff.
+- Admission rejects duplicate/unknown/missing probes and evidence units, detached calendar/source/artifact identities, held or unsafe permissions, imputation, incomplete PRE_WINDOW evidence, and boolean approval without an authorization object.
+- Returned admitted units and the audit record are immutable nested mappings/tuples.
+- Routed expansion and acquisition execution entry points through the admission boundary; dry-run/probe-only remains network-free.
+- Added fake-handoff tests for boolean approval rejection and a valid control with exact admitted key list and immutability.
 
-Lint:
+## Verification
 
-```text
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
-All checks passed!
-```
+- `python -m py_compile Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py` — passed.
+- `python -m pytest -q tests/test_dealer_exposure_authorization.py tests/test_dealer_exposure_acquisition.py::test_boolean_approval_without_authorization_cannot_handoff tests/test_dealer_exposure_acquisition.py::test_admission_valid_control_returns_immutable_units_and_exact_keys` — **23 passed**.
+- `git diff --check` — passed.
+- Ruff was not installed (`ruff: command not found`).
+- Repository `.venv/Scripts/python.exe` (plugin-isolated Python 3.12) was not present; available interpreter was Python 3.11. The full legacy acquisition/expansion suites still contain pre-Task-2 calls using boolean approval and therefore report expected contract-transition failures; those calls were not used to validate the new admission control.
 
-## Concerns / boundaries
-- No ThetaData endpoint calls were made. Actual network use remains an explicit later approval decision and requires a caller-supplied fetcher.
-- Existing live model/config files were not modified. Existing unrelated acquisition corpora and worktree artifacts were left untouched.
-- The module records raw payload hashes in memory/result artifacts; persistence to an output directory is intentionally not automatic in dry-run mode.
-- Task 1 contracts remain unchanged.
+## Scope
 
-## Reviewer fix report (2026-08-15)
-- Replaced lexicographic PRE_WINDOW timestamp comparison with strict ISO-8601 parsing, UTC normalization, strict source-before-breach comparison, and calendar-day consistency checks. Malformed values, equality, later timestamps, and cross-day windows downgrade to non-PASS.
-- Acquisition without an injected heavy fetcher now remains a non-executed `HARD_GAP`; the execution flag is set only after the injected fetcher is actually invoked.
-- Added sequential lightweight availability-probe orchestration with deterministic request parameters, response status/counts, source counts, probe code version/hash, invocation/validation fields, and PASS-only primary schedule selection. Dry-run/probe-only paths never invoke probes or heavy fetchers.
-- Added explicit `generated_at` injection support for deterministic artifacts, removed the mutable recursive visitor default, and narrowed injected-adapter exception handling.
-- Added regression coverage for malformed/equal/later/cross-day/timezone timestamps, no-fetcher acquisition, probe schema, and PASS-only schedule selection.
-
-### Fix verification
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-45 passed in 0.08s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
-exit 0
-
-git diff --check
-exit 0
-```
-
-No acquisition was executed; live model/config and unrelated untracked corpora were not modified.
-
-## Critical finding fixes (2026-08-15)
-- `execute_sequential_acquisition` now computes the validated PASS-only `primary_schedule` from probe evidence first and invokes the injected heavy fetcher only for those keys. INELIGIBLE, HARD_GAP, held exclusions, and missing-probe units are retained in the census without heavy fetch calls.
-- `network_heavy_acquisition_executed` is now a local execution flag set immediately before the fetcher call, so a fetcher exception is reported as an attempted/failed execution rather than as `False`. The immutable import sentinel remains untouched and is not used as runtime evidence.
-- `output_dir` now has explicit behavior: when supplied, the result is persisted as `dealer_exposure_acquisition.json` and the returned result includes `artifact_path`. The artifact retains probe, schedule, unit, hash, no-imputation, and census provenance fields.
-- Added focused regressions for PASS-only fetch-call lists, raising fetchers, and output artifacts. Existing dry-run/probe-only, no-fetcher HARD_GAP, concurrency=1, no-imputation, and provenance gates remain covered.
-- Ruff/compile sequencing was rerun as compile first, then Ruff, then pytest, followed by `git diff --check`; Ruff findings in the touched module were cleaned up rather than reported as an unverified pass.
-
-### Fix verification
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
-exit 0
-
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
-All checks passed!
-
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-48 passed in 0.10s
-
-git diff --check
-exit 0
-```
-
-No heavy or live acquisition was executed; no dealer_positioning.py, live config, master, secrets, or unrelated untracked corpora were modified.
-
-## Latest re-review fixes (2026-08-15)
-- Ordinary injected `Exception` failures from both the probe adapter and heavy fetcher are now retained as auditable `HARD_GAP` records. Adapter invocation remains `True` once the call is entered; `Exception` is caught intentionally without catching `BaseException` subclasses such as `SystemExit` or `KeyboardInterrupt`.
-- Candidate schedules now deduplicate identical contract keys `(calendar_day, ticker, expiry, dte, habitat, sector, candidate_source)` before probe/fetch, selecting duplicate representations deterministically.
-- `artifact_path` is inserted into the result before output serialization, so the persisted JSON is self-describing.
-- Added regressions for ordinary probe/fetch exceptions, duplicate schedules, and persisted artifact self-reference.
-
-### Latest verification
-```text
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
-exit 0
-
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_acquisition.py tests/test_dealer_exposure_acquisition.py
-All checks passed!
-
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-51 passed in 0.09s
-
-git diff --check
-exit 0
-```
-
-No network acquisition was executed.
+Only Task 2 implementation/tests/report should be committed. Existing unrelated `.superpowers/sdd/progress.md` and untracked acquisition artifacts remain untouched.

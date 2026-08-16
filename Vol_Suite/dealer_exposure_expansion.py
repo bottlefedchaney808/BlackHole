@@ -29,6 +29,7 @@ LIVE_CONFIG = {
 }
 
 from .dealer_exposure_acquisition import (
+    admit_acquisition,
     build_candidate_schedule,
     select_primary_schedule,
 )
@@ -519,20 +520,27 @@ def run_expansion_plan(
     executor: Callable[[Mapping[str, Any]], Any] | None = None,
     write_manifest: bool = False,
     acquisition_evidence: Mapping[str, Any] | None = None,
+    authorization: Any | None = None,
+    registry: Mapping[str, Any] | None = None,
     calendar_snapshot: Any | None = None,
     as_of: str | None = None,
     window_policy: str = "OPEX_DAY",
 ) -> dict[str, Any]:
-    if not dry_run and not approve_network:
-        raise ExpansionApprovalError("explicit --approve-network approval is required")
+    if not dry_run and authorization is None:
+        raise ExpansionApprovalError("a validated authorization is required; approve_network is not authorization")
     if not dry_run and executor is None:
-        raise ExpansionApprovalError("an injected executor is required after --approve-network")
+        raise ExpansionApprovalError("an injected restricted executor is required after admission")
     result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
     if not dry_run:
         result["mode"] = "approved-execution"
-        admitted, reasons = _execution_gate(result, acquisition_evidence, calendar_snapshot=calendar_snapshot)
-        result["network_fetch_allowed"] = bool(admitted)
-        result["execution_audit"] = {"invoked": [], "blocked": reasons}
+        auth_manifest = authorization.candidate_manifest_projection() if hasattr(authorization, "candidate_manifest_projection") else result
+        payload = acquisition_evidence if isinstance(acquisition_evidence, Mapping) else {}
+        admitted, audit = admit_acquisition(
+            authorization, auth_manifest, payload.get("probes", ()), payload,
+            registry if registry is not None else payload.get("artifact_registry", {}),
+        )
+        result["network_fetch_allowed"] = bool(audit.get("admitted"))
+        result["execution_audit"] = {"invoked": [], "blocked": list(audit.get("blocked", ())), "admission": audit}
         if not admitted:
             result["mode"] = "blocked"
         else:
@@ -601,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["ExpansionApprovalError", "build_expansion_manifest", "compare_expansion_common_input", "main", "run_expansion_plan"]
+__all__ = ["ExpansionApprovalError", "admit_acquisition", "build_expansion_manifest", "compare_expansion_common_input", "main", "run_expansion_plan"]
 
 if __name__ == "__main__":
     raise SystemExit(main())
