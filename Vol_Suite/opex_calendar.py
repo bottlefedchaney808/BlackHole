@@ -462,7 +462,7 @@ def calendar_for_probe(snapshot: CalendarSnapshot, *, ticker: str, calendar_day:
     if len(set(event_ids)) != len(event_ids):
         raise CalendarGapError("duplicate event IDs")
     resolved_events = [resolve_event_window(snapshot, event_type=str(e.get("event_type")), event_day=calendar_day, window_policy=window_policy, as_of=as_of) for e in event_rows]
-    event_windows = {event.event_id: {"window_id": event.window_id, "window_start": event.window_start, "window_end": event.window_end, "window_policy": window_policy} for event in resolved_events}
+    event_windows = {event.event_id: {"event_type": event.event_type, "window_id": event.window_id, "window_start": event.window_start, "window_end": event.window_end, "window_policy": window_policy} for event in resolved_events}
     first_window = resolved_events[0]
     event_source_hashes = [source_hash for event in resolved_events for source_hash in event.source_hashes]
     source_hashes = sorted({*opex.source_hashes, *event_source_hashes, str(session_source["content_sha256"])})

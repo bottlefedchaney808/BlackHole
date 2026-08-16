@@ -163,6 +163,7 @@ def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
             expected_value = sources
         if actual != expected_value or entry.get(field) != (list(sources) if field == "source_hashes" else expected_value):
             raise EvaluationInvalid(f"registry {field} does not bind to evaluation record")
+    _validate_calendar_metadata(row, manifest, entry)
     if value.get("no_imputation") is not True:
         raise EvaluationInvalid("COMPARISON_INVALID: provenance no_imputation must be true")
     if value.get("causal_status") == "CAUSAL_ELIGIBLE":
@@ -176,6 +177,65 @@ def _provenance(row: Mapping[str, Any], comparison: Mapping[str, Any]) -> bool:
     raise EvaluationInvalid(
         "COMPARISON_INVALID: provenance must declare CAUSAL_ELIGIBLE or explicit associational status"
     )
+
+
+_CALENDAR_FIELDS = (
+    "calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
+    "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
+    "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
+    "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
+    "timezone", "calendar_binding_hash",
+)
+
+
+def _validate_calendar_metadata(row: Mapping[str, Any], manifest: Mapping[str, Any], entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Validate supplied Task-3 calendar evidence without importing/resolving."""
+    binding = row.get("calendar_binding")
+    if not isinstance(binding, Mapping):
+        raise EvaluationInvalid("COMPARISON_INVALID: supplied calendar_binding is required")
+    for field in ("calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash",
+                  "as_of", "event_ids", "event_window_id", "window_start", "window_end",
+                  "window_policy", "nominal_date", "observed_expiry_date", "session_id",
+                  "session_status", "regular_open", "regular_close", "early_close",
+                  "settlement_style", "settlement_timestamp", "timezone", "calendar_binding_hash"):
+        if field not in binding or binding[field] in (None, "", []):
+            raise EvaluationInvalid(f"COMPARISON_INVALID: calendar binding missing {field}")
+    for field in ("calendar_hash", "snapshot_hash", "resolver_code_hash", "calendar_binding_hash"):
+        _hash(binding[field], f"calendar {field}")
+    if binding["calendar_hash"] != binding["snapshot_hash"]:
+        raise EvaluationInvalid("calendar hash does not match snapshot hash")
+    source_hashes = binding.get("source_hashes")
+    if not isinstance(source_hashes, (list, tuple)) or not source_hashes:
+        raise EvaluationInvalid("calendar source hashes are required")
+    tuple(_hash(v, "calendar source hash") for v in source_hashes)
+    event_ids = binding["event_ids"]
+    if not isinstance(event_ids, (list, tuple)) or not event_ids or list(event_ids) != sorted(event_ids) or len(set(event_ids)) != len(event_ids):
+        raise EvaluationInvalid("calendar event IDs must be unique and deterministically sorted")
+    windows = binding.get("event_windows")
+    if not isinstance(windows, Mapping) or set(windows) != set(event_ids):
+        raise EvaluationInvalid("calendar event windows are detached from event IDs")
+    event_types = sorted(str(windows[event_id].get("event_type")) for event_id in event_ids if isinstance(windows[event_id], Mapping))
+    if len(event_types) != len(event_ids) or any(event_type not in {"OPEX", "FOMC", "EARNINGS"} for event_type in event_types):
+        raise EvaluationInvalid("calendar event types are incomplete")
+    if bool(binding.get("event_overlap")) != (len(event_ids) > 1):
+        raise EvaluationInvalid("calendar overlap flag is inconsistent")
+    if binding["event_window_id"] not in {windows[event_id].get("window_id") for event_id in event_ids}:
+        raise EvaluationInvalid("calendar event window identity is detached")
+    if binding.get("observed_expiry") != binding["observed_expiry_date"]:
+        raise EvaluationInvalid("calendar observed expiry fields disagree")
+    if binding.get("calendar_binding_hash") != canonical_sha256({key: value for key, value in binding.items() if key != "calendar_binding_hash"}):
+        raise EvaluationInvalid("calendar_binding_hash mismatch")
+    for field in _CALENDAR_FIELDS:
+        if field not in manifest or manifest[field] != row.get(field, binding.get(field)):
+            raise EvaluationInvalid(f"calendar registry field {field} is detached or mutated")
+    if manifest.get("calendar_binding") != dict(binding):
+        raise EvaluationInvalid("calendar binding is not registry-bound")
+    if tuple(manifest.get("source_hashes", ())) != tuple(row.get("source_hashes", ())):
+        raise EvaluationInvalid("calendar/source hashes are detached")
+    for field in (*_CALENDAR_FIELDS, "calendar_binding"):
+        if field not in entry or entry[field] != manifest.get(field):
+            raise EvaluationInvalid(f"calendar registry top-level field {field} is detached")
+    return binding
 
 
 def _mean_required(rows: list[Mapping[str, Any]], field: str) -> float:
@@ -201,6 +261,19 @@ def _collapse(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
             item[field] = _mean_required(members, field)
         item["event"] = int(any(bool(r.get("event", 0)) for r in members))
         item["families"] = sorted({str(r.get("family", r["ticker"])).upper() for r in members})
+        # Calendar facts are descriptive identities, never averaged. Preserve
+        # ticker-level records and form only deterministic event unions.
+        item["calendar_metadata"] = [
+            {"ticker": str(member["ticker"]), **{field: member.get(field) for field in _CALENDAR_FIELDS},
+             "calendar_binding": dict(member["calendar_binding"])}
+            for member in members
+        ]
+        item["event_ids"] = sorted({event_id for member in members for event_id in member["event_ids"]})
+        item["event_types"] = sorted({event_type for member in members for event_type in member["event_types"]})
+        item["event_overlap"] = len(item["event_ids"]) > 1
+        item["calendar_labels"] = sorted(set(item["event_types"]) | ({"OVERLAP"} if item["event_overlap"] else set()))
+        item["early_close"] = any(bool(member["early_close"]) for member in members)
+        item["shifted_opex"] = any(member.get("nominal_date") != member.get("observed_expiry_date") for member in members)
         item["causal_eligible"] = all(_provenance(r, _comparison(r)) for r in members)
         item["placebo_return"] = _mean_required(members, "placebo_return") if all("placebo_return" in r for r in members) else None
         item["reverse_return"] = _mean_required(members, "reverse_return") if all("reverse_return" in r for r in members) else None

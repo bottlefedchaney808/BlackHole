@@ -445,7 +445,12 @@ _PROVENANCE_FIELDS = (
     "spot_timestamp", "chain_timestamp", "iv_source_ts", "breach_window_start_prov",
     "source_hashes", "raw_payload_hash", "same_day_cluster", "iv_before_ts",
     "iv_before_value", "iv_source_value", "delta_iv_aggregation", "delta_iv_aggregation_version",
-    "expiry", "dte", "imputed", "no_imputation",
+    "expiry", "dte", "imputed", "no_imputation", "calendar_hash",
+    "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
+    "event_ids", "event_types", "event_overlap", "event_window_id", "window_start",
+    "window_end", "window_policy", "nominal_date", "observed_expiry_date",
+    "session_id", "session_status", "regular_open", "regular_close", "early_close",
+    "settlement_style", "settlement_timestamp", "timezone", "calendar_binding_hash",
 )
 
 
@@ -597,6 +602,11 @@ def _validate_registered_provenance(unit: Mapping[str, Any], registry: Mapping[s
         raise ValueError("status must be PASS for causal eligibility")
     if not isinstance(unit.get("endpoint"), str) or not unit["endpoint"].strip():
         raise ValueError("endpoint must be a non-empty string")
+    for calendar_field in _PROVENANCE_FIELDS[24:]:
+        if calendar_field not in entry or entry[calendar_field] != manifest.get(calendar_field):
+            raise ValueError(f"registry calendar field {calendar_field} is detached")
+    if entry.get("calendar_binding") != manifest.get("calendar_binding"):
+        raise ValueError("registry calendar_binding is detached")
     if not isinstance(unit.get("request_parameters"), Mapping):
         raise TypeError("request_parameters must be a mapping")
     return manifest

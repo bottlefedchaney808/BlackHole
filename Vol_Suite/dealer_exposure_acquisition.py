@@ -17,13 +17,18 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .dealer_exposure_universe import DTE_STRATA, EVENT_HABITATS, _validate_calendar_binding, held_pairs_from_paths, validate_probe_result
+from .dealer_exposure_universe import (
+    DTE_STRATA,
+    EVENT_HABITATS,
+    _validate_calendar_binding,
+    held_pairs_from_paths,
+)
+from .opex_calendar import CalendarGapError, calendar_for_probe
 from .provenance_contract import (
     canonical_json_bytes,
     canonical_sha256,
     validate_source_hashes,
 )
-from .opex_calendar import CalendarGapError, calendar_for_probe
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -369,6 +374,38 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
             timestamp_reason = str(exc)
     status = "PASS" if valid else ("HARD_GAP" if mapping_status == "HARD_GAP" or payload is None or eligibility is not True or raw_decision == "HARD_GAP" else "ASSOCIATIONAL")
     artifact = dict(unit)
+    binding = unit.get("calendar_binding")
+    if not isinstance(binding, Mapping):
+        status = "HARD_GAP"
+        timestamp_reason = timestamp_reason or "COMPARISON_INVALID: calendar binding is required"
+    else:
+        # Persist the supplied Stage-2 binding as immutable Task-3 evidence;
+        # Task 4 consumes these fields and never re-resolves them.
+        artifact.update({
+            "calendar_hash": binding.get("calendar_hash"),
+            "calendar_policy_version": binding.get("calendar_policy_version"),
+            "resolver_code_hash": binding.get("resolver_code_hash"),
+            "snapshot_hash": binding.get("snapshot_hash"),
+            "as_of": binding.get("as_of"),
+            "event_ids": list(binding.get("event_ids", ())),
+            "event_types": sorted({str(v.get("event_type")) for v in binding.get("event_windows", {}).values() if isinstance(v, Mapping) and v.get("event_type")}),
+            "event_overlap": len(binding.get("event_ids", ())) > 1,
+            "event_window_id": binding.get("event_window_id"),
+            "window_start": binding.get("window_start"),
+            "window_end": binding.get("window_end"),
+            "window_policy": binding.get("window_policy"),
+            "nominal_date": binding.get("nominal_date"),
+            "observed_expiry_date": binding.get("observed_expiry_date"),
+            "session_id": binding.get("session_id"),
+            "session_status": binding.get("session_status"),
+            "regular_open": binding.get("regular_open"),
+            "regular_close": binding.get("regular_close"),
+            "early_close": binding.get("early_close"),
+            "settlement_style": binding.get("settlement_style"),
+            "settlement_timestamp": binding.get("settlement_timestamp"),
+            "timezone": binding.get("timezone"),
+            "calendar_binding_hash": binding.get("calendar_binding_hash"),
+        })
     artifact.update({"status": status, "breach_eligible": eligibility, "acquisition_decision": raw_decision or None, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "pre_window_observations": l2.get("pre_window_observations", []), "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "spot_source_identity": l2.get("spot_source_identity"), "spot_source_hash": l2.get("spot_source_hash"), "chain_source_identity": l2.get("chain_source_identity"), "chain_source_hash": l2.get("chain_source_hash"), "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
     manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"),
                 "calendar_day": unit.get("calendar_day"), "canonical_input_hash": unit.get("canonical_input_hash"),
@@ -377,6 +414,12 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
                 "request_identity": _probe_request(unit), "calendar_binding": unit.get("calendar_binding"),
                 "source_hashes": artifact.get("source_hashes"),
                 "imputed": False, "no_imputation": True}
+    for field in ("calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
+                  "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
+                  "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
+                  "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
+                  "timezone", "calendar_binding_hash"):
+        manifest[field] = artifact.get(field)
     artifact["artifact_manifest"] = manifest
     artifact["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
     artifact["artifact_hash"] = _hash(manifest)
@@ -568,7 +611,12 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                     "chain_source_identity", "chain_source_hash", "iv_source_ts",
                     "breach_window_start_prov", "source_hashes", "pre_window_observations", "same_day_cluster", "iv_before_ts",
                     "iv_before_value", "iv_source_value", "delta_iv_aggregation",
-                    "delta_iv_aggregation_version", "expiry", "dte", "calendar_binding", "imputed", "no_imputation")}
+                    "delta_iv_aggregation_version", "expiry", "dte", "calendar_binding", "imputed", "no_imputation",
+                    "calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
+                    "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
+                    "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
+                    "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
+                    "timezone", "calendar_binding_hash")}
                 manifest["request_identity"] = _probe_request(item)
                 item["artifact_manifest"] = manifest
                 item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
@@ -590,6 +638,12 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             "dte": item.get("dte"),
             "calendar_day": item.get("calendar_day"),
             "canonical_input_hash": item.get("canonical_input_hash"),
+            **{field: item.get(field) for field in (
+                "calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
+                "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
+                "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
+                "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
+                "timezone", "calendar_binding_hash")},
         }
         for item in units
     }

@@ -20,16 +20,43 @@ def row(day, ticker, y=0.02, v=2.0, div=0.1, *, daily=-0.01, breach=0.02):
     payload = f"payload:{day}:{ticker}".encode()
     raw_hash = hashlib.sha256(payload).hexdigest()
     candidate = f"{ticker}|{day}"
+    calendar_hash = hashlib.sha256(f"calendar:{day}".encode()).hexdigest()
+    resolver_hash = hashlib.sha256(f"resolver:{day}".encode()).hexdigest()
+    event_id = f"OPEX:{day}"
+    binding = {
+        "ticker": ticker, "calendar_day": day, "nominal_date": day,
+        "observed_expiry": day, "observed_expiry_date": day, "expiry": day,
+        "dte": 1, "exact_dte": 1, "session_id": f"NYSE:{day}",
+        "observed_session_id": f"NYSE:{day}", "session_status": "OPEN",
+        "regular_open": f"{day}T09:30:00-05:00", "regular_close": f"{day}T16:00:00-05:00",
+        "early_close": False, "close_reason": None, "settlement_style": "PM_CLOSE",
+        "settlement_timestamp": f"{day}T16:00:00-05:00", "event_ids": [event_id],
+        "event_windows": {event_id: {"event_type": "OPEX", "window_id": f"{event_id}:OPEX_DAY",
+                                       "window_start": f"{day}T09:30:00-05:00", "window_end": f"{day}T16:00:00-05:00",
+                                       "window_policy": "OPEX_DAY"}}, "event_window_id": f"{event_id}:OPEX_DAY",
+        "window_id": f"{event_id}:OPEX_DAY", "window_start": f"{day}T09:30:00-05:00",
+        "window_end": f"{day}T16:00:00-05:00", "window_policy": "OPEX_DAY", "timezone": "America/New_York",
+        "as_of": f"{day}T23:59:00-05:00", "snapshot_hash": calendar_hash, "calendar_hash": calendar_hash,
+        "source_hashes": [source_hash], "calendar_policy_version": "test-policy-v1",
+        "resolver_code_version": "test-resolver-v1", "resolver_code_hash": resolver_hash,
+        "event_overlap": False,
+    }
+    binding["calendar_binding_hash"] = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    calendar_fields = {key: binding[key] for key in ("calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of", "event_ids", "event_window_id", "window_start", "window_end", "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status", "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp", "timezone", "calendar_binding_hash")}
     manifest = {"candidate_key": candidate, "ticker": ticker, "calendar_day": day,
-                "canonical_input_hash": input_hash, "source_hashes": [source_hash]}
+                "canonical_input_hash": input_hash, "source_hashes": [source_hash], "calendar_binding": binding,
+                **calendar_fields, "event_types": ["OPEX"], "event_overlap": False}
     artifact_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     registry = {artifact_hash: {"artifact_hash": artifact_hash, "raw_payload_hash": raw_hash,
                                 "candidate_key": candidate, "ticker": ticker, "calendar_day": day,
                                 "canonical_input_hash": input_hash, "source_hashes": [source_hash],
-                                "artifact_manifest": manifest, "payload_bytes": payload}}
+                                "artifact_manifest": manifest, "payload_bytes": payload,
+                                "calendar_binding": binding, **calendar_fields, "event_types": ["OPEX"],
+                                "event_overlap": False}}
     return {
         "day": day, "ticker": ticker, "family": ticker, "candidate_key": candidate,
         "canonical_input_hash": input_hash,
+        "calendar_binding": binding, "source_hashes": [source_hash], **calendar_fields, "event_types": ["OPEX"], "event_overlap": False,
         "artifact_registry": registry,
         "comparison": {"status": "VALID", "input_hash": input_hash,
                        "coverage": {"live": 1, "new": 1, "common": 1, "total": 1},
