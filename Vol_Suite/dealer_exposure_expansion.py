@@ -427,7 +427,7 @@ def _validate_probe_contract(probe: Mapping[str, Any], schedule_by_key: Mapping[
     return key, None
 
 
-def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | None, *, calendar_snapshot: Any | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return admitted units and auditable reasons; approval alone never admits."""
     reasons: list[dict[str, Any]] = []
     schedule = [dict(unit) for unit in manifest.get("units", ())]
@@ -458,7 +458,7 @@ def _execution_gate(manifest: Mapping[str, Any], evidence: Mapping[str, Any] | N
             continue
         probe_keys.add(key)
         valid_probes.append(dict(probe))
-    primary = select_primary_schedule(schedule, valid_probes)
+    primary = select_primary_schedule(schedule, valid_probes, calendar_snapshot=calendar_snapshot)
     if {u["candidate_key"] for u in primary} != {u["candidate_key"] for u in schedule}:
         reasons.append({"reason": "every schedule unit requires a validated PASS probe"})
     units = evidence.get("units")
@@ -530,7 +530,7 @@ def run_expansion_plan(
     result = build_expansion_manifest(candidates, held_pairs=held_pairs, held_paths=held_paths, output_root=output_root, calendar_snapshot=calendar_snapshot, as_of=as_of, window_policy=window_policy)
     if not dry_run:
         result["mode"] = "approved-execution"
-        admitted, reasons = _execution_gate(result, acquisition_evidence)
+        admitted, reasons = _execution_gate(result, acquisition_evidence, calendar_snapshot=calendar_snapshot)
         result["network_fetch_allowed"] = bool(admitted)
         result["execution_audit"] = {"invoked": [], "blocked": reasons}
         if not admitted:

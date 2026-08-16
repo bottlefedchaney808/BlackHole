@@ -42,4 +42,20 @@ Authorization, Task 4 calendar consumption, source adapters, live acquisition, a
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest Vol_Suite/tests/test_task1_opex_binding.py Vol_Suite/tests/test_opex_calendar.py -q`: **34 passed**.
 - `python -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/dealer_exposure_universe.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py`: passed.
 - `git diff --check`: passed.
-- Ruff was not available on this host (`ruff: command not found`). The pre-existing legacy acquisition/universe tests still encode the pre-calendar contract and fail when run unchanged; the destructive Stage 2 regressions cover the new fail-closed contract.
+- Ruff was not available on this host (`python -m ruff`: module unavailable; `ruff` is not installed). The pre-existing legacy acquisition/universe tests still encode the pre-calendar contract and fail when run unchanged; the destructive Stage 2 regressions cover the new fail-closed contract.
+
+## Stage 2 calendar-binding bypass closure (2026-08-15)
+
+- `select_primary_schedule()` now requires the exact injected `CalendarSnapshot`; it recomputes and validates both probe and schedule bindings against that snapshot before admission. A self-consistent probe-contained binding without a matching snapshot cannot be admitted.
+- `run_availability_probes()` now emits `status=HARD_GAP`, `validated=false`, and `comparison_status=COMPARISON_INVALID` when the exact snapshot or complete calendar evidence is absent/mismatched.
+- `execute_sequential_acquisition()` threads the snapshot through probes/selection and revalidates the binding immediately before every injected heavy fetch. Missing/forged snapshot-backed identity produces no heavy call and reports `heavy_calls=0`, `network_flag=false`.
+- Expansion execution passes the validated snapshot into the selector gate. Held-pair, dry-run, same-day, artifact identity, and strict hash behavior remain unchanged.
+
+### Closure verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest Vol_Suite/tests/test_task1_opex_binding.py Vol_Suite/tests/test_opex_calendar.py -q`: **36 passed**.
+- The focused regression file now covers forged selector admission, forged heavy-path admission, missing-calendar PASS probes, and a valid snapshot-backed control reaching only an injected executor.
+- `python -m py_compile Vol_Suite/opex_calendar.py Vol_Suite/dealer_exposure_universe.py Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_expansion.py`: passed.
+- `git diff --check`: passed.
+- Ruff unavailable: `python -m ruff` reported `No module named ruff`.
+- The legacy root acquisition suite was run plugin-isolated; **15 failures** are expected stale pre-calendar-contract assertions (they build unbound schedules and expect heavy admission), while the Stage 2/core slice is green.

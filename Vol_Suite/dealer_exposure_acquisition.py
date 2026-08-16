@@ -421,7 +421,7 @@ def _probe_request(unit: Mapping[str, Any]) -> dict[str, Any]:
     return request
 
 
-def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None) -> list[dict[str, Any]]:
+def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
     """Run sequential lightweight probes; never dispatches the heavy fetcher."""
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     if dry_run or probe_only or not approval or probe_fetcher is None:
@@ -429,6 +429,9 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
     results = []
     for unit in ordered:
         request = _probe_request(unit)
+        if not unit.get("held_pair_exclusion") and calendar_snapshot is None:
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": "HARD_GAP", "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required", "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "evidence": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"})
+            continue
         try:
             response = probe_fetcher(request)
             if not isinstance(response, Mapping):
@@ -443,15 +446,28 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
             if "calendar_binding" in response:
                 evidence["calendar_binding"] = response["calendar_binding"]
             validated = status == "PASS" and response_status is not None and bool(response_counts) and bool(source_counts)
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": response.get("reason"), "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True})
+            reason = response.get("reason")
+            comparison_status = "COMPARISON_VALID"
+            if validated and not unit.get("held_pair_exclusion"):
+                supplied = evidence.get("calendar_binding")
+                try:
+                    checked = _validate_calendar_binding(supplied, ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), expected=unit.get("calendar_binding"), calendar_snapshot=calendar_snapshot)
+                    if not isinstance(unit.get("calendar_binding"), Mapping) or checked != dict(unit["calendar_binding"]):
+                        raise ValueError("calendar binding does not exactly match schedule")
+                except (TypeError, ValueError) as exc:
+                    status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
+                    reason = f"COMPARISON_INVALID: {exc}"
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
-            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True})
+            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": True, "comparison_status": "COMPARISON_INVALID"})
     return results
 
 
-def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Iterable[Mapping[str, Any]], *, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
     """Admit only PASS probes with a recomputed, exact calendar binding."""
     by_key: dict[str, Mapping[str, Any]] = {}
+    if calendar_snapshot is None:
+        return []
     for probe in probes:
         if probe.get("status") != "PASS" or probe.get("validated") is not True or probe.get("invoked") is not True:
             continue
@@ -460,7 +476,7 @@ def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Itera
         binding = evidence.get("calendar_binding") if isinstance(evidence, Mapping) else None
         if isinstance(key, str) and isinstance(binding, Mapping):
             try:
-                checked = _validate_calendar_binding(binding, ticker=str(probe.get("ticker", "")), day=str(probe.get("day", "")), expiry=str(probe.get("expiry", "")), dte=int(probe.get("dte")))
+                checked = _validate_calendar_binding(binding, ticker=str(probe.get("ticker", "")), day=str(probe.get("day", "")), expiry=str(probe.get("expiry", "")), dte=int(probe.get("dte")), calendar_snapshot=calendar_snapshot)
                 if checked == dict(binding):
                     by_key[key] = probe
             except (TypeError, ValueError):
@@ -470,25 +486,22 @@ def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Itera
         probe = by_key.get(unit.get("candidate_key")); schedule_binding = unit.get("calendar_binding")
         if unit.get("held_pair_exclusion") or probe is None or not isinstance(schedule_binding, Mapping):
             continue
+        try:
+            _validate_calendar_binding(schedule_binding, ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
+        except (TypeError, ValueError):
+            continue
         if dict(probe["evidence"]["calendar_binding"]) != dict(schedule_binding):
             continue
         admitted.append(unit)
     return admitted
 
 
-def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None) -> dict[str, Any]:
+def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None, calendar_snapshot: Any | None = None) -> dict[str, Any]:
     if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1": raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
     if not dry_run and not approval: raise AcquisitionGateError("explicit approval is required")
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
-    if not (dry_run or probe_only):
-        for unit in ordered:
-            if not unit.get("held_pair_exclusion"):
-                try:
-                    _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit.get("ticker")), day=str(unit.get("calendar_day")), expiry=str(unit.get("expiry")), dte=int(unit.get("dte")))
-                except (TypeError, ValueError) as exc:
-                    raise AcquisitionGateError(f"calendar binding gate failed before probes: {exc}") from exc
-    probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash)
-    primary_schedule = select_primary_schedule(ordered, probes)
+    probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash, calendar_snapshot=calendar_snapshot)
+    primary_schedule = select_primary_schedule(ordered, probes, calendar_snapshot=calendar_snapshot)
     primary_keys = {u["candidate_key"] for u in primary_schedule}
     probe_by_key = {p["candidate_key"]: p for p in probes}
     units = []
@@ -514,6 +527,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             try:
                 # This is deliberately immediately before the injected call: a
                 # raised fetcher still proves that acquisition was attempted.
+                _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
                 network_executed = True
                 payload = fetcher(unit)
                 item = _unit_from_payload(unit, payload)
@@ -573,7 +587,7 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         for item in units
     }
     census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
+    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": int(network_executed), "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
