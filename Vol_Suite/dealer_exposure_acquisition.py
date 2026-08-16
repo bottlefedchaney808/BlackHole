@@ -123,9 +123,11 @@ def _cost_usage(evidence: Mapping[str, Any]) -> Mapping[str, Any] | None:
 class _AdmissionContext:
     """Opaque token minted only after static authorization preflight."""
 
-    __slots__ = ("authorization", "manifest", "limits", "usage", "finalized_usage", "lock", "blocked")
+    _SEAL = object()
+    __slots__ = ("authorization", "manifest", "limits", "usage", "finalized_usage", "lock", "blocked", "_executor_seal")
 
     def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any]) -> None:
+        self._executor_seal = self._SEAL
         self.authorization = authorization
         self.manifest = candidate_manifest_projection(manifest)
         cost = authorization.to_mapping()["cost_ceiling"]
@@ -224,6 +226,18 @@ def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization)
     if executor is None or not callable(executor) or not isinstance(authorization, AcquisitionAuthorization):
         return False, {}, "typed named adapter and authorization are required"
     policy = authorization.to_mapping()["executor_policy"]
+    registration = getattr(executor, "_registration", None)
+    if registration is not None and all(hasattr(registration, field) for field in ("registry_key", "identity", "endpoint", "method", "scope", "family")):
+        identity = {"registry_key": registration.registry_key, "entrypoint": registration.identity, "endpoint": registration.endpoint, "request_method": registration.method, "scope_binding": registration.scope, "family": registration.family}
+        paths = tuple(policy["allowed_endpoint_paths"])
+        family_paths = {str(path).lstrip("/"): str(path) for path in paths}
+        if family_paths.get(identity["family"]) != identity["endpoint"] or identity["family"] not in tuple(policy["allowed_endpoint_families"]):
+            return False, identity, "registered endpoint family/path mapping is not exact"
+        if identity["endpoint"] not in paths or identity["request_method"] not in tuple(str(method).upper() for method in policy["allowed_request_methods"]):
+            return False, identity, "registered endpoint or method is outside authorization scope"
+        if identity["scope_binding"] != policy["scope_binding"]:
+            return False, identity, "registered scope binding is outside authorization scope"
+        return policy["network_fetch_allowed"] is True, identity, "authorization does not permit network fetch"
     identity = {
         "executor_id": getattr(executor, "executor_id", None),
         "entrypoint": getattr(executor, "entrypoint", None),

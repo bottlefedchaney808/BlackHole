@@ -1,59 +1,102 @@
-"""Restricted, fail-closed executor for admitted dealer-exposure units.
+"""Fail-closed restricted executor for admitted dealer-exposure units.
 
-The executor is intentionally a small policy boundary.  It accepts an immutable
-admission handoff and the opaque runtime context minted by acquisition; it does
-not accept endpoint strings, counters, approval booleans, or arbitrary functions
-from a caller.
+This boundary deliberately admits only an opaque adapter registration.  A callable's
+self-declared attributes and returned ``calls`` are never authorization evidence.
+The in-process adapter is a controlled boundary, not a sandbox: code inside a
+trusted registered adapter must still be audited separately.
 """
 from __future__ import annotations
 
+import hashlib
 import inspect
-from types import MappingProxyType
+import marshal
+import secrets
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any
 
+from .dealer_exposure_acquisition import _AdmissionContext
 from .dealer_exposure_authorization import AcquisitionAuthorization
-from .provenance_contract import canonical_json_bytes, sha256_bytes
+from .provenance_contract import canonical_json_bytes, sha256_bytes, validate_source_hashes
 
 
 class ExecutorFailure(RuntimeError):
     """A static executor-policy or immutable-handoff violation."""
 
 
-class RestrictedExecutor:
-    """Run one exact named adapter over one exact admitted candidate scope."""
+class _Registration:
+    __slots__ = ("adapter", "registry_key", "code_hash", "identity", "endpoint", "method", "scope", "family", "_token")
 
-    def __init__(self, adapter: Any, authorization: AcquisitionAuthorization) -> None:
+    def __init__(self, adapter: Any, *, endpoint: str, method: str, scope: str, family: str) -> None:
+        if not callable(adapter) or inspect.isfunction(adapter) or inspect.ismethod(adapter):
+            raise ExecutorFailure("only callable adapter objects may be registered")
+        if not all(isinstance(v, str) and v.strip() for v in (endpoint, method, scope, family)):
+            raise ExecutorFailure("adapter registration identity is incomplete")
+        code = getattr(type(adapter).__call__, "__code__", None)
+        if code is None:
+            raise ExecutorFailure("adapter entrypoint has no attestable code")
+        self.adapter = adapter
+        self.identity = f"{type(adapter).__module__}:{type(adapter).__qualname__}.__call__"
+        self.code_hash = hashlib.sha256(marshal.dumps(code)).hexdigest()
+        self.endpoint, self.method, self.scope, self.family = endpoint, method.upper(), scope, family
+        self.registry_key = secrets.token_hex(32)
+        self._token = object()
+
+
+class RegisteredAdapter:
+    """Opaque handle returned by :meth:`AdapterRegistry.register`."""
+    __slots__ = ("_registration",)
+
+    def __init__(self, registration: _Registration, token: object) -> None:
+        if token is not registration._token:
+            raise ExecutorFailure("invalid adapter registration token")
+        self._registration = registration
+
+    def __call__(self, unit: Mapping[str, Any]) -> Any:
+        return self._registration.adapter(unit)
+
+
+class AdapterRegistry:
+    """Explicit registry for the only callable boundary the executor admits."""
+    __slots__ = ("_entries",)
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _Registration] = {}
+
+    def register(self, adapter: Any, *, endpoint: str, method: str, scope_binding: str, family: str) -> RegisteredAdapter:
+        entry = _Registration(adapter, endpoint=endpoint, method=method, scope=scope_binding, family=family)
+        self._entries[entry.registry_key] = entry
+        return RegisteredAdapter(entry, entry._token)
+
+
+def _valid_hash(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value.lower())
+
+
+class RestrictedExecutor:
+    """Run one exact registered adapter over one exact admitted candidate scope."""
+
+    def __init__(self, adapter: RegisteredAdapter, authorization: AcquisitionAuthorization) -> None:
         self.adapter = adapter
         self.authorization = authorization
         if not isinstance(authorization, AcquisitionAuthorization):
             raise ExecutorFailure("authenticated authorization is required")
-        if inspect.isfunction(adapter) or inspect.ismethod(adapter) or not callable(adapter):
-            raise ExecutorFailure("a named adapter object is required; arbitrary callables are forbidden")
+        if not isinstance(adapter, RegisteredAdapter) or not isinstance(adapter._registration, _Registration):
+            raise ExecutorFailure("unregistered adapter is forbidden; register it at the controlled boundary")
+        self.registration = adapter._registration
         policy = authorization.to_mapping()["executor_policy"]
-        self.identity = {
-            "executor_id": getattr(adapter, "executor_id", None),
-            "entrypoint": getattr(adapter, "entrypoint", None),
-            "endpoint": getattr(adapter, "endpoint", None),
-            "method": getattr(adapter, "request_method", getattr(adapter, "method", None)),
-            "scope_binding": getattr(adapter, "scope_binding", None),
-        }
-        if any(not isinstance(v, str) or not v.strip() for v in self.identity.values()):
-            raise ExecutorFailure("named adapter identity is incomplete")
-        if self.identity["executor_id"] != policy["allowed_executor_id"]:
-            raise ExecutorFailure("executor ID is outside authorization scope")
-        if self.identity["entrypoint"] != policy["allowed_executor_entrypoint"]:
-            raise ExecutorFailure("executor entrypoint is outside authorization scope")
-        if self.identity["endpoint"] not in policy["allowed_endpoint_paths"]:
-            raise ExecutorFailure("executor endpoint path is outside authorization scope")
-        if "?" in self.identity["endpoint"] or "#" in self.identity["endpoint"]:
-            raise ExecutorFailure("dynamic endpoint expansion is forbidden")
-        if self.identity["method"].upper() not in {m.upper() for m in policy["allowed_request_methods"]}:
-            raise ExecutorFailure("executor request method is outside authorization scope")
-        if self.identity["scope_binding"] != policy["scope_binding"]:
-            raise ExecutorFailure("executor scope binding is outside authorization scope")
-        for name in ("allow_new_candidate_keys", "allow_held_pairs", "allow_live_model_calls",
-                     "allow_scheduler_calls", "allow_writes_outside_artifact_root"):
+        paths = tuple(policy["allowed_endpoint_paths"])
+        families = tuple(policy["allowed_endpoint_families"])
+        family_paths = {str(path).lstrip("/"): str(path) for path in paths}
+        if family_paths.get(self.registration.family) != self.registration.endpoint or self.registration.family not in families:
+            raise ExecutorFailure("endpoint family/path mapping is not exact")
+        if self.registration.endpoint not in paths or self.registration.method not in {str(m).upper() for m in policy["allowed_request_methods"]}:
+            raise ExecutorFailure("registered endpoint or method is outside authorization scope")
+        if self.registration.scope != policy["scope_binding"]:
+            raise ExecutorFailure("registered scope binding is outside authorization scope")
+        if policy["network_fetch_allowed"] is not True:
+            raise ExecutorFailure("authorization does not permit executor dispatch")
+        for name in ("allow_new_candidate_keys", "allow_held_pairs", "allow_live_model_calls", "allow_scheduler_calls", "allow_writes_outside_artifact_root"):
             if policy[name] is not False:
                 raise ExecutorFailure(f"unsafe executor permission: {name}")
 
@@ -70,25 +113,25 @@ class RestrictedExecutor:
         return True
 
     def _check_context(self, context: Any) -> None:
-        if context is None or getattr(context, "authorization", None) is not self.authorization:
+        # Exact type and exact method implementation close the duck-typing gap.
+        if type(context) is not _AdmissionContext or getattr(context, "_executor_seal", None) is not _AdmissionContext._SEAL:
             raise ExecutorFailure("authenticated runtime context is required")
-        if not hasattr(context, "call") or not hasattr(context, "finalized_usage"):
-            raise ExecutorFailure("authenticated runtime context is incomplete")
-        try:
-            if context.manifest != self.authorization.candidate_manifest_projection():
-                raise ExecutorFailure("runtime context manifest is detached")
-        except AttributeError as exc:
-            raise ExecutorFailure("authenticated runtime context is incomplete") from exc
+        if context.authorization is not self.authorization:
+            raise ExecutorFailure("runtime context ownership is detached")
+        if context.manifest != self.authorization.candidate_manifest_projection():
+            raise ExecutorFailure("runtime context manifest is detached")
+        if context.call.__func__ is not _AdmissionContext.call:
+            raise ExecutorFailure("runtime context atomic call implementation is detached")
+        if not isinstance(context.limits, dict) or not isinstance(context.usage, dict) or not hasattr(context, "lock"):
+            raise ExecutorFailure("runtime context atomic counters are incomplete")
 
     def _check_units(self, units: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
-        if not isinstance(units, (tuple, list)):
-            raise ExecutorFailure("admitted units must be an immutable sequence")
         if not isinstance(units, tuple) or not self._immutable(units):
-            raise ExecutorFailure("admitted units must be deeply immutable")
+            raise ExecutorFailure("admitted units must be a deeply immutable tuple")
         allowed = tuple(self.authorization.scope["candidate_keys"])
         manifest_units = {item["candidate_key"]: item for item in self.authorization.candidate_manifest_projection()["units"]}
-        seen: set[str] = set()
         checked: list[Mapping[str, Any]] = []
+        seen: set[str] = set()
         for unit in units:
             if not isinstance(unit, MappingProxyType) or not self._immutable(unit):
                 raise ExecutorFailure("admitted units must be deeply immutable")
@@ -96,14 +139,21 @@ class RestrictedExecutor:
             if not isinstance(key, str) or key not in allowed or key in seen:
                 raise ExecutorFailure("candidate scope is not exact")
             expected = manifest_units[key]
-            for field in ("ticker", "calendar_day", "expiry", "dte", "habitat", "sector",
-                          "calendar_hash", "calendar_binding_hash", "session_id"):
+            for field in ("ticker", "calendar_day", "expiry", "dte", "habitat", "sector", "calendar_hash", "calendar_binding_hash", "session_id"):
                 if unit.get(field) != expected.get(field):
                     raise ExecutorFailure("calendar-bound candidate scope is detached")
-            if unit.get("held_pair_exclusion") is True or unit.get("network") is True or unit.get("imputed") is True:
+            if any(unit.get(flag) is True for flag in ("held_pair_exclusion", "network", "imputed", "scheduler", "live_model")):
                 raise ExecutorFailure("held/new/live/scheduler or imputation unit is forbidden")
-            if unit.get("scheduler") is True or unit.get("live_model") is True:
-                raise ExecutorFailure("scheduler/live model unit is forbidden")
+            for field in ("artifact_hash", "manifest_hash", "authorization_hash", "registry_key"):
+                if not _valid_hash(unit.get(field)) and field != "registry_key":
+                    raise ExecutorFailure(f"receipt prerequisite {field} is missing or invalid")
+            if unit.get("registry_key") != self.registration.registry_key:
+                raise ExecutorFailure("unit registry key is detached")
+            if not validate_source_hashes(unit.get("source_hashes")):
+                raise ExecutorFailure("source hashes are required")
+            evidence = unit.get("pre_window_evidence_hashes")
+            if not isinstance(evidence, (list, tuple)) or not evidence or any(not _valid_hash(v) for v in evidence):
+                raise ExecutorFailure("PRE_WINDOW evidence hashes are required")
             seen.add(key)
             checked.append(unit)
         if tuple(sorted(seen)) != tuple(sorted(allowed)):
@@ -111,62 +161,40 @@ class RestrictedExecutor:
         return tuple(checked)
 
     def _request(self, unit: Mapping[str, Any]) -> dict[str, Any]:
-        return {"executor_id": self.identity["executor_id"], "entrypoint": self.identity["entrypoint"],
-                "path": self.identity["endpoint"], "method": self.identity["method"].upper(),
-                "scope_binding": self.identity["scope_binding"], "candidate_key": unit["candidate_key"],
-                "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"),
-                "expiry": unit.get("expiry"), "dte": unit.get("dte"),
-                "calendar_binding_hash": unit.get("calendar_binding_hash")}
+        return {"registry_key": self.registration.registry_key, "entrypoint": self.registration.identity, "entrypoint_code_hash": self.registration.code_hash, "family": self.registration.family, "path": self.registration.endpoint, "method": self.registration.method, "scope_binding": self.registration.scope, "candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "calendar_binding_hash": unit.get("calendar_binding_hash")}
 
     def run(self, units: Sequence[Mapping[str, Any]], context: Any) -> dict[str, Any]:
-        """Execute serially; return a finalized audit even after the first failure."""
-        audit: dict[str, Any] = {"invocations": [], "requests": [], "responses": [],
-                                 "finalized_usage": {}}
+        audit: dict[str, Any] = {"invocations": [], "requests": [], "responses": [], "receipts": [], "finalized_usage": {}}
         try:
             self._check_context(context)
-            admitted = self._check_units(units)
-        except ExecutorFailure:
-            raise
+        except ExecutorFailure as exc:
+            return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
+        admitted = self._check_units(units)
         for unit in admitted:
             request = self._request(unit)
             request["request_sha256"] = sha256_bytes(canonical_json_bytes(request))
             audit["requests"].append(request)
             try:
                 audit["invocations"].append(unit["candidate_key"])
-                result, _usage = context.call("heavy", lambda u=unit: self.adapter(u))
-                captured_calls = result.get("calls", ()) if isinstance(result, Mapping) else ()
-                if captured_calls:
-                    if not isinstance(captured_calls, (list, tuple)):
-                        raise ExecutorFailure("adapter request audit is malformed")
-                    for captured in captured_calls:
-                        if not isinstance(captured, Mapping):
-                            raise ExecutorFailure("adapter request audit is malformed")
-                        path = captured.get("path", captured.get("endpoint"))
-                        method = captured.get("method", captured.get("request_method"))
-                        if path != self.identity["endpoint"] or str(method).upper() != self.identity["method"].upper():
-                            raise ExecutorFailure("dynamic or unauthorized endpoint in adapter request audit")
-                        request_audit = dict(captured)
-                        request_audit["path"] = path
-                        request_audit["method"] = str(method).upper()
-                        request_audit["request_sha256"] = sha256_bytes(canonical_json_bytes(request_audit))
-                        audit["requests"].append(request_audit)
-                response = {"candidate_key": unit["candidate_key"],
-                            "status": result.get("status") if isinstance(result, Mapping) else None,
-                            "payload_sha256": sha256_bytes(canonical_json_bytes(result))}
-                audit["responses"].append(response)
-                status = str(response["status"] or "").upper()
-                valid = (isinstance(result, Mapping) and status in {"SUCCESS", "SUCCEEDED", "PASS", "OK"}
-                         and type(result.get("validated")) is bool and result["validated"] is True
-                         and type(result.get("success")) is bool and result["success"] is True)
-                if not valid:
+                result, _ = context.call("heavy", lambda u=unit: self.adapter(u))
+                if not isinstance(result, Mapping):
+                    raise ExecutorFailure("adapter response is not a mapping")
+                status = str(result.get("status", "")).upper()
+                if status not in {"SUCCESS", "SUCCEEDED", "PASS", "OK"} or type(result.get("validated")) is not bool or result["validated"] is not True or type(result.get("success")) is not bool or result["success"] is not True:
                     raise ExecutorFailure("adapter returned non-success execution evidence")
+                response = {"candidate_key": unit["candidate_key"], "status": status, "payload_sha256": sha256_bytes(canonical_json_bytes(result))}
+                audit["responses"].append(response)
+                receipt = {"candidate_key": unit["candidate_key"], "request_sha256": request["request_sha256"], "response_payload_sha256": response["payload_sha256"], "source_hashes": list(validate_source_hashes(unit["source_hashes"])), "artifact_hash": unit["artifact_hash"], "manifest_hash": unit["manifest_hash"], "authorization_hash": unit["authorization_hash"], "registry_key": self.registration.registry_key, "entrypoint_code_hash": self.registration.code_hash, "pre_window_evidence_hashes": list(unit["pre_window_evidence_hashes"])}
+                required = ("source_hashes", "artifact_hash", "registry_key", "authorization_hash", "manifest_hash", "pre_window_evidence_hashes")
+                if any(not receipt.get(k) for k in required):
+                    raise ExecutorFailure("generated call receipt is incomplete")
+                receipt["receipt_sha256"] = sha256_bytes(canonical_json_bytes(receipt))
+                audit["receipts"].append(receipt)
+                audit["finalized_usage"] = dict(context.finalized_usage)
             except BaseException as exc:
                 audit["finalized_usage"] = dict(getattr(exc, "runtime_usage", context.finalized_usage))
-                return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP",
-                        "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
-            audit["finalized_usage"] = dict(context.finalized_usage)
-        return {"status": "SUCCESS", "classification": "SUCCESS", "network_fetch_allowed": True,
-                "audit": audit}
+                return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
+        return {"status": "SUCCESS", "classification": "SUCCESS", "network_fetch_allowed": True, "audit": audit}
 
 
-__all__ = ["ExecutorFailure", "RestrictedExecutor"]
+__all__ = ["AdapterRegistry", "ExecutorFailure", "RegisteredAdapter", "RestrictedExecutor"]

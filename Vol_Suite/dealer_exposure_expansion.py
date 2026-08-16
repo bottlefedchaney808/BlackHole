@@ -590,7 +590,10 @@ def run_expansion_plan(
             else:
                 result["execution_audit"]["runtime_usage"] = dict(runtime_context.finalized_usage)
             try:
-                execution = RestrictedExecutor(executor, authorization).run(admitted, runtime_context)
+                if runtime_context is None:
+                    execution = {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": "runtime authorization context unavailable", "audit": {"finalized_usage": {}}}
+                else:
+                    execution = RestrictedExecutor(executor, authorization).run(admitted, runtime_context)
                 result["execution_audit"].update(execution.get("audit", {}))
                 result["execution_audit"]["runtime_usage"] = dict(execution.get("audit", {}).get("finalized_usage", runtime_context.finalized_usage))
                 result["execution_audit"]["executor_result"] = {key: value for key, value in execution.items() if key != "audit"}

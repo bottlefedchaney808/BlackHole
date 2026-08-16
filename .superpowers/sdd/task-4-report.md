@@ -41,9 +41,18 @@ Implemented the Task 4 restricted executor boundary only. No network acquisition
 
 Unrelated pre-existing worktree artifacts were not staged.
 
+## Review-fix closure (2026-08-15)
+
+- Replaced metadata-only adapter admission with `AdapterRegistry`/opaque `RegisteredAdapter` handles. Registration attests the exact `type(adapter).__call__` identity and marshalled code hash; unregistered callables, functions, methods, and malicious self-declared metadata fail closed. The controlled adapter remains in-process and is not represented as a sandbox against side effects inside trusted code.
+- RestrictedExecutor now accepts only the exact sealed `_AdmissionContext` class, verifies ownership, seal, atomic `call` implementation, lock, counters, and ceilings. Duck-typed/fabricated contexts return `FAILED_EXECUTION`/`HARD_GAP` before dispatch.
+- Exact family-to-path mapping, method, and scope binding are enforced. Adapter-returned `calls` are not authorization evidence; the executor emits a receipt for each successful dispatch.
+- Successful receipts require source hashes, artifact hash, registry key, authorization hash, manifest hash, PRE_WINDOW evidence hashes, request/response hashes, and the registered entrypoint code hash. Missing prerequisites fail closed. Exceptions and ceiling overruns remain hard stops.
+- Added adversarial coverage for forged contexts, unregistered callables, metadata mismatch, missing receipt prerequisites, family/path/method/scope mismatches, hash audit, malicious self-reporting, and a valid registered fake adapter.
+
 ## Status
 
-Focused Task 4 executor tests and syntax verification are green. Ruff/Python 3.12 verification is environment-blocked as documented. Commit is created after final diff and status checks.
+Review-fix focused executor tests are green: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_executor.py` = **17 passed**. The requested combined executor/Task 2/calendar/stage2 slice produced **69 passed, 4 failed**: two Task 2 assertions still expect metadata-only adapters to dispatch, and two calendar tests exercise the pre-existing authorization-required gate without an authorization object. These are fail-closed transition failures, not weakened. `py_compile` and `git diff --check` passed; Ruff is unavailable on PATH.
+
 
 ## Commit
 
