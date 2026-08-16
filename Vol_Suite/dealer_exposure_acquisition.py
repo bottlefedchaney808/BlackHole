@@ -8,10 +8,12 @@ fail-closed at one.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import math
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -42,7 +44,58 @@ _PREWINDOW = "PRE_WINDOW"
 _CONTEXT_CONSTRUCTION_TOKEN = object()
 _CONTEXT_OWNERS: dict[int, object] = {}
 _CONTEXT_STATES: dict[int, dict[str, Any]] = {}
+# The state table is intentionally not itself the trust anchor.  A keyed seal and
+# append-only seal history live in a separate table, so replacing/resetting a
+# state dict, lock, limits, counters, or blocked flag cannot create continuity.
+_CONTEXT_ATTESTATIONS: dict[int, dict[str, Any]] = {}
+_CONTEXT_ATTESTATION_KEY = secrets.token_bytes(32)
 _CONTEXT_FIELDS = ("units", "probe_calls", "heavy_calls", "total_endpoint_calls", "payload_bytes", "wall_seconds", "concurrency")
+
+
+def _state_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "state_id": id(state),
+        "lock_id": id(state.get("lock")),
+        "limits_id": id(state.get("limits")),
+        "usage_id": id(state.get("usage")),
+        "finalized_usage_id": id(state.get("finalized_usage")),
+        "limits": dict(state.get("limits", {})),
+        "usage": dict(state.get("usage", {})),
+        "finalized_usage": dict(state.get("finalized_usage", {})),
+        "blocked": state.get("blocked"),
+        "authorization_id": id(state.get("authorization")),
+        "manifest_hash": canonical_sha256(state.get("manifest", {})),
+    }
+
+
+def _state_seal(state: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_CONTEXT_ATTESTATION_KEY + canonical_json_bytes(_state_snapshot(state))).hexdigest()
+
+
+def _attest_new_state(context: Any, state: dict[str, Any]) -> None:
+    seal = _state_seal(state)
+    _CONTEXT_ATTESTATIONS[id(context)] = {"state": state, "seal": seal, "history": (seal,)}
+
+
+def _verify_state_integrity(context: Any, state: Any) -> bool:
+    attestation = _CONTEXT_ATTESTATIONS.get(id(context))
+    if not isinstance(state, dict) or not isinstance(attestation, dict):
+        return False
+    if attestation.get("state") is not state:
+        return False
+    seal = _state_seal(state)
+    return seal == attestation.get("seal") and isinstance(attestation.get("history"), tuple) and attestation["history"] and attestation["history"][-1] == seal
+
+
+def _commit_state(context: Any, state: dict[str, Any]) -> None:
+    # Callers must obtain state through _state() before mutating it.  The
+    # attestation is then advanced exactly once for that controlled mutation.
+    attestation = _CONTEXT_ATTESTATIONS.get(id(context))
+    if not isinstance(attestation, dict) or attestation.get("state") is not state:
+        raise AcquisitionGateError("authenticated runtime context integrity continuity is invalid")
+    seal = _state_seal(state)
+    attestation["seal"] = seal
+    attestation["history"] = (*attestation["history"], seal)
 
 
 class AcquisitionGateError(RuntimeError):
@@ -142,8 +195,10 @@ class _AdmissionContext:
         cost = authorization.to_mapping()["cost_ceiling"]
         limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
         usage = {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
-        _CONTEXT_STATES[id(self)] = {"limits": limits, "usage": usage, "finalized_usage": dict(usage), "lock": threading.Lock(), "blocked": None, "authorization": authorization, "manifest": self._manifest}
+        state = {"limits": limits, "usage": usage, "finalized_usage": dict(usage), "lock": threading.Lock(), "blocked": None, "authorization": authorization, "manifest": self._manifest}
+        _CONTEXT_STATES[id(self)] = state
         _CONTEXT_OWNERS[id(self)] = self
+        _attest_new_state(self, state)
 
     @property
     def authorization(self) -> AcquisitionAuthorization:
@@ -155,8 +210,8 @@ class _AdmissionContext:
 
     def _state(self) -> dict[str, Any]:
         state = _CONTEXT_STATES.get(id(self))
-        if not isinstance(state, dict) or state.get("authorization") is not self._authorization or state.get("manifest") != self._manifest:
-            raise AcquisitionGateError("authenticated runtime context provenance is invalid")
+        if not isinstance(state, dict) or state.get("authorization") is not self._authorization or state.get("manifest") != self._manifest or not _verify_state_integrity(self, state):
+            raise AcquisitionGateError("authenticated runtime context integrity continuity is invalid")
         return state
 
     @property
@@ -183,6 +238,7 @@ class _AdmissionContext:
         """Raise an auditable gate error with the latest usage snapshot."""
         state = self._state()
         state["finalized_usage"] = dict(state["usage"])
+        _commit_state(self, state)
         error = AcquisitionGateError(reason)
         error.runtime_usage = dict(state["finalized_usage"])
         raise error
@@ -218,6 +274,7 @@ class _AdmissionContext:
             # Atomic commit: no permitted call can be observed without its
             # probe/heavy/total/unit reservation already present in usage.
             state["usage"].update(projected)
+            _commit_state(self, state)
         started = time.perf_counter()
         value: Any = None
         failure: tuple[type[BaseException], BaseException, Any] | None = None
@@ -238,6 +295,7 @@ class _AdmissionContext:
                     state["blocked"] = "authorization cost ceiling exceeded: payload_bytes"
                 finalized = dict(state["usage"])
                 state["finalized_usage"] = finalized
+                _commit_state(self, state)
         if failure is not None:
             _, exc, traceback = failure
             try:
@@ -255,7 +313,7 @@ def _context_is_owned_and_initialized(context: Any, authorization: AcquisitionAu
     if type(context) is not _AdmissionContext or _CONTEXT_OWNERS.get(id(context)) is not context:
         return False
     state = _CONTEXT_STATES.get(id(context))
-    if not isinstance(state, dict) or state.get("authorization") is not authorization:
+    if not isinstance(state, dict) or state.get("authorization") is not authorization or not _verify_state_integrity(context, state):
         return False
     if not isinstance(state.get("lock"), type(threading.Lock())):
         return False
@@ -982,21 +1040,38 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
     executor_ok, _, executor_reason = _authorized_executor(probe_fetcher, authorization)
     if not executor_ok:
         return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": f"authorized probe executor required: {executor_reason}", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
-    results = []
+    # Probe dispatch uses the exact same RestrictedExecutor boundary as heavy
+    # acquisition.  The adapter handle is passed through unchanged; no caller
+    # callable is invoked after the registry/policy checks.
+    from .dealer_exposure_executor import RestrictedExecutor
+    executor = RestrictedExecutor(probe_fetcher, authorization)
+    dispatch_units = []
+    skipped: dict[str, dict[str, Any]] = {}
     for unit in ordered:
         request = _probe_request(unit)
         if not unit.get("held_pair_exclusion") and calendar_snapshot is None:
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": "HARD_GAP", "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required", "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "evidence": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"})
+            skipped[unit["candidate_key"]] = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": "HARD_GAP", "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required", "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "evidence": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"}
             continue
-        invoked = False
+        enriched = dict(unit)
+        enriched.setdefault("artifact_hash", _hash({"probe": request, "candidate_key": unit["candidate_key"]}))
+        enriched.setdefault("manifest_hash", canonical_sha256(authorization.candidate_manifest_projection()))
+        enriched.setdefault("authorization_hash", authorization.authorization_sha256())
+        enriched.setdefault("registry_key", probe_fetcher._registration.registry_key)
+        enriched.setdefault("pre_window_evidence_hashes", tuple(unit.get("source_hashes", ())))
+        dispatch_units.append(_immutable(enriched))
+    execution = executor.run(tuple(dispatch_units), authorization_context, call_kind="probe")
+    response_by_key = {item.get("candidate_key"): item for item in execution.get("results", ()) if isinstance(item, Mapping)}
+    usage = execution.get("audit", {}).get("finalized_usage", {})
+    results = []
+    for unit in ordered:
+        request = _probe_request(unit)
+        if unit["candidate_key"] in skipped:
+            results.append(skipped[unit["candidate_key"]])
+            continue
         try:
-            def dispatch_probe() -> Any:
-                nonlocal invoked
-                invoked = True
-                _attest_registered(probe_fetcher, authorization)
-                return probe_fetcher(request)
-
-            response, runtime_usage = authorization_context.call("probe", dispatch_probe)
+            response = response_by_key.get(unit["candidate_key"])
+            if response is None:
+                raise AcquisitionGateError(execution.get("reason", "restricted probe executor hard stop"))
             if not isinstance(response, Mapping):
                 raise TypeError("probe response must be a mapping")
             status = str(response.get("status", "HARD_GAP")).upper()
@@ -1027,10 +1102,9 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
                 if status == "PASS" and unit.get("held_pair_exclusion"):
                     status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
                     reason = reason or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": invoked, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": runtime_usage})
+            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": usage, "executor_receipts": execution.get("audit", {}).get("receipts", ())})
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
-            runtime_usage = getattr(exc, "runtime_usage", authorization_context.finalized_usage)
-            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": invoked, "comparison_status": "COMPARISON_INVALID", "runtime_usage": dict(runtime_usage)})
+            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID", "runtime_usage": dict(getattr(exc, "runtime_usage", usage)), "executor_receipts": execution.get("audit", {}).get("receipts", ())})
     return results
 
 
@@ -1110,6 +1184,14 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         primary_schedule = select_primary_schedule(ordered, probes, calendar_snapshot=calendar_snapshot)
     primary_keys = {u["candidate_key"] for u in primary_schedule}
     probe_by_key = {p["candidate_key"]: p for p in probes}
+    execution: dict[str, Any] | None = None
+    response_by_key: dict[str, Mapping[str, Any]] = {}
+    if not dry_run and not probe_only and primary_schedule and fetcher is not None:
+        from .dealer_exposure_executor import RestrictedExecutor
+        execution = RestrictedExecutor(fetcher, authorization).run(
+            tuple(_immutable(unit) for unit in primary_schedule), authorization_context, call_kind="heavy"
+        )
+        response_by_key = {item.get("candidate_key"): item for item in execution.get("results", ()) if isinstance(item, Mapping)}
     units = []
     payloads: dict[str, Any] = {}
     network_executed = False
@@ -1136,8 +1218,12 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
                 # raised fetcher still proves that acquisition was attempted.
                 _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
                 network_executed = True
-                _attest_registered(fetcher, authorization)
-                payload, runtime_usage = authorization_context.call("heavy", lambda: fetcher(unit))
+                if execution is None or execution.get("status") != "SUCCESS":
+                    raise AcquisitionGateError((execution or {}).get("reason", "restricted acquisition executor hard stop"))
+                payload = response_by_key.get(unit["candidate_key"])
+                if payload is None:
+                    raise AcquisitionGateError("restricted acquisition executor did not return this admitted unit")
+                runtime_usage = dict(execution.get("audit", {}).get("finalized_usage", runtime_usage))
                 item = _unit_from_payload(unit, payload)
                 status, reason = item["status"], item["reason"]
             except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs

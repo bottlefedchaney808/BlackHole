@@ -182,8 +182,11 @@ class RestrictedExecutor:
     def _request(self, unit: Mapping[str, Any]) -> dict[str, Any]:
         return {"registry_key": self.registration.registry_key, "entrypoint": self.registration.identity, "entrypoint_code_hash": self.registration.code_hash, "family": self.registration.family, "path": self.registration.endpoint, "method": self.registration.method, "scope_binding": self.registration.scope, "candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "calendar_binding_hash": unit.get("calendar_binding_hash")}
 
-    def run(self, units: Sequence[Mapping[str, Any]], context: Any) -> dict[str, Any]:
+    def run(self, units: Sequence[Mapping[str, Any]], context: Any, *, call_kind: str = "heavy") -> dict[str, Any]:
+        if call_kind not in {"probe", "heavy"}:
+            raise ExecutorFailure("executor call kind must be probe or heavy")
         audit: dict[str, Any] = {"invocations": [], "requests": [], "responses": [], "receipts": [], "finalized_usage": {}}
+        results: list[Mapping[str, Any]] = []
         try:
             self._check_context(context)
         except ExecutorFailure as exc:
@@ -196,7 +199,7 @@ class RestrictedExecutor:
             try:
                 audit["invocations"].append(unit["candidate_key"])
                 self._attest_entrypoint()
-                result, _ = context.call("heavy", lambda u=unit: self.adapter(u))
+                result, _ = context.call(call_kind, lambda u=unit: self.adapter(u))
                 if not isinstance(result, Mapping):
                     raise ExecutorFailure("adapter response is not a mapping")
                 status = str(result.get("status", "")).upper()
@@ -204,6 +207,7 @@ class RestrictedExecutor:
                     raise ExecutorFailure("adapter returned non-success execution evidence")
                 response = {"candidate_key": unit["candidate_key"], "status": status, "payload_sha256": sha256_bytes(canonical_json_bytes(result))}
                 audit["responses"].append(response)
+                results.append(result)
                 receipt = {"candidate_key": unit["candidate_key"], "request_sha256": request["request_sha256"], "response_payload_sha256": response["payload_sha256"], "source_hashes": list(validate_source_hashes(unit["source_hashes"])), "artifact_hash": unit["artifact_hash"], "manifest_hash": unit["manifest_hash"], "authorization_hash": unit["authorization_hash"], "registry_key": self.registration.registry_key, "entrypoint_code_hash": self.registration.code_hash, "pre_window_evidence_hashes": list(unit["pre_window_evidence_hashes"])}
                 required = ("source_hashes", "artifact_hash", "registry_key", "authorization_hash", "manifest_hash", "pre_window_evidence_hashes")
                 if any(not receipt.get(k) for k in required):
@@ -214,7 +218,7 @@ class RestrictedExecutor:
             except BaseException as exc:
                 audit["finalized_usage"] = dict(getattr(exc, "runtime_usage", context.finalized_usage))
                 return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
-        return {"status": "SUCCESS", "classification": "SUCCESS", "network_fetch_allowed": True, "audit": audit}
+        return {"status": "SUCCESS", "classification": "SUCCESS", "network_fetch_allowed": True, "audit": audit, "results": tuple(results)}
 
 
 __all__ = ["AdapterRegistry", "ExecutorFailure", "RegisteredAdapter", "RestrictedExecutor"]

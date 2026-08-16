@@ -84,3 +84,18 @@ The final Task 4-only commit is the commit carrying this report; its short hash 
 - Plugin-isolated Task 4 executor + Task 2 authorization + calendar tests: **97 passed**.
 - Stage-2/backtest collection was attempted but blocked by the isolated runner's missing `scipy` dependency; no project `.venv` was present.
 - `py_compile` and `git diff --check`: **passed**. Ruff was attempted and is unavailable on PATH (`ruff: command not found`).
+
+## Critical trust-boundary remediation (2026-08-16)
+
+- Refactored probe and sequential-acquisition dispatch to use the same `RestrictedExecutor.run` boundary as expansion. Registered adapter handles are passed into the wrapper; no direct probe/fetcher callable invocation remains after validation. The shared path performs immutable admitted-unit checks, runtime reservation, dispatch-time entrypoint attestation, success validation, request/response/source/artifact/registry/authorization/manifest/PRE_WINDOW receipt construction, audit accounting, and hard-stop handling.
+- Extended the shared boundary with an explicit `call_kind` (`probe` or `heavy`) and returned validated adapter results only after receipt creation, preserving the existing expansion path and trusted in-process adapter limitation.
+- Replaced unauthenticated module-state continuity with keyed state seals, object/container identity attestation, and append-only seal history. Backing state replacement/reset, counter rollback, lock replacement, limits mutation, and clearing a blocked state after usage now fail before adapter dispatch; this is not a shape-only or `MappingProxyType` control.
+- Added regressions for probe receipt parity/registered control and backing-state reset, rollback, lock, limits, and blocked-state tampering. Existing forged-context and valid registered controls remain covered.
+
+## Remediation verification
+
+- `PYTHONPATH=. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_executor.py -p no:cacheprovider`: **27 passed**.
+- `python -m py_compile Vol_Suite/dealer_exposure_acquisition.py Vol_Suite/dealer_exposure_executor.py Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_executor.py`: **passed**.
+- `git diff --check`: **passed**.
+- Ruff: unavailable on PATH (`ruff: command not found`).
+- The combined legacy Task 2/calendar/expansion collection remains fail-closed with pre-existing transition tests that directly supply unbound lambdas or omit the required typed authorization; these are expected legacy failures under the frozen authorization boundary and were not weakened.

@@ -4,6 +4,7 @@ from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
+import Vol_Suite.dealer_exposure_acquisition as acquisition
 from Vol_Suite.dealer_exposure_executor import AdapterRegistry, ExecutorFailure, RestrictedExecutor
 from Vol_Suite.dealer_exposure_acquisition import _AdmissionContext, _immutable
 from Vol_Suite.dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_sha256
@@ -219,6 +220,41 @@ def test_valid_registry_context_control_still_dispatches():
     assert output["status"] == "SUCCESS"
     assert raw.calls
     assert registry
+
+
+@pytest.mark.parametrize("mutation", ["reset", "rollback", "lock", "limits", "blocked"])
+def test_backing_context_state_tamper_is_hard_gap_before_dispatch(mutation):
+    auth, manifest, context = _context()
+    registry, raw, registered = _registered()
+    state = acquisition._CONTEXT_STATES[id(context)]
+    if mutation == "reset":
+        state["usage"] = {field: 0 for field in acquisition._CONTEXT_FIELDS}
+        state["finalized_usage"] = dict(state["usage"])
+        state["blocked"] = None
+    elif mutation == "rollback":
+        state["usage"]["heavy_calls"] = -1
+    elif mutation == "lock":
+        import threading
+        state["lock"] = threading.Lock()
+    elif mutation == "limits":
+        state["limits"]["heavy_calls"] = 999
+    else:
+        state["usage"]["heavy_calls"] = 1
+        state["finalized_usage"] = dict(state["usage"])
+        state["blocked"] = "prior failure"
+        state["blocked"] = None
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context)
+    assert output["classification"] == "HARD_GAP"
+    assert raw.calls == []
+
+
+def test_probe_call_kind_uses_same_receipt_contract_and_registered_control():
+    auth, manifest, context = _context()
+    registry, raw, registered = _registered()
+    output = RestrictedExecutor(registered, auth).run(_admitted(manifest, auth, registered), context, call_kind="probe")
+    assert output["status"] == "SUCCESS"
+    assert output["audit"]["receipts"][0]["receipt_sha256"]
+    assert raw.calls and registry
 
 
 def test_mapping_proxy_is_deeply_immutable():
