@@ -1,16 +1,13 @@
-"""price_dist_tool.py
+"""price_dist_tool.py -> the "Simulations" tool.
 
-Wraps VaR_Tools_Simulations/main.py's _build_price_dist_from_context as a
-standalone Tool -- a 1-year-out analytic lognormal price-distribution table
-plus an MC terminal-price histogram and touch/expiry probabilities for a
-context's focus ticker.
+Multi-mode wrapper around three VaR context builders:
+  mode='price_dist' -> _build_price_dist_from_context
+  mode='mc_sim'     -> _build_mc_sim_from_context
+  mode='corr_sim'   -> _build_corr_sim_peer_from_context
 
-var_engine/price_dist.py's only prior entry point (main.py's run_price_dist())
-is fully interactive -- it prompts for spot, targets, vol and horizon. This
-tool uses the non-interactive _build_price_dist_from_context() builder instead,
-which derives its inputs from the selected context: live spot, the context's
-Vol_Suite GARCH vol (falling back to VaR's own fit), and VaR's historical
-geometric drift, with the resolution branch reported in `data_quality`.
+Ticker comes from context.focus.ticker; horizon_days/n_sims/seed/confidence
+are read off context when present and passed through as override kwargs to the
+VaR builders (which default to their own 1y/10k/0.99 when absent).
 """
 from __future__ import annotations
 
@@ -27,6 +24,13 @@ if str(_VAR_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_VAR_SUITE_ROOT))
 
 from Tools.registry import ToolSpec  # noqa: E402
+
+_MODES = {
+    'price_dist': '_build_price_dist_from_context',
+    'mc_sim': '_build_mc_sim_from_context',
+    'corr_sim': '_build_corr_sim_peer_from_context',
+}
+_OVERRIDES = ('horizon_days', 'n_sims', 'seed', 'confidence')
 
 
 def _import_var_main():
@@ -50,26 +54,37 @@ def _import_var_main():
 
 def run(context: Dict[str, Any]) -> Dict[str, Any]:
     """context: a validated suite_context.json dict (see
-    context_loader.load_context).
+    context_loader.load_context), optionally carrying:
+      - "mode": "price_dist" (default) | "mc_sim" | "corr_sim"
+      - override keys: horizon_days, n_sims, seed, confidence
 
-    Returns a dict: ticker, spot, vol, expected_return, distribution_table,
-    terminal_price_histogram, avg_end_price, target probabilities and
-    data_quality.
+    Returns the selected VaR builder's dict verbatim.
     """
-    var_main = _import_var_main()
-
     focus = context.get("focus") or {}
-    ticker = focus.get("ticker")
-    return var_main._build_price_dist_from_context(context, ticker)
+    ticker = context.get("ticker") or focus.get("ticker")
+    if not ticker:
+        raise ValueError(
+            "Simulations tool requires a ticker "
+            "(context.ticker or context.focus.ticker)")
+    mode = str(context.get("mode") or "price_dist").strip().lower()
+    if mode not in _MODES:
+        raise ValueError(
+            f"mode must be one of {sorted(_MODES)}; got {mode!r}")
+
+    var_main = _import_var_main()
+    builder = getattr(var_main, _MODES[mode])
+    kwargs = {k: context[k] for k in _OVERRIDES if k in context}
+    return builder(context, ticker, **kwargs)
 
 
 TOOL_SPEC = ToolSpec(
-    name="Price Distribution",
-    slug="price-distribution",
+    name="Simulations",
+    slug="simulations",
     description=(
-        "1-year-out lognormal price-distribution table and MC terminal-price "
-        "histogram for a context's focus ticker, with probabilities of "
-        "reaching +/-50% targets at expiry and at any time."
+        "Three 1-year-out Monte Carlo simulations for a context's focus "
+        "ticker -- price-distribution table, MC terminal price, or "
+        "correlation sim vs basket peers -- seeded from live spot + GARCH "
+        "vol + drift. Select via mode."
     ),
     run=run,
 )

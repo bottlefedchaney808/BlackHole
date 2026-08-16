@@ -1955,7 +1955,7 @@ async def tools_backtest_run(request: Request):
 GENERIC_TOOL_SLUGS = {
     'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
     'liquidity-map', 'direction-signal', 'hedge-optimizer',
-    'vrp-term-structure', 'price-distribution',
+    'vrp-term-structure', 'simulations',
 }
 
 
