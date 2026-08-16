@@ -183,3 +183,30 @@ exit 0
 ```
 
 Ruff was unavailable. The repository `.venv/Scripts/python.exe` was unavailable in this worker; the available runner reported Python 3.11, so a repository Python 3.12 execution could not be performed here. The observed dry-run digest remains an audit reference only; no XLE/XLF/AAPL/META packet was authorized or acquired.
+
+## Authorization Task 1 review findings (2026-08-15)
+
+Closed the reproduced safety-boundary defects in the authorization contract:
+
+- Calendar binding identity is now transitive: every unit and observed binding must exactly equal the manifest calendar binding hash, in addition to the existing calendar snapshot/policy/resolver/session checks.
+- `source_hashes` is mandatory on every unit, validated as non-empty lowercase SHA-256 values, and must exactly match the point-in-time `selection_provenance.source_registry` entry for that unit's non-empty `candidate_source`.
+- The complete source registry and normalized source hashes remain in the canonical manifest projection, so source identity cannot be detached from the manifest digest.
+- `_manifest_projection` now requires every normative manifest field before serialization/hashing, including exclusions, selection provenance, quota, held-pair evidence hash, probe policy, executor policy, cost ceiling, calendar projection, and complete units.
+- `authorization_sha256` is mandatory input, format-validated, independently recomputed from all other authorization fields, and compared byte-for-byte; it is never auto-generated for malformed or absent input.
+- Added regressions for unit/observed binding mismatch, missing source hashes, source-registry mismatch, missing quota, absent/malformed/mismatched authorization self-hashes, plus a valid control.
+
+### Review-fix verification
+
+```text
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py -p no:cacheprovider
+..................                                                       [100%]
+18 passed in 0.03s
+
+python -m py_compile Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py
+exit 0
+
+git diff --check -- Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py .superpowers/sdd/task-1-report.md
+exit 0
+```
+
+Ruff was unavailable. No acquisition, network, live-model, scheduler, master, expiry-book, or unrelated worktree artifacts were modified.

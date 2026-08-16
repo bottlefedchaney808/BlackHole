@@ -13,7 +13,12 @@ from math import isfinite
 from types import MappingProxyType
 from typing import Any
 
-from .provenance_contract import SHA256_RE, canonical_json_bytes, sha256_bytes
+from .provenance_contract import (
+    SHA256_RE,
+    canonical_json_bytes,
+    sha256_bytes,
+    validate_source_hashes,
+)
 
 SCHEMA_VERSION = 1
 MANIFEST_PROJECTION = "candidate_manifest_calendar_enriched_v2"
@@ -72,6 +77,28 @@ _UNIT_FIELDS = {
     "early_close", "settlement_style", "settlement_timestamp", "timezone", "exact_dte",
     "calendar_binding_hash", "source_hashes", "close_reason",
 }
+
+
+def _source_registry(selection_provenance: Any) -> Mapping[str, Any]:
+    if not isinstance(selection_provenance, Mapping):
+        raise TypeError("selection_provenance must be an object")
+    registry = selection_provenance.get("source_registry")
+    if registry is None:
+        registry = selection_provenance.get("candidate_source_registry")
+    if not isinstance(registry, Mapping) or not registry:
+        raise ValueError("selection_provenance.source_registry is required")
+    return registry
+
+
+def _registered_source_hashes(registry: Mapping[str, Any], source: str) -> tuple[str, ...]:
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("candidate_source must be a non-empty source identity")
+    entry = registry.get(source)
+    hashes = entry.get("source_hashes") if isinstance(entry, Mapping) else entry
+    try:
+        return tuple(sorted(set(validate_source_hashes(hashes))))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"source registry entry {source!r} is invalid") from exc
 
 
 def _reject_unknown(value: Mapping[str, Any], allowed: set[str], label: str) -> None:
@@ -144,7 +171,7 @@ def _manifest_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(manifest, Mapping):
         raise TypeError("candidate manifest must be an object")
     _reject_unknown(manifest, _MANIFEST_FIELDS, "candidate manifest")
-    required = ("schema_version", "manifest_schema", "calendar_enriched", "units", "calendar")
+    required = tuple(_MANIFEST_FIELDS)
     if any(field not in manifest for field in required):
         raise ValueError("candidate manifest is missing required calendar-enriched fields")
     if manifest["schema_version"] != SCHEMA_VERSION or manifest["manifest_schema"] != MANIFEST_PROJECTION:
@@ -188,7 +215,14 @@ def _manifest_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
         keys.append(key)
         _strict_bool(raw["early_close"], f"unit {index}.early_close")
         _finite(raw, f"unit {index}")
+        source_hashes = tuple(sorted(set(validate_source_hashes(raw.get("source_hashes")))))
+        registered_hashes = _registered_source_hashes(
+            _source_registry(manifest["selection_provenance"]), raw["candidate_source"]
+        )
+        if source_hashes != registered_hashes:
+            raise ValueError(f"unit {index} source registry identity mismatch")
         normalized = {str(k): raw[k] for k in sorted(raw)}
+        normalized["source_hashes"] = list(source_hashes)
         normalized_units.append(normalized)
         for field in ("calendar_hash", "resolver_code_hash", "calendar_binding_hash"):
             _hash(raw[field], f"unit {index}.{field}")
@@ -196,6 +230,8 @@ def _manifest_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
             calendar["calendar_hash"], calendar["calendar_policy_version"], calendar["resolver_code_version"], calendar["resolver_code_hash"]
         ):
             raise ValueError("unit/calendar identity mismatch")
+        if raw["calendar_binding_hash"] != calendar["calendar_binding_hash"]:
+            raise ValueError("unit/calendar binding identity mismatch")
         if raw["session_id"] != calendar["observed_session_id"]:
             raise ValueError("unit/session identity mismatch")
         if raw["session_status"] not in _ALLOWED_SESSION_STATUS or raw["settlement_style"] not in _ALLOWED_SETTLEMENT:
@@ -205,10 +241,8 @@ def _manifest_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
     if keys != sorted(keys):
         raise ValueError("candidate keys must be exactly sorted")
 
-    result: dict[str, Any] = {}
-    for field in ("schema_version", "manifest_schema", "units", "exclusions", "selection_provenance", "quota", "held_pair_evidence_hash", "probe_policy", "executor_policy", "cost_ceiling", "calendar"):
-        if field in manifest:
-            result[field] = manifest[field]
+    _hash(manifest["held_pair_evidence_hash"], "held_pair_evidence_hash")
+    result: dict[str, Any] = {field: manifest[field] for field in _MANIFEST_FIELDS}
     result["units"] = normalized_units
     result["calendar"] = {key: calendar[key] for key in sorted(calendar)}
     _finite(result, "candidate manifest")
@@ -248,7 +282,7 @@ class AcquisitionAuthorization:
         if not isinstance(payload, Mapping):
             raise TypeError("authorization must be an object")
         _reject_unknown(payload, _AUTH_FIELDS, "authorization")
-        required = _AUTH_FIELDS - {"authorization_sha256"}
+        required = _AUTH_FIELDS
         missing = sorted(required - set(payload))
         if missing:
             raise ValueError(f"authorization is missing required fields: {missing}")
@@ -310,6 +344,8 @@ class AcquisitionAuthorization:
             if set(binding) != _BINDING_FIELDS:
                 raise ValueError("observed binding identity is incomplete")
             _validate_hash_fields(binding, ("calendar_binding_hash",), f"observed binding {index}")
+            if binding["calendar_binding_hash"] != calendar["calendar_binding_hash"]:
+                raise ValueError("observed binding/calendar binding identity mismatch")
             unit = projection["units"][index]
             for field in _BINDING_FIELDS - {"candidate_key"}:
                 expected = unit.get(field)
@@ -350,12 +386,13 @@ class AcquisitionAuthorization:
             raise ValueError("executor policy attempts an unsafe capability")
         if not isinstance(payload["stop_conditions"], list) or not payload["stop_conditions"]:
             raise ValueError("stop_conditions must be a non-empty list")
+        supplied = payload["authorization_sha256"]
+        _hash(supplied, "authorization_sha256")
         normalized = {key: _thaw(_freeze(payload[key])) for key in payload if key != "authorization_sha256"}
         digest = sha256_bytes(canonical_json_bytes(normalized))
-        supplied = payload.get("authorization_sha256")
-        if supplied is not None and supplied != digest:
+        if supplied != digest:
             raise ValueError("authorization_sha256 does not match authorization contents")
-        normalized["authorization_sha256"] = digest
+        normalized["authorization_sha256"] = supplied
         return cls(_freeze(normalized), _freeze(projection))
 
     def to_mapping(self) -> dict[str, Any]:

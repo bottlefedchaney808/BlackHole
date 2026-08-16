@@ -15,6 +15,7 @@ from Vol_Suite.provenance_contract import canonical_sha256
 
 H = "a" * 64
 H2 = "b" * 64
+SOURCE_HASH = "c" * 64
 
 
 def _binding(key="XLE|2026-07-06|2026-07-06|1"):
@@ -42,6 +43,7 @@ def _unit(key="XLE|2026-07-06|2026-07-06|1"):
         "habitat": "OPEX",
         "sector": "ENERGY",
         "candidate_source": "fixture",
+        "source_hashes": [SOURCE_HASH],
         "calendar_hash": H,
         "calendar_policy_version": "opex-calendar-v1",
         "resolver_code_version": "resolver-v1",
@@ -69,7 +71,7 @@ def _manifest():
         "calendar_enriched": True,
         "units": [unit],
         "exclusions": [],
-        "selection_provenance": {"source": "fixture"},
+        "selection_provenance": {"source": "fixture", "source_registry": {"fixture": {"source_hashes": [SOURCE_HASH]}}},
         "quota": {"max_units": 1},
         "held_pair_evidence_hash": H,
         "probe_policy": {"required_status": "PASS"},
@@ -97,7 +99,7 @@ def _manifest():
 def _authorization(manifest=None):
     manifest = manifest or _manifest()
     digest = candidate_manifest_sha256(manifest)
-    return {
+    payload = {
         "schema_version": 1,
         "authorization_id": "auth-fixture-1",
         "issued_at": "2026-08-15T12:00:00+00:00",
@@ -160,6 +162,10 @@ def _authorization(manifest=None):
         },
         "stop_conditions": ["hard gap"],
     }
+    payload["authorization_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "authorization_sha256"}
+    )
+    return payload
 
 
 def test_projection_is_calendar_enriched_sorted_and_deterministic():
@@ -215,3 +221,41 @@ def test_pre_calendar_manifest_and_unsorted_duplicate_keys_are_rejected():
     manifest["units"].append(deepcopy(manifest["units"][0]))
     with pytest.raises(ValueError):
         candidate_manifest_projection(manifest)
+
+
+@pytest.mark.parametrize("mutator", [
+    lambda m: m["units"][0].update(calendar_binding_hash=H),
+    lambda m: m["units"][0].update(source_hashes=[]),
+    lambda m: m.pop("quota"),
+])
+def test_manifest_rejects_transitive_binding_provenance_and_missing_normative_fields(mutator):
+    manifest = _manifest()
+    mutator(manifest)
+    with pytest.raises((ValueError, TypeError)):
+        candidate_manifest_projection(manifest)
+
+
+def test_manifest_rejects_source_registry_hash_mismatch():
+    manifest = _manifest()
+    manifest["selection_provenance"]["source_registry"]["fixture"]["source_hashes"] = [H]
+    with pytest.raises(ValueError, match="source registry"):
+        candidate_manifest_projection(manifest)
+
+
+@pytest.mark.parametrize("mutator", [
+    lambda p: p.pop("authorization_sha256"),
+    lambda p: p.update(authorization_sha256="not-a-sha256"),
+    lambda p: p.update(authorization_sha256=H),
+])
+def test_authorization_requires_independent_valid_self_hash(mutator):
+    payload = _authorization()
+    mutator(payload)
+    with pytest.raises((ValueError, TypeError)):
+        AcquisitionAuthorization.from_mapping(payload, candidate_manifest=_manifest())
+
+
+def test_valid_source_and_calendar_binding_control_is_admitted():
+    manifest = _manifest()
+    payload = _authorization(manifest)
+    auth = AcquisitionAuthorization.from_mapping(payload, candidate_manifest=manifest)
+    assert auth.to_mapping()["authorization_sha256"] == payload["authorization_sha256"]
