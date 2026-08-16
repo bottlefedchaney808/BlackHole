@@ -122,9 +122,9 @@ def test_vrp_term_structure_tool_is_registered():
 
 @pytest.mark.unit
 def test_price_dist_tool_is_registered():
-    tool = get_tool("price-distribution")
-    assert tool.slug == "price-distribution"
-    assert tool.name == "Price Distribution"
+    tool = get_tool("simulations")
+    assert tool.slug == "simulations"
+    assert tool.name == "Simulations"
 
 
 @pytest.mark.unit

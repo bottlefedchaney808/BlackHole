@@ -1948,6 +1948,53 @@ async def tools_backtest_run(request: Request):
     })
 
 
+@app.get('/tools/simulations', response_class=HTMLResponse)
+def tools_simulations_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_simulations.html', {
+        'active': 'tools', 'tool': get_tool('simulations'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': '', 'selected_mode': 'price_dist',
+        'horizon_days': '', 'n_sims': '', 'confidence': '', 'seed': '',
+        'result': None, 'result_json': None, 'error': None,
+    })
+
+
+@app.post('/tools/simulations', response_class=HTMLResponse)
+async def tools_simulations_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+    context_path = str(body.get('context_path') or '').strip()
+    mode = str(body.get('mode') or 'price_dist').strip().lower()
+    context, error = _load_selected_context(context_path)
+    result = None
+    if context is not None:
+        context['mode'] = mode
+        for key, cast in (('horizon_days', int), ('n_sims', int),
+                          ('confidence', float), ('seed', int)):
+            raw = str(body.get(key) or '').strip()
+            if raw:
+                try:
+                    context[key] = cast(raw)
+                except ValueError:
+                    error = f'{key} must be numeric, got {raw!r}'
+        if error is None:
+            result, run_error = _run_tool_safe('simulations', context)
+            if run_error:
+                error = run_error
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_simulations.html', {
+        'active': 'tools', 'tool': get_tool('simulations'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': context_path, 'selected_mode': mode,
+        'horizon_days': str(body.get('horizon_days') or ''),
+        'n_sims': str(body.get('n_sims') or ''),
+        'confidence': str(body.get('confidence') or ''),
+        'seed': str(body.get('seed') or ''),
+        'result': result, 'result_json': result_json, 'error': error,
+    })
+
+
 # Tools whose UI is just "pick a context, run" (plus, for whale-flow, two
 # optional numeric overrides) -- everything registered in Tools.registry
 # except options-strategy and backtesting, which have bespoke forms above
