@@ -42,3 +42,14 @@ Pre-existing `.superpowers/sdd/progress.md` modification and untracked acquisiti
 ## Commit
 
 `bbd20ae51364ae30786c02b4a9ec472d26753e27` (`feat(vol): implement opex calendar stage3 consumption`).
+
+## Stage 3 review remediation (2026-08-15)
+
+- `_validate_calendar_metadata()` now requires calendar binding `ticker`, `calendar_day`, `expiry`, and `dte`, and compares each exactly to the evaluation row or supplied canonical-input identity before fitting. A fully rehashed binding from another ticker/day/expiry/DTE now hard-gaps even when registry, artifact, and binding hashes are internally consistent.
+- Every nested `event_windows` entry is now required to carry event/window identity and is checked against top-level event metadata. Nested bounds and policy must agree with the top-level selected window; selected-window identity is checked explicitly. Optional event ID/type/source/status metadata is checked when supplied.
+- Added regressions for fully rehashed cross-ticker/cross-day/expiry/DTE detachment and rehashed nested-window bounds/policy inconsistency. Existing same-day nested metadata, event unions, no-firing/strata/clocks/CI/power/falsifier/no-promotion behavior, and resolver non-invocation remain covered.
+
+### Remediation verification
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH= C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider Vol_Suite/tests/test_opex_calendar_stage3.py Vol_Suite/tests/test_task4_evaluation.py Vol_Suite/tests/test_opex_calendar.py`: **74 passed**.
+- The broader Stage 3/core/acquisition-adjacent slice produced **172 passed, 7 pre-existing legacy contract-transition failures** in `test_common_input_live_vs_expiry_book.py`; those failures are outside Stage 3 and were not weakened.

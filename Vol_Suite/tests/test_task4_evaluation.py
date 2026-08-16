@@ -54,7 +54,7 @@ def row(day, ticker, y=0.02, v=2.0, div=0.1, *, daily=-0.01, breach=0.02):
                                 "calendar_binding": binding, **calendar_fields, "event_types": ["OPEX"],
                                 "event_overlap": False}}
     return {
-        "day": day, "ticker": ticker, "family": ticker, "candidate_key": candidate,
+        "day": day, "ticker": ticker, "expiry": day, "dte": 1, "family": ticker, "candidate_key": candidate,
         "canonical_input_hash": input_hash,
         "calendar_binding": binding, "source_hashes": [source_hash], **calendar_fields, "event_types": ["OPEX"], "event_overlap": False,
         "artifact_registry": registry,

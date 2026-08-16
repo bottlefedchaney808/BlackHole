@@ -51,6 +51,45 @@ def _rebind(record, event_types):
     return out
 
 
+def _reattest_binding(record, mutate):
+    """Rehash a mutated binding and registry, without changing row identity."""
+    out = copy.deepcopy(record)
+    binding = out["calendar_binding"]
+    mutate(binding)
+    binding["calendar_binding_hash"] = hashlib.sha256(
+        json.dumps({k: v for k, v in binding.items() if k != "calendar_binding_hash"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    old_hash = out["comparison"]["artifact_hash"]
+    manifest = out["artifact_registry"][old_hash]["artifact_manifest"]
+    manifest["calendar_binding"] = binding
+    new_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    entry = out["artifact_registry"].pop(old_hash)
+    entry.update(artifact_hash=new_hash, artifact_manifest=manifest, calendar_binding=binding)
+    out["artifact_registry"][new_hash] = entry
+    out["comparison"]["artifact_hash"] = new_hash
+    out["provenance"].update(artifact_hash=new_hash, record_artifact_hash=new_hash)
+    return out
+
+
+def test_rehashed_calendar_binding_must_match_row_ticker_day_expiry_and_dte():
+    record = row("2026-06-01", "SPY")
+    bad = _reattest_binding(record, lambda binding: binding.update(
+        ticker="QQQ", calendar_day="2026-06-02", expiry="2026-06-20", dte=19,
+    ))
+    with pytest.raises(EvaluationInvalid, match="identity|ticker|calendar day|expiry|DTE"):
+        evaluate_task4([bad], min_days=1)
+
+
+def test_rehashed_nested_event_window_must_match_top_level_window_metadata():
+    record = row("2026-06-01", "SPY")
+    event_id = record["calendar_binding"]["event_ids"][0]
+    bad = _reattest_binding(record, lambda binding: binding["event_windows"][event_id].update(
+        window_start="2026-06-01T10:00:00-05:00", window_policy="WRONG_POLICY",
+    ))
+    with pytest.raises(EvaluationInvalid, match="event window|window|policy"):
+        evaluate_task4([bad], min_days=1)
+
+
 def test_missing_calendar_binding_invalidates_before_fitting():
     record = row("2026-06-01", "SPY")
     record.pop("calendar_binding")

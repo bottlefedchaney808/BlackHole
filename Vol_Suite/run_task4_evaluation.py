@@ -193,13 +193,33 @@ def _validate_calendar_metadata(row: Mapping[str, Any], manifest: Mapping[str, A
     binding = row.get("calendar_binding")
     if not isinstance(binding, Mapping):
         raise EvaluationInvalid("COMPARISON_INVALID: supplied calendar_binding is required")
-    for field in ("calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash",
-                  "as_of", "event_ids", "event_window_id", "window_start", "window_end",
-                  "window_policy", "nominal_date", "observed_expiry_date", "session_id",
-                  "session_status", "regular_open", "regular_close", "early_close",
+    for field in ("ticker", "calendar_day", "expiry", "dte", "calendar_hash", "calendar_policy_version",
+                  "resolver_code_hash", "snapshot_hash", "as_of", "event_ids", "event_window_id",
+                  "window_start", "window_end", "window_policy", "nominal_date", "observed_expiry_date",
+                  "session_id", "session_status", "regular_open", "regular_close", "early_close",
                   "settlement_style", "settlement_timestamp", "timezone", "calendar_binding_hash"):
         if field not in binding or binding[field] in (None, "", []):
             raise EvaluationInvalid(f"COMPARISON_INVALID: calendar binding missing {field}")
+    canonical = row.get("canonical_input")
+    if canonical is not None and not isinstance(canonical, Mapping):
+        raise EvaluationInvalid("COMPARISON_INVALID: canonical input must be a mapping")
+    identity_source = canonical if isinstance(canonical, Mapping) else row
+    expected_identity = {
+        "ticker": identity_source.get("ticker", row.get("ticker")),
+        "calendar_day": identity_source.get("calendar_day", identity_source.get("day", identity_source.get("date"))),
+        "expiry": identity_source.get("expiry", row.get("expiry")),
+        "dte": identity_source.get("dte", row.get("dte")),
+    }
+    if any(value in (None, "") for value in expected_identity.values()):
+        raise EvaluationInvalid("COMPARISON_INVALID: evaluation row/canonical input identity is incomplete")
+    for field, expected_value in expected_identity.items():
+        if binding.get(field) != expected_value:
+            raise EvaluationInvalid(f"COMPARISON_INVALID: calendar binding {field} does not match evaluation identity")
+    if isinstance(canonical, Mapping):
+        for field, expected_value in expected_identity.items():
+            row_value = row.get(field, row.get("day") if field == "calendar_day" else None)
+            if row_value is not None and row_value != expected_value:
+                raise EvaluationInvalid(f"COMPARISON_INVALID: row/canonical {field} identity mismatch")
     for field in ("calendar_hash", "snapshot_hash", "resolver_code_hash", "calendar_binding_hash"):
         _hash(binding[field], f"calendar {field}")
     if binding["calendar_hash"] != binding["snapshot_hash"]:
@@ -214,13 +234,44 @@ def _validate_calendar_metadata(row: Mapping[str, Any], manifest: Mapping[str, A
     windows = binding.get("event_windows")
     if not isinstance(windows, Mapping) or set(windows) != set(event_ids):
         raise EvaluationInvalid("calendar event windows are detached from event IDs")
-    event_types = sorted(str(windows[event_id].get("event_type")) for event_id in event_ids if isinstance(windows[event_id], Mapping))
-    if len(event_types) != len(event_ids) or any(event_type not in {"OPEX", "FOMC", "EARNINGS"} for event_type in event_types):
-        raise EvaluationInvalid("calendar event types are incomplete")
+    event_types = []
+    event_metadata = binding.get("event_metadata", {})
+    if not isinstance(event_metadata, Mapping):
+        raise EvaluationInvalid("calendar event metadata is invalid")
+    for event_id in event_ids:
+        window = windows[event_id]
+        if not isinstance(window, Mapping):
+            raise EvaluationInvalid("calendar event window entry is invalid")
+        for field in ("window_id", "window_start", "window_end", "window_policy", "event_type"):
+            if field not in window or window[field] in (None, ""):
+                raise EvaluationInvalid(f"calendar event window missing {field}")
+        metadata = event_metadata.get(event_id, {})
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, Mapping):
+            raise EvaluationInvalid("calendar event metadata entry is invalid")
+        for field in ("event_id", "event_type", "source", "status"):
+            expected = metadata.get(field, binding.get(f"event_{field}"))
+            if expected is not None and window.get(field, event_id if field == "event_id" else None) != expected:
+                raise EvaluationInvalid(f"calendar event {field} does not match nested window")
+        if window.get("event_id", event_id) != event_id:
+            raise EvaluationInvalid("calendar nested event ID is inconsistent")
+        event_types.append(str(window["event_type"]))
+        if window["event_type"] not in {"OPEX", "FOMC", "EARNINGS"}:
+            raise EvaluationInvalid("calendar event types are incomplete")
+        if window["event_type"] not in [str(value) for value in binding.get("event_types", event_types)]:
+            raise EvaluationInvalid("calendar nested event type is detached")
+        for field in ("window_start", "window_end", "window_policy"):
+            if window[field] != binding[field]:
+                raise EvaluationInvalid(f"calendar event window {field} disagrees with top-level metadata")
     if bool(binding.get("event_overlap")) != (len(event_ids) > 1):
         raise EvaluationInvalid("calendar overlap flag is inconsistent")
-    if binding["event_window_id"] not in {windows[event_id].get("window_id") for event_id in event_ids}:
+    selected = next((window for window in windows.values() if window.get("window_id") == binding["event_window_id"]), None)
+    if not isinstance(selected, Mapping):
         raise EvaluationInvalid("calendar event window identity is detached")
+    for field in ("window_id", "window_start", "window_end", "window_policy"):
+        if selected.get(field) != binding[field]:
+            raise EvaluationInvalid(f"calendar selected window {field} disagrees with top-level metadata")
     if binding.get("observed_expiry") != binding["observed_expiry_date"]:
         raise EvaluationInvalid("calendar observed expiry fields disagree")
     if binding.get("calendar_binding_hash") != canonical_sha256({key: value for key, value in binding.items() if key != "calendar_binding_hash"}):
