@@ -774,17 +774,11 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
     if accumulate:
         # v2_live: classify the v2 regime from the accumulated SIGNED dealer
         # book (the live model runs with accumulation on) rather than the
-        # same-day OI snapshot. Reuse the proven live accumulation over the
-        # rows already fetched here (no re-fetch); fall back to same-day when
-        # it cannot produce a position for this data shape.
-        try:
-            _acc = replication_reference.compute_accumulated_position_for_expiry(
-                ticker, expiry, lookback_days=lookback_days, seed_mode='replication',
-                _hist_rows=(hist_greek_rows, hist_oi_rows, hist_price_rows))
-            if _acc.position_by_strike:
-                accumulated_position = dict(_acc.position_by_strike)
-        except Exception:
-            accumulated_position = None
+        # same-day OI snapshot. Route through dealer_positioning -- the single
+        # live model -- so there is no second, separate accumulation path.
+        accumulated_position = dealer_positioning.compute_accumulated_position(
+            ticker, expiry, lookback_days=lookback_days, seed_mode='replication',
+            hist_rows=(hist_greek_rows, hist_oi_rows, hist_price_rows))
         if not accumulated_position:
             raise ValueError(
                 f"v2_live accumulation produced no position for {ticker} "
