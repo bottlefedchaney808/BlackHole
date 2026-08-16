@@ -76,6 +76,13 @@ Under the hood it runs Cloudflare's free, account-less "quick tunnel"
 (`cloudflared tunnel --url http://127.0.0.1:8787`). The URL changes each time
 you start a new one, and `cloudflared` must be installed and on PATH.
 
+**Stopping cleanly on Windows.** The Stop button and Ctrl+C both clean up the
+tunnel automatically. But a *hard* kill of the dashboard process (Task
+Manager "End task", or `taskkill /F`) bypasses the app's shutdown hook and can
+leave a `cloudflared` process running with the public URL still live. If that
+happens, stop it manually: `taskkill /F /IM cloudflared.exe` (in cmd) or
+`taskkill //F //IM cloudflared.exe` (in git-bash).
+
 **There is no password on the dashboard.** Anyone with the link can see all
 swap data and trigger orchestrator runs (which call real, billed ThetaData
 API requests). Only share the link with people you trust, and stop the
