@@ -1781,6 +1781,17 @@ def _strategy_map(contexts: List[Dict[str, Any]]) -> str:
         except Exception:
             continue
         strategies = full.get('strategies') or []
+        if not strategies:
+            # The chain scanner writes recommended strategies to
+            # chain_strategies.json next to suite_context.json, not inside the
+            # context file -- fall back to that artifact on this machine.
+            artifact = os.path.join(os.path.dirname(c['path']), 'chain_strategies.json')
+            if os.path.isfile(artifact):
+                try:
+                    with open(artifact, encoding='utf-8') as _f:
+                        strategies = (json.load(_f) or {}).get('strategies') or []
+                except (OSError, ValueError):
+                    strategies = []
         out[c['path']] = {
             'ticker': (full.get('focus') or {}).get('ticker'),
             'expiration_date': (full.get('focus') or {}).get('expiration_date'),

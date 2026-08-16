@@ -38,6 +38,7 @@ No signature drift to flag.
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -50,6 +51,32 @@ if str(_VOL_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_VOL_SUITE_ROOT))
 
 from Tools.registry import ToolSpec  # noqa: E402
+
+_CHAIN_STRATEGIES_FILENAME = "chain_strategies.json"
+
+
+def _resolve_strategies(context: Dict[str, Any]) -> list:
+    """Resolve the strategy list to backtest.
+
+    The chain scanner writes its recommended strategies to
+    <output_dir>/chain_strategies.json (format_strategies_artifact's shape),
+    NOT into suite_context.json -- so a context's own `strategies` key is
+    usually empty. Prefer the artifact when present, else fall back to the
+    context's inline `strategies`.
+    """
+    strategies = context.get("strategies") or []
+    if strategies:
+        return strategies
+    out_dir = context.get("_output_dir_override") or context.get("output_dir")
+    if out_dir:
+        artifact = Path(out_dir) / _CHAIN_STRATEGIES_FILENAME
+        if artifact.is_file():
+            try:
+                data = json.loads(artifact.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return []
+            return data.get("strategies") or []
+    return []
 
 
 def _iso_to_compact(date_str: Optional[str]) -> Optional[str]:
@@ -105,7 +132,7 @@ def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
 
     strategy = context.get("strategy")
     if strategy is None:
-        strategies = context.get("strategies") or []
+        strategies = _resolve_strategies(context)
         strategy_index = int(context.get("strategy_index", 0))
         if not strategies:
             raise ValueError(
