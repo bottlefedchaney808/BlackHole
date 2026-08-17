@@ -1,5 +1,42 @@
 # HANDOFF — Dealer-Exposure-Dev improvement loop (continue in a fresh session)
 
+## SUPERSEDED 2026-08-17 — expiry_book_exposure is now the LIVE model
+
+Everything below this notice describes the state as of 2026-08-14, while the
+new model was still an unapproved, descriptive-only study running alongside
+the untouched legacy `dealer_positioning.py` live model, gated on an explicit
+Cem-arbiter APPROVED verdict before promotion.
+
+**That plan changed on 2026-08-17.** Jason made the call to promote
+`expiry_book_exposure.py` (via `expiry_book_production.py`) to the live path
+across `volatility_suite.py`, `options_chain_scanner.py`, and
+`sentiment-scanner/scanner/gex_scanner.py`, and to lock
+`dealer_positioning.py`'s legacy `compute_dealer_positioning`/
+`compute_accumulated_position` to backtest/test callers only
+(`_assert_legacy_backtest_access`). Reason, in his words: the old
+accumulation model was broken, and continuing to sink cost into fixing it
+again and again wasn't worth it when the new model looked more promising.
+This was **not** a claim that the Round-2 statistical validation below
+crossed Cem's acceptance bar — it was a pragmatic/cost call made in spite of
+the last recorded verdict being **NOT ACCEPTED** (see below). Do not read the
+"LOCKED LIVE MODEL" section below as still describing the live path — it
+describes the RETIRED model. `expiry_book_exposure.py`'s own module
+docstring carries the current, load-bearing description of what's live now.
+
+A 2026-08-17 CARL adversarial review of the swap found and the same session
+fixed: a guaranteed crash in `gex_scanner.py` on every successful scan (fixed
+in commit `1020eac`), and a real cross-greek vanna sign-composition bug where
+`dealer_frame_vanna` applied a double negation that made vanna compose as
+`+1*customer-raw` while delta/charm both compose as `-1*customer-raw` (fixed
+in commit `bd30cd8`, confirmed intentional-fix by Jason, not by Cem/the CARL
+loop below). The statistical-validation content below (Round-2 results,
+effective-n, Cem's required upgrade set) was NOT re-litigated by that review
+and remains exactly as accurate/inaccurate as it was on 2026-08-14 — nothing
+about the promotion decision retroactively validates or invalidates those
+numbers.
+
+---
+
 **Copy this as the first message in the new session.** Begin by anchoring to the worktree before any other tool use.
 
 ---
@@ -30,7 +67,7 @@ Do not work in C:/Users/bottl/FinancialDevelopment (master). The study belongs o
 
 Keep improving the **NEW expiry-book exposure model** in a CARL loop until **Cem Karsan says APPROVED/acceptable**. The new model remains descriptive/conditional until approval. The live model is the benchmark and must not be redesigned.
 
-## LOCKED LIVE MODEL (do not relitigate)
+## RETIRED LIVE MODEL (as of 2026-08-14; superseded 2026-08-17 — see notice above)
 
 - `sign_model = vol_surface_replication`
 - `VOL_SURFACE_FITTER = svi`
