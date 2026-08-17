@@ -36,6 +36,11 @@ The `--help` text itself is stale — it says "Run module 1-9 directly" but `MOD
 
 In context mode, a `status: error` with a message like `"Missing required field 'basket' (or fallback 'ticker')"` means the JSON at `--context` is malformed or incomplete for corr_sim, not a code bug — validate against the shared `suite_context.json` schema (`Vol_Suite/suite_context.py`) first.
 
+Recurring bug classes (added 2026-08-17, from a fix-hotspot audit):
+- **GARCH/drift fetch failures must return `None`, never a fake `0.0`.** `var_engine/data_loader.py`'s `estimate_garch_vol`/`estimate_geometric_return` used to catch every exception and return `0.0`, making a ThetaData outage indistinguishable from a legitimately-computed zero. Both now return `None` and log a WARNING (with `exc_info` on the exception path) — don't reintroduce the silent-zero pattern, and any caller doing a bare `garch_vol > 0.0` comparison needs a `None` guard first (fixed `d3eb4e4`).
+- **`corr_sim`'s default horizon is 252 trading days (1yr)**, not a hard-required field. `_build_corr_sim_from_context` used to abort the whole module if `var.horizon_days` was missing from context; it now falls back to 252 (matching MC sim's default), with an explicit top-level `corr_sim_days` taking priority over `var.horizon_days` when both are present. The dashboard trigger form must actually pass `var_horizon_days` through (`_focus_from_body` in `dashboard/app.py`) or the UI has no way to override it (fixed `e9b463b`).
+- **`terminal_price_histogram`-shaped output needs an explicit `histogram_unit` sibling field.** All four VaR context builders emit one of `"price"` (mc_sim/copula/price_dist) or `"portfolio_value"` (corr_sim, whose bins are terminal portfolio values, not one ticker's price) — don't let that distinction live only in a source comment where a downstream JSON consumer keying off the field name can't see it (fixed `68fb1bf`).
+
 ## Quick Reference
 
 | Flag | Interactive | Context mode |
