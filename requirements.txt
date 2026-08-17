@@ -55,9 +55,8 @@ APScheduler==3.11.3
 filelock==3.32.2
 
 # --- Sentiment / social (sentiment-scanner/scanner/youtube.py) ---
-# Loose bound, not an exact pin like the rest of this file -- unverified on
-# this machine (not yet installed in any suite's venv here).
-yt-dlp>=2025
+# Pinned to the version installed in sentiment-scanner's venv on this machine.
+yt-dlp==2026.7.4
 
 # --- MCP server (mcp-stockflow) ---
 mcp>=1.0
