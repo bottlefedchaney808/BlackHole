@@ -190,8 +190,23 @@ def _candle_width(dates: list[float]) -> float:
     return min(0.7, max(0.35, spacing * 0.72))
 
 
-def _configure_date_axis(axis, dates: list[float], *, intraday: bool = False) -> None:
+def _configure_date_axis(
+    axis,
+    dates: list[float],
+    *,
+    intraday: bool = False,
+    label_dates: list[float] | None = None,
+) -> None:
     """Use adaptive date/time ticks for daily and intraday windows."""
+    if label_dates is not None and intraday and dates:
+        tick_count = min(8, max(4, len(dates) // 25))
+        indices = np.linspace(0, len(dates) - 1, tick_count, dtype=int)
+        axis.set_xticks([dates[index] for index in indices])
+        axis.set_xticklabels(
+            [mdates.num2date(label_dates[index]).strftime("%b %d") for index in indices]
+        )
+        axis.tick_params(axis="x", pad=4)
+        return
     span = dates[-1] - dates[0] if len(dates) > 1 else 1.0
     if intraday:
         locator = mdates.AutoDateLocator(minticks=5, maxticks=9)
@@ -207,6 +222,19 @@ def _configure_date_axis(axis, dates: list[float], *, intraday: bool = False) ->
     else:
         axis.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b"))
     axis.tick_params(axis="x", pad=4)
+
+
+def _compress_non_trading_gaps(dates: list[float]) -> list[float]:
+    """Place intraday bars on a regular session-bar axis.
+
+    A calendar-time axis makes a 30-day hourly chart look mostly empty because
+    overnight and weekend gaps dominate the canvas.  For a conventional market
+    chart, preserve the order of observations while assigning each bar one
+    equal horizontal slot.
+    """
+    if not dates:
+        return []
+    return [float(index) for index, _ in enumerate(dates)]
 
 
 def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str]) -> Path:
@@ -228,7 +256,12 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str])
     has_volume = any(observation.volume is not None for observation in observations)
     figure = None
     try:
-        dates = [mdates.date2num(observation.timestamp) for observation in observations]
+        calendar_dates = [mdates.date2num(observation.timestamp) for observation in observations]
+        dates = (
+            _compress_non_trading_gaps(calendar_dates)
+            if payload.interval != "1d"
+            else calendar_dates
+        )
         if has_volume:
             figure, (axis, volume_axis) = plt.subplots(
                 2,
@@ -257,8 +290,7 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str])
 
         candle_width = _candle_width(dates)
         if payload.interval != "1d" and len(dates) > 1:
-            spacing = median(right - left for left, right in pairwise(dates) if right > left)
-            candle_width = max(0.0002, spacing * 0.72)
+            candle_width = 0.72
         for date_number, candle in zip(dates, observations):
             color = _UP if candle.close >= candle.open else _DOWN
             axis.vlines(date_number, candle.low, candle.high, color=color, linewidth=1.15, zorder=3)
@@ -285,7 +317,12 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str])
                 )
             )
 
-        _configure_date_axis(axis, dates, intraday=payload.interval != "1d")
+        _configure_date_axis(
+            axis,
+            dates,
+            intraday=payload.interval != "1d",
+            label_dates=calendar_dates if payload.interval != "1d" else None,
+        )
         axis.margins(x=0.025, y=0.06)
 
         if volume_axis is not None:
@@ -304,7 +341,12 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str])
                     align="center",
                     zorder=3,
                 )
-            _configure_date_axis(volume_axis, dates, intraday=payload.interval != "1d")
+            _configure_date_axis(
+                volume_axis,
+                dates,
+                intraday=payload.interval != "1d",
+                label_dates=calendar_dates if payload.interval != "1d" else None,
+            )
             volume_axis.yaxis.set_major_formatter(FuncFormatter(_format_volume))
             volume_axis.margins(x=0.025, y=0.08)
 
