@@ -13,9 +13,7 @@ Network-free: synthetic steep-skew chains.
 """
 import math
 
-import numpy as np
 import pytest
-
 import svi_rp
 
 
@@ -69,3 +67,38 @@ def test_robust_svi_mark_chain_still_consistent():
     for (_k, _r, sig, refv, diff, mark, oiv) in marks:
         assert (mark == "SHORT") == (diff > 0)
         assert (mark == "LONG") == (diff <= 0)
+
+
+@pytest.mark.unit
+def test_robust_svi_illiquid_far_wing_does_not_flatten():
+    """Real-chain OI is wildly uneven: ATM strikes carry thousands of lots
+    while far-OTM puts carry tens (measured UUUU 2026-08-17: far puts OI 0-31
+    vs ATM 4880). The OI weighting must NOT let that liquidity gap blind the
+    fit to the steep far-put wing -- raw max(oi,1) weights gave a 300x
+    imbalance and collapsed the smile flat (fit 0.84 vs market 1.16 at K=5).
+    The sqrt-compressed weights keep the liquidity tilt without flattening.
+    """
+    chain, _ = _steep_skew_chain()
+    # Skew OI exactly like a real equity chain: heavy near ATM, near-zero in
+    # the far wings.
+    oi = {}
+    for (k, right) in chain:
+        if 90 <= k <= 110:
+            oi[(k, right)] = 4000
+        elif 80 <= k < 90 or 110 < k <= 120:
+            oi[(k, right)] = 300
+        else:
+            oi[(k, right)] = 12
+    ref = svi_rp.calibrate_svi(chain, 100.0, 0.28, oi_by=oi)
+    far_put = ref.sigma_ref(60.0)
+    atm = ref.sigma_atm
+    assert far_put > atm + 0.05, (
+        f"illiquid far wing flattened the smile: far-put ref {far_put:.3f} "
+        f"not above ATM {atm:.3f} -- OI weighting is crushing the wing"
+    )
+    # And the wing must actually track the market's steep put skew, not just
+    # clear the ATM bar by a hair.
+    market_far_put = chain[(60.0, "P")]
+    assert far_put > market_far_put - 0.08, (
+        f"far-put ref {far_put:.3f} too far below market {market_far_put:.3f}"
+    )

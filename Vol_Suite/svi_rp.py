@@ -312,8 +312,14 @@ def calibrate_svi(
     sigs = np.array([chain_iv[(k, right)] for (k, right) in chain_iv])
     # target total variance
     w_target = np.clip(sigs, 1e-6, None) ** 2 * T
-    # OI weights (illiquid wings downweighted)
-    weights = np.array([max(oi_by.get((k, right), 0), 1.0) for (k, right) in chain_iv])
+    # OI weights (illiquid wings downweighted). sqrt() compression, NOT raw
+    # OI: raw max(oi,1) lets a multi-thousand-lot ATM strike outweigh a
+    # 10-lot far-OTM wing by ~300x, which on real chains (measured UUUU
+    # 2026-08-17: far puts OI 0-31 vs ATM 4880) collapses the fitted smile
+    # flat by discarding the steep wing entirely. sqrt keeps the liquidity
+    # tilt without blindfolding the fit to the wings.
+    weights = np.array([math.sqrt(max(oi_by.get((k, right), 0), 1.0))
+                        for (k, right) in chain_iv])
     weights = weights / max(weights.sum(), 1e-9)
 
     # ATM anchor for a good init

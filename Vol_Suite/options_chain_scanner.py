@@ -65,6 +65,7 @@ from vs_utils import timestamped_output_dir
 from dealer_positioning import (
     DARK_BG, GRID_COLOR, TEXT_COLOR, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED,
     ACCENT_GOLD, ACCENT_PURPLE, ACCENT_CYAN, ACCENT_ORANGE,
+    sign_model_render_label,
 )
 from expiry_book_production import fetch_production_result
 from strategy_recommender import StrategyRecommender, format_strategies_artifact
@@ -252,6 +253,10 @@ class ScanResult:
     insight: str
     strategies: List[dict] = field(default_factory=list)  # Recommended strategies from chain scan
     svi_params: Optional[dict] = None  # fitter + SVI observables when SVI smile fit ran
+    dealer_result: Optional[object] = None  # the shared dealer engine result
+    # (set by scan_chain; plot_scanner_charts renders vanna from it -- the
+    #  "two-vanna" fix: the chart must draw the SAME series the dealer
+    #  engine's exposure charts draw, never a second independent recomputation)
 
 
 # ---------- Data pull / merge ----------
@@ -385,6 +390,7 @@ def fit_smile_and_flag_edges(df: pd.DataFrame, forward: float) -> Tuple[pd.DataF
 # ---------- SVI smile fit (reuses the reusable svi_rp module) ----------
 def fit_svi_smile(df: pd.DataFrame, forward: float, T_years: float,
                   oi_by=None, use_svi: bool = True,
+                  spot: Optional[float] = None,
                   ) -> Tuple[pd.DataFrame, float, float, Optional[dict]]:
     """Fit the reference smile (SVI via the reusable svi_rp module) and flag
     cheap/rich edges. Keeps the SAME contract as fit_smile_and_flag_edges
@@ -396,6 +402,12 @@ def fit_svi_smile(df: pd.DataFrame, forward: float, T_years: float,
     Uses the ROBUST full-SVI fit (svi_rp.calibrate_svi, the 2026-08-13 flat-smile
     fix), NOT the exact 3-observable SSVI construction (calibrate_ssvi) which
     saturates flat on a steep equity put skew and would misprice the wings.
+
+    `spot` (current price, NOT the forward) is what calibrate_svi anchors the
+    fit to -- it computes F0 = spot * exp((r-q)*T) internally, so passing the
+    already-forwarded price double-applies the forward and shifts the
+    log-moneyness anchor. Defaults to `forward` when the caller has no spot
+    (back-compat), but scan_chain passes the real spot.
     """
     df = df.copy()
     df['moneyness'] = np.log(df['strike'] / forward)
@@ -417,7 +429,8 @@ def fit_svi_smile(df: pd.DataFrame, forward: float, T_years: float,
                 rt = str(r['right']).strip().upper()[:1]
                 chain_iv[(k, rt)] = float(r['iv'])
                 oi_map[(k, rt)] = int(r.get('oi', 0) or 0)
-            ref = svi_rp.calibrate_svi(chain_iv, float(forward), float(T_years),
+            anchor = spot if spot is not None else forward
+            ref = svi_rp.calibrate_svi(chain_iv, float(anchor), float(T_years),
                                        oi_by=oi_map)
             for idx in df.index:
                 k = float(df.at[idx, 'strike'])
@@ -555,7 +568,7 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
     forward = compute_forward_price(spot, r_use, dividend_yield, actual_T)
 
     df = build_chain_dataframe(td, ticker, expiration)
-    df, smile_a, smile_b, svi_params = fit_svi_smile(df, forward, actual_T)
+    df, smile_a, smile_b, svi_params = fit_svi_smile(df, forward, actual_T, spot=spot)
 
     if dealer_result is None:
         dealer_result = fetch_production_result(td, ticker, expiration)
@@ -621,6 +634,7 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
         top_vanna_strikes=vanna_info['top_vanna_strikes'],
         edge_candidates=edge_candidates, regime=regime, verdict=verdict, insight=insight,
         svi_params=svi_params,
+        dealer_result=dealer_result,
     )
 
 
@@ -769,25 +783,48 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
     ax1.legend(facecolor='#161b22', edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, fontsize=8)
 
     # ---- Panel 2: net vanna by strike ----
+    # Rendered from the SHARED dealer engine result -- the same series the
+    # dealer engine's exposure charts draw -- NOT recomputed from this
+    # expiry's chain. This is the "two-vanna" fix: the old code re-derived
+    # sign * vanna * oi * CONTRACT_MULTIPLIER * VANNA_PP_SCALE from the
+    # scanner's own single-expiry DataFrame, which silently diverged from the
+    # dealer engine's book. Handles BOTH engine result shapes: the production
+    # expiry-book engine (ProductionDealerExposure, `.snapshot` NetExposure)
+    # and the legacy DealerPositioningResult (`strike_grid` /
+    # `vanna_shares_by_strike`), mirroring compute_vanna_positioning's dual
+    # read so the chart can never disagree with the numbers it annotates.
     ax2.set_facecolor('#161b22')
-    by_strike = df.copy()
-    by_strike['sign'] = np.where(by_strike['right'] == 'C', 1.0, -1.0)
-    by_strike['vanna_shares'] = np.where(
-        by_strike['vanna'].notna(),
-        by_strike['sign'] * by_strike['vanna'].fillna(0.0) * by_strike['oi'] * CONTRACT_MULTIPLIER * VANNA_PP_SCALE,
-        0.0,
-    )
-    grouped = by_strike.groupby('strike')['vanna_shares'].sum().sort_index()
-    if len(grouped):
-        colors = [ACCENT_BLUE if v >= 0 else ACCENT_RED for v in grouped.values]
-        diffs = np.diff(grouped.index.values)
+    dr = result.dealer_result
+    if dr is None:
+        raise ValueError("plot_scanner_charts requires the shared dealer engine "
+                         "result (scan_chain attaches it via fetch_production_result / "
+                         "compute_dealer_positioning) -- refusing to recompute vanna from "
+                         "the single-expiry chain")
+    if hasattr(dr, "snapshot"):
+        # Production expiry-book engine: per-strike vanna from the NetExposure.
+        by_strike: Dict[float, float] = {}
+        for row in dr.snapshot.rows:
+            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + row.exposure_of("vanna")
+        strikes = np.asarray(sorted(by_strike), dtype=float)
+        values = np.asarray([by_strike[k] for k in strikes], dtype=float)
+        if hasattr(dr, "sign_model"):
+            engine_label = sign_model_render_label(dr)
+        else:
+            engine_label = "expiry-book engine"
+    else:
+        strikes = np.asarray(dr.strike_grid, dtype=float)
+        values = np.asarray(dr.vanna_shares_by_strike, dtype=float)
+        engine_label = sign_model_render_label(dr)
+    if len(strikes):
+        colors = [ACCENT_BLUE if v >= 0 else ACCENT_RED for v in values]
+        diffs = np.diff(strikes)
         bar_width = (float(np.median(diffs)) if len(diffs) else 1.0) * 0.7
-        ax2.bar(grouped.index, grouped.values, width=bar_width, color=colors, alpha=0.9)
+        ax2.bar(strikes, values, width=bar_width, color=colors, alpha=0.9)
     ax2.axhline(0, color='#8b949e', linewidth=0.8, alpha=0.6)
     ax2.axvline(result.spot, color=ACCENT_CYAN, linestyle='--', linewidth=1.5, alpha=0.8)
     if result.vanna_flip_strike is not None:
         ax2.axvline(result.vanna_flip_strike, color=ACCENT_ORANGE, linestyle=':', linewidth=1.5, alpha=0.8)
-    ax2.set_title('Net Dealer Vanna by Strike (calls +, puts -)', color=TEXT_COLOR, fontsize=13, fontweight='bold')
+    ax2.set_title(f'Net Dealer Vanna by Strike ({engine_label})', color=TEXT_COLOR, fontsize=13, fontweight='bold')
     ax2.set_xlabel('Strike', color=TEXT_COLOR)
     ax2.set_ylabel('Vanna (shares / 1pp IV)', color=TEXT_COLOR)
     ax2.tick_params(colors=TEXT_COLOR)

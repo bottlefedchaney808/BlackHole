@@ -17,12 +17,11 @@ ThetaDataController (same pattern as test_dealer_positioning_sign_model.py),
 then feeds it into the scanner's vanna computation.
 """
 import math
-
-import pytest
+import os
 
 import dealer_positioning as dp
 import options_chain_scanner as ocs
-
+import pytest
 
 SPOT = 100.0
 STRIKES = list(range(70, 131))
@@ -147,3 +146,30 @@ def test_scan_chain_without_dealer_result_computes_one_itself_not_twice():
     reference = fetch_production_result(td, "MOCK", expiration)
     expected_net = float(reference.snapshot.net("vanna"))
     assert scan_result.net_vanna_shares == pytest.approx(expected_net, rel=1e-9)
+
+
+@pytest.mark.unit
+def test_plot_scanner_charts_renders_dealer_engine_series(tmp_path):
+    """plot_scanner_charts must render the DEALER ENGINE's vanna series
+    (result.dealer_result), not recompute a second series from the scanner's
+    own single-expiry chain -- the two-vanna fix that makes the scanner chart
+    agree with the dealer engine's exposure charts.
+    """
+    from datetime import datetime, timedelta
+    td = _FakeTD()
+    expiration = (datetime.now() + timedelta(days=60)).strftime("%Y%m%d")
+
+    scan_result = ocs.scan_chain("MOCK", expiration, 60 / 365, td)
+    assert scan_result.dealer_result is not None
+
+    # A ScanResult without the shared dealer result must be REFUSED (raise),
+    # not silently recomputed from the single-expiry chain.
+    from dataclasses import replace
+    bad_result = replace(scan_result, dealer_result=None)
+    with pytest.raises(ValueError):
+        ocs.plot_scanner_charts(bad_result, output_dir=str(tmp_path))
+
+    # With the shared result, the chart renders (network-free via fakes).
+    path = ocs.plot_scanner_charts(scan_result, output_dir=str(tmp_path))
+    assert path.endswith(".png")
+    assert os.path.exists(path)

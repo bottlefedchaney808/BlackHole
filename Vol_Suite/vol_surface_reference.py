@@ -331,7 +331,7 @@ def fit_sabr_reference(chain_iv: Dict[Tuple[float, str], float], forward: float,
 
 
 def fit_svi_reference(chain_iv: Dict[Tuple[float, str], float], forward: float,
-                      T: float) -> Optional[dict]:
+                      T: float, spot: Optional[float] = None) -> Optional[dict]:
     """SSVI/Gatheral-Jacquier reference fit via the reusable svi_rp module.
 
     Uses the ROBUST full-SVI least-squares fit (`svi_rp.calibrate_svi`, the
@@ -339,6 +339,11 @@ def fit_svi_reference(chain_iv: Dict[Tuple[float, str], float], forward: float,
     construction -- the exact construction saturates flat on a steep equity put
     skew (measured on real SPY: reference 0.26 vs market 0.65 at K=300), which
     would badly distort the dealer sign resolver's rich/cheap deviation.
+
+    `spot` (current price, NOT the forward) is the anchor calibrate_svi wants --
+    it computes F0 = spot * exp((r-q)*T) internally, so passing the forward
+    double-applies the forward and shifts the log-moneyness anchor. Defaults to
+    `forward` when the caller has no spot (back-compat).
 
     Returns a params dict the caller uses to price per-strike reference IV via
     `SviRpReference.sigma_ref` (carried in `_ref`), or None when the fit can't
@@ -359,7 +364,7 @@ def fit_svi_reference(chain_iv: Dict[Tuple[float, str], float], forward: float,
     if len(otm) < MIN_SABR_POINTS or T <= 0:
         return None
     try:
-        ref = svi_rp.calibrate_svi(otm, float(forward), float(T))
+        ref = svi_rp.calibrate_svi(otm, float(spot if spot is not None else forward), float(T))
     except Exception:
         return None
     return {
@@ -433,7 +438,7 @@ def compute_vol_surface_reference(ticker: str, chain_iv: Dict[Tuple[float, str],
         fitter = _fitter()
         params = None
         if fitter == 'svi':
-            params = fit_svi_reference(chain_iv, forward, T)
+            params = fit_svi_reference(chain_iv, forward, T, spot=spot)
         if params is None and fitter in ('svi', 'sabr'):
             params = fit_sabr_reference(chain_iv, forward, T)
         if params is None and fitter == 'sabr_market':
