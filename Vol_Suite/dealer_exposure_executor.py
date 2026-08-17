@@ -269,6 +269,17 @@ class RestrictedExecutor:
             self._check_executor_identity()
             admitted = self._check_units(units)
         except BaseException as exc:
+            # A pre-dispatch check can fail before any unit is processed, so
+            # the per-unit loop below never gets a chance to populate
+            # audit["finalized_usage"] from the runtime context. Without this,
+            # callers (e.g. run_expansion_plan) that fall back to
+            # audit["finalized_usage"] only when the key is *absent* would
+            # silently receive an empty {} snapshot instead of the real
+            # counters, dropping fields like payload_bytes from the audit.
+            try:
+                audit["finalized_usage"] = dict(context.finalized_usage)
+            except Exception:
+                pass
             return {"status": "FAILED_EXECUTION", "classification": "HARD_GAP", "network_fetch_allowed": False, "reason": str(exc)[:200], "audit": audit}
         for unit in admitted:
             request = self._request(unit)
