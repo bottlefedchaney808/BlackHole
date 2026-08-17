@@ -25,6 +25,11 @@ YouTube captions being silently thin or absent is not a bug — verified in `sca
 
 Interactive prompts (`_prompt_yes_no` for Sector Rotation launch and PDF report generation) auto-skip when stdin isn't a TTY, so scheduled/cron runs never hang — but `--skip-sector-prompt`/`--skip-report-prompt` still make headless behavior explicit and are cheap to always pass in scripts.
 
+Recurring bug classes (added 2026-08-17, from a fix-hotspot audit — the YouTube integration was ~40% of one worktree's fix commits):
+- **yt-dlp's `js_runtimes` config must be a dict `{"node": {"path": _NODE_PATH}}`, not a list.** `scanner/youtube.py`'s `_ytdl_search`/`_fetch_transcript` both build `ydl_config["js_runtimes"]`; an earlier version used a list form (`["node"]`, then `[f"node:{_NODE_PATH}"]`) that yt-dlp didn't accept — the dict form is current and correct (fixed `f6ee104`, `b43682a`).
+- **Always pass the full resolved Node.js path**, not a bare `"node"` relying on PATH resolution — `_NODE_PATH = shutil.which("node")`'s result, set once at module import, feeds directly into the `js_runtimes` dict above.
+- **`main.py` imports `scanner.youtube.scan_ticker` under a private alias (`_youtube_scan`), not a bare re-export named `run_youtube_scanner`** — `main.py` also defines its own `run_youtube_scanner(ticker, engine)` function, and re-exporting the module's `scan_ticker` under that same name shadowed it. If touching the YouTube call site in `main.py`, use `_youtube_scan(ticker)`, not a name that collides with the local function (fixed `726d926`).
+
 `requirements.txt` has no dev/test split (unlike Vol_Suite) — one file, no `requirements-dev.txt`. `tests/` exists (pytest-based, `test_main.py`, `test_correlation_engine.py`, etc.) with no `pytest.ini`/`pyproject.toml`, so run with plain `pytest tests/` from `sentiment-scanner/` using its own `.venv` interpreter — not the shared root `.venv`, which won't have this project's deps (yt-dlp, curl_cffi, bgutil-ytdlp-pot-provider).
 
 ## Quick Reference
