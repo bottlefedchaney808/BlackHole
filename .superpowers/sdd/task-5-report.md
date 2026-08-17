@@ -1,170 +1,103 @@
-# Task 5 — Universe-expansion execution package
+# Task 5 Report: `output_runs.py` — sentiment date-bucket discovery
 
-## Status
+## Status: DONE
 
-Implemented and verified a fail-closed, network-free execution package. No ThetaData, market-data, or other network acquisition was run. `dealer_positioning.py`, live configuration, `master`, secrets, and unrelated untracked artifacts were not modified.
+## What was implemented
 
-## Changes
+Appended `discover_date_bucket_runs(root_glob: str, suite: str, run_id_prefix: str) -> List[RunInfo]`
+to `dashboard/output_runs.py`, verbatim from the task brief. It treats each directory matching
+`root_glob` as one run bucket — built for sentiment-scanner's
+`data/exports/highlighted_ticker_packs/<YYYYMMDD>/` layout. Deliberately collapses multiple scan
+cycles from one day into a single bucket (sentiment-scanner loops continuously per
+`SCAN_INTERVAL_MINUTES`).
 
-- `Vol_Suite/dealer_exposure_expansion.py`
-  - Composes the Task 3 `run_live_vs_expiry_book_common_input` harness through `compare_expansion_common_input`; canonical payload consumption, engine identities, SVI/deadband/accumulation settings, exact strike/right coverage, exclusions, pairwise levels/units/sign provenance, metrics, and 100% coverage remain owned by the common harness.
-  - Adds an execution admission gate requiring balanced event/control schedule, validated PASS probes for every primary unit, two PRE_WINDOW observations per unit, complete canonical Task 1 evidence, verified registry integrity, no-imputation evidence, and exact primary-schedule coverage.
-  - Approval is necessary but insufficient. Blocked attempts return an auditable `execution_audit`; executors receive only admitted evidence units and failures are recorded.
-  - Preserves dry-run/probe-only behavior, no imputation, strict `THETADATA_HIST_CONCURRENCY=1`, and no implicit network adapter.
-- `tests/test_dealer_exposure_expansion.py`
-  - Adds regressions for missing probes/evidence, missing PRE_WINDOW observations, incomplete coverage, balance failure, and a valid gated executor call list.
-- `.superpowers/sdd/task-5-report.md`
-  - Repaired the malformed report tail/newline and appended this review-fix report.
+Key behavior:
+- Walks each candidate directory's direct files (non-recursive), classifies each via `classify_file`,
+  builds `RunFile` records.
+- Skips directories with zero files.
+- Parses the directory name as `%Y%m%d` for the label (`YYYY-MM-DD`) and, critically, for the sort
+  timestamp — using `parsed_date.timestamp()` rather than filesystem mtime, per the bug fix already
+  baked into this brief (mirrors the Task 4 clustering fix: near-identical folders created close
+  together can share an mtime at this filesystem's granularity, but never share a parsed date).
+- Falls back to raw dirname as label and max file mtime as timestamp only when the dirname isn't a
+  parseable `%Y%m%d` token.
+- `run_id` is `f"{run_id_prefix}:{dirname}"`, e.g. `pack:20260728`.
 
-## Verification
+Appended the four tests from the brief to `dashboard/tests/test_output_runs.py`:
+- `test_discover_date_bucket_runs_one_run_per_date_folder`
+- `test_discover_date_bucket_runs_ignores_manifest_file`
+- `test_discover_date_bucket_runs_skips_empty_date_folders`
+- `test_discover_date_bucket_runs_sorts_newest_first`
 
-Commands run with no plugin autoload:
+No existing code was touched — both edits are pure appends.
 
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py --disable-warnings
-19 passed
+## RED evidence
 
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-71 passed in 0.11s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-
-git diff --check
+```
+ImportError while importing test module '...\dashboard\tests\test_output_runs.py'.
+E   ImportError: cannot import name 'discover_date_bucket_runs' from 'dashboard.output_runs'
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
 ```
 
-Real acquisition was not authorized and was not attempted.
+## GREEN evidence
 
-## Commit scope
-
-Only the Task 5 implementation, tests, and report are to be committed. Existing modified `.superpowers/sdd/progress.md`, `.hermes/`, and unrelated untracked acquisition/scratch artifacts remain preserved and unstaged.
-
-## Limitations
-
-The package still requires caller-supplied canonical acquisition evidence and an injected executor. The manifest alone can never authorize network execution or produce headline comparison eligibility.
-
-## Review-blocker closure
-
-- Enforced an exact `deadband=0.01` input contract; live invocation now receives explicit `sign_model=vol_surface_replication`, `accumulate=True`, `route=SVI`, `deadband=0.01`, and `dealer_vanna_flow=1`.
-- Live results must attest every requested configuration; missing or mismatched attestation is structured invalid rather than a hardcoded report label.
-- Both engine results must attest spot, selected expiry, DTE/T, exact record count, and exact canonical strike/right coverage. Every pair carries OI, IV, spot, T/DTE, per-strike source/config hashes, and resolved sign provenance.
-- Structured executor failure returns are classified as auditable `HARD_GAP` / `FAILED_EXECUTION` and cannot produce a successful execution status.
-- Added regressions for wrong deadband, missing configuration attestation, omitted result identity/rows, missing per-strike provenance, and structured executor failure.
-
-## Review-blocker closure (2026-08-15)
-
-- `_require_result_identity` now validates every live/new row, not only the container: exact expiry, spot, DTE/T, strike/right, IV, OI, canonical source hash, and non-empty config identity are required; optional canonical `config_hash` attributes are matched exactly.
-- Pair metadata is populated from the verified live/new rows for spot, T, DTE, IV, OI, and provenance; it no longer copies canonical values into the output.
-- Live config output is the actual validated attestation, including `sign_model`, `accumulate`, route, deadband, vanna-flow, and explicit `attested`; omitted or mutated attestations block comparison.
-- Executor admission is now fail-closed: only an explicit `SUCCESS`/`SUCCEEDED`/`PASS`/`OK` mapping with `validated=True` and `success=True` or `ok=True` proceeds. `HARD_GAP`, `FAILED_EXECUTION`, `BLOCKED`, `ERROR`, `FAIL`, false success/ok, missing status, and non-mapping returns are auditable `HARD_GAP`/`FAILED_EXECUTION` with `network_fetch_allowed=False`.
-- Added regressions for per-strike identity/IV/OI/source mutations and omissions, config mutations/omitted explicit validation, and every structured executor failure class.
-
-## Verification (review-blocker closure)
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-104 passed in 0.15s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-# All checks passed
-
-git diff --check
 ```
-
-## Review-fix closure (2026-08-15)
-
-- Executor success admission now fails closed on either explicit `success=False` or `ok=False`, regardless of a contradictory success status or validation flag. It also rejects explicit error/failure markers; admission requires an allowed success status, `validated=True`, at least one explicit true success flag, and no failure marker.
-- `_execution_gate` now inspects the original evidence-unit list for duplicate `candidate_key` identities before constructing the lookup mapping. Duplicates produce structured blocking reasons and return no admitted units, so evidence cannot be silently overwritten or deduplicated.
-- Added regressions for contradictory executor results (`SUCCESS`/`OK` with false flags and error markers), duplicate evidence units, and the valid unique-evidence control.
-- No acquisition, live/master, or secrets changes were made.
-
-## Verification (review-fix closure)
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-110 passed in 0.16s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-# exit 0
-
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-All checks passed!
-
-git diff --check
-# exit 0 (Git emitted only LF/CRLF conversion warnings)
+collected 43 items
+... (all 43 tests, including the 4 new ones)
+============================= 43 passed in 0.09s ==============================
 ```
+All Task 1–4 tests plus the 4 new Task 5 tests pass; no regressions.
 
-<!-- report ends with a newline -->
+## 3x repeat-run of the sort-order test (flakiness check)
 
-## Review-fix closure (2026-08-15, typed admission and malformed identities)
-
-- Executor admission now requires `status` in the allowed success set, `validated is True`, required `success is True`, and optional `ok is True`; every present boolean gate field must have exact `bool` type. String, integer, `None`, omitted, and contradictory values fail closed, while failure markers remain blocking.
-- Evidence candidate identities are validated as non-empty canonical strings and counted in one pass. Duplicate, unhashable, or malformed identities return structured blocking evidence before mapping/coverage operations; no `TypeError` or silent overwrite is possible.
-- Added regressions for string false, integer 0/1, `None`, omitted fields, contradictory/invalid `ok`, unhashable identity, and retained valid-control coverage.
-
-## Verification (typed admission and malformed identity closure)
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-120 passed in 0.16s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-# exit 0
-
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py tests/test_dealer_exposure_expansion.py
-All checks passed!
-
-git diff --check
-# exit 0 (Git emitted only LF/CRLF conversion warnings)
 ```
-
-No network acquisition, live/master, secrets, or unrelated files were changed.
-
-## Review-fix closure (2026-08-15, structural PRE_WINDOW and canonical config identities)
-
-- Replaced the length-only PRE_WINDOW admission check with structural validation: every observation must be a mapping with explicit `role=PRE_WINDOW`, timezone-qualified timestamp, finite IV, non-empty source identity, valid SHA-256 source hash, and timestamp strictly before the breach/cutoff in the declared timezone and calendar day. Observations must be distinct and ordered; when delta fields are supplied, the registered aggregation is recomputed and must bind the ordered values.
-- Added separate canonical live/new configuration identities to `CanonicalInput`, derived from explicit locked configuration fields. Per-strike `config_hash` must match the exact engine-specific canonical hash; arbitrary non-empty labels now block.
-- Added regressions for `None`, scalar, malformed, post-cutoff, and arbitrary config evidence without monkeypatch bypass of the structural gate.
-
-## Verification (structural evidence-contract closure)
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-126 passed in 0.14s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
-# exit 0
-
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
-All checks passed!
-
-git diff --check
-# exit 0 (Git emitted only LF/CRLF conversion warnings)
+=== Run 1 ===
+dashboard/tests/test_output_runs.py::test_discover_date_bucket_runs_sorts_newest_first PASSED [100%]
+============================== 1 passed in 0.03s ==============================
+=== Run 2 ===
+dashboard/tests/test_output_runs.py::test_discover_date_bucket_runs_sorts_newest_first PASSED [100%]
+============================== 1 passed in 0.04s ==============================
+=== Run 3 ===
+dashboard/tests/test_output_runs.py::test_discover_date_bucket_runs_sorts_newest_first PASSED [100%]
+============================== 1 passed in 0.05s ==============================
 ```
+No flakiness observed. This is expected given the implementation sorts by `parsed_date.timestamp()`
+(deterministic from the folder name) rather than mtime, so two folders created back-to-back in the
+same test run can never tie.
 
-No acquisition, network, live/master, secrets, or unrelated files were changed.
+## Files changed
 
-## Review-fix closure (2026-08-15, timezone validation)
+- `C:\Users\bottl\FinancialDevelopment\dashboard\output_runs.py` (+63 lines, pure append)
+- `C:\Users\bottl\FinancialDevelopment\dashboard\tests\test_output_runs.py` (+53 lines, pure append)
 
-- `_validate_pre_window_observations` now catches `ZoneInfoNotFoundError`, `KeyError`, `TypeError`, `ValueError`, `OverflowError`, and `OSError` from malformed declared timezone and PRE_WINDOW values, returning an auditable reason instead of leaking an exception.
-- `_execution_gate` classifies every malformed PRE_WINDOW observation as structured `classification=HARD_GAP` / `status=COMPARISON_INVALID`, preserving fail-closed admission and preventing executor invocation.
-- Added real-path regressions for `No/Such timezone`, non-string timezone values, and a valid `America/New_York` control; existing malformed PRE_WINDOW regressions remain covered.
-- No acquisition, live/master, secrets, or unrelated files were changed.
+## Self-review findings
 
-## Verification (timezone validation closure)
+- Diff matches the brief's code exactly (verified via `git diff` before commit) — no deviations.
+- No existing code in either file was modified or reordered.
+- `ruff check` on both files surfaces ~32 findings (`UP006`/`UP035` `List`→`list`, `UP045`
+  `Optional`→`X | None`, `DTZ001`/`DTZ007` naive-datetime warnings, one import-sort issue). All of
+  these are **pre-existing style debt spanning the whole file**, present in code from Tasks 1–4
+  (e.g. `cluster_by_timestamp`'s `List[str]` signature, `extract_timestamp`'s naive
+  `datetime.strptime`) — my added code merely extends the same established (if not ruff-clean)
+  conventions already used throughout `output_runs.py`. Fixing them would mean deviating from "use
+  the brief's code exactly as written" and touching lines outside Task 5's scope, so left untouched.
+- Ran the full `dashboard/tests/` directory as an extra sanity check beyond what the task required;
+  it did not finish within 120s and was stopped. This is unrelated to Task 5 — `test_output_runs.py`
+  alone (the file this task modifies, and the command explicitly specified in the task instructions)
+  runs in under 0.1s and is fully green. Did not investigate the other test file further since it's
+  out of scope for this task.
+- `git status` showed several unrelated pre-existing modifications (`.superpowers/sdd/progress.md`,
+  `Options_Suite/tests/test_crr_binomial.py`, `Options_Suite/tests/test_pricing_models.py`,
+  `docs/superpowers/plans/2026-08-09-dashboard-output-tab-redesign.md`, a deleted `swaps.db.lock`)
+  plus some untracked archive files at repo root. None of these were touched or staged — only
+  `dashboard/output_runs.py` and `dashboard/tests/test_output_runs.py` were added and committed, per
+  the brief's explicit `git add` list.
 
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q -p no:cacheprovider tests/test_dealer_exposure_expansion.py tests/test_dealer_exposure_acquisition.py tests/test_dealer_exposure_universe.py --disable-warnings
-130 passed in 0.16s
+## Concerns
 
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
-# exit 0
+None. Task 5 is complete, tests are green and non-flaky, and the commit is scoped exactly to the two
+files the brief specifies.
 
-C:/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m ruff check Vol_Suite/dealer_exposure_expansion.py Vol_Suite/run_live_vs_expiry_book_common_input.py tests/test_dealer_exposure_expansion.py
-All checks passed!
+## Commit
 
-git diff --check
-# exit 0 (Git emitted only LF/CRLF conversion warnings)
-```
+`5110b35` — "feat: add date-bucket run discovery for sentiment-scanner exports"

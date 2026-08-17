@@ -1,0 +1,5 @@
+symbol,rank,cns,war_score,thesis_ratio,pump_ratio,volume,bullish_pct,bearish_pct,confidence
+NUAI,1,60,0.467,0.067,0.0,60,56.7,23.3,0.6
+TLT,2,60,0.4,0.0,0.0,60,20.0,20.0,0.6
+MSTR,3,60,0.4,0.033,0.0,60,20.0,36.7,0.6
+JD,4,55,0.133,0.2,0.0,60,26.7,6.7,0.575

@@ -1,230 +1,115 @@
-# Task 1 — Deterministic universe manifest / eligibility layer
+# Task 1 Report: `output_runs.py` -- data model, file classification, timestamp clustering
 
-## Status
+## Status: DONE
 
-**PASS — implemented and committed on `Dealer-Exposure-Dev`.**
+## What was implemented
 
-Task 1 freezes a network-free contract layer. It does not acquire data, call market-data endpoints, modify `dealer_positioning.py`, modify live configuration, or modify `master`.
+Created two files exactly as specified in the task brief, verbatim, via TDD:
 
-## Files created
+- `dashboard/output_runs.py` -- `RunFile`/`RunInfo` frozen dataclasses, `classify_file`,
+  `extract_timestamp`, `cluster_by_timestamp`, plus module-level `ROOT`, `ORCH_OUTPUT`,
+  `SUITE_ROOTS` constants for later tasks to build on.
+- `dashboard/tests/test_output_runs.py` -- 18 test cases (parametrized `classify_file` cases
+  count individually) covering extension-based classification, timestamp extraction (valid,
+  absent, malformed), and clustering (singleton, in-window pair, out-of-window pair, transitive
+  chain, undated-file singleton), plus dataclass field sanity checks.
 
-- `Vol_Suite/dealer_exposure_universe.py`
-  - Canonical `Candidate`, `ManifestUnit`, `ProbeResult`, and `UniverseManifest` contracts.
-  - Candidate normalization with ticker canonicalization, required provenance, point-in-time sector, asset type, and SPY/QQQ reference-family exclusion.
-  - Recursive JSON/file-name held-pair extraction for ticker×calendar-day exclusion. It supports acquisition manifests, record corpora, and `seed_data_TICKER_YYYYMMDD_short.json` seed files.
-  - Locked DTE strata `(1–3, 4–7, 8–10)`, event-habitat vocabulary, PASS/INELIGIBLE/HARD_GAP probe schema, complete probe checks, and explicit rejection of zero-DTE/imputed-zero representations.
-  - Deterministic manifest construction: stable ordering, duplicate exclusion keys, held-pair exclusion, DTE/event validation, sector/ticker caps, unique-day reporting, quota schema, and serializable output.
-- `tests/test_dealer_exposure_universe.py`
-  - 19 network-free contract tests covering normalization, reference-family handling, held-pair extraction, probe schema, zero-DTE and invalid-event exclusions, caps, stable ordering, duplicate exclusions, serialization, input immutability, and quota schema.
-- `.superpowers/sdd/task-1-report.md`
-  - This report.
+No deviation from the brief's code -- transcribed exactly as given.
 
-## Commands and output
+## TDD evidence
 
-### Focused tests
+### RED (before implementation existed)
 
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
-...................                                                      [100%]
-19 passed in 0.05s
+```
+$ .venv/Scripts/python.exe -m pytest dashboard/tests/test_output_runs.py -v
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\bottl\FinancialDevelopment
+configfile: pyproject.toml
+collecting ... collected 0 items / 1 error
+
+=================================== ERRORS ====================================
+____________ ERROR collecting dashboard/tests/test_output_runs.py _____________
+ImportError while importing test module 'C:\Users\bottl\FinancialDevelopment\dashboard\tests\test_output_runs.py'.
+Traceback:
+..\AppData\Local\Programs\Python\Python312\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+dashboard\tests\test_output_runs.py:20: in <module>
+    from dashboard.output_runs import (
+E   ModuleNotFoundError: No module named 'dashboard.output_runs'
+=========================== short test summary info ===========================
+ERROR dashboard/tests/test_output_runs.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.15s ===============================
 ```
 
-The normal `pytest` launcher in the Hermes runtime was blocked by an unrelated environment failure (`pydantic_core._pydantic_core` missing while loading the `langsmith` plugin). The focused command above uses the repository's installed Python 3.12 and disables third-party plugin autoloading; no network or credentials are needed.
+Matches the brief's expected failure exactly.
 
-### Syntax verification
+### GREEN (after implementation)
 
-```text
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
-exit 0
+```
+$ .venv/Scripts/python.exe -m pytest dashboard/tests/test_output_runs.py -v
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\bottl\FinancialDevelopment
+configfile: pyproject.toml
+collecting ... collected 18 items
+
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[options_result.json-json] PASSED [  5%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[comparison_20260728_093751.csv-csv] PASSED [ 11%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[SPY_gamma_records_20260716_142448.csv-csv] PASSED [ 16%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[correlation_heatmap_20260716_142423.png-png] PASSED [ 22%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[comparison_20260728_093751.pdf-pdf] PASSED [ 27%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[SOMETHING.PDF-pdf] PASSED [ 33%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[run_notes.txt-other] PASSED [ 38%]
+dashboard/tests/test_output_runs.py::test_classify_file_by_extension[no_extension_at_all-other] PASSED [ 44%]
+dashboard/tests/test_output_runs.py::test_extract_timestamp_parses_embedded_token PASSED [ 50%]
+dashboard/tests/test_output_runs.py::test_extract_timestamp_returns_none_when_absent PASSED [ 55%]
+dashboard/tests/test_output_runs.py::test_extract_timestamp_returns_none_on_malformed_token PASSED [ 61%]
+dashboard/tests/test_output_runs.py::test_single_file_is_its_own_cluster PASSED [ 66%]
+dashboard/tests/test_output_runs.py::test_two_files_within_window_cluster_together PASSED [ 72%]
+dashboard/tests/test_output_runs.py::test_two_files_outside_window_are_separate_clusters PASSED [ 77%]
+dashboard/tests/test_output_runs.py::test_transitive_chain_clusters_despite_endpoints_exceeding_window PASSED [ 83%]
+dashboard/tests/test_output_runs.py::test_undated_files_become_singleton_clusters PASSED [ 88%]
+dashboard/tests/test_output_runs.py::test_run_file_holds_fields PASSED   [ 94%]
+dashboard/tests/test_output_runs.py::test_run_info_holds_fields PASSED  [100%]
+
+============================= 18 passed in 0.04s ==============================
 ```
 
-### Existing-corpus smoke scan
+All 18 pass, no warnings, no skips.
 
-```text
-python -c "... held_pairs_from_paths([_causal_acquisition_20260815, _scratch_tier2, _scratch_tier2b]) ..."
-held_pairs 234 spy_days 77 qqq_days 77 seed_tickers ['AAPL', 'AMD', 'AMZN', 'GOOGL', 'JPM', 'META', 'MSFT', 'NFLX', 'NVDA', 'TSLA']
-```
+## Files changed
 
-This read-only smoke scan confirms the extractor sees both SPY/QQQ corpus days and the ten seed tickers. It did not write to any corpus.
+- `C:\Users\bottl\FinancialDevelopment\dashboard\output_runs.py` (new)
+- `C:\Users\bottl\FinancialDevelopment\dashboard\tests\test_output_runs.py` (new)
 
-## Requirements mapping
+Only these two files were staged/committed. The working tree also had unrelated pre-existing
+modifications (`.superpowers/sdd/progress.md`, two `Options_Suite/tests/*` files, a deleted
+`swaps.db.lock`) and some untracked archive files at repo root -- none of these were touched,
+staged, or committed; they are out of scope for this task.
 
-- Point-in-time candidate provenance: `selection_date` and `source_list` are required by normalization/building; sector is required; no current-winner selection or network lookup exists.
-- SPY/QQQ: rejected as expansion candidates and retained only as held reference families when scanning corpus artifacts.
-- Held ticker×day exclusion: normalized calendar days are clustered as one day and exact pairs are excluded; duplicate candidates retain distinct exclusion keys.
-- Explicit eligibility/probe schema: probe checks cover chain listing, historical greeks/IV, OI, spot/OHLC, timestamp granularity, expiry/DTE, and post-window returns. Failures require reasons and cannot become imputed zero.
-- Concentration controls: sector cap defaults to 20% and ticker cap to 10% of intended units, with recorded cap values and achieved counts.
-- Event/control mix: quota schema records 1/3 event-habitat and 2/3 controls, FOMC/EARNINGS/OPEX vocabulary, and the causal-surprise requirement. `DESCRIPTIVE-HABITAT` is accepted for unavailable surprise information.
-- DTE strata: locked 1–3, 4–7, and 8–10 strata; zero/out-of-range DTE is explicitly excluded.
+## Self-review
 
-## Concerns / follow-up boundaries
+- **Completeness**: All five interfaces from the brief are present (`RunFile`, `RunInfo`,
+  `classify_file`, `extract_timestamp`, `cluster_by_timestamp`), plus the `ROOT`/`ORCH_OUTPUT`/
+  `SUITE_ROOTS` module constants the docstring says later tasks will use. All brief test cases
+  transcribed verbatim; none omitted.
+- **Quality**: Matches existing repo conventions -- `from __future__ import annotations`,
+  frozen dataclasses, module docstring explaining the *why* (no-DB rationale, cross-referencing
+  `dashboard/app.py::_execute_run` and a migration file), consistent with the rest of
+  `dashboard/tests/` (module-level `pytestmark = pytest.mark.unit`, `sys.path` shim for
+  `dashboard.*` imports).
+- **Discipline**: No additions beyond the brief -- no extra helper functions, no premature
+  discovery-function stubs, no repo-layout logic beyond the two constants the brief itself
+  specifies as forward-looking placeholders.
+- **Testing**: Tests exercise real behavior (not implementation internals) -- classification by
+  actual extension list, timestamp regex/parse edge cases (absent token, syntactically-matching
+  but semantically invalid date), and clustering behavior including the transitive-chain case
+  that would fail under a naive all-pairs-distance approach. Output is clean: 18/18 pass, 0
+  warnings.
 
-- This task intentionally does not invent a candidate list or sector/event labels. A later acquisition task must provide an approved static point-in-time list and real probe results.
-- The existing acquisition and scratch corpus directories were already untracked before this task. They were read only and are intentionally not included in the commit.
-- The repository's default pytest plugin environment has an unrelated broken `pydantic_core` installation; the focused no-plugin command is the verified test path for this task.
-- The module records caps and quota schema; it does not pretend to make a causal claim or impute missing data.
+## Concerns
 
-## Commit
-
-```text
-feat(vol): add deterministic dealer exposure universe contracts (final commit recorded in handback)
-```
-
-Unrelated untracked files were preserved and are excluded from the commit.
-
-## Reviewer fix report (2026-08-15)
-
-- Corrected held-pair extraction for actual `_scratch_tier2` and `_scratch_tier2b` schemas: seed filename dates are treated as expiries, while `manifest.as_of`, acquisition-manifest `as_of`, and explicit `window_YYYYMMDD` acquisition directories provide held calendar days. Added minimized fixtures matching both artifact formats.
-- `build_manifest` now validates and deterministically orders probes, associates by ticker/day/expiry/DTE, admits only exactly one validated `PASS`, and records `missing_probe`, `ambiguous_probe`, and non-PASS exclusions explicitly.
-- Expanded the probe contract to require evidence for spot/OHLC windows, same-expiry/grid OI+IV, both strike sides and moneyness, strict PRE_WINDOW ordering, distinct return clocks, no imputation, and positive locked-stratum DTE. Invalid dates and reversed duplicate/probe inputs are deterministic and explicit.
-
-### Fix verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
-.............                                                            [100%]
-13 passed in 0.05s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
-exit 0
-
-python -c "from Vol_Suite.dealer_exposure_universe import held_pairs_from_paths; p=held_pairs_from_paths(['Vol_Suite/_scratch_tier2','Vol_Suite/_scratch_tier2b']); print(len(p), sorted(p)[:5], sorted(p)[-5:])"
-96 [('AAPL', '2026-05-08'), ..., ('TSLA', '2026-08-14')]
-```
-
-Remaining concern: this remains a network-free contract layer; real acquisition probes must populate the evidence fields from approved data sources before any unit is admitted.
-
-## Important finding fixes (2026-08-15)
-
-- Replaced truthy-placeholder probe acceptance with semantic PASS validation: probe identity (when supplied), expiry/DTE arithmetic, real timestamped spot/OHLC rows for all required windows, same-expiry non-empty positive OI/IV arrays with equal strike-grid lengths, numeric strike-side/moneyness coverage within the declared band, derived PRE_WINDOW ordering (the caller `strictly_before` boolean is not proof), distinct positive daily/from-breach clocks, and explicit clean imputation/zero-DTE markers.
-- Removed the missing-expiry manifest fallback. Candidate admission now requires an exact `(ticker, day, expiry, DTE)` match to exactly one validated probe; missing expiry is recorded as `missing_probe`.
-- Added regressions for contradictory timestamps, mismatched probe/evidence expiry and identity, invalid grid/clock/moneyness evidence, and missing candidate expiry.
-
-### Fix verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
-.................                                                        [100%]
-17 passed in 0.07s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
-exit 0
-
-git diff --check
-exit 0
-```
-
-Only the Task 1 implementation, its tests, and this report were modified; unrelated untracked corpora were preserved and are excluded from the commit.
-
-## Remaining Task 1 review finding fix (2026-08-15)
-
-- `_validate_probe_evidence` now requires every `pre_window`, `firing_window`, and `response_window` row to be a mapping with an explicit valid `timestamp`, positive `spot`, and positive `open`/`high`/`low`/`close` OHLC fields. Scalar timestamp-only rows and rows using only the legacy `ts` alias are rejected.
-- Removed the dead conditional test statement (`if False`) noted by review and normalized the nearby assertion spacing.
-- Added `test_probe_rejects_scalar_timestamp_only_spot_ohlc_rows`, covering all three required windows.
-
-### Fix verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py::test_probe_rejects_scalar_timestamp_only_spot_ohlc_rows --disable-warnings
-F                                                                        [100%]
-1 failed in 0.07s
-
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
-..................                                                       [100%]
-18 passed in 0.04s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py && git diff --check
-exit 0
-```
-
-The first focused run is the intentional RED check before the implementation change; it failed because the pre-fix validator accepted the scalar timestamp row. No live model, acquisition data, or unrelated untracked corpora were modified.
-
-## Remaining Task 1 review finding fix — provenance (2026-08-15)
-
-- Removed the `build_manifest` provenance defaults. `selection_date` is now mandatory, canonical `YYYY-MM-DD`, and calendar-valid; `source_list` is mandatory, non-blank, and rejects the fabricated `point-in-time-static` placeholder.
-- Candidate-level `selection_date` and `source_list`, when present, are validated and must exactly agree with manifest metadata. Conflicts fail loudly rather than being discarded or replaced; valid values serialize unchanged in `UniverseManifest.to_dict()`.
-- Added regressions for missing/invalid selection dates, missing/blank/default source lists, conflicting candidate provenance, and valid provenance serialization.
-
-### Fix verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m pytest -q tests/test_dealer_exposure_universe.py --disable-warnings
-......................                                                   [100%]
-22 passed in 0.05s
-
-C:/Users/bottl/AppData/Local/Programs/Python/Python312/python.exe -m py_compile Vol_Suite/dealer_exposure_universe.py tests/test_dealer_exposure_universe.py
-exit 0
-
-git diff --check
-exit 0
-```
-
-No live model, acquisition data, or unrelated untracked corpora were modified.
-
-## Authorization Hardening Task 1 (2026-08-15)
-
-Implemented `Vol_Suite/dealer_exposure_authorization.py` and `tests/test_dealer_exposure_authorization.py` without acquisition, network, live-model, scheduler, master, expiry-book, or existing packet changes.
-
-- Added immutable `AcquisitionAuthorization` with strict `from_mapping()` parsing, timezone-aware issued/expiry validation, authorization self-hash, and immutable round trips.
-- Added strict calendar-enriched candidate-manifest projection/hash using `canonical_json_bytes()` and `sha256_bytes()` from `Vol_Suite/provenance_contract.py`.
-- Enforced mandatory calendar hash/policy/resolver/session/binding identity, exact sorted candidate-key scope, binding equality, unknown-field rejection, strict booleans, finite canonical JSON, bounded cost policy, concurrency `1`, no held/new candidates, no live-model/scheduler calls, and no writes outside artifact root.
-- Added tests for missing/mutated calendar identity, scope mismatch, expiry, unknown fields, non-boolean policy values, cost/concurrency violations, pre-calendar/duplicate manifests, and deterministic/self-hash round trips.
-
-### Authorization verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py -p no:cacheprovider
-..........                                                               [100%]
-10 passed in 0.04s
-
-python -m py_compile Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py
-git diff --check -- Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py
-exit 0
-```
-
-Ruff was unavailable. The repository `.venv/Scripts/python.exe` was unavailable in this worker; the available runner reported Python 3.11, so a repository Python 3.12 execution could not be performed here. The observed dry-run digest remains an audit reference only; no XLE/XLF/AAPL/META packet was authorized or acquired.
-
-## Authorization Task 1 review findings (2026-08-15)
-
-Closed the reproduced safety-boundary defects in the authorization contract:
-
-- Calendar binding identity is now transitive: every unit and observed binding must exactly equal the manifest calendar binding hash, in addition to the existing calendar snapshot/policy/resolver/session checks.
-- `source_hashes` is mandatory on every unit, validated as non-empty lowercase SHA-256 values, and must exactly match the point-in-time `selection_provenance.source_registry` entry for that unit's non-empty `candidate_source`.
-- The complete source registry and normalized source hashes remain in the canonical manifest projection, so source identity cannot be detached from the manifest digest.
-- `_manifest_projection` now requires every normative manifest field before serialization/hashing, including exclusions, selection provenance, quota, held-pair evidence hash, probe policy, executor policy, cost ceiling, calendar projection, and complete units.
-- `authorization_sha256` is mandatory input, format-validated, independently recomputed from all other authorization fields, and compared byte-for-byte; it is never auto-generated for malformed or absent input.
-- Added regressions for unit/observed binding mismatch, missing source hashes, source-registry mismatch, missing quota, absent/malformed/mismatched authorization self-hashes, plus a valid control.
-
-### Review-fix verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py -p no:cacheprovider
-..................                                                       [100%]
-18 passed in 0.03s
-
-python -m py_compile Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py
-exit 0
-
-git diff --check -- Vol_Suite/dealer_exposure_authorization.py tests/test_dealer_exposure_authorization.py .superpowers/sdd/task-1-report.md
-exit 0
-```
-
-Ruff was unavailable. No acquisition, network, live-model, scheduler, master, expiry-book, or unrelated worktree artifacts were modified.
-
-## Authorization Task 1 follow-up review remediation (2026-08-15)
-
-Closed the remaining strict validation defects:
-
-- Authorization and calendar-enriched manifest `schema_version` values now require an actual `int` with the exact supported value `1`; JSON booleans such as `true` are rejected rather than relying on Python's `bool`-is-an-`int` equality.
-- Authorization validation now uses an injected timezone-aware `now` when supplied, or the current UTC instant by default. It rejects `issued_at` values later than validation time and retains the existing timezone-aware expiry check.
-- Added regressions for authorization `schema_version: true`, manifest `schema_version: true`, future-issued authorization, and the valid authorization control with deterministic validation time.
-
-### Follow-up verification
-
-```text
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_dealer_exposure_authorization.py -p no:cacheprovider
-.....................                                                    [100%]
-21 passed in 0.04s
-```
-
-No acquisition, network, live-model, scheduler, master, expiry-book, or unrelated worktree artifacts were modified.
+None. The brief's code was internally consistent, matched its own test expectations, and ran
+clean on first attempt with no adjustments needed.

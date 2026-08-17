@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "version": 1,
+  "group_id": "cns-threshold-alerts-ad2b5e2de6dd",
+  "group_name": "cns-threshold-alerts",
+  "created_at": "2026-08-14T22:40:06.698221+00:00",
+  "source_run_id": "20260814T221900Z",
+  "priority": "high",
+  "thesis_summary": "4 highlighted tickers crossing CNS threshold",
+  "tickers": [
+    {
+      "symbol": "NUAI",
+      "rank": 1,
+      "cns": 60,
+      "war_score": 0.467,
+      "thesis_ratio": 0.067,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 56.7,
+      "bearish_pct": 23.3,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "TLT",
+      "rank": 2,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.0,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 20.0,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "MSTR",
+      "rank": 3,
+      "cns": 60,
+      "war_score": 0.4,
+      "thesis_ratio": 0.033,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 20.0,
+      "bearish_pct": 36.7,
+      "confidence": 0.6,
+      "social_sources": [
+        "stocktwits"
+      ]
+    },
+    {
+      "symbol": "JD",
+      "rank": 4,
+      "cns": 55,
+      "war_score": 0.133,
+      "thesis_ratio": 0.2,
+      "pump_ratio": 0.0,
+      "volume": 60,
+      "bullish_pct": 26.7,
+      "bearish_pct": 6.7,
+      "confidence": 0.575,
+      "social_sources": [
+        "stocktwits"
+      ]
+    }
+  ],
+  "downstream_hints": {
+    "volatility_suite": true,
+    "var_suite": true,
+    "options_suite": false
+  }
+}
