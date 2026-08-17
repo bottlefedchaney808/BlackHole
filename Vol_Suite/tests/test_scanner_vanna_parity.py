@@ -143,7 +143,7 @@ def test_scan_chain_without_dealer_result_computes_one_itself_not_twice():
     # assert the scanner's standalone numbers match it exactly -- proving
     # scan_chain's internal fallback path is calling compute_dealer_positioning
     # itself, not running its own separate vanna arithmetic.
-    reference = dp.compute_dealer_positioning("MOCK", target_years=60 / 365,
-                                                expiration=expiration, sign_model="oi_heuristic")
-    expected_net = float(sum(reference.vanna_shares_by_strike))
+    from expiry_book_production import fetch_production_result
+    reference = fetch_production_result(td, "MOCK", expiration)
+    expected_net = float(reference.snapshot.net("vanna"))
     assert scan_result.net_vanna_shares == pytest.approx(expected_net, rel=1e-9)

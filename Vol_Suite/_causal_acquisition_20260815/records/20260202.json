@@ -1,0 +1,96 @@
+{
+  "day": "20260202",
+  "expiry": "20260206",
+  "habitat": "NONE",
+  "label": "control Mon",
+  "records": [
+    {
+      "day": "20260202",
+      "date": "20260202",
+      "ticker": "SPY",
+      "families": [
+        "SPY"
+      ],
+      "dte": 4,
+      "expiry": "20260206",
+      "event_habitat": "NONE",
+      "pre_window": {
+        "pre_vanna_timestamp": 34200000,
+        "pre_window_end": 34200000,
+        "breach_window_start": 58200000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 1011.769848162707,
+        "delta_iv": 0.1371,
+        "gamma_burst": 1061350.223471,
+        "delta_s": 0.007132,
+        "market": 0.007132,
+        "event": 0,
+        "a6_reflexivity": -0.019188,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "NONE",
+        "family_interaction_spy": 1011.769848162707,
+        "forward_return_h": -0.000333
+      },
+      "clock": {
+        "daily": {
+          "return": 0.007132,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": null,
+          "eligible": false
+        }
+      },
+      "source": "acq-20260202-spy"
+    },
+    {
+      "day": "20260202",
+      "date": "20260202",
+      "ticker": "QQQ",
+      "families": [
+        "QQQ"
+      ],
+      "dte": 4,
+      "expiry": "20260206",
+      "event_habitat": "NONE",
+      "pre_window": {
+        "pre_vanna_timestamp": 43200000,
+        "pre_window_end": 43200000,
+        "breach_window_start": 43800000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": -42379.705173948656,
+        "delta_iv": 0.2003,
+        "gamma_burst": 189627.453714,
+        "delta_s": 0.008987,
+        "market": 0.008987,
+        "event": 0,
+        "a6_reflexivity": -0.237338,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "NONE",
+        "family_interaction_qqq": -42379.705173948656,
+        "forward_return_h": 3.2e-05
+      },
+      "clock": {
+        "daily": {
+          "return": 0.008987,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": 3.2e-05,
+          "eligible": true
+        }
+      },
+      "source": "acq-20260202-qqq"
+    }
+  ]
+}

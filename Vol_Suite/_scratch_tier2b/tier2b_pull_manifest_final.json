@@ -1,0 +1,2987 @@
+{
+  "prior_asof": [
+    "2026-07-31",
+    "2026-07-17",
+    "2026-07-03",
+    "2026-06-19",
+    "2026-06-05",
+    "2026-05-22",
+    "2026-05-08"
+  ],
+  "results": [
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1041,
+      "oi_rows": 1012,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_AAPL_20260803_short.json",
+      "sha256": "f803a6fe8693f3173e9c8b6d4be6346fc1b86f31f0bd98254b8ef064b47fa49b",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2784,
+      "oi_rows": 2582,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_AMD_20260803_short.json",
+      "sha256": "ff4c1fea986fa14c33d0695ba7dbdd5cba303d0702a8b97d8191c3c28e12bcbf",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 987,
+      "oi_rows": 916,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_AMZN_20260803_short.json",
+      "sha256": "b76145ea3bff375e4f3518be6d64b308629ce046ee10f9406dd4fe3e34495ec2",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1033,
+      "oi_rows": 986,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_GOOGL_20260803_short.json",
+      "sha256": "96d34338d8e6c9176266592fd04c3b46f72078fd4fcea5bcc6cec5ba7c7824bf",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-07-31",
+      "expiry": "20260807",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1151,
+      "oi_rows": 1306,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_JPM_20260807_short.json",
+      "sha256": "43152b9e2888a9eb527ddae94880c396ee444c78b87e63f24307562fceca5454",
+      "obs_date_range": [
+        "20260717",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2280,
+      "oi_rows": 2052,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_META_20260803_short.json",
+      "sha256": "bfc8e4f6c300728aa05cb3de3df965e703900feb11e958acea46a2fbe9677768",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1431,
+      "oi_rows": 1342,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_MSFT_20260803_short.json",
+      "sha256": "3645507274638f291c8b04512b45eb35a0cc089d76306c6ceb1fcad08c4dd9f1",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-07-31",
+      "expiry": "20260807",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 938,
+      "oi_rows": 1022,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_NFLX_20260807_short.json",
+      "sha256": "05c5f67631faf9a68ff00515b831479d6afe918cbee48c31b290c20f104d7231",
+      "obs_date_range": [
+        "20260717",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1027,
+      "oi_rows": 1036,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_NVDA_20260803_short.json",
+      "sha256": "d99ddd890be5dc24c8a6a769cf49903dd8cc4dc33315ac942f511506b3186137",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2815,
+      "oi_rows": 2780,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_QQQ_20260803_short.json",
+      "sha256": "2b842ad0500e16c6e0805e2459b46a017ad0c3f8aab5299dcac6c3b1b0c333ac",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          4,
+          "20260804"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          6,
+          "20260806"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2737,
+      "oi_rows": 2738,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_SPY_20260803_short.json",
+      "sha256": "6eec008153306778df398acfb06f4011eca33417d6741946382edcd37d21c2ac",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          4,
+          "20260804"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          6,
+          "20260806"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-07-31",
+      "expiry": "20260803",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2298,
+      "oi_rows": 2170,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260731\\seed_data_TSLA_20260803_short.json",
+      "sha256": "6125aedfb33adddb9d12b7ff61e4e296f74440444b6c5349e36f0163724e133d",
+      "obs_date_range": [
+        "20260720",
+        "20260731"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260803"
+        ],
+        [
+          5,
+          "20260805"
+        ],
+        [
+          7,
+          "20260807"
+        ]
+      ]
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 882,
+      "oi_rows": 876,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_AAPL_20260720_short.json",
+      "sha256": "cddcd7d2f56547365aef71a9fd2b00d9ce2af2632200cbe782b81446d02a897b",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 3165,
+      "oi_rows": 3018,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_AMD_20260720_short.json",
+      "sha256": "7163f2f39a9f5012c3fb8ee180c58aa91c86fdd1e2bd8fa3b0e7bbca18acdbf6",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 806,
+      "oi_rows": 810,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_AMZN_20260720_short.json",
+      "sha256": "ebfc17e2d9d966e8e2193d4f3ff98c302d5b542ec06d166611ab1ddb0e01f5ec",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1081,
+      "oi_rows": 1020,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_GOOGL_20260720_short.json",
+      "sha256": "c7b55a3705f62a8573be55ea6af2f192b0fdb7d690d91fdb59929a6ef8f0de2a",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-07-17",
+      "expiry": "20260724",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1075,
+      "oi_rows": 1220,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_JPM_20260724_short.json",
+      "sha256": "c736fa6ffa5e0b3f812576df419ad92a6ede0810d1558f3ecd3a166232356803",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        7,
+        18
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1778,
+      "oi_rows": 1752,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_META_20260720_short.json",
+      "sha256": "9995189224049afe2d0d67156cbc92268c903dd21e02976c7f3a92c6b5087687",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1253,
+      "oi_rows": 1228,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_MSFT_20260720_short.json",
+      "sha256": "5a2d1a133d963c9f4fced745d4531e053fef0718f9becf75e10014d8aa3e2586",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-07-17",
+      "expiry": "20260724",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 976,
+      "oi_rows": 1020,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_NFLX_20260724_short.json",
+      "sha256": "e1e55c021477606ae219286e3d759ad4b93611d7bba2045c8673d8969afc91b7",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        7,
+        18
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1047,
+      "oi_rows": 1029,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_NVDA_20260720_short.json",
+      "sha256": "a1e3ff2670093dc4ee8b401b7dd8db137a8ba630e610fd4aac84419102e9a9fa",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2785,
+      "oi_rows": 2612,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_QQQ_20260720_short.json",
+      "sha256": "671eb209ae3f2dbcb952553811ec9bcf16af4b1de38c5dac62b66e11ef208a40",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          4,
+          "20260721"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          6,
+          "20260723"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2628,
+      "oi_rows": 2727,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_SPY_20260720_short.json",
+      "sha256": "81df742a4b2f2b57eb662d69708f87a878a9e5c68b6439eccc17fed954d84c46",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          4,
+          "20260721"
+        ],
+        [
+          5,
+          "20260722"
+        ],
+        [
+          6,
+          "20260723"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-07-17",
+      "expiry": "20260720",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2566,
+      "oi_rows": 2375,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260717\\seed_data_TSLA_20260720_short.json",
+      "sha256": "2b85c4de01784f95b4799cb53e886bf5830beb3462366ab0dd5527cf16bcbd15",
+      "obs_date_range": [
+        "20260706",
+        "20260717"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260720"
+        ],
+        [
+          7,
+          "20260724"
+        ]
+      ]
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 767,
+      "oi_rows": 760,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_AAPL_20260706_short.json",
+      "sha256": "948683c483841754dd8b20f8a32749aebf70411a82ce552a9b13c6724832ad7d",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-07-03",
+      "expiry": "20260710",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 3754,
+      "oi_rows": 3842,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_AMD_20260710_short.json",
+      "sha256": "70e8cd7443c1290a61328d601b7055c28f3f9d3f8dd9b137109bcd358d71b514",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        8,
+        18
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 707,
+      "oi_rows": 676,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_AMZN_20260706_short.json",
+      "sha256": "46a2257db64436fb79b09f77b53f1dbce2779537a9cfda016efa26460a881c53",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 835,
+      "oi_rows": 770,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_GOOGL_20260706_short.json",
+      "sha256": "5cd98acf97149eccd3bb26d1e3ed373a7b4f2c8ca836492c01e34c55d69d2840",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-07-03",
+      "expiry": "20260710",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 984,
+      "oi_rows": 1092,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_JPM_20260710_short.json",
+      "sha256": "bd551127f32a48c9de9641a9a2acdb7e7133fe90fd22628d44013ca4e6bcf13e",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        8,
+        18
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1337,
+      "oi_rows": 1252,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_META_20260706_short.json",
+      "sha256": "36fd1144cf1466e80541f1563a29a88090aac077bcdb7990400c7fade0d8d9c5",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1007,
+      "oi_rows": 960,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_MSFT_20260706_short.json",
+      "sha256": "319e99104fd33007a86f073ddbd0a170be39269db0a913e54e479fd3b2241868",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-07-03",
+      "expiry": "20260710",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 817,
+      "oi_rows": 974,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_NFLX_20260710_short.json",
+      "sha256": "6e0e511d9a4cc4127b25e4e801477734dc593f4ca340806b48ed057ad53a1dc7",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        8,
+        18
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1006,
+      "oi_rows": 950,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_NVDA_20260706_short.json",
+      "sha256": "cd4b20ca4973fa285f51758eef4f6964a3854081ac3d208c9a0a0893b8aac592",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2307,
+      "oi_rows": 2300,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_QQQ_20260706_short.json",
+      "sha256": "321c05ba1b09dcce01c5969304c668f94e9c221d7b1d2d5c8020b3c08c4aaf85",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          4,
+          "20260707"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          6,
+          "20260709"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2349,
+      "oi_rows": 2398,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_SPY_20260706_short.json",
+      "sha256": "d6f57a9503a4b4ac26f1d97674b7725f77fae74328e91138623f731bbfca12cb",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          4,
+          "20260707"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          6,
+          "20260709"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-07-03",
+      "expiry": "20260706",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1780,
+      "oi_rows": 1612,
+      "spot_rows": 10,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260703\\seed_data_TSLA_20260706_short.json",
+      "sha256": "950954e58350a058f7fceb11b76a2798d2e4522c78e7d482824c21f9b4aa9d65",
+      "obs_date_range": [
+        "20260622",
+        "20260702"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260706"
+        ],
+        [
+          5,
+          "20260708"
+        ],
+        [
+          7,
+          "20260710"
+        ]
+      ]
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 784,
+      "oi_rows": 734,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_AAPL_20260622_short.json",
+      "sha256": "d7a57eefe8672800d80a6d5c62c37574f3bf98c4efe05d4bb2950c7d0af98265",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-06-19",
+      "expiry": "20260626",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 3985,
+      "oi_rows": 3968,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_AMD_20260626_short.json",
+      "sha256": "073aaee33a676ef0972cafbdda125c04f1d6a4eabec4bc483d194f97935b7e2d",
+      "obs_date_range": [
+        "20260605",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        8,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 714,
+      "oi_rows": 664,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_AMZN_20260622_short.json",
+      "sha256": "aa8255280167949772fae8959eb0307610f20eda173d5754639c92f62fa493f6",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 819,
+      "oi_rows": 776,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_GOOGL_20260622_short.json",
+      "sha256": "5131b443420e9da2a9c334a5c6dc30c53d81064db0ecdc85df63377950b2155e",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-06-19",
+      "expiry": "20260626",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1054,
+      "oi_rows": 1134,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_JPM_20260626_short.json",
+      "sha256": "4bfaa93cedd565323ebc47b55d234068f8c2aa3e1816c8bf0e6487515fa67310",
+      "obs_date_range": [
+        "20260605",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        8,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1420,
+      "oi_rows": 1324,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_META_20260622_short.json",
+      "sha256": "1c0d02dd862d98b9811ac479d0c3815184d428e5b11ac6a1c9cadfc47079aff3",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1082,
+      "oi_rows": 1010,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_MSFT_20260622_short.json",
+      "sha256": "7bf49077a4931bbeaaffc17df41fbf374b4b1a5cd33c972ee2ae8bbe9aa510ba",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-06-19",
+      "expiry": "20260626",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 861,
+      "oi_rows": 960,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_NFLX_20260626_short.json",
+      "sha256": "96d463f739d844fd3d1c7395fad166cdac7b21c8f9fa8a9b697819a6572852b0",
+      "obs_date_range": [
+        "20260605",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        8,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 955,
+      "oi_rows": 952,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_NVDA_20260622_short.json",
+      "sha256": "61c72d025defbfd26b6fa2afb79f7c7be322f9fb56cfc2b821032f6665c7bbfe",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2471,
+      "oi_rows": 2388,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_QQQ_20260622_short.json",
+      "sha256": "aa21b7ebefcac84b23007ddd003aa9bd3d07c22a53d1c58aa0b1999bf849602e",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          4,
+          "20260623"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          6,
+          "20260625"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2428,
+      "oi_rows": 2454,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_SPY_20260622_short.json",
+      "sha256": "8651d8531de267d93a8e0581fcaf893cc48b755557e6128b0a15716989022c92",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          4,
+          "20260623"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          6,
+          "20260625"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-06-19",
+      "expiry": "20260622",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1842,
+      "oi_rows": 1724,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260619\\seed_data_TSLA_20260622_short.json",
+      "sha256": "e61470f0ecca7a041e9c84aa67690671d73b9a78e6878f2586ce351b1b8bde9c",
+      "obs_date_range": [
+        "20260608",
+        "20260618"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260622"
+        ],
+        [
+          5,
+          "20260624"
+        ],
+        [
+          7,
+          "20260626"
+        ]
+      ]
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 554,
+      "oi_rows": 542,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_AAPL_20260608_short.json",
+      "sha256": "44add2b91f4836e1a62751640b1a209eef0d1067735092693bccabca4e9a23e0",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-06-05",
+      "expiry": "20260612",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 3908,
+      "oi_rows": 3982,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_AMD_20260612_short.json",
+      "sha256": "7eca587aae2ae91da5936a8ce1a6242f434c6dc4c7b0ae229815704a04daf42a",
+      "obs_date_range": [
+        "20260522",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 542,
+      "oi_rows": 528,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_AMZN_20260608_short.json",
+      "sha256": "d391296d4fa8ba38840f0469756883fbee7640e9808fa985097c00ab167a023e",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 813,
+      "oi_rows": 740,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_GOOGL_20260608_short.json",
+      "sha256": "6db2e522229b8ad62b00ae69656a78bf982212b537d4200e8ca2ced01fcb0e41",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-06-05",
+      "expiry": "20260612",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1017,
+      "oi_rows": 1118,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_JPM_20260612_short.json",
+      "sha256": "3ca1d642cb9e978f1f03005d6d9e4b1a4b3cd540a05022e31618acdcd4c16037",
+      "obs_date_range": [
+        "20260522",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1485,
+      "oi_rows": 1370,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_META_20260608_short.json",
+      "sha256": "77cbf4f878e14993282cc50eb2ae489bc14571a98a28fd87fbfe9d4780b45239",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 822,
+      "oi_rows": 784,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_MSFT_20260608_short.json",
+      "sha256": "fe265c93bbb30967b88bfda975be0481ae1d3aeae2530098091c5c093ca6e103",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-06-05",
+      "expiry": "20260612",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 869,
+      "oi_rows": 954,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_NFLX_20260612_short.json",
+      "sha256": "6a018be5d834c100e4f4c0ec1d33df5e1ff4d450de9aca613e21b1a2eda120d2",
+      "obs_date_range": [
+        "20260522",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 861,
+      "oi_rows": 868,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_NVDA_20260608_short.json",
+      "sha256": "a072f76c74e1b9a5820379921691e75097db8a33ce8e63b8f3cc206812b2c67c",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2268,
+      "oi_rows": 2184,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_QQQ_20260608_short.json",
+      "sha256": "0e377e42e1f56af8e30d77cfd39d56f4c029f1263d045c1dd36f28fd365871c5",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          4,
+          "20260609"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          6,
+          "20260611"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2290,
+      "oi_rows": 2166,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_SPY_20260608_short.json",
+      "sha256": "ff1a4569936266e7bbacfd677e612b1348aaf43dd623f011ee5c07944fc1c4b1",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          4,
+          "20260609"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          6,
+          "20260611"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-06-05",
+      "expiry": "20260608",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1493,
+      "oi_rows": 1402,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260605\\seed_data_TSLA_20260608_short.json",
+      "sha256": "b8b6aecfa3ae6d19d1a2fa5bafc87e773eae92d0def532d827d7b4d512a1918f",
+      "obs_date_range": [
+        "20260526",
+        "20260605"
+      ],
+      "dte_range_obs": [
+        3,
+        13
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260608"
+        ],
+        [
+          5,
+          "20260610"
+        ],
+        [
+          7,
+          "20260612"
+        ]
+      ]
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 662,
+      "oi_rows": 660,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_AAPL_20260526_short.json",
+      "sha256": "01af91e9e78e9ddc4849fc0e9ae5ea6dfc3947f617e9f8b2514bc26d4efa4ccd",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-05-22",
+      "expiry": "20260529",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 3534,
+      "oi_rows": 3710,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_AMD_20260529_short.json",
+      "sha256": "f24d25d6d609b59d40bc99d2a77b722a3d80919fff27f481aa456879aba86b44",
+      "obs_date_range": [
+        "20260508",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 755,
+      "oi_rows": 760,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_AMZN_20260526_short.json",
+      "sha256": "2986af6e99c75b659c707c2fa9969269e6611bc01d4e714c5e2a67c79a13090a",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 786,
+      "oi_rows": 730,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_GOOGL_20260526_short.json",
+      "sha256": "eb3b83cbd2d335d4b122c91107219062115759562471cc8ec5d935543e378150",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-05-22",
+      "expiry": "20260529",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1183,
+      "oi_rows": 1244,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_JPM_20260529_short.json",
+      "sha256": "ba86fc17ad3633708ec8d2d0c1632668ffcf32826ba7c059151f0783d1eb16e3",
+      "obs_date_range": [
+        "20260508",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 965,
+      "oi_rows": 880,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_META_20260526_short.json",
+      "sha256": "3cdda31aa1f94be30c3561419529ad924ef6a292f26064a5dc4abf68973480b9",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 694,
+      "oi_rows": 710,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_MSFT_20260526_short.json",
+      "sha256": "e01c3b44563266deb57b01214249cc3addc25b559ef3f5d228a3b81c15171ff1",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-05-22",
+      "expiry": "20260529",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1141,
+      "oi_rows": 1298,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_NFLX_20260529_short.json",
+      "sha256": "d5fce1216f3e69c47296b577d096665d8e4663965f738631d185969c9260c715",
+      "obs_date_range": [
+        "20260508",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 1027,
+      "oi_rows": 1004,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_NVDA_20260526_short.json",
+      "sha256": "9f679c0bb2efc70895866dc8642994ff669286971e1ff718b412c983f41b1a38",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 1867,
+      "oi_rows": 1796,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_QQQ_20260526_short.json",
+      "sha256": "9abc41f2d096925e1c5c09434f1fe209c84d00a78d23bbf264e2787562567127",
+      "obs_date_range": [
+        "20260512",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          6,
+          "20260528"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 2339,
+      "oi_rows": 2286,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_SPY_20260526_short.json",
+      "sha256": "f92990e8caaf6716e5cc2f882af3f8267156450ef00013dd56aaf73a263e3444",
+      "obs_date_range": [
+        "20260512",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          6,
+          "20260528"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-05-22",
+      "expiry": "20260526",
+      "dte": 4,
+      "status": "ok",
+      "greeks_rows": 2402,
+      "oi_rows": 2164,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260522\\seed_data_TSLA_20260526_short.json",
+      "sha256": "cd1f911924c666faaa16adfcc89d0e3a6e5347a22d69893b6df5feebcc078b55",
+      "obs_date_range": [
+        "20260511",
+        "20260522"
+      ],
+      "dte_range_obs": [
+        4,
+        15
+      ],
+      "eligible_candidates": [
+        [
+          4,
+          "20260526"
+        ],
+        [
+          5,
+          "20260527"
+        ],
+        [
+          7,
+          "20260529"
+        ]
+      ]
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 703,
+      "oi_rows": 740,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_AAPL_20260511_short.json",
+      "sha256": "279d4342475613bc2cdc91f784e6a0b2ef9cf731b6c343160f4e5563f1f8d237",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-05-08",
+      "expiry": "20260515",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 3241,
+      "oi_rows": 3456,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_AMD_20260515_short.json",
+      "sha256": "da83c8f66073492213fe38be579e8667d3473106e5b68fb5360df7cf49fc5855",
+      "obs_date_range": [
+        "20260424",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 809,
+      "oi_rows": 834,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_AMZN_20260511_short.json",
+      "sha256": "c3458e57e226736113d44db7705f906c8a0ac56ad19f40e74b01f9cea49aa0e9",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 982,
+      "oi_rows": 1054,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_GOOGL_20260511_short.json",
+      "sha256": "aa9c0aa5d21d6e170552540b88e55307e63e952e4dc672a95634fb83ed802444",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-05-08",
+      "expiry": "20260515",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 1487,
+      "oi_rows": 1592,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_JPM_20260515_short.json",
+      "sha256": "a9d95285e82b7a94f10180baf6df788aa51825370de453077aed6c23d6970014",
+      "obs_date_range": [
+        "20260424",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1898,
+      "oi_rows": 1884,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_META_20260511_short.json",
+      "sha256": "5bae867d44410c140e74f08d8a9d42f02599dcccec907f263ca53745133754f9",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1115,
+      "oi_rows": 1110,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_MSFT_20260511_short.json",
+      "sha256": "fe2d9ccafc970f703404164a0b2cf224cba47db470031aa971f960f6697f2978",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-05-08",
+      "expiry": "20260515",
+      "dte": 7,
+      "status": "ok",
+      "greeks_rows": 4327,
+      "oi_rows": 5082,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_NFLX_20260515_short.json",
+      "sha256": "a0c10bab346fa3feb275e152bf0060ae4a8432e6a779e62462c2e2252fff963e",
+      "obs_date_range": [
+        "20260424",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        7,
+        21
+      ],
+      "eligible_candidates": [
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 696,
+      "oi_rows": 722,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_NVDA_20260511_short.json",
+      "sha256": "5478efb242251adc47cf0ca13affbaea9536ba4a4e1a58c2f8c885aadf2e955f",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2553,
+      "oi_rows": 2488,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_QQQ_20260511_short.json",
+      "sha256": "fa2b1d950f2440b984ade41572b6b32df277e2eef773f9c0d186f10f6e584af5",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          4,
+          "20260512"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          6,
+          "20260514"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 2529,
+      "oi_rows": 2568,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_SPY_20260511_short.json",
+      "sha256": "05ef62b65d1da9af805c435c5db2f23955af2390fab2bed845ab6c6e1ced8137",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          4,
+          "20260512"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          6,
+          "20260514"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-05-08",
+      "expiry": "20260511",
+      "dte": 3,
+      "status": "ok",
+      "greeks_rows": 1206,
+      "oi_rows": 1138,
+      "spot_rows": 12,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2b\\window_20260508\\seed_data_TSLA_20260511_short.json",
+      "sha256": "d24f3ff7b7bd488aeb25fcc7cd4371efe9aa63283db620f06231a01af7a4aae8",
+      "obs_date_range": [
+        "20260427",
+        "20260508"
+      ],
+      "dte_range_obs": [
+        3,
+        14
+      ],
+      "eligible_candidates": [
+        [
+          3,
+          "20260511"
+        ],
+        [
+          5,
+          "20260513"
+        ],
+        [
+          7,
+          "20260515"
+        ]
+      ]
+    }
+  ],
+  "reused_most_recent": [
+    {
+      "ticker": "data",
+      "expiry": "AAPL",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "65ef8bc2fa126d93a9101057945c8064d57afd64ad89028b382e37f6267f4e90",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_AAPL_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "AMD",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "e805fc00731ec7827904af7e5a5b5e8a1f44b2198df93b33a99f997d6a5ba82b",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_AMD_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "AMZN",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "5fed2e0d88f8756ae74913288de13c5c40acb816984356e5797b2e05e2f4d1d0",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_AMZN_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "GOOGL",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "80920e4c3509ea783da1d63dbb2ac2959ca7dc11e193e0aa9aba71509af0204e",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_GOOGL_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "JPM",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "9f0ce6c88b3f53de5ebf4f1d2065ce76c7d6f13004e2f972b9ddbdccdb19be0d",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_JPM_20260821_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "META",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "1a36cfd5b2b97d42e6e92940ba157d405066aefc900d99ca37a0d439f944e0b3",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_META_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "MSFT",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "4f18764c3047fed961860ef51b869c89c7dc4894b1a1a7ac87479435b5f10b58",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_MSFT_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "NFLX",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "1e7bc57eede672a905b35a4ce7b9345878155dd171fda82e19eaa836c34cc216",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_NFLX_20260821_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "NVDA",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "1acbd75cd997ba28845087874cd94160eae48bc717710f3d068c713ec48c7ab4",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_NVDA_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "QQQ",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "a4181c05437fd812dbfbd7a2453011baa9491d2c014eec1e07ebcf54b015eb85",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_QQQ_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "SPY",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "49ee4ffb460f3c136568a9a7ad002eefafd020e6572edd676fb6fb4cca29d855",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_SPY_20260817_short.json"
+    },
+    {
+      "ticker": "data",
+      "expiry": "TSLA",
+      "window": "2026-08-14(REUSED)",
+      "sha256": "7f1a1b43eee35aca8b052822115c25c3cc620b93e83f02fcdab958d2d5634094",
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_TSLA_20260817_short.json"
+    }
+  ]
+}

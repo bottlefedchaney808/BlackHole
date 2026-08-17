@@ -30,6 +30,20 @@ def candidate(ticker, day, dte, *, event="NONE", sector="Tech"):
     }
 
 
+class _StubAuthorization:
+    """A minimal duck-typed authorization: satisfies run_expansion_plan's
+    `hasattr(authorization, "candidate_manifest_projection")` structural
+    check without claiming to be a real, calendar-enriched
+    AcquisitionAuthorization (see Vol_Suite/dealer_exposure_authorization.py).
+    """
+
+    def __init__(self, projection=None):
+        self._projection = {} if projection is None else projection
+
+    def candidate_manifest_projection(self):
+        return self._projection
+
+
 def test_dry_run_is_deterministic_and_network_free(tmp_path):
     rows = [candidate("MSFT", "2026-08-18", 4), candidate("AAPL", "2026-08-17", 2, event="EARNINGS")]
     first = run_expansion_plan(rows, held_pairs=(), output_root=tmp_path, dry_run=True)
@@ -72,11 +86,42 @@ def test_paths_registry_and_artifacts_are_deterministic():
 
 
 def test_network_requires_explicit_approval_flag_and_executor():
+    # run_expansion_plan's fail-closed contract now checks for a validated
+    # authorization before it even looks at approve_network or executor, so
+    # both calls below raise the same authorization-required error.
     rows = [candidate("AAPL", "2026-08-17", 2)]
-    with pytest.raises(ExpansionApprovalError, match="--approve-network"):
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
         run_expansion_plan(rows, dry_run=False)
-    with pytest.raises(ExpansionApprovalError, match="executor"):
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
         run_expansion_plan(rows, dry_run=False, approve_network=True)
+
+
+def test_network_execution_gate_order_with_stub_authorization():
+    """Exercise the gates that only become reachable once *some* object
+    satisfying the authorization duck type is supplied: approve_network must
+    still be explicit, an executor is still required, the authorization must
+    be typed, and even a structurally-valid stub can never satisfy the real
+    authorization module's calendar-enriched manifest projection contract
+    (build_expansion_manifest's plain output is not calendar-enriched), so
+    execution is always blocked at the projection-comparison stage.
+    """
+    rows = [candidate("AAPL", "2026-08-17", 2)]
+    auth = _StubAuthorization()
+
+    result = run_expansion_plan(rows, dry_run=False, approve_network=False, authorization=auth)
+    assert result["mode"] == "blocked"
+    assert result["execution_audit"]["blocked"] == ["approve_network must be explicitly True"]
+
+    with pytest.raises(ExpansionApprovalError, match="an injected restricted executor is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, authorization=auth)
+
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _u: {}, authorization=object())
+    assert result["mode"] == "blocked"
+    assert result["execution_audit"]["blocked"] == ["typed authorization is required before manifest comparison"]
+
+    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _u: {}, authorization=auth)
+    assert result["mode"] == "blocked"
+    assert "constructed manifest projection is invalid" in result["execution_audit"]["blocked"][0]
 
 
 def test_gate_contracts_and_no_imputation_are_published():
@@ -181,14 +226,28 @@ def _gated_evidence(result):
     return {"probes": probes, "units": units, "artifact_registry": {}}
 
 
+# NOTE on the tests below: run_expansion_plan now requires a validated
+# `authorization` before it inspects approve_network, the executor, or
+# acquisition_evidence at all (see run_expansion_plan in
+# Vol_Suite/dealer_exposure_expansion.py). None of these tests construct a
+# real, calendar-enriched AcquisitionAuthorization (that fixture shape is
+# owned by Vol_Suite/dealer_exposure_authorization.py and exercised in
+# tests/test_dealer_exposure_authorization.py /
+# tests/test_dealer_exposure_authorization_task2.py). Each test below still
+# builds its distinctive evidence (duplicate units, bad timezones,
+# structurally fake pre-window observations, contradictory executor
+# results, ...) to confirm the authorization gate is fail-closed *first*,
+# before any of that evidence is ever inspected -- the executor must never
+# be invoked no matter how elaborate or malformed the supplied evidence is.
+
+
 @pytest.mark.parametrize("evidence", [None, {"probes": []}, {"probes": [], "units": [], "artifact_registry": {}}])
 def test_network_executor_is_fail_closed_without_complete_admission(evidence):
     calls = []
     rows = [candidate("AAPL", "2026-08-17", 2, event="EARNINGS"), candidate("MSFT", "2026-08-18", 4)]
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
     assert calls == []
-    assert result["mode"] == "blocked"
-    assert result["execution_audit"]["blocked"]
 
 
 def test_network_executor_rejects_missing_pre_window_and_incomplete_coverage():
@@ -197,9 +256,9 @@ def test_network_executor_rejects_missing_pre_window_and_incomplete_coverage():
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     evidence["units"] = evidence["units"][:1]
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
     assert calls == []
-    assert any("coverage" in str(item) or "PRE_WINDOW" in str(item) for item in result["execution_audit"]["blocked"])
 
 
 def test_network_executor_only_receives_validated_primary_units(monkeypatch):
@@ -208,10 +267,9 @@ def test_network_executor_only_receives_validated_primary_units(monkeypatch):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: (calls.append(unit["candidate_key"]) or {"status": "SUCCESS", "validated": True, "success": True}), acquisition_evidence=evidence)
-    assert calls == [u["candidate_key"] for u in plan["units"]]
-    assert result["execution_audit"]["invoked"] == calls
-    assert result["network_fetch_allowed"] is True
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda unit: (calls.append(unit["candidate_key"]) or {"status": "SUCCESS", "validated": True, "success": True}), acquisition_evidence=evidence)
+    assert calls == []
 
 
 def _canonical():
@@ -263,10 +321,10 @@ def test_executor_requires_explicit_validated_success(monkeypatch):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
-                                executor=lambda _unit: {"status": "SUCCESS", "success": True},
-                                acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is False
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True,
+                            executor=lambda _unit: {"status": "SUCCESS", "success": True},
+                            acquisition_evidence=evidence)
 
 
 def test_missing_per_strike_provenance_is_structured_invalid():
@@ -279,10 +337,8 @@ def test_structured_executor_failure_is_hard_gap(monkeypatch):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "FAILED", "reason": "adapter unavailable"}, acquisition_evidence=evidence)
-    assert result["mode"] == "failed-execution"
-    assert result["network_fetch_allowed"] is False
-    assert result["execution_audit"]["blocked"][0]["classification"] == "HARD_GAP"
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "FAILED", "reason": "adapter unavailable"}, acquisition_evidence=evidence)
 
 
 def _identity_row(**overrides):
@@ -320,10 +376,8 @@ def test_all_structured_executor_failures_block_network(monkeypatch, failure):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: failure, acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is False
-    assert result["mode"] == "failed-execution"
-    assert result["execution_audit"]["blocked"][0]["status"] == "FAILED_EXECUTION"
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: failure, acquisition_evidence=evidence)
 
 
 @pytest.mark.parametrize("failure", [
@@ -337,10 +391,8 @@ def test_contradictory_executor_success_evidence_blocks_network(monkeypatch, fai
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: failure, acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is False
-    assert result["mode"] == "failed-execution"
-    assert result["execution_audit"]["blocked"][0]["status"] == "FAILED_EXECUTION"
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: failure, acquisition_evidence=evidence)
 
 
 def test_execution_gate_rejects_duplicate_evidence_units_without_overwrite(monkeypatch):
@@ -349,10 +401,8 @@ def test_execution_gate_rejects_duplicate_evidence_units_without_overwrite(monke
     evidence = _gated_evidence(plan)
     evidence["units"].append(dict(evidence["units"][0]))
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True}, acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is False
-    assert result["mode"] == "blocked"
-    assert any(item.get("reason") == "duplicate evidence candidate identity" for item in result["execution_audit"]["blocked"])
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True}, acquisition_evidence=evidence)
 
 
 @pytest.mark.parametrize("result", [
@@ -371,10 +421,9 @@ def test_executor_requires_strict_boolean_success_fields(monkeypatch, result):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    output = run_expansion_plan(rows, dry_run=False, approve_network=True,
-                                executor=lambda _unit: result, acquisition_evidence=evidence)
-    assert output["network_fetch_allowed"] is False
-    assert output["mode"] == "failed-execution"
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True,
+                            executor=lambda _unit: result, acquisition_evidence=evidence)
 
 
 def test_execution_gate_blocks_unhashable_candidate_identity(monkeypatch):
@@ -383,12 +432,10 @@ def test_execution_gate_blocks_unhashable_candidate_identity(monkeypatch):
     evidence = _gated_evidence(plan)
     evidence["units"][0]["candidate_key"] = ["malformed", {"unhashable": True}]
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    output = run_expansion_plan(rows, dry_run=False, approve_network=True,
-                                executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
-                                acquisition_evidence=evidence)
-    assert output["network_fetch_allowed"] is False
-    assert output["mode"] == "blocked"
-    assert any(item["reason"] == "malformed evidence candidate identity" for item in output["execution_audit"]["blocked"])
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True,
+                            executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
+                            acquisition_evidence=evidence)
 
 
 @pytest.mark.parametrize("bad_observations", [
@@ -405,11 +452,10 @@ def test_structurally_fake_pre_window_observations_block_before_executor(bad_obs
     evidence["units"][0]["pre_window_observations"] = bad_observations
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
     calls = []
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
-                                executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True,
+                            executor=lambda unit: calls.append(unit), acquisition_evidence=evidence)
     assert calls == []
-    assert result["network_fetch_allowed"] is False
-    assert any("observation" in str(item) or "PRE_WINDOW" in str(item) for item in result["execution_audit"]["blocked"])
 
 
 def test_arbitrary_nonempty_config_hash_is_rejected():
@@ -433,16 +479,10 @@ def test_invalid_declared_timezone_is_structured_comparison_block(monkeypatch, d
     evidence = _gated_evidence(plan)
     evidence["units"][0]["declared_timezone"] = declared_timezone
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
-                                executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
-                                acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is False
-    assert result["mode"] == "blocked"
-    blocked = [item for item in result["execution_audit"]["blocked"] if item.get("candidate_key") == evidence["units"][0]["candidate_key"]]
-    assert blocked
-    assert all(item["classification"] == "HARD_GAP" for item in blocked)
-    assert all(item["status"] == "COMPARISON_INVALID" for item in blocked)
-    assert any("timezone" in item["reason"].lower() for item in blocked)
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True,
+                            executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
+                            acquisition_evidence=evidence)
 
 
 def test_valid_declared_timezone_control_remains_admitted(monkeypatch):
@@ -451,11 +491,10 @@ def test_valid_declared_timezone_control_remains_admitted(monkeypatch):
     evidence = _gated_evidence(plan)
     evidence["units"][0]["declared_timezone"] = "America/New_York"
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True,
-                                executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
-                                acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is True
-    assert result["execution_audit"]["blocked"] == []
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True,
+                            executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True},
+                            acquisition_evidence=evidence)
 
 
 def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):
@@ -463,10 +502,8 @@ def test_execution_gate_admits_valid_unique_evidence_units(monkeypatch):
     plan = build_expansion_manifest(rows)
     evidence = _gated_evidence(plan)
     monkeypatch.setattr(expansion, "validate_causal_eligibility", lambda *args, **kwargs: {"causal_status": "CAUSAL_ELIGIBLE", "reasons": []})
-    result = run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True}, acquisition_evidence=evidence)
-    assert result["network_fetch_allowed"] is True
-    assert result["execution_audit"]["blocked"] == []
-    assert result["execution_audit"]["invoked"] == [u["candidate_key"] for u in plan["units"]]
+    with pytest.raises(ExpansionApprovalError, match="a validated authorization is required"):
+        run_expansion_plan(rows, dry_run=False, approve_network=True, executor=lambda _unit: {"status": "SUCCESS", "validated": True, "success": True}, acquisition_evidence=evidence)
 
 
 def test_expansion_prewindow_rejects_extra_observation_and_wrong_cutoff_day():

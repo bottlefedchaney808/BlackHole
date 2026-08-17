@@ -1,0 +1,983 @@
+{
+  "audit_status": "HARD_GAP",
+  "calendar_day": "2026-07-06",
+  "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+  "canonical_input_sha256": "e30bd2bbed0f0fc536e0a320b84736c12fb2e3cf319765d475cbd5c47d0f2199",
+  "canonical_inputs": {
+    "calendar_day": "2026-07-06",
+    "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "dte": 4,
+    "expiry": "2026-07-10",
+    "ticker": "XLE"
+  },
+  "chain_timestamp": null,
+  "delta_iv_pre_window": null,
+  "dte": 4,
+  "endpoint_request_evidence": [
+    {
+      "endpoint": "/api/theta/hist/stock/ohlc/XLE",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "500035d6dba53e743730344cde72fe37f2a6b14014374d69d470b5645f851d3c",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/stock/eod/XLE",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "da446c71367ec995b077eea4436563b53ae4e9c33efe777dfb39f1fec1550735",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260624"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/-5000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "a438daad7f5be2f94eefcfb06a414d63e1fb3715a7eb22e92cbe73798c17d4fe",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/0/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "7b1f57ccbbb52bca397abcc59606ea96d47c3a313893797a353c2305105a4f79",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/5000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "52f60254b350b691474d3e2cff1bb61b0c0c396a3902bd4a2948f62aebbcc2aa",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/10000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "adbcb019255a6f00da6effd7a7be51e54ba7d5bfbd02bff2dda8388784b56764",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/15000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "3b28acddac3103fefc50bf808c488144c2cd7ae20cc8c1c9ac43982f2961742c",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/20000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "ad69c4295c328384516c5ed4ef0116f2c5ea9755188821c8ad0d28fda4b33ec2",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/25000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "0b35952c6055cada26ec83f2c1902cbe4636fb22068cdd5c2f65cd406c025f63",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/30000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "a366f4ab9672d30960b36ee1678f610d6cac8966e152786ec0f303ce1d52ba5c",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/35000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "1dbb38502315f625b9d155374b40562766d8f7dcc478c0749789580b65bf173a",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/40000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "8e73dbb52989b777fefaae93b7248732f717e9f9fcf4587615c48075ab720176",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/45000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "753c813dc1187c913fff0a0d606b77460c2fea4fddde94047e908e45539fbb08",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/50000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "eb07cbb64a63db5545e502e5ad9447618a5016264041bb6a93d334595b0efa9d",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/55000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "209f118cdefa28b0b034369e1cec2dfdb38b5e0dec1eef8eb2dc04bdf7b07a2f",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/60000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "296c6f8a55f07ad6d599d034ff3fe04a73d123137bf6f44519c27e55e062a203",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/65000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "6babb28b7f9fb2dff573843b77f1339528e55c9be31a5398c79d039583e564fc",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/70000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "72d081c3be3fa22ec6c0be9cb363f09ed4bc395d8c4672a9a578f8625ebfcadd",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/75000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "66e2525fd362b892510210a05e47474b570a8b2537beffe24a0d0a57b3967ced",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/80000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "bb3941b25d6922f01033ffb27d8008bb2e8affcf4e4964f80cad97312d8a48e7",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/85000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "412583e0a00625af3e2daf5d7969b53c59c7330aec5c5917cb8477f3bc789454",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/90000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "1ba578dd8404bb44981a9f38255604cf491baa431e5407444905053071118664",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/95000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "1b082805571ac9d720b60007859be3eab1c5d86f426c7aebf0c490536d31a856",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/100000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "7b62cad1f2bd8aad656e2b6c799bf69b5489f44e0c3a353b58f3c9c32b5028ad",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/105000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "2f31e3596dbbdeffe0e625d9817bf442467a05bd3cf0e5715b9cf17c8bdc736b",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/110000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "2189b03ea92c3cbd0dbb5b5516079c0bbbc8f32c9f90d055840f43c44370adf7",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/115000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "d4bd65be84c7c0ff2a0dc2e38cdf72cc606647296cd2ce5f3141ca231bad9b35",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/-5000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "f10c9cc547014e993ec572e5723d114980870a717f1775e26d9775eaf2410d36",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/0/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "d553d19b1495d0694d9dbb054818e42417c7b746806c0b3023c1f3819cf8c4e7",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/5000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "0f2d03b32607b5172918955eee5b45dbc6188ce5c7c00464a2e50105e49f6880",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/10000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "4e9cd1a55e9108319be3f36a8208e13e0cf64330f61351bb216b461ec130a960",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/15000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "9a6a71900b19af232acf58a00980081766603f8d89b0f9ce469502f4ef539e67",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/20000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "ed856df4bc8b61edfb0e48f5ef8cee579c8b773f52574deba1fc0bbca1f4b201",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/25000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "d2fd93efaa01a9c7eaa3ef79d1f2c529a8e9e04c9a0bf0462752259fe187fff5",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/30000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "cd275ee4204e620f03f28c6860404385cd5cf0da7a90bf39c965feeaef3ca825",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/35000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "fc8dfc1e4d237408f8fff51dd147a45b0c9d6d7fcc3369a86a1185f7bc98d6a8",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/40000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "df573241908b9f6101e44e05aa0e79845b5f25fed6f5aebe4930d683798f8f4b",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/45000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "10cb2d857fd6a42583c43fd0a493bc9d207f6054b2ec5836f2b2e747e4f30ee0",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/50000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "f8df604d345cd07fbcb45b4a1abe79db401a949026a305006bbab591875edfb3",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/55000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "9069b2418ca4e01dd584415acf8e2f1e39565654a0b6d40a3157024c3d2a5fd5",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/60000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "9ecc9337c2de63aff720b41d6b297fab9b84ef66d9963e21b14e7ab960a1209d",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/65000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "3408454af7473f6443aff0b589598cc2392a2d49a43c6f5563d51431d3d6dfba",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/70000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "c3140b51e2ce1b5a1f5a7a2289df392a51131b1b02240e5b4be61a2edd9126b6",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/75000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "b2680f5a70968ada011af4214bd3b13ce504a1bbade11ebcf3679ff0d4ef792b",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/80000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "387955892d868df10762a77da0b1881c6f3f8570934e589e53cf3b9b6ea5a02b",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/85000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "9782683a420220a99b5caef4e25bfbf68b86029e76eaf025c32edbe878550bc7",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/90000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "04b69706328566c505a417e5b735306da3981fa278753faff405b6b11682982b",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/95000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "348272475431f1f5f5079dca16ea2657e99894ce043e74422b8e8fc1cfd0da57",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/100000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "930038dc7f6001ee85f4e8879f5965f2002918f1698758de2998591a4b2969d7",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/105000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "d0d363b3d8bfee8dd873bffb509ab38436cef060a37e408bf920342c7685f80e",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/110000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "5652ff555abeabf65df7351bdd027df3e32cc5af56d1705d8e3273f3b42f23ce",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/all_greeks/XLE/20260710/115000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "64cf071c7bd6699604a0a1886e9b7e234e817b8927ab0ee3d3729670194a25a1",
+      "request_parameters": {
+        "end_date": "20260706",
+        "ivl": 600000,
+        "start_date": "20260706"
+      },
+      "response_status": 404
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/0/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "bc55bcb8cf99b038e19e2f4cfb5b3f4a27e7b515aa6b7cc954de219005546717",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/35000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "ff6b4836bd078b397d3aa889fa398ed9673ba771e068e1597d4c53dceb1e4221",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/40000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "148d905486c8191285b47750b410a8739e6df6a4a7fd22adc37a6222fba83fd3",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/45000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "695a1f458471780bb543534ceb04b14dc7436abe9620a6b018ae8b3627f67db5",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/50000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "fe6693279453915d0ebf8b06d99b1d0d2405e6703818b254373d9c0abd87ce03",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/55000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "9769105eae99ecd48018c48f8549d240abb66c8c1349cc2c4bd8ece2ba303350",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/60000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "597bdad6f8c1b6772076c4f37055b01ad27da709a3f5f28ea9e4374dc9dc7767",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/65000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "0b191084c98ea7f849589dbc6b21910cff921efa890cd94c49d99c32c5f63bc9",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/70000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "edcadee02770da2016669bf462fa82d0bd6d34b07397a8f976dde8696910795d",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/75000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "78d7b36baee04ffc6baa469a40f229c63a5f63ad62aec22c56a7c1479e686a09",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/80000/C",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "55c817ef5f99d273c5367e1ef846763bf8786503f7cfbc140aabf343ad517e47",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/0/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "817d616b1567859823653e5ae60404659f3e151c9998810dc8c1ff9c9cee5893",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/35000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "1e0d55bc68c624bb62ee74c680f76621c56d16503044f06ffe0ccd6bf6549a37",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/40000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "4d0cc3d7bf585a88931fbc31c985d6a74ee62960061b9bbfa733504ad545e3c4",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/45000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "f1da23b28194d7b1a4b9ce9482d42350c9193a735b070ca18458a242a0eb274b",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/50000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "878ce51b256b6987f5781ae00c8014505534e183ea565f9d3e4d342c8f9c94a4",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/55000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "180805712afcb12dca854b5fc9d6481af9bf85ef2ee92de8f70c47060d78c67f",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/60000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "a5e06720230b67e17c669f5c46327a73bf12bc2e13e8a53d4dc622956f774b92",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/65000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "391bf3a523e20f291a65559bd67651f3ab64064cb91925f63337facf13a64417",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/70000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "3fec931a6525658370110321837d51b977d109313fb5aab74c81f284d6523261",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/75000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "1f0cbfb3bc29f3f8183960342c69f7c8c56de8514e9a3b35777d0cea025890da",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/hist/option/open_interest/XLE/20260710/80000/P",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "591b9849305ba1ad839273ccef6f451fb8e72b2c44ad2488540b9b02169ca9b1",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    },
+    {
+      "endpoint": "/api/theta/bulk_hist/option/eod_greeks/XLE/20260710",
+      "error": null,
+      "error_class": null,
+      "payload_sha256": "955c44a57b3e24fa01c6ea8d70f5977f3a5b7001491cc12254c02db14afa5ff1",
+      "request_parameters": {
+        "end_date": "20260706",
+        "start_date": "20260706"
+      },
+      "response_status": 200
+    }
+  ],
+  "expiry": "2026-07-10",
+  "heavy_fetch_count": 1,
+  "imputed": false,
+  "no_imputation": true,
+  "pre_event_vanna_exposure": -0.048328191150856126,
+  "pre_window_observations": [],
+  "raw_payload_path": "Vol_Suite/_bounded_heavy_acquisition_20260815/raw/2026-07-06_XLE.json",
+  "raw_payload_sha256": "d23903866ce9addc9ab281c063555881bb827a8c5593f885827047e7e9841d7d",
+  "reason": "spot_and_chain_timestamps; two_timestamped_pre_window_iv_observations; delta_iv_pre_window",
+  "registry_bound_hashes": [
+    "500035d6dba53e743730344cde72fe37f2a6b14014374d69d470b5645f851d3c",
+    "da446c71367ec995b077eea4436563b53ae4e9c33efe777dfb39f1fec1550735",
+    "a438daad7f5be2f94eefcfb06a414d63e1fb3715a7eb22e92cbe73798c17d4fe",
+    "7b1f57ccbbb52bca397abcc59606ea96d47c3a313893797a353c2305105a4f79",
+    "52f60254b350b691474d3e2cff1bb61b0c0c396a3902bd4a2948f62aebbcc2aa",
+    "adbcb019255a6f00da6effd7a7be51e54ba7d5bfbd02bff2dda8388784b56764",
+    "3b28acddac3103fefc50bf808c488144c2cd7ae20cc8c1c9ac43982f2961742c",
+    "ad69c4295c328384516c5ed4ef0116f2c5ea9755188821c8ad0d28fda4b33ec2",
+    "0b35952c6055cada26ec83f2c1902cbe4636fb22068cdd5c2f65cd406c025f63",
+    "a366f4ab9672d30960b36ee1678f610d6cac8966e152786ec0f303ce1d52ba5c",
+    "1dbb38502315f625b9d155374b40562766d8f7dcc478c0749789580b65bf173a",
+    "8e73dbb52989b777fefaae93b7248732f717e9f9fcf4587615c48075ab720176",
+    "753c813dc1187c913fff0a0d606b77460c2fea4fddde94047e908e45539fbb08",
+    "eb07cbb64a63db5545e502e5ad9447618a5016264041bb6a93d334595b0efa9d",
+    "209f118cdefa28b0b034369e1cec2dfdb38b5e0dec1eef8eb2dc04bdf7b07a2f",
+    "296c6f8a55f07ad6d599d034ff3fe04a73d123137bf6f44519c27e55e062a203",
+    "6babb28b7f9fb2dff573843b77f1339528e55c9be31a5398c79d039583e564fc",
+    "72d081c3be3fa22ec6c0be9cb363f09ed4bc395d8c4672a9a578f8625ebfcadd",
+    "66e2525fd362b892510210a05e47474b570a8b2537beffe24a0d0a57b3967ced",
+    "bb3941b25d6922f01033ffb27d8008bb2e8affcf4e4964f80cad97312d8a48e7",
+    "412583e0a00625af3e2daf5d7969b53c59c7330aec5c5917cb8477f3bc789454",
+    "1ba578dd8404bb44981a9f38255604cf491baa431e5407444905053071118664",
+    "1b082805571ac9d720b60007859be3eab1c5d86f426c7aebf0c490536d31a856",
+    "7b62cad1f2bd8aad656e2b6c799bf69b5489f44e0c3a353b58f3c9c32b5028ad",
+    "2f31e3596dbbdeffe0e625d9817bf442467a05bd3cf0e5715b9cf17c8bdc736b",
+    "2189b03ea92c3cbd0dbb5b5516079c0bbbc8f32c9f90d055840f43c44370adf7",
+    "d4bd65be84c7c0ff2a0dc2e38cdf72cc606647296cd2ce5f3141ca231bad9b35",
+    "f10c9cc547014e993ec572e5723d114980870a717f1775e26d9775eaf2410d36",
+    "d553d19b1495d0694d9dbb054818e42417c7b746806c0b3023c1f3819cf8c4e7",
+    "0f2d03b32607b5172918955eee5b45dbc6188ce5c7c00464a2e50105e49f6880",
+    "4e9cd1a55e9108319be3f36a8208e13e0cf64330f61351bb216b461ec130a960",
+    "9a6a71900b19af232acf58a00980081766603f8d89b0f9ce469502f4ef539e67",
+    "ed856df4bc8b61edfb0e48f5ef8cee579c8b773f52574deba1fc0bbca1f4b201",
+    "d2fd93efaa01a9c7eaa3ef79d1f2c529a8e9e04c9a0bf0462752259fe187fff5",
+    "cd275ee4204e620f03f28c6860404385cd5cf0da7a90bf39c965feeaef3ca825",
+    "fc8dfc1e4d237408f8fff51dd147a45b0c9d6d7fcc3369a86a1185f7bc98d6a8",
+    "df573241908b9f6101e44e05aa0e79845b5f25fed6f5aebe4930d683798f8f4b",
+    "10cb2d857fd6a42583c43fd0a493bc9d207f6054b2ec5836f2b2e747e4f30ee0",
+    "f8df604d345cd07fbcb45b4a1abe79db401a949026a305006bbab591875edfb3",
+    "9069b2418ca4e01dd584415acf8e2f1e39565654a0b6d40a3157024c3d2a5fd5",
+    "9ecc9337c2de63aff720b41d6b297fab9b84ef66d9963e21b14e7ab960a1209d",
+    "3408454af7473f6443aff0b589598cc2392a2d49a43c6f5563d51431d3d6dfba",
+    "c3140b51e2ce1b5a1f5a7a2289df392a51131b1b02240e5b4be61a2edd9126b6",
+    "b2680f5a70968ada011af4214bd3b13ce504a1bbade11ebcf3679ff0d4ef792b",
+    "387955892d868df10762a77da0b1881c6f3f8570934e589e53cf3b9b6ea5a02b",
+    "9782683a420220a99b5caef4e25bfbf68b86029e76eaf025c32edbe878550bc7",
+    "04b69706328566c505a417e5b735306da3981fa278753faff405b6b11682982b",
+    "348272475431f1f5f5079dca16ea2657e99894ce043e74422b8e8fc1cfd0da57",
+    "930038dc7f6001ee85f4e8879f5965f2002918f1698758de2998591a4b2969d7",
+    "d0d363b3d8bfee8dd873bffb509ab38436cef060a37e408bf920342c7685f80e",
+    "5652ff555abeabf65df7351bdd027df3e32cc5af56d1705d8e3273f3b42f23ce",
+    "64cf071c7bd6699604a0a1886e9b7e234e817b8927ab0ee3d3729670194a25a1",
+    "bc55bcb8cf99b038e19e2f4cfb5b3f4a27e7b515aa6b7cc954de219005546717",
+    "ff6b4836bd078b397d3aa889fa398ed9673ba771e068e1597d4c53dceb1e4221",
+    "148d905486c8191285b47750b410a8739e6df6a4a7fd22adc37a6222fba83fd3",
+    "695a1f458471780bb543534ceb04b14dc7436abe9620a6b018ae8b3627f67db5",
+    "fe6693279453915d0ebf8b06d99b1d0d2405e6703818b254373d9c0abd87ce03",
+    "9769105eae99ecd48018c48f8549d240abb66c8c1349cc2c4bd8ece2ba303350",
+    "597bdad6f8c1b6772076c4f37055b01ad27da709a3f5f28ea9e4374dc9dc7767",
+    "0b191084c98ea7f849589dbc6b21910cff921efa890cd94c49d99c32c5f63bc9",
+    "edcadee02770da2016669bf462fa82d0bd6d34b07397a8f976dde8696910795d",
+    "78d7b36baee04ffc6baa469a40f229c63a5f63ad62aec22c56a7c1479e686a09",
+    "55c817ef5f99d273c5367e1ef846763bf8786503f7cfbc140aabf343ad517e47",
+    "817d616b1567859823653e5ae60404659f3e151c9998810dc8c1ff9c9cee5893",
+    "1e0d55bc68c624bb62ee74c680f76621c56d16503044f06ffe0ccd6bf6549a37",
+    "4d0cc3d7bf585a88931fbc31c985d6a74ee62960061b9bbfa733504ad545e3c4",
+    "f1da23b28194d7b1a4b9ce9482d42350c9193a735b070ca18458a242a0eb274b",
+    "878ce51b256b6987f5781ae00c8014505534e183ea565f9d3e4d342c8f9c94a4",
+    "180805712afcb12dca854b5fc9d6481af9bf85ef2ee92de8f70c47060d78c67f",
+    "a5e06720230b67e17c669f5c46327a73bf12bc2e13e8a53d4dc622956f774b92",
+    "391bf3a523e20f291a65559bd67651f3ab64064cb91925f63337facf13a64417",
+    "3fec931a6525658370110321837d51b977d109313fb5aab74c81f284d6523261",
+    "1f0cbfb3bc29f3f8183960342c69f7c8c56de8514e9a3b35777d0cea025890da",
+    "591b9849305ba1ad839273ccef6f451fb8e72b2c44ad2488540b9b02169ca9b1",
+    "955c44a57b3e24fa01c6ea8d70f5977f3a5b7001491cc12254c02db14afa5ff1"
+  ],
+  "schema_version": 1,
+  "spot_timestamp": null,
+  "status": "HARD_GAP",
+  "ticker": "XLE"
+}

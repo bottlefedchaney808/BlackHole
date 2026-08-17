@@ -414,17 +414,38 @@ def _prompt_sign_model_and_options_chain(pack_ctx: Optional[dict]) -> Tuple[str,
     v2 (vol_surface_replication) and the chain scanner instead of silently
     skipping them the way it used to. See FIX_PLAN_20260725.md, "mode two
     needs to run just like mode 1"."""
-    sign_choice = input(
-        "Dealer positioning sign model -- (1) OI heuristic, (2) Replication "
-        "(Layer 1b), (3) Vol-Surface + Replication (Layer 1a+1b) [default 3]: "
-    ).strip()
-    sign_model = {'1': 'oi_heuristic', '2': 'replication'}.get(sign_choice, 'vol_surface_replication')
+    # Production has one authoritative dealer engine; legacy sign selection is
+    # intentionally unavailable outside the backtesting/comparison path.
+    sign_model = "expiry_book"
     options_hint = True
     if pack_ctx:
         options_hint = bool(pack_ctx["pack"].get("downstream_hints", {}).get("options_suite", False))
     options_default = "y" if options_hint else "n"
     run_options_chain = (input(f"Run Options Chain Scanner step? (y/n, default {options_default}): ").strip().lower() or options_default) == "y"
     return sign_model, run_options_chain
+
+
+def _run_production_dealer_positioning(ticker: str, target_years: float,
+                                       output_dir: str, expiration: str,
+                                       sign_model: str):
+    """Run the authoritative expiry-book engine for the production suite."""
+    from expiry_book_production import fetch_production_result
+    from thetadata_client import ThetaDataController
+
+    td = ThetaDataController()
+    try:
+        result = fetch_production_result(td, ticker, expiration)
+    finally:
+        td.close()
+    interp = (
+        f"Ticker: {ticker}\nSpot: ${result.spot:.2f}\n"
+        f"GEX (dollar gamma per 1%): ${result.snapshot.gex():,.0f}\n"
+        f"DEX (post-multiplier shares): {result.snapshot.dex():,.0f}\n"
+        f"Local gamma boundary: ${result.execution_locus.local_gamma_boundary:.2f}\n"
+        f"Call gamma wall: ${result.execution_locus.call_gamma_wall:.2f}\n"
+        f"Put gamma wall: ${result.execution_locus.put_gamma_wall:.2f}"
+    )
+    return [], interp, result
 
 
 def _prompt_extra_analytics(pack_ctx: Optional[dict]) -> Tuple[bool, bool, bool]:
@@ -664,7 +685,10 @@ def _dealer_positioning_summary(result: Any, sign_model: str,
     for key in _DEALER_SCALAR_FIELDS:
         if hasattr(result, key):
             payload[key] = _json_safe(getattr(result, key))
-    payload["sign_model"] = str(getattr(result, "sign_model", sign_model) or sign_model)
+    # Historical comparison objects may carry a retired label; production
+    # artifacts must identify the authoritative engine, never the test object's
+    # legacy metadata.
+    payload["sign_model"] = str(sign_model)
     return payload
 
 
@@ -1347,26 +1371,40 @@ def _run_core_analysis(
     print(f"\n[Running] Dealer Positioning (sign_model={sign_model})")
     dp_result = None
     try:
-        import dealer_positioning as dp
-        files, interp, dp_result = dp.run_dealer_positioning(ticker, target_years, output_dir=out_root, save_csv=True,
-                                                       expiration=expiration, sign_model=sign_model)
+        files, interp, dp_result = _run_production_dealer_positioning(
+            ticker=ticker, target_years=target_years, output_dir=out_root,
+            expiration=expiration, sign_model=sign_model)
         produced.extend(files)
         sections.append({
             "title": f"Dealer Positioning: {ticker} (sign_model={sign_model})", "text": interp or "",
             "images": [f for f in files if f.lower().endswith('.png')]
         })
-        # The full record set stays on disk as CSV; vol_result.json carries a
-        # capped sample plus this pointer (see _gamma_records_payload).
-        gamma_csv = next((f for f in files
-                          if "_gamma_records_" in os.path.basename(f)
-                          and f.lower().endswith(".csv")), None)
-        artifacts["dealer_positioning"] = _dealer_positioning_summary(
-            dp_result, sign_model, csv_path=gamma_csv)
-        records, total, truncated = _gamma_records_payload(dp_result)
-        artifacts["gamma_records"] = records
-        artifacts["gamma_records_total"] = total
-        artifacts["gamma_records_truncated"] = truncated
-        artifacts["gamma_records_csv"] = gamma_csv
+        if hasattr(dp_result, "snapshot"):
+            artifacts["dealer_positioning"] = {
+                "available": dp_result.status == "available",
+                "engine": "expiry_book", "sign_model": "expiry_book",
+                "units": dp_result.units, "provenance": dp_result.provenance,
+                "spot": dp_result.spot, "expiry": dp_result.expiry,
+                "gex": dp_result.snapshot.gex(), "dex": dp_result.snapshot.dex(),
+                "execution_locus": vars(dp_result.execution_locus),
+                "structural": vars(dp_result.structural),
+            }
+            artifacts["gamma_records"] = []
+            artifacts["gamma_records_total"] = 0
+            artifacts["gamma_records_truncated"] = False
+            artifacts["gamma_records_csv"] = None
+        else:
+            # Test/comparison adapters may still supply the historical result
+            # shape. Normalize it here without making that shape a production
+            # dependency or reopening the legacy live caller.
+            gamma_csv = next((f for f in files if str(f).lower().endswith(".csv")), None)
+            artifacts["dealer_positioning"] = _dealer_positioning_summary(
+                dp_result, "expiry_book", csv_path=gamma_csv)
+            records, total, truncated = _gamma_records_payload(dp_result)
+            artifacts["gamma_records"] = records
+            artifacts["gamma_records_total"] = total
+            artifacts["gamma_records_truncated"] = truncated
+            artifacts["gamma_records_csv"] = gamma_csv
     except Exception as e:
         print(f"  Dealer positioning failed: {e}")
         _note_error("dealer_positioning", e)
@@ -1526,7 +1564,7 @@ def run_unified_flow():
     )
 
     # Populate strategies from chain scan into shared context (Task 3 integration)
-    if 'chain_scan' in artifacts and 'strategies' in artifacts['chain_scan']:
+    if isinstance(artifacts.get('chain_scan'), dict) and 'strategies' in artifacts['chain_scan']:
         context['strategies'] = artifacts['chain_scan']['strategies']
 
     context_path = write_suite_context(context, os.path.join(out_root, "suite_context.json"))
@@ -1713,7 +1751,7 @@ def run_focus_workflow():
 # Non-interactive context mode
 # ---------------------------------------------------------------------------
 
-_VALID_SIGN_MODELS = {"oi_heuristic", "replication", "vol_surface_replication"}
+_VALID_SIGN_MODELS = {"expiry_book"}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -1781,12 +1819,8 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
     # wall-clock time in a headless batch (the group screener re-runs
     # replication for every ranked ticker; the chain scanner pulls another full
     # chain), which are opt-in.
-    sign_model = os.environ.get("VS_SIGN_MODEL", "vol_surface_replication").strip()
-    if sign_model not in _VALID_SIGN_MODELS:
-        print(f"  [context] ignoring VS_SIGN_MODEL={sign_model!r}; "
-              f"expected one of {sorted(_VALID_SIGN_MODELS)}. Using vol_surface_replication.",
-              file=sys.stderr)
-        sign_model = "vol_surface_replication"
+    # Production sign-model selection is locked to the expiry-book engine.
+    sign_model = "expiry_book"
     run_options_chain = _env_flag("VS_RUN_CHAIN_SCANNER", False)
     run_group_screener = _env_flag("VS_RUN_GROUP_SCREENER", False)
     run_vol_surface_2d = _env_flag("VS_RUN_VOL_SURFACE_2D", False)

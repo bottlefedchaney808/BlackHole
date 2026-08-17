@@ -74,7 +74,8 @@ def test_gamma_flow_opposes_spot_move_and_is_gex_scaled():
     up = b.flow("up_1pct", "gamma")
     down = b.flow("down_1pct", "gamma")
     assert up == pytest.approx(-down, rel=0.01)
-    assert up == pytest.approx(ne.gex(), rel=0.01)  # activation ~1 at band edge
+    # Dealer hedge trade opposes the option-book gamma response.
+    assert up == pytest.approx(-ne.gex(), rel=0.01)  # activation ~1 at band edge
 
 
 def test_vanna_flow_uses_one_formula_in_iv_scenarios():

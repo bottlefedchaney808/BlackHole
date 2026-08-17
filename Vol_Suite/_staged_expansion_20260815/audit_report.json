@@ -1,0 +1,67 @@
+{
+  "artifact_hash_file": "SHA256SUMS.txt",
+  "artifact_registry_identity": "probe-only registry contains no causally valid PASS artifacts",
+  "balance_gate": true,
+  "candidate_days": [
+    "2026-07-06",
+    "2026-07-14",
+    "2026-07-24",
+    "2026-08-07"
+  ],
+  "candidate_ticker_day_rows": [
+    {
+      "calendar_day": "2026-07-06",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-07-14",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-07-24",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-08-07",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-07-06",
+      "ticker": "XLF"
+    },
+    {
+      "calendar_day": "2026-07-14",
+      "ticker": "XLF"
+    },
+    {
+      "calendar_day": "2026-07-24",
+      "ticker": "XLF"
+    },
+    {
+      "calendar_day": "2026-08-07",
+      "ticker": "XLF"
+    }
+  ],
+  "candidate_tickers": [
+    "XLE",
+    "XLF"
+  ],
+  "causal_status": "CAUSAL_BLOCKED",
+  "heavy_fetch_occurred": false,
+  "next_authorization": "Authorize a subsequent bounded heavy acquisition only after reviewing this probe packet and explicitly approving the exact 4-day XLE/XLF clustered schedule, cost ceiling, and PRE_WINDOW acquisition; no model promotion authorization is implied.",
+  "pre_window_coverage": "0/6 scheduled units (0/3 unique scheduled days; no heavy acquisition; lightweight probes do not establish two timestamped PRE_WINDOW observations)",
+  "probe_status_counts": {
+    "HARD_GAP": 6,
+    "INELIGIBLE": 0,
+    "PASS": 0
+  },
+  "status": "CAUSAL_BLOCKED",
+  "stop_reason": {
+    "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "classification": "HARD_GAP",
+    "reason": "HTTPStatusError",
+    "status": "PROBE_FAILURE"
+  },
+  "task5_execution_gate": "NOT_ADMITTED; probe-only evidence lacks complete Task 1 evidence, registry-bound artifact identity, and PRE_WINDOW observations; clustered same-day adapter cannot compare ticker rows independently",
+  "unique_day_count": 4
+}

@@ -176,9 +176,44 @@ def test_malformed_strike_row_is_structured_invalid():
                for item in exc.value.invalid_result["exclusions"])
 
 
+# Fields required by run_live_vs_expiry_book_common_input.py's
+# _PROVENANCE_FIELDS[24:] -- calendar/session/event identity that must be
+# present on the unit, echoed in the registry's artifact manifest, and
+# duplicated on the top-level registry entry (see
+# _validate_registered_provenance's "registry calendar field is detached"
+# check). These are independent of dealer_exposure_universe.py's calendar
+# binding contract; this module only requires the fields to be present,
+# non-empty, and consistent between unit/manifest/entry -- it does not
+# recompute them from a live OpEx calendar snapshot.
+_CALENDAR_PROVENANCE = {
+    "calendar_hash": "e" * 64,
+    "calendar_policy_version": "us-options-v1",
+    "resolver_code_hash": "f" * 64,
+    "snapshot_hash": "1" * 64,
+    "as_of": "2026-08-13T00:00:00Z",
+    "event_ids": ["opex-1"],
+    "event_types": ["OPEX"],
+    "event_overlap": False,
+    "event_window_id": "opex-1:OPEX_DAY",
+    "window_start": "2026-08-14T09:30:00-04:00",
+    "window_end": "2026-08-14T16:00:00-04:00",
+    "window_policy": "OPEX_DAY",
+    "nominal_date": "2026-08-14",
+    "observed_expiry_date": "2026-08-14",
+    "session_id": "S-2026-08-14",
+    "session_status": "OPEN",
+    "regular_open": "2026-08-14T09:30:00-04:00",
+    "regular_close": "2026-08-14T16:00:00-04:00",
+    "early_close": False,
+    "settlement_style": "PM_CLOSE",
+    "settlement_timestamp": "2026-08-14T16:00:00-04:00",
+    "calendar_binding_hash": "2" * 64,
+}
+
+
 def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026-08-14T12:00:00Z", breach="2026-08-14T13:00:00Z", source_hash="a" * 64, *, raw_hash="b" * 64, artifact_hash="c" * 64, timezone="America/New_York"):
     candidate_key = "IWM|2026-08-14"
-    return {"ticker": "IWM", "calendar_day": "2026-08-14", "candidate_key": candidate_key, "status": status,
+    unit = {"ticker": "IWM", "calendar_day": "2026-08-14", "candidate_key": candidate_key, "status": status,
             "pre_window_provenance": provenance, "pre_window_value": value,
             "delta_iv_pre_window": value, "iv_before_ts": "2026-08-14T11:00:00Z",
             "iv_before_value": 0.0, "iv_source_ts": source, "iv_source_value": value,
@@ -186,7 +221,7 @@ def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026
             "delta_iv_aggregation_version": "1",
             "breach_window_start_prov": breach, "source_hashes": [source_hash],
             "raw_payload_hash": raw_hash, "artifact_hash": artifact_hash,
-            "declared_timezone": timezone, "endpoint": "https://example.invalid/chain",
+            "declared_timezone": timezone, "timezone": timezone, "endpoint": "https://example.invalid/chain",
             "request_parameters": {"ticker": "IWM", "day": "2026-08-14"},
             "spot_timestamp": "2026-08-14T10:00:00Z", "chain_timestamp": source,
             "expiry": EXPIRY, "dte": 35, "canonical_input_hash": _input().input_hash,
@@ -194,6 +229,8 @@ def _causal_unit(status="PASS", provenance="PRE_WINDOW", value=0.1, source="2026
             "same_day_cluster": {"cluster_id": "2026-08-14", "calendar_day": "2026-08-14",
                                   "tickers": ["IWM"], "n_tickers": 1,
                                   "aggregation_rule": "preserve_ticker_values_v1"}}
+    unit.update(_CALENDAR_PROVENANCE)
+    return unit
 
 
 def _registry(unit, payload=b"verified canonical payload"):
@@ -201,19 +238,22 @@ def _registry(unit, payload=b"verified canonical payload"):
     unit["raw_payload_hash"] = hashlib.sha256(payload).hexdigest()
     manifest = {key: unit[key] for key in (
         "candidate_key", "ticker", "calendar_day", "canonical_input_hash", "status", "raw_payload_hash", "endpoint", "request_parameters",
-        "declared_timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
+        "declared_timezone", "timezone", "spot_timestamp", "chain_timestamp", "iv_source_ts",
         "breach_window_start_prov", "source_hashes", "same_day_cluster",
         "iv_before_ts", "iv_before_value", "iv_source_value", "delta_iv_aggregation",
         "delta_iv_aggregation_version", "expiry", "dte", "canonical_input_hash",
-        "imputed", "no_imputation")}
+        "imputed", "no_imputation", *_CALENDAR_PROVENANCE)}
     unit["artifact_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return {unit["artifact_hash"]: {"artifact_hash": unit["artifact_hash"],
+    entry = {"artifact_hash": unit["artifact_hash"],
             "raw_payload_hash": unit["raw_payload_hash"], "candidate_key": unit["candidate_key"],
             "status": unit["status"], "artifact_manifest": manifest,
             "source_hashes": unit["source_hashes"], "payload_bytes": payload,
             "ticker": unit["ticker"], "calendar_day": unit["calendar_day"],
             "canonical_input_hash": unit["canonical_input_hash"],
-            "expiry": unit["expiry"], "dte": unit["dte"]}}
+            "expiry": unit["expiry"], "dte": unit["dte"]}
+    for field in (*_CALENDAR_PROVENANCE, "timezone"):
+        entry[field] = unit[field]
+    return {unit["artifact_hash"]: entry}
 
 
 def test_causal_gate_blocks_missing_equal_later_and_mixed_provenance():

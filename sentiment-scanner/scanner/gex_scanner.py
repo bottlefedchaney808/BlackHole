@@ -15,16 +15,15 @@ from typing import Optional, Dict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from scanner.options_scanner_base import VolSuiteImporter, get_td
+from scanner.options_scanner_base import get_td
+from expiry_book_production import ExpiryBookUnavailable, fetch_production_result
+import expiry_selector
 
 # How many calendar days of expiries to include (passed as max_days
 # to dealer_positioning.compute_dealer_positioning).
 DEFAULT_MAX_DAYS = 150
 # Default target years for the anchoring forward price.
 DEFAULT_TARGET_YEARS = 0.25
-
-vsi = VolSuiteImporter()
-
 
 @dataclass
 class GexScan:
@@ -46,7 +45,7 @@ def scan_gex(
     ticker: str,
     max_days: int = DEFAULT_MAX_DAYS,
     target_years: float = DEFAULT_TARGET_YEARS,
-    sign_model: str = "oi_heuristic",
+    sign_model: str = "expiry_book",
 ) -> GexScan:
     """Run dealer-positioning GEX scan for one ticker.
 
@@ -69,13 +68,9 @@ def scan_gex(
     """
     td = get_td()
     try:
-        result = vsi.dealer_positioning.compute_dealer_positioning(
-            ticker,
-            target_years=target_years,
-            max_days=max_days,
-            sign_model=sign_model,
-        )
-    except (ValueError, RuntimeError) as e:
+        expiry, _ = expiry_selector.resolve_expiration(td, ticker, None, target_years)
+        result = fetch_production_result(td, ticker, expiry)
+    except (ValueError, RuntimeError, ExpiryBookUnavailable) as e:
         return GexScan(
             ticker=ticker, spot=0.0, forward=0.0,
             total_net_gamma=0.0, total_net_dollar_gamma=0.0,
@@ -84,18 +79,20 @@ def scan_gex(
             timestamp=datetime.now(timezone.utc).isoformat(),
             error=str(e),
         )
+    finally:
+        td.close()
 
     return GexScan(
         ticker=ticker,
         spot=result.spot,
         forward=result.forward,
-        total_net_gamma=result.total_net_gamma,
-        total_net_dollar_gamma=result.total_net_dollar_gamma,
-        gamma_flip_level=result.gamma_flip_level,
-        highest_gamma_strike=result.highest_gamma_strike,
-        num_expiries=result.num_expiries,
-        num_records=result.num_records,
-        sign_model=result.sign_model,
+        total_net_gamma=result.snapshot.gex(),
+        total_net_dollar_gamma=result.snapshot.gex(),
+        gamma_flip_level=result.execution_locus.local_gamma_boundary,
+        highest_gamma_strike=result.execution_locus.call_gamma_wall,
+        num_expiries=1,
+        num_records=len(result.snapshot.rows),
+        sign_model="expiry_book",
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 

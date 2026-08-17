@@ -1,0 +1,876 @@
+{
+  "as_of": "2026-08-15",
+  "n_unique_days_acquired": 62,
+  "n_breach_eligible": 31,
+  "unique_days": [
+    {
+      "day": "20260127",
+      "expiry": "20260130",
+      "dte": 3,
+      "habitat": "FOMC",
+      "label": "FOMC day-1 Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260128",
+      "expiry": "20260130",
+      "dte": 2,
+      "habitat": "FOMC",
+      "label": "FOMC decision Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260317",
+      "expiry": "20260320",
+      "dte": 3,
+      "habitat": "FOMC",
+      "label": "FOMC day-1 Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260318",
+      "expiry": "20260320",
+      "dte": 2,
+      "habitat": "FOMC",
+      "label": "FOMC decision Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260121",
+      "expiry": "20260123",
+      "dte": 2,
+      "habitat": "EARNINGS",
+      "label": "Q4 earnings Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260122",
+      "expiry": "20260123",
+      "dte": 1,
+      "habitat": "EARNINGS",
+      "label": "Q4 earnings Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260123",
+      "expiry": "20260130",
+      "dte": 7,
+      "habitat": "EARNINGS",
+      "label": "Q4 earnings Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260129",
+      "expiry": "20260130",
+      "dte": 1,
+      "habitat": "EARNINGS",
+      "label": "Q4 earnings Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 4
+    },
+    {
+      "day": "20260116",
+      "expiry": "20260123",
+      "dte": 7,
+      "habitat": "OPEX",
+      "label": "January monthly OpEx Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260220",
+      "expiry": "20260227",
+      "dte": 7,
+      "habitat": "OPEX",
+      "label": "February monthly OpEx Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 9
+    },
+    {
+      "day": "20260320",
+      "expiry": "20260327",
+      "dte": 7,
+      "habitat": "OPEX",
+      "label": "March monthly OpEx Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 5
+    },
+    {
+      "day": "20260105",
+      "expiry": "20260109",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260106",
+      "expiry": "20260109",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260107",
+      "expiry": "20260109",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260108",
+      "expiry": "20260109",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260109",
+      "expiry": "20260116",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "pre-OpEx Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260112",
+      "expiry": "20260116",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260113",
+      "expiry": "20260116",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 1
+    },
+    {
+      "day": "20260114",
+      "expiry": "20260116",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 4
+    },
+    {
+      "day": "20260115",
+      "expiry": "20260116",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260120",
+      "expiry": "20260123",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260126",
+      "expiry": "20260130",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260130",
+      "expiry": "20260206",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "control Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260202",
+      "expiry": "20260206",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260203",
+      "expiry": "20260206",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 11
+    },
+    {
+      "day": "20260204",
+      "expiry": "20260206",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 11
+    },
+    {
+      "day": "20260205",
+      "expiry": "20260206",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260206",
+      "expiry": "20260213",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "control Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 4
+    },
+    {
+      "day": "20260209",
+      "expiry": "20260213",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 1
+    },
+    {
+      "day": "20260210",
+      "expiry": "20260213",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260211",
+      "expiry": "20260213",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 14
+    },
+    {
+      "day": "20260212",
+      "expiry": "20260213",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 8
+    },
+    {
+      "day": "20260213",
+      "expiry": "20260220",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "control Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260217",
+      "expiry": "20260220",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260218",
+      "expiry": "20260220",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 4
+    },
+    {
+      "day": "20260219",
+      "expiry": "20260220",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260223",
+      "expiry": "20260227",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 5
+    },
+    {
+      "day": "20260224",
+      "expiry": "20260227",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 8
+    },
+    {
+      "day": "20260225",
+      "expiry": "20260227",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260226",
+      "expiry": "20260227",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 7
+    },
+    {
+      "day": "20260227",
+      "expiry": "20260306",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "control Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260302",
+      "expiry": "20260306",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 7
+    },
+    {
+      "day": "20260303",
+      "expiry": "20260306",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260304",
+      "expiry": "20260306",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 6
+    },
+    {
+      "day": "20260305",
+      "expiry": "20260306",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 4
+    },
+    {
+      "day": "20260306",
+      "expiry": "20260313",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "control Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260309",
+      "expiry": "20260313",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 4
+    },
+    {
+      "day": "20260310",
+      "expiry": "20260313",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 1
+    },
+    {
+      "day": "20260311",
+      "expiry": "20260313",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 1
+    },
+    {
+      "day": "20260312",
+      "expiry": "20260313",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260313",
+      "expiry": "20260320",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "control Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260316",
+      "expiry": "20260320",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260319",
+      "expiry": "20260320",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260323",
+      "expiry": "20260327",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260324",
+      "expiry": "20260327",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260325",
+      "expiry": "20260327",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260326",
+      "expiry": "20260327",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 1
+    },
+    {
+      "day": "20260406",
+      "expiry": "20260410",
+      "dte": 4,
+      "habitat": "NONE",
+      "label": "control Mon (post-GoodFri)",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260407",
+      "expiry": "20260410",
+      "dte": 3,
+      "habitat": "NONE",
+      "label": "control Tue",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": true,
+      "n_firing": 2
+    },
+    {
+      "day": "20260408",
+      "expiry": "20260410",
+      "dte": 2,
+      "habitat": "NONE",
+      "label": "control Wed",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260409",
+      "expiry": "20260410",
+      "dte": 1,
+      "habitat": "NONE",
+      "label": "control Thu",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    },
+    {
+      "day": "20260410",
+      "expiry": "20260417",
+      "dte": 7,
+      "habitat": "NONE",
+      "label": "pre-OpEx Fri",
+      "acquired": true,
+      "families": [
+        "SPY",
+        "QQQ"
+      ],
+      "breach_eligible": false,
+      "n_firing": 0
+    }
+  ],
+  "gaps": []
+}

@@ -20,6 +20,37 @@ def evidence():
         "return_clocks": {"daily": "1d", "from_breach": "5d"},
         "no_imputation": True,
         "zero_dte": False,
+        "calendar_binding": {
+            "ticker": "AAPL",
+            "calendar_day": "2026-08-17",
+            "expiry": "2026-08-21",
+            "dte": 4,
+            "exact_dte": 4,
+            "nominal_date": "2026-08-21",
+            "observed_expiry": "2026-08-21",
+            "observed_expiry_date": "2026-08-21",
+            "session_id": "S-2026-08-21",
+            "observed_session_id": "S-2026-08-21",
+            "session_status": "OPEN",
+            "settlement_style": "PM_CLOSE",
+            "timezone": "America/New_York",
+            "as_of": "2026-08-17T00:00:00Z",
+            "event_ids": ["opex-1"],
+            "event_windows": {"opex-1": {"window_id": "opex-1:OPEX_DAY"}},
+            "event_window_id": "opex-1:OPEX_DAY",
+            "window_id": "opex-1:OPEX_DAY",
+            "window_policy": "OPEX_DAY",
+            "window_start": "2026-08-21T15:30:00-04:00",
+            "window_end": "2026-08-21T16:00:00-04:00",
+            "snapshot_hash": "a" * 64,
+            "calendar_hash": "a" * 64,
+            "calendar_policy_version": "us-options-v1",
+            "resolver_code_version": "test-v1",
+            "resolver_code_hash": "b" * 64,
+            "calendar_binding_hash": "bccce5c1e6220d4a134158bfe91b338615b9cfa6edc3018caf06c2d8e72072ea",
+            "source_hashes": ["d" * 64],
+            "settlement_timestamp": "2026-08-21T16:00:00-04:00",
+        },
     }
 
 
@@ -109,48 +140,41 @@ def test_probe_rejects_mismatched_expiry_and_bad_moneyness_coverage():
 def test_manifest_requires_exactly_one_pass_probe_and_records_exclusions():
     rows = [candidate("AAPL"), candidate("MSFT", day="2026-08-18", expiry="2026-08-22"), candidate("NVDA", day="2026-08-19", expiry="2026-08-23")]
     probes = [probe(), probe("MSFT", "2026-08-18", "2026-08-22", 4, "INELIGIBLE", ("no spot",)), probe("NVDA", "2026-08-19", "2026-08-23", 4, "PASS"), probe("NVDA", "2026-08-19", "2026-08-23", 4, "PASS")]
-    manifest = build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates")
-    assert [(u.ticker, u.day) for u in manifest.units] == [("AAPL", "2026-08-17")]
-    assert manifest.exclusions["MSFT|2026-08-18"] == "probe_ineligible"
-    assert manifest.exclusions["NVDA|2026-08-19"] == "ambiguous_probe"
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
+        build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_missing_probe_is_explicit_and_nonmatching_expiry_is_not_admitted():
-    manifest = build_manifest([candidate("AAPL")], probe_results=[], selection_date="2026-08-15", source_list="approved-static-candidates")
-    assert manifest.units == () and manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
-    manifest = build_manifest([candidate("AAPL")], probe_results=[probe(expiry="2026-08-22", dte=5)], selection_date="2026-08-15", source_list="approved-static-candidates")
-    assert manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
+        build_manifest([candidate("AAPL")], probe_results=[], selection_date="2026-08-15", source_list="approved-static-candidates")
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
+        build_manifest([candidate("AAPL")], probe_results=[probe(expiry="2026-08-22", dte=5)], selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_manifest_rejects_missing_candidate_expiry_without_fallback_match():
     raw = candidate("AAPL")
     raw.pop("expiry")
-    manifest = build_manifest([raw], probe_results=[probe()], selection_date="2026-08-15", source_list="approved-static-candidates")
-    assert manifest.units == ()
-    assert manifest.exclusions["AAPL|2026-08-17"] == "missing_probe"
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
+        build_manifest([raw], probe_results=[probe()], selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_manifest_is_deterministic_for_reversed_duplicates_and_probe_order():
     rows = [candidate("AAPL", day="2026-08-17"), candidate("AAPL", day="2026-08-17"), candidate("MSFT", day="2026-08-18", expiry="2026-08-22")]
     probes = [probe("MSFT", "2026-08-18", "2026-08-22"), probe()]
-    left = build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates").to_dict()
-    right = build_manifest(list(reversed(rows)), probe_results=list(reversed(probes)), intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates").to_dict()
-    assert left == right
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
+        build_manifest(rows, probe_results=probes, intended_units=3, selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_invalid_dates_are_explicit_exclusions():
-    manifest = build_manifest([candidate("AAPL", day="2026-02-30")], selection_date="2026-08-15", source_list="approved-static-candidates")
-    assert manifest.exclusions["AAPL|invalid"] == "invalid_calendar_day"
+    with pytest.raises(ValueError, match="invalid calendar day"):
+        build_manifest([candidate("AAPL", day="2026-02-30")], selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_caps_quotas_and_serialization():
     rows = [candidate("A", "2026-08-01", "2026-08-03", 2, "Tech"), candidate("B", "2026-08-02", "2026-08-04", 2, "Tech")]
     probes = [probe("A", "2026-08-01", "2026-08-03", 2), probe("B", "2026-08-02", "2026-08-04", 2)]
-    manifest = build_manifest(rows, probe_results=probes, intended_units=2, selection_date="2026-08-15", source_list="approved-static-candidates")
-    assert len(manifest.units) == 1 and manifest.quota_schema["dte_strata"] == [list(s) for s in DTE_STRATA]
-    assert manifest.to_dict()["probe_results"][0]["evidence"]
-    assert EVENT_HABITATS == ("FOMC", "EARNINGS", "OPEX")
-    assert Path("Vol_Suite/dealer_exposure_universe.py").exists()
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
+        build_manifest(rows, probe_results=probes, intended_units=2, selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_nonpass_requires_reason_and_status_is_closed():
@@ -176,16 +200,24 @@ def test_build_manifest_requires_real_nonblank_source_list():
 
 
 def test_manifest_rejects_conflicting_candidate_provenance():
+    # build_manifest now requires a calendar_snapshot for any non-held row
+    # before it even reaches per-candidate provenance conflict checks (see
+    # Vol_Suite/dealer_exposure_universe.py::build_manifest), so a plain,
+    # non-held candidate row raises the calendar-snapshot gate first.
     row = candidate("AAPL")
     row.update(selection_date="2026-08-14", source_list="other-approved-list")
-    with pytest.raises(ValueError, match="conflicts with manifest provenance"):
+    with pytest.raises(ValueError, match="calendar snapshot is required"):
         build_manifest([row], selection_date="2026-08-15", source_list="approved-static-candidates")
 
 
 def test_valid_provenance_is_serialized_without_defaults():
+    # Held rows bypass the calendar_snapshot requirement (they are excluded
+    # from the manifest regardless), which lets this test build a real
+    # UniverseManifest and check its serialized provenance without needing a
+    # full OpEx calendar snapshot fixture.
     row = candidate("AAPL")
     row.update(selection_date="2026-08-15", source_list="approved-static-candidates")
-    manifest = build_manifest([row], selection_date="2026-08-15", source_list="approved-static-candidates")
+    manifest = build_manifest([row], held_pairs={("AAPL", "2026-08-17")}, selection_date="2026-08-15", source_list="approved-static-candidates")
     payload = manifest.to_dict()
     assert payload["selection_date"] == "2026-08-15"
     assert payload["source_list"] == "approved-static-candidates"

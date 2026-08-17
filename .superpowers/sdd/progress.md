@@ -18,3 +18,11 @@ Plan: docs/superpowers/plans/2026-08-13-hermes-settings-remediation.md
 ## Verification notes
 - web_search live after reset (confirmed 2026-08-13): returned real CPI results, core 2.5%.
 - web_search_watchdog_cron.py: exit 0 (silent/healthy) before reset; web-search-watchdog cron (00b13c000c47) scheduled 9-18 M-F.
+
+## Authorization Hardening ledger (Dealer-Exposure-Dev branch)
+Plan: staged acquisition authorization hardening
+- Authorization Task 1: complete (16c6fb8..de8ae55, review clean)
+- Authorization Task 2: complete (c9cdb52..c5aa129, review clean)
+- Authorization Task 3: complete (e4660ea..7e51936, review clean)
+- OpEx Calendar Stages 1-3: complete (review clean)
+- Authorization Task 4: complete (74e7462..7721d4c, review clean; executor identity + post-validation probe receipts; 3 Minor non-blocking)

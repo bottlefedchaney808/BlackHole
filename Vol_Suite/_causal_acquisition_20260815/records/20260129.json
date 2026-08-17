@@ -1,0 +1,96 @@
+{
+  "day": "20260129",
+  "expiry": "20260130",
+  "habitat": "EARNINGS",
+  "label": "Q4 earnings Thu",
+  "records": [
+    {
+      "day": "20260129",
+      "date": "20260129",
+      "ticker": "SPY",
+      "families": [
+        "SPY"
+      ],
+      "dte": 1,
+      "expiry": "20260130",
+      "event_habitat": "EARNINGS",
+      "pre_window": {
+        "pre_vanna_timestamp": 35400000,
+        "pre_window_end": 35400000,
+        "breach_window_start": 36000000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": -217891.96730480916,
+        "delta_iv": 0.1405,
+        "gamma_burst": 92779295.229141,
+        "delta_s": -0.003775,
+        "market": -0.003775,
+        "event": 1,
+        "a6_reflexivity": -0.276064,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "EARNINGS",
+        "family_interaction_spy": -217891.96730480916,
+        "forward_return_h": -0.000492
+      },
+      "clock": {
+        "daily": {
+          "return": -0.003775,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": -0.000492,
+          "eligible": true
+        }
+      },
+      "source": "acq-20260129-spy"
+    },
+    {
+      "day": "20260129",
+      "date": "20260129",
+      "ticker": "QQQ",
+      "families": [
+        "QQQ"
+      ],
+      "dte": 1,
+      "expiry": "20260130",
+      "event_habitat": "EARNINGS",
+      "pre_window": {
+        "pre_vanna_timestamp": 35400000,
+        "pre_window_end": 35400000,
+        "breach_window_start": 36000000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": -84315.00984459282,
+        "delta_iv": 0.1975,
+        "gamma_burst": 539866033.249778,
+        "delta_s": -0.005468,
+        "market": -0.005468,
+        "event": 1,
+        "a6_reflexivity": -0.312502,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "EARNINGS",
+        "family_interaction_qqq": -84315.00984459282,
+        "forward_return_h": -0.000848
+      },
+      "clock": {
+        "daily": {
+          "return": -0.005468,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": -0.000848,
+          "eligible": true
+        }
+      },
+      "source": "acq-20260129-qqq"
+    }
+  ]
+}

@@ -1,0 +1,982 @@
+{
+  "acquisition_census": {
+    "associational_exclusions": [],
+    "associational_n": 0,
+    "causal_reasons": [
+      {
+        "calendar_day": "2026-07-06",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "calendar_day": "2026-07-06",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "calendar_day": "2026-07-14",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "calendar_day": "2026-07-14",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "calendar_day": "2026-07-24",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "calendar_day": "2026-07-24",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLF"
+      }
+    ],
+    "causal_status": "CAUSAL_BLOCKED",
+    "comparison_status": "COMPARISON_INVALID",
+    "fail_loud": false,
+    "gate_pass": false,
+    "gate_reason": "strict causal eligibility failed (0/6)",
+    "generated_at": "2026-08-15T00:00:00+00:00",
+    "hard_gap_n": 0,
+    "ineligible_exclusions": [
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":4,\"expiry\":\"2026-07-10\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"1f96577a6d3d35e91a726e344350cc440572b58bc40507b82ca0d550a6c1d780\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "0f303b6a620489be1781692c37b06b881ff02c0bb1616328643db6364afe496e",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 4,
+          "expiry": "2026-07-10",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "1f96577a6d3d35e91a726e344350cc440572b58bc40507b82ca0d550a6c1d780",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-06",
+        "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 4,
+        "dte_stratum": [
+          4,
+          7
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-10",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-06.json",
+        "raw_payload_hash": "1f96577a6d3d35e91a726e344350cc440572b58bc40507b82ca0d550a6c1d780",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-06.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-06",
+          "cluster_id": "2026-07-06",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":4,\"expiry\":\"2026-07-10\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"ed410366d4ba90dbbd2b85b267618690d1782beddeaa442c345637365bb9f8ba\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "27b2463a829dfd1751849f9cfd46b0998bfe447762ed1b966b08130681c6c707",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 4,
+          "expiry": "2026-07-10",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "ed410366d4ba90dbbd2b85b267618690d1782beddeaa442c345637365bb9f8ba",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-06",
+        "candidate_key": "2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 4,
+        "dte_stratum": [
+          4,
+          7
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-10",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-06.json",
+        "raw_payload_hash": "ed410366d4ba90dbbd2b85b267618690d1782beddeaa442c345637365bb9f8ba",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-06.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-06",
+          "cluster_id": "2026-07-06",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Financials",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":3,\"expiry\":\"2026-07-17\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"c01f819dfcd0850c00907d02ddb5fd5a1a7af9f3a988577cdf86fc76f82ff71d\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "d27a5f2de6e31a724da0481dbce618ea483ae0af9cdd1e00a0e8566b0ee37873",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 3,
+          "expiry": "2026-07-17",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "c01f819dfcd0850c00907d02ddb5fd5a1a7af9f3a988577cdf86fc76f82ff71d",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-14",
+        "candidate_key": "2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 3,
+        "dte_stratum": [
+          1,
+          3
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-17",
+        "habitat": "OPEX",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-14.json",
+        "raw_payload_hash": "c01f819dfcd0850c00907d02ddb5fd5a1a7af9f3a988577cdf86fc76f82ff71d",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-14.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-14",
+          "cluster_id": "2026-07-14",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":3,\"expiry\":\"2026-07-17\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"7b4f78ff5fd285b24ea94545410d1607cb2f5b493fefdf3fc7c1b5e8717e2425\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "9a3ddd3bc989766827cbd2470ee68e5b18fb18a2b2497c807c87427bc4bf8112",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 3,
+          "expiry": "2026-07-17",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "7b4f78ff5fd285b24ea94545410d1607cb2f5b493fefdf3fc7c1b5e8717e2425",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-14",
+        "candidate_key": "2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 3,
+        "dte_stratum": [
+          1,
+          3
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-17",
+        "habitat": "OPEX",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-14.json",
+        "raw_payload_hash": "7b4f78ff5fd285b24ea94545410d1607cb2f5b493fefdf3fc7c1b5e8717e2425",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-14.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-14",
+          "cluster_id": "2026-07-14",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Financials",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":8,\"expiry\":\"2026-08-01\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"4eddd4d2dc0ce3ae4051a388e8cba13364c7ec55ad806c3cb5d7c192e1f9f95e\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "115e22e5c7bf4fdb36e4e6dfed0038e45eab74b11a17dd7fa9b4852809a3ecc0",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 8,
+          "expiry": "2026-08-01",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "4eddd4d2dc0ce3ae4051a388e8cba13364c7ec55ad806c3cb5d7c192e1f9f95e",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-24",
+        "candidate_key": "2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 8,
+        "dte_stratum": [
+          8,
+          10
+        ],
+        "endpoint": null,
+        "expiry": "2026-08-01",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-24.json",
+        "raw_payload_hash": "4eddd4d2dc0ce3ae4051a388e8cba13364c7ec55ad806c3cb5d7c192e1f9f95e",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-24.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-24",
+          "cluster_id": "2026-07-24",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":8,\"expiry\":\"2026-08-01\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"6ca73f0d2c2bba178bdd2e01d8a2f85964fe51b24d68a064e83bc2571a103d12\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "a2d4222d070d142aafa926f2472284cc86930ede3ceb5e9010c996a556007dfd",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 8,
+          "expiry": "2026-08-01",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "6ca73f0d2c2bba178bdd2e01d8a2f85964fe51b24d68a064e83bc2571a103d12",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-24",
+        "candidate_key": "2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 8,
+        "dte_stratum": [
+          8,
+          10
+        ],
+        "endpoint": null,
+        "expiry": "2026-08-01",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-24.json",
+        "raw_payload_hash": "6ca73f0d2c2bba178bdd2e01d8a2f85964fe51b24d68a064e83bc2571a103d12",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-24.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-24",
+          "cluster_id": "2026-07-24",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Financials",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLF"
+      }
+    ],
+    "ineligible_n": 6,
+    "intended_units": 6,
+    "no_imputation": true,
+    "pass_n": 0,
+    "pre_window_N": 6,
+    "pre_window_coverage": 0.0,
+    "pre_window_n": 0,
+    "provenance_census": true,
+    "raw_payload_hash_census": true,
+    "reasons": [
+      {
+        "calendar_day": "2026-07-06",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "calendar_day": "2026-07-06",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "calendar_day": "2026-07-14",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "calendar_day": "2026-07-14",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "calendar_day": "2026-07-24",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "calendar_day": "2026-07-24",
+        "reason": "status=INELIGIBLE",
+        "ticker": "XLF"
+      }
+    ],
+    "same_day_gate": false,
+    "statuses": {
+      "ASSOCIATIONAL": 0,
+      "HARD_GAP": 0,
+      "INELIGIBLE": 6,
+      "PASS": 0
+    },
+    "unit_count": 6,
+    "units": [
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":4,\"expiry\":\"2026-07-10\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"1f96577a6d3d35e91a726e344350cc440572b58bc40507b82ca0d550a6c1d780\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "0f303b6a620489be1781692c37b06b881ff02c0bb1616328643db6364afe496e",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 4,
+          "expiry": "2026-07-10",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "1f96577a6d3d35e91a726e344350cc440572b58bc40507b82ca0d550a6c1d780",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-06",
+        "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 4,
+        "dte_stratum": [
+          4,
+          7
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-10",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-06.json",
+        "raw_payload_hash": "1f96577a6d3d35e91a726e344350cc440572b58bc40507b82ca0d550a6c1d780",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-06.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-06",
+          "cluster_id": "2026-07-06",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":4,\"expiry\":\"2026-07-10\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"ed410366d4ba90dbbd2b85b267618690d1782beddeaa442c345637365bb9f8ba\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "27b2463a829dfd1751849f9cfd46b0998bfe447762ed1b966b08130681c6c707",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 4,
+          "expiry": "2026-07-10",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "ed410366d4ba90dbbd2b85b267618690d1782beddeaa442c345637365bb9f8ba",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-06",
+        "candidate_key": "2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 4,
+        "dte_stratum": [
+          4,
+          7
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-10",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-06.json",
+        "raw_payload_hash": "ed410366d4ba90dbbd2b85b267618690d1782beddeaa442c345637365bb9f8ba",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-06.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-06",
+          "cluster_id": "2026-07-06",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Financials",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":3,\"expiry\":\"2026-07-17\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"c01f819dfcd0850c00907d02ddb5fd5a1a7af9f3a988577cdf86fc76f82ff71d\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "d27a5f2de6e31a724da0481dbce618ea483ae0af9cdd1e00a0e8566b0ee37873",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 3,
+          "expiry": "2026-07-17",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "c01f819dfcd0850c00907d02ddb5fd5a1a7af9f3a988577cdf86fc76f82ff71d",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-14",
+        "candidate_key": "2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 3,
+        "dte_stratum": [
+          1,
+          3
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-17",
+        "habitat": "OPEX",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-14.json",
+        "raw_payload_hash": "c01f819dfcd0850c00907d02ddb5fd5a1a7af9f3a988577cdf86fc76f82ff71d",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-14.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-14",
+          "cluster_id": "2026-07-14",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":3,\"expiry\":\"2026-07-17\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"7b4f78ff5fd285b24ea94545410d1607cb2f5b493fefdf3fc7c1b5e8717e2425\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "9a3ddd3bc989766827cbd2470ee68e5b18fb18a2b2497c807c87427bc4bf8112",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 3,
+          "expiry": "2026-07-17",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "7b4f78ff5fd285b24ea94545410d1607cb2f5b493fefdf3fc7c1b5e8717e2425",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-14",
+        "candidate_key": "2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 3,
+        "dte_stratum": [
+          1,
+          3
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-17",
+        "habitat": "OPEX",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-14.json",
+        "raw_payload_hash": "7b4f78ff5fd285b24ea94545410d1607cb2f5b493fefdf3fc7c1b5e8717e2425",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-14.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-14",
+          "cluster_id": "2026-07-14",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Financials",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLF"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":8,\"expiry\":\"2026-08-01\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"4eddd4d2dc0ce3ae4051a388e8cba13364c7ec55ad806c3cb5d7c192e1f9f95e\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "115e22e5c7bf4fdb36e4e6dfed0038e45eab74b11a17dd7fa9b4852809a3ecc0",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 8,
+          "expiry": "2026-08-01",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "4eddd4d2dc0ce3ae4051a388e8cba13364c7ec55ad806c3cb5d7c192e1f9f95e",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-24",
+        "candidate_key": "2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 8,
+        "dte_stratum": [
+          8,
+          10
+        ],
+        "endpoint": null,
+        "expiry": "2026-08-01",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-24.json",
+        "raw_payload_hash": "4eddd4d2dc0ce3ae4051a388e8cba13364c7ec55ad806c3cb5d7c192e1f9f95e",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-24.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-24",
+          "cluster_id": "2026-07-24",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLE"
+      },
+      {
+        "artifact_basis": "{\"candidate_key\":\"2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":8,\"expiry\":\"2026-08-01\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"6ca73f0d2c2bba178bdd2e01d8a2f85964fe51b24d68a064e83bc2571a103d12\",\"status\":\"INELIGIBLE\"}",
+        "artifact_hash": "a2d4222d070d142aafa926f2472284cc86930ede3ceb5e9010c996a556007dfd",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 8,
+          "expiry": "2026-08-01",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "6ca73f0d2c2bba178bdd2e01d8a2f85964fe51b24d68a064e83bc2571a103d12",
+          "status": "INELIGIBLE"
+        },
+        "asset_type": "equity",
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-24",
+        "candidate_key": "2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_timestamp": null,
+        "declared_timezone": null,
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 8,
+        "dte_stratum": [
+          8,
+          10
+        ],
+        "endpoint": null,
+        "expiry": "2026-08-01",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "network": false,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-24.json",
+        "raw_payload_hash": "6ca73f0d2c2bba178bdd2e01d8a2f85964fe51b24d68a064e83bc2571a103d12",
+        "reason": "dry_run_probe_only",
+        "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-24.json",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-24",
+          "cluster_id": "2026-07-24",
+          "n_tickers": 2,
+          "tickers": [
+            "XLE",
+            "XLF"
+          ]
+        },
+        "sector": "Financials",
+        "source_hashes": null,
+        "spot_timestamp": null,
+        "status": "INELIGIBLE",
+        "ticker": "XLF"
+      }
+    ]
+  },
+  "asset_families": {
+    "Energy": [
+      "XLE"
+    ],
+    "Financials": [
+      "XLF"
+    ]
+  },
+  "candidate_count_before_held_exclusion": 8,
+  "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+  "dte_strata_rule": [
+    [
+      1,
+      3
+    ],
+    [
+      4,
+      7
+    ],
+    [
+      8,
+      10
+    ]
+  ],
+  "event_control_rule": "2 event-habitat rows and 2 controls per ticker in the four-day probe schedule; DESCRIPTIVE-HABITAT is not a surprise-based causal label",
+  "genuinely_new_candidate_pairs": [
+    {
+      "calendar_day": "2026-07-06",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-07-14",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-07-24",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-08-07",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-07-06",
+      "ticker": "XLF"
+    },
+    {
+      "calendar_day": "2026-07-14",
+      "ticker": "XLF"
+    },
+    {
+      "calendar_day": "2026-07-24",
+      "ticker": "XLF"
+    },
+    {
+      "calendar_day": "2026-08-07",
+      "ticker": "XLF"
+    }
+  ],
+  "held_calendar_day_count": 77,
+  "held_pair_count": 234,
+  "held_paths_scanned": [
+    "Vol_Suite/_causal_acquisition_20260815",
+    "Vol_Suite/_prewindow_acquisition_20260815",
+    "Vol_Suite/_scratch_tier2",
+    "Vol_Suite/_scratch_tier2b",
+    "Vol_Suite/_expiry_falsifier_cache"
+  ],
+  "held_tickers": [
+    "AAPL",
+    "AMD",
+    "AMZN",
+    "GOOGL",
+    "JPM",
+    "META",
+    "MSFT",
+    "NFLX",
+    "NVDA",
+    "QQQ",
+    "SPY",
+    "TSLA"
+  ],
+  "network_heavy_acquisition_executed": false,
+  "phase": "post_probe",
+  "pre_window_coverage": {
+    "N": 6,
+    "fraction": 0.0,
+    "n": 0,
+    "status": "BLOCKED"
+  },
+  "probe_status_counts": {
+    "HARD_GAP": 6,
+    "INELIGIBLE": 0,
+    "PASS": 0
+  },
+  "same_day_cluster_rule": "one calendar day; preserve ticker-specific rows; never count same-day tickers independently",
+  "selection_date": "2026-08-15",
+  "stop_reason": {
+    "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "classification": "HARD_GAP",
+    "reason": "HTTPStatusError",
+    "status": "PROBE_FAILURE"
+  },
+  "universe_rule": "Frozen broad liquid US sector ETF families; deterministic sector-balanced order; no outcome-based replacement"
+}

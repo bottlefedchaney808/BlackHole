@@ -1,0 +1,188 @@
+{
+  "census": {
+    "associational_exclusions": [],
+    "associational_n": 0,
+    "causal_reasons": [
+      {
+        "calendar_day": "2026-07-06",
+        "reason": "status=HARD_GAP",
+        "ticker": "XLE"
+      }
+    ],
+    "causal_status": "CAUSAL_BLOCKED",
+    "comparison_status": "COMPARISON_INVALID",
+    "fail_loud": false,
+    "gate_pass": false,
+    "gate_reason": "strict causal eligibility failed (0/1)",
+    "generated_at": "2026-08-15T00:00:00Z",
+    "hard_gap_n": 1,
+    "ineligible_exclusions": [],
+    "ineligible_n": 0,
+    "intended_units": 1,
+    "no_imputation": true,
+    "pass_n": 0,
+    "pre_window_N": 1,
+    "pre_window_coverage": 0.0,
+    "pre_window_n": 0,
+    "provenance_census": true,
+    "raw_payload_hash_census": true,
+    "reasons": [
+      {
+        "calendar_day": "2026-07-06",
+        "reason": "status=HARD_GAP",
+        "ticker": "XLE"
+      }
+    ],
+    "same_day_gate": false,
+    "statuses": {
+      "ASSOCIATIONAL": 0,
+      "HARD_GAP": 1,
+      "INELIGIBLE": 0,
+      "PASS": 0
+    },
+    "unit_count": 1,
+    "units": [
+      {
+        "acquisition_decision": "NONE",
+        "artifact_basis": "{\"candidate_key\":\"2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":4,\"expiry\":\"2026-07-10\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"8ff581fe123e0d478c791296d6ca894ba17dcf08af9b78c06c18e856b37ab728\",\"status\":\"HARD_GAP\"}",
+        "artifact_hash": "f53c272fe7c44b45a41ef488b10f473749c9a5cef35f67893186cf6be6d5cdfd",
+        "artifact_manifest": {
+          "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+          "dte": 4,
+          "expiry": "2026-07-10",
+          "imputed": false,
+          "no_imputation": true,
+          "raw_payload_hash": "8ff581fe123e0d478c791296d6ca894ba17dcf08af9b78c06c18e856b37ab728",
+          "status": "HARD_GAP"
+        },
+        "asset_type": "equity",
+        "breach_eligible": false,
+        "breach_window_start_prov": null,
+        "calendar_day": "2026-07-06",
+        "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+        "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+        "canonical_input_hash": null,
+        "chain_source_hash": null,
+        "chain_source_identity": null,
+        "chain_timestamp": null,
+        "declared_timezone": "America/New_York",
+        "delta_iv_aggregation": null,
+        "delta_iv_aggregation_version": null,
+        "delta_iv_pre_window": null,
+        "dte": 4,
+        "dte_stratum": [
+          4,
+          7
+        ],
+        "endpoint": null,
+        "expiry": "2026-07-10",
+        "habitat": "NONE",
+        "held_day_reference": null,
+        "held_pair_exclusion": false,
+        "held_pair_exclusion_reason": null,
+        "imputed": false,
+        "iv_before_ts": null,
+        "iv_before_value": null,
+        "iv_source_ts": null,
+        "iv_source_value": null,
+        "no_imputation": true,
+        "parameters": null,
+        "pre_window_observations": [],
+        "pre_window_provenance": "ASSOCIATIONAL",
+        "pre_window_value": null,
+        "raw_payload_hash": "8ff581fe123e0d478c791296d6ca894ba17dcf08af9b78c06c18e856b37ab728",
+        "reason": "raw acquisition is not breach eligible",
+        "request_parameters": null,
+        "same_day_cluster": {
+          "aggregation_rule": "preserve_ticker_values_v1",
+          "calendar_day": "2026-07-06",
+          "cluster_id": "2026-07-06",
+          "n_tickers": 1,
+          "tickers": [
+            "XLE"
+          ]
+        },
+        "sector": "Energy",
+        "source_hashes": null,
+        "spot_source_hash": null,
+        "spot_source_identity": null,
+        "spot_timestamp": null,
+        "status": "HARD_GAP",
+        "ticker": "XLE"
+      }
+    ]
+  },
+  "heavy_call_count": 75,
+  "network_heavy_acquisition_executed": true,
+  "no_imputation": true,
+  "status": "HARD_GAP",
+  "stop_reason": "raw acquisition is not breach eligible",
+  "unit": {
+    "acquisition_decision": "NONE",
+    "artifact_basis": "{\"candidate_key\":\"2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1\",\"dte\":4,\"expiry\":\"2026-07-10\",\"imputed\":false,\"no_imputation\":true,\"raw_payload_hash\":\"8ff581fe123e0d478c791296d6ca894ba17dcf08af9b78c06c18e856b37ab728\",\"status\":\"HARD_GAP\"}",
+    "artifact_hash": "f53c272fe7c44b45a41ef488b10f473749c9a5cef35f67893186cf6be6d5cdfd",
+    "artifact_manifest": {
+      "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 4,
+      "expiry": "2026-07-10",
+      "imputed": false,
+      "no_imputation": true,
+      "raw_payload_hash": "8ff581fe123e0d478c791296d6ca894ba17dcf08af9b78c06c18e856b37ab728",
+      "status": "HARD_GAP"
+    },
+    "asset_type": "equity",
+    "breach_eligible": false,
+    "breach_window_start_prov": null,
+    "calendar_day": "2026-07-06",
+    "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+    "canonical_input_hash": null,
+    "chain_source_hash": null,
+    "chain_source_identity": null,
+    "chain_timestamp": null,
+    "declared_timezone": "America/New_York",
+    "delta_iv_aggregation": null,
+    "delta_iv_aggregation_version": null,
+    "delta_iv_pre_window": null,
+    "dte": 4,
+    "dte_stratum": [
+      4,
+      7
+    ],
+    "endpoint": null,
+    "expiry": "2026-07-10",
+    "habitat": "NONE",
+    "held_day_reference": null,
+    "held_pair_exclusion": false,
+    "held_pair_exclusion_reason": null,
+    "imputed": false,
+    "iv_before_ts": null,
+    "iv_before_value": null,
+    "iv_source_ts": null,
+    "iv_source_value": null,
+    "no_imputation": true,
+    "parameters": null,
+    "pre_window_observations": [],
+    "pre_window_provenance": "ASSOCIATIONAL",
+    "pre_window_value": null,
+    "raw_payload_hash": "8ff581fe123e0d478c791296d6ca894ba17dcf08af9b78c06c18e856b37ab728",
+    "reason": "raw acquisition is not breach eligible",
+    "request_parameters": null,
+    "same_day_cluster": {
+      "aggregation_rule": "preserve_ticker_values_v1",
+      "calendar_day": "2026-07-06",
+      "cluster_id": "2026-07-06",
+      "n_tickers": 1,
+      "tickers": [
+        "XLE"
+      ]
+    },
+    "sector": "Energy",
+    "source_hashes": null,
+    "spot_source_hash": null,
+    "spot_source_identity": null,
+    "spot_timestamp": null,
+    "status": "HARD_GAP",
+    "ticker": "XLE"
+  }
+}

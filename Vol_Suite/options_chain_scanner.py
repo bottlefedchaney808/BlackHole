@@ -58,8 +58,8 @@ from vs_utils import timestamped_output_dir
 from dealer_positioning import (
     DARK_BG, GRID_COLOR, TEXT_COLOR, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED,
     ACCENT_GOLD, ACCENT_PURPLE, ACCENT_CYAN, ACCENT_ORANGE,
-    CONTRACT_MULTIPLIER, VANNA_PP_SCALE,
 )
+from expiry_book_production import fetch_production_result
 from strategy_recommender import StrategyRecommender, format_strategies_artifact
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
@@ -480,13 +480,26 @@ def compute_vanna_positioning(dealer_result) -> dict:
     same model. `scan_chain`/`run_chain_scanner` now always pass a shared
     DealerPositioningResult in here instead.
     """
-    strikes = np.asarray(dealer_result.strike_grid, dtype=float)
-    values = np.asarray(dealer_result.vanna_shares_by_strike, dtype=float)
-    has_vanna = bool(dealer_result.has_vanna_data)
+    if hasattr(dealer_result, "snapshot"):
+        rows = dealer_result.snapshot.rows
+        by_strike = {}
+        for row in rows:
+            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + row.exposure_of("vanna")
+        strikes = np.asarray(sorted(by_strike), dtype=float)
+        values = np.asarray([by_strike[k] for k in strikes], dtype=float)
+        has_vanna = bool(len(rows))
+        call_vanna = sum(r.exposure_of("vanna") for r in rows if r.right == "C")
+        put_vanna = sum(r.exposure_of("vanna") for r in rows if r.right == "P")
+        spot = float(dealer_result.spot)
+    else:
+        strikes = np.asarray(dealer_result.strike_grid, dtype=float)
+        values = np.asarray(dealer_result.vanna_shares_by_strike, dtype=float)
+        has_vanna = bool(dealer_result.has_vanna_data)
+        call_vanna = float(dealer_result.vanna_call_shares) if has_vanna else 0.0
+        put_vanna = float(dealer_result.vanna_put_shares) if has_vanna else 0.0
+        spot = float(dealer_result.spot)
 
     net_vanna = float(np.sum(values)) if has_vanna else 0.0
-    call_vanna = float(dealer_result.vanna_call_shares) if has_vanna else 0.0
-    put_vanna = float(dealer_result.vanna_put_shares) if has_vanna else 0.0
 
     # Flip strike: adjacent-strike sign change in the per-strike net vanna
     # profile, nearest to spot (same "nearest crossing to the reference point"
@@ -496,7 +509,7 @@ def compute_vanna_positioning(dealer_result) -> dict:
         signs = np.sign(values)
         crossings = np.where(np.diff(signs) != 0)[0]
         if len(crossings) > 0:
-            spot_idx = int(np.argmin(np.abs(strikes - dealer_result.spot)))
+            spot_idx = int(np.argmin(np.abs(strikes - spot)))
             nearest = crossings[np.argmin(np.abs(crossings - spot_idx))]
             flip_strike = float((strikes[nearest] + strikes[nearest + 1]) / 2.0)
 
@@ -538,9 +551,7 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
     df, smile_a, smile_b, svi_params = fit_svi_smile(df, forward, actual_T)
 
     if dealer_result is None:
-        import dealer_positioning as _dp
-        dealer_result = _dp.compute_dealer_positioning(
-            ticker, target_years=target_years, expiration=expiration)
+        dealer_result = fetch_production_result(td, ticker, expiration)
     vanna_info = compute_vanna_positioning(dealer_result)
 
     # ATM IV via the OTM-side convention (put IV below forward, call IV above --

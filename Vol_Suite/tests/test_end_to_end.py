@@ -12,6 +12,7 @@ Tests cover:
 import pytest
 import json
 import math
+import os
 import tempfile
 from pathlib import Path
 
@@ -20,7 +21,13 @@ import numpy as np
 from Vol_Suite.options_chain_scanner import run_chain_scanner
 from Vol_Suite.suite_context import build_suite_context, validate_suite_context
 
+requires_thetadata = pytest.mark.skipif(
+    not (os.environ.get("THETADATA_CF_ACCESS_CLIENT_ID") and os.environ.get("THETADATA_CF_ACCESS_CLIENT_SECRET")),
+    reason="ThetaData credentials not configured (THETADATA_CF_ACCESS_CLIENT_ID/_SECRET)",
+)
 
+
+@requires_thetadata
 class TestEndToEndChainScanToStrategies:
     """Test complete flow from chain scan to strategy recommendations."""
 
@@ -167,6 +174,7 @@ class TestStrategiesInSuiteContext:
             json_str = json.dumps(context)
             assert 'put_spread' in json_str
 
+    @requires_thetadata
     def test_multiple_edges_generate_multiple_strategies(self):
         """Test that multiple edge strikes generate multiple strategy options."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -190,6 +198,7 @@ class TestStrategiesInSuiteContext:
                         f"Expected {len(edge_candidates)} strategy groups, got {len(strategies)}"
 
 
+@requires_thetadata
 class TestOptionssuiteIntegration:
     """Test integration with Options_Suite format (R10)."""
 

@@ -1,0 +1,96 @@
+{
+  "day": "20260320",
+  "expiry": "20260327",
+  "habitat": "OPEX",
+  "label": "March monthly OpEx Fri",
+  "records": [
+    {
+      "day": "20260320",
+      "date": "20260320",
+      "ticker": "SPY",
+      "families": [
+        "SPY"
+      ],
+      "dte": 7,
+      "expiry": "20260327",
+      "event_habitat": "OPEX",
+      "pre_window": {
+        "pre_vanna_timestamp": 36600000,
+        "pre_window_end": 36600000,
+        "breach_window_start": 37200000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 34509.964058727135,
+        "delta_iv": 0.2483,
+        "gamma_burst": 37828615.605682,
+        "delta_s": -0.011071,
+        "market": -0.011071,
+        "event": 1,
+        "a6_reflexivity": 0.29948,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "OPEX",
+        "family_interaction_spy": 34509.964058727135,
+        "forward_return_h": -0.000767
+      },
+      "clock": {
+        "daily": {
+          "return": -0.011071,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": -0.000767,
+          "eligible": true
+        }
+      },
+      "source": "acq-20260320-spy"
+    },
+    {
+      "day": "20260320",
+      "date": "20260320",
+      "ticker": "QQQ",
+      "families": [
+        "QQQ"
+      ],
+      "dte": 7,
+      "expiry": "20260327",
+      "event_habitat": "OPEX",
+      "pre_window": {
+        "pre_vanna_timestamp": 52200000,
+        "pre_window_end": 52200000,
+        "breach_window_start": 52800000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 9981.456980128205,
+        "delta_iv": 0.2684,
+        "gamma_burst": 1029316409.239372,
+        "delta_s": -0.01272,
+        "market": -0.01272,
+        "event": 1,
+        "a6_reflexivity": 0.358199,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "OPEX",
+        "family_interaction_qqq": 9981.456980128205,
+        "forward_return_h": -0.000447
+      },
+      "clock": {
+        "daily": {
+          "return": -0.01272,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": -0.000447,
+          "eligible": true
+        }
+      },
+      "source": "acq-20260320-qqq"
+    }
+  ]
+}

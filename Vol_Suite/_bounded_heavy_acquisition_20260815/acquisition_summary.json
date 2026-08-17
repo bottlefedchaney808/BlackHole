@@ -1,0 +1,27 @@
+{
+  "attempted_unit": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+  "heavy_fetch_count": 1,
+  "network_calls": 75,
+  "next_evidence_decision": "STOP: first attempted unit failed a hard/provenance gate; review endpoint availability and provenance completeness before any future authorization.",
+  "raw_artifact": {
+    "path": "Vol_Suite/_bounded_heavy_acquisition_20260815/raw/2026-07-06_XLE.json",
+    "sha256": "d23903866ce9addc9ab281c063555881bb827a8c5593f885827047e7e9841d7d"
+  },
+  "reason": "spot_and_chain_timestamps; two_timestamped_pre_window_iv_observations; delta_iv_pre_window",
+  "record_artifact": {
+    "path": "Vol_Suite/_bounded_heavy_acquisition_20260815/records/2026-07-06_XLE.json",
+    "sha256": "7dc20434474891a921c4001c34a1ead053d9132ebdc03b57f17fc57272326557"
+  },
+  "required_evidence": {
+    "canonical_inputs": true,
+    "delta_iv_pre_window": false,
+    "endpoint_request_parameters": true,
+    "pre_event_vanna": true,
+    "raw_payloads": true,
+    "registry_bound_hashes": true,
+    "spot_and_chain_timestamps": false,
+    "two_timestamped_pre_window_iv_observations": false
+  },
+  "status": "HARD_GAP",
+  "stop_reason": "spot_and_chain_timestamps; two_timestamped_pre_window_iv_observations; delta_iv_pre_window"
+}

@@ -91,13 +91,11 @@ def _install_common_stubs(monkeypatch, calls: dict):
     import garch_analysis as ga
     monkeypatch.setattr(ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31))
 
-    import dealer_positioning as dp
-
     def fake_run_dealer_positioning(ticker, target_years, output_dir=None, save_csv=True, expiration=None, sign_model=None):
         calls["dealer_positioning_sign_model"] = sign_model
         return [], "Dealer positioning done", None
 
-    monkeypatch.setattr(dp, "run_dealer_positioning", fake_run_dealer_positioning)
+    monkeypatch.setattr(vsuite, "_run_production_dealer_positioning", fake_run_dealer_positioning)
 
     import options_chain_scanner as ocs
 
@@ -139,9 +137,8 @@ def _assert_full_pipeline_ran_on_the_pack_basket(calls: dict):
     # Both replication legs ran (index benchmark + focus ticker).
     assert calls["variance_swap_tickers"] == ["SPY", "TSLA"]
 
-    # The sign-model prompt was actually threaded through -- both modes used
-    # to risk silently defaulting to v1 (oi_heuristic) if this got dropped.
-    assert calls["dealer_positioning_sign_model"] == "vol_surface_replication"
+    # Production is locked to the expiry-book engine.
+    assert calls["dealer_positioning_sign_model"] == "expiry_book"
 
     # Options chain scanner ran because the script said "y".
     assert calls["chain_scanner_called"] is True
@@ -166,7 +163,6 @@ def test_unified_flow_runs_the_same_pipeline_as_focus_workflow(monkeypatch, tmp_
 
     answers = ScriptedInput([
         "2",     # input mode: highlighted ticker pack
-        "3",     # sign model: vol_surface_replication
         "y",     # run options chain scanner step
         "call",  # option type (for the suite_context handoff)
         "",      # strike (keep null)
@@ -195,7 +191,6 @@ def test_focus_workflow_reaches_the_same_pipeline_calls(monkeypatch, tmp_path):
 
     answers = ScriptedInput([
         "2",     # input mode: highlighted ticker pack
-        "3",     # sign model: vol_surface_replication
         "y",     # run options chain scanner step
         "y",     # compile outputs into single PDF
         "y",     # run group screener on the full highlighted pack

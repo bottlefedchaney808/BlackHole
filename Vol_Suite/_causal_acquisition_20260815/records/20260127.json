@@ -1,0 +1,96 @@
+{
+  "day": "20260127",
+  "expiry": "20260130",
+  "habitat": "FOMC",
+  "label": "FOMC day-1 Tue",
+  "records": [
+    {
+      "day": "20260127",
+      "date": "20260127",
+      "ticker": "SPY",
+      "families": [
+        "SPY"
+      ],
+      "dte": 3,
+      "expiry": "20260130",
+      "event_habitat": "FOMC",
+      "pre_window": {
+        "pre_vanna_timestamp": 34200000,
+        "pre_window_end": 34200000,
+        "breach_window_start": 58200000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 437948.83043406083,
+        "delta_iv": 0.1461,
+        "gamma_burst": 0.0,
+        "delta_s": 0.00193,
+        "market": 0.00193,
+        "event": 1,
+        "a6_reflexivity": 0.264486,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "FOMC",
+        "family_interaction_spy": 437948.83043406083,
+        "forward_return_h": -0.000403
+      },
+      "clock": {
+        "daily": {
+          "return": 0.00193,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": null,
+          "eligible": false
+        }
+      },
+      "source": "acq-20260127-spy"
+    },
+    {
+      "day": "20260127",
+      "date": "20260127",
+      "ticker": "QQQ",
+      "families": [
+        "QQQ"
+      ],
+      "dte": 3,
+      "expiry": "20260130",
+      "event_habitat": "FOMC",
+      "pre_window": {
+        "pre_vanna_timestamp": 34200000,
+        "pre_window_end": 34200000,
+        "breach_window_start": 58200000,
+        "cutoff_pass": true,
+        "n_rows_used": 50,
+        "excluded_post_cutoff": 0
+      },
+      "l2": {
+        "pre_vanna_exposure": 24527.958738441157,
+        "delta_iv": 0.2195,
+        "gamma_burst": 0.0,
+        "delta_s": 0.003514,
+        "market": 0.003514,
+        "event": 1,
+        "a6_reflexivity": 0.42559,
+        "cross_family_spillover": 0.0,
+        "surprise": null,
+        "event_habitat": "FOMC",
+        "family_interaction_qqq": 24527.958738441157,
+        "forward_return_h": 0.000588
+      },
+      "clock": {
+        "daily": {
+          "return": 0.003514,
+          "eligible": true
+        },
+        "from_breach": {
+          "return": null,
+          "eligible": false
+        }
+      },
+      "source": "acq-20260127-qqq"
+    }
+  ]
+}

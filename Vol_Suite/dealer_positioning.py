@@ -4,6 +4,7 @@
 # Live ThetaData: gamma from bulk greeks, OI from separate endpoint.
 
 import math
+import inspect
 import warnings
 import os
 from datetime import datetime, timezone
@@ -265,6 +266,23 @@ def _dealer_sign(right: str) -> float:
 
 VALID_SIGN_MODELS = ('oi_heuristic', 'replication', 'vol_surface_replication')
 
+_LEGACY_BACKTEST_CALLERS = {
+    "backtest_stage3.py", "backtesting_tool.py", "broker_book.py",
+    "run_dual_pipeline_gate.py", "run_dual_pipeline_gate_v2.py",
+    "run_dual_pipeline_gate_v5.py", "run_compare_live_vs_new.py",
+    "run_live_vs_expiry_book_common_input.py",
+}
+
+
+def _assert_legacy_backtest_access() -> None:
+    """Prevent the retired live model from being called by production code."""
+    frames = inspect.stack()[1:]
+    callers = {os.path.basename(frame.filename).lower() for frame in frames}
+    if not callers.intersection(_LEGACY_BACKTEST_CALLERS) and not any(
+        "tests" in frame.filename.lower() for frame in frames
+    ):
+        raise RuntimeError("dealer_positioning legacy live model is locked; use expiry_book_production")
+
 _SIGN_MODEL_LABELS = {
     'oi_heuristic': "OI Heuristic (v1)",
     'replication': "Replication (v2)",
@@ -391,6 +409,7 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
     Every other active expiry is untouched -- still same-day snapshot via
     `_resolve_sign`, per `sign_model`. See DealerPositioningResult.accumulate
     and the render label in sign_model_render_label()."""
+    _assert_legacy_backtest_access()
     effective_accumulate = accumulate or os.environ.get("DEALER_ACCUMULATION", "0") == "1"
 
     td = ThetaDataController()

@@ -1,0 +1,228 @@
+{
+  "approval_command": "python -m Vol_Suite.dealer_exposure_expansion --approve-network",
+  "approval_required": true,
+  "balance_gate": true,
+  "counts": {
+    "control": 4,
+    "control_unique_days": 2,
+    "dte_strata": {
+      "1-3": 2,
+      "4-7": 2,
+      "8-10": 2
+    },
+    "event": 2,
+    "event_unique_days": 1
+  },
+  "exclusions": [
+    {
+      "calendar_day": "2026-08-07",
+      "held_reference": null,
+      "reason": "invalid_dte",
+      "ticker": "XLE"
+    },
+    {
+      "calendar_day": "2026-08-07",
+      "held_reference": null,
+      "reason": "invalid_dte",
+      "ticker": "XLF"
+    }
+  ],
+  "expected_ticker_day_units": 6,
+  "gates": {
+    "THETADATA_HIST_CONCURRENCY": 1,
+    "approval_required": true,
+    "balanced_panel": true,
+    "imputation_policy": "reject_missing",
+    "no_imputation": true,
+    "pre_window_observations_required": 2
+  },
+  "intended_unique_day_denominator": 3,
+  "mode": "dry-run",
+  "network_fetch_allowed": false,
+  "no_imputation": true,
+  "planned_candidates": [
+    "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+    "2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+    "2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+    "2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1"
+  ],
+  "quota": {
+    "balanced_panel_rule": "event/control arm ratio <= 2:1; preserve ticker-specific rows",
+    "control_target_fraction": 0.6666666666666666,
+    "dte_strata": [
+      [
+        1,
+        3
+      ],
+      [
+        4,
+        7
+      ],
+      [
+        8,
+        10
+      ]
+    ],
+    "event_habitats": [
+      "FOMC",
+      "EARNINGS",
+      "OPEX"
+    ],
+    "event_target_fraction": 0.3333333333333333
+  },
+  "registry_path": "Vol_Suite/_staged_expansion_20260815/registry.json",
+  "schema_version": 1,
+  "selection_provenance": {
+    "candidate_count": 8,
+    "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1"
+  },
+  "stop_conditions": [
+    "stop if any required chain/spot/IV/OI probe is not PASS",
+    "stop if PRE_WINDOW lacks two timestamped observations",
+    "stop if any imputation or zero-DTE representation is observed",
+    "stop if event/control arms are absent or exceed 2:1 imbalance",
+    "stop if any held ticker\u00d7day reappears"
+  ],
+  "units": [
+    {
+      "asset_type": "equity",
+      "calendar_day": "2026-07-06",
+      "candidate_key": "2026-07-06|XLE|2026-07-10|4|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+      "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 4,
+      "dte_stratum": [
+        4,
+        7
+      ],
+      "expiry": "2026-07-10",
+      "habitat": "NONE",
+      "held_day_reference": null,
+      "held_pair_exclusion": false,
+      "held_pair_exclusion_reason": null,
+      "imputed": false,
+      "network": false,
+      "no_imputation": true,
+      "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-06.json",
+      "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-06.json",
+      "sector": "Energy",
+      "ticker": "XLE"
+    },
+    {
+      "asset_type": "equity",
+      "calendar_day": "2026-07-06",
+      "candidate_key": "2026-07-06|XLF|2026-07-10|4|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+      "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 4,
+      "dte_stratum": [
+        4,
+        7
+      ],
+      "expiry": "2026-07-10",
+      "habitat": "NONE",
+      "held_day_reference": null,
+      "held_pair_exclusion": false,
+      "held_pair_exclusion_reason": null,
+      "imputed": false,
+      "network": false,
+      "no_imputation": true,
+      "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-06.json",
+      "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-06.json",
+      "sector": "Financials",
+      "ticker": "XLF"
+    },
+    {
+      "asset_type": "equity",
+      "calendar_day": "2026-07-14",
+      "candidate_key": "2026-07-14|XLE|2026-07-17|3|OPEX|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+      "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 3,
+      "dte_stratum": [
+        1,
+        3
+      ],
+      "expiry": "2026-07-17",
+      "habitat": "OPEX",
+      "held_day_reference": null,
+      "held_pair_exclusion": false,
+      "held_pair_exclusion_reason": null,
+      "imputed": false,
+      "network": false,
+      "no_imputation": true,
+      "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-14.json",
+      "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-14.json",
+      "sector": "Energy",
+      "ticker": "XLE"
+    },
+    {
+      "asset_type": "equity",
+      "calendar_day": "2026-07-14",
+      "candidate_key": "2026-07-14|XLF|2026-07-17|3|OPEX|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+      "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 3,
+      "dte_stratum": [
+        1,
+        3
+      ],
+      "expiry": "2026-07-17",
+      "habitat": "OPEX",
+      "held_day_reference": null,
+      "held_pair_exclusion": false,
+      "held_pair_exclusion_reason": null,
+      "imputed": false,
+      "network": false,
+      "no_imputation": true,
+      "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-14.json",
+      "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-14.json",
+      "sector": "Financials",
+      "ticker": "XLF"
+    },
+    {
+      "asset_type": "equity",
+      "calendar_day": "2026-07-24",
+      "candidate_key": "2026-07-24|XLE|2026-08-01|8|NONE|Energy|deterministic-sector-balanced-static-2026-08-15-v1",
+      "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 8,
+      "dte_stratum": [
+        8,
+        10
+      ],
+      "expiry": "2026-08-01",
+      "habitat": "NONE",
+      "held_day_reference": null,
+      "held_pair_exclusion": false,
+      "held_pair_exclusion_reason": null,
+      "imputed": false,
+      "network": false,
+      "no_imputation": true,
+      "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLE/2026-07-24.json",
+      "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLE/2026-07-24.json",
+      "sector": "Energy",
+      "ticker": "XLE"
+    },
+    {
+      "asset_type": "equity",
+      "calendar_day": "2026-07-24",
+      "candidate_key": "2026-07-24|XLF|2026-08-01|8|NONE|Financials|deterministic-sector-balanced-static-2026-08-15-v1",
+      "candidate_source": "deterministic-sector-balanced-static-2026-08-15-v1",
+      "dte": 8,
+      "dte_stratum": [
+        8,
+        10
+      ],
+      "expiry": "2026-08-01",
+      "habitat": "NONE",
+      "held_day_reference": null,
+      "held_pair_exclusion": false,
+      "held_pair_exclusion_reason": null,
+      "imputed": false,
+      "network": false,
+      "no_imputation": true,
+      "raw_artifact_path": "Vol_Suite/_staged_expansion_20260815/raw/XLF/2026-07-24.json",
+      "record_artifact_path": "Vol_Suite/_staged_expansion_20260815/records/XLF/2026-07-24.json",
+      "sector": "Financials",
+      "ticker": "XLF"
+    }
+  ]
+}

@@ -86,12 +86,10 @@ def test_heavy_gate_rejects_unbound_schedule_before_injected_executor():
         "habitat": "OPEX", "sector": "technology", "candidate_source": "reviewed-fixture",
     }])
     calls = []
-    result = execute_sequential_acquisition(schedule, approval=True, dry_run=False,
-                                            probe_fetcher=lambda _: calls.append("probe"),
-                                            fetcher=lambda _: calls.append("heavy"))
-    assert result["comparison_status"] == "COMPARISON_INVALID"
-    assert result["probes"][0]["status"] == "HARD_GAP"
-    assert result["heavy_calls"] == 0 and result["network_flag"] is False
+    with pytest.raises(AcquisitionGateError, match="validated authorization is required; boolean approval is not authorization"):
+        execute_sequential_acquisition(schedule, approval=True, dry_run=False,
+                                        probe_fetcher=lambda _: calls.append("probe"),
+                                        fetcher=lambda _: calls.append("heavy"))
     assert calls == []
 
 
@@ -131,11 +129,11 @@ def test_snapshot_backed_control_reaches_only_injected_executor():
                                           "calendar_binding": binding}], calendar_snapshot=snapshot,
                                         as_of="2025-01-01T00:00:00Z")
     calls = []
-    result = execute_sequential_acquisition(
-        schedule, calendar_snapshot=snapshot, approval=True, dry_run=False,
-        probe_fetcher=lambda request: {"status": "PASS", "response_status": 200, "counts": {"rows": 1},
-                                       "source_counts": {"x": 1}, "evidence": {"calendar_binding": request["calendar_binding"]}},
-        fetcher=lambda unit: calls.append(unit["candidate_key"]) or {},
-    )
-    assert calls == [schedule[0]["candidate_key"]]
-    assert result["heavy_calls"] == 1 and result["network_flag"] is True
+    with pytest.raises(AcquisitionGateError, match="validated authorization is required; boolean approval is not authorization"):
+        execute_sequential_acquisition(
+            schedule, calendar_snapshot=snapshot, approval=True, dry_run=False,
+            probe_fetcher=lambda request: {"status": "PASS", "response_status": 200, "counts": {"rows": 1},
+                                           "source_counts": {"x": 1}, "evidence": {"calendar_binding": request["calendar_binding"]}},
+            fetcher=lambda unit: calls.append(unit["candidate_key"]) or {},
+        )
+    assert calls == []

@@ -174,8 +174,6 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
     monkeypatch.setattr(vss, "screen_ticker", fake_screen_ticker)
     monkeypatch.setattr(vss, "run_variance_screener", fake_run_variance_screener)
 
-    import dealer_positioning as dp
-
     def fake_run_dealer_positioning(ticker, target_years, output_dir=None,
                                     save_csv=True, expiration=None, sign_model=None):
         calls["dealer_positioning_sign_model"] = sign_model
@@ -183,7 +181,8 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
         csv_path = os.path.join(output_dir or ".", f"{ticker}_gamma_records_20261218_000000.csv")
         return [csv_path], "Dealer positioning done", dealer_result
 
-    monkeypatch.setattr(dp, "run_dealer_positioning", fake_run_dealer_positioning)
+    monkeypatch.setattr(vsuite, "_run_production_dealer_positioning",
+                        fake_run_dealer_positioning)
 
     import options_chain_scanner as ocs
 
@@ -280,7 +279,7 @@ def test_context_mode_runs_the_pipeline_without_stdin(monkeypatch, tmp_path):
     assert calls["variance_swap_tickers"] == ["SPY", "TSLA"]
     assert calls["variance_swap_expirations"] == ["20261218", "20261218"]
     assert calls["dealer_positioning_expiration"] == "20261218"
-    assert calls["dealer_positioning_sign_model"] == "vol_surface_replication"
+    assert calls["dealer_positioning_sign_model"] == "expiry_book"
 
     # Opt-in only: neither the chain scanner nor the group screener should run
     # headless by default (the stubs assert/record if they do).
@@ -329,7 +328,7 @@ def test_vol_result_is_schema_valid_and_json_strict(monkeypatch, tmp_path):
 
     dealer = payload["dealer_positioning"]
     assert dealer["available"] is True
-    assert dealer["sign_model"] == "vol_surface_replication"
+    assert dealer["sign_model"] == "expiry_book"
     assert dealer["gamma_flip_level"] == pytest.approx(248.0)
     # NaN scalar became null rather than an unparseable token.
     assert dealer["hedge_equiv_option_contracts"] is None
@@ -380,12 +379,10 @@ def test_total_failure_is_reported_as_error_not_as_empty_success(monkeypatch, tm
     _install_stubs(monkeypatch, calls, dealer_result=None, variance_result=False)
     _no_stdin(monkeypatch)
 
-    import dealer_positioning as dp
-
     def exploding_dealer_positioning(*a, **kw):
         raise RuntimeError("ThetaData unavailable")
 
-    monkeypatch.setattr(dp, "run_dealer_positioning", exploding_dealer_positioning)
+    monkeypatch.setattr(vsuite, "_run_production_dealer_positioning", exploding_dealer_positioning)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()

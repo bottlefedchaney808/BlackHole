@@ -46,15 +46,13 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-# Reuse (read-only) the shared scaling constants from the live module so the
-# new model is provably consistent with the reference without touching it.
-import dealer_positioning as _dp
-
-CONTRACT_MULTIPLIER = _dp.CONTRACT_MULTIPLIER          # 100
-VANNA_PP_SCALE = _dp.VANNA_PP_SCALE                     # 0.01
-DEFAULT_A = _dp.DEFAULT_A                               # 365
-CHARM_ANNUALIZED = _dp.CHARM_ANNUALIZED                 # True
-RISK_FREE_RATE = _dp.RISK_FREE_RATE                     # 0.05
+# Keep production constants local. The legacy live module is locked and is not
+# a dependency of the authoritative production engine.
+CONTRACT_MULTIPLIER = 100
+VANNA_PP_SCALE = 0.01
+DEFAULT_A = 365
+CHARM_ANNUALIZED = True
+RISK_FREE_RATE = 0.05
 
 GREEKS = ("delta", "gamma", "vega", "vanna", "charm", "volga")
 # Stock/futures hedging channel vs options/vol hedging channel (plan §3 table).
@@ -563,6 +561,9 @@ class ExecutionLocus:
     tolerance_pct: float
     residual_delta: float
     gex_slope: float  # local dollar-gamma-per-1% slope at the zero-gamma level
+    local_gamma_boundary: float = 0.0
+    call_gamma_wall: float = 0.0
+    put_gamma_wall: float = 0.0
 
 
 def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
@@ -618,8 +619,14 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
         oi_by_right_strike[(r.right, r.strike)] = oi_by_right_strike.get((r.right, r.strike), 0.0) + r.oi
     call_strikes = [k for k in strikes if k > spot]
     put_strikes = [k for k in strikes if k < spot]
-    call_wall = max(call_strikes, key=lambda k: oi_by_right_strike.get(("C", k), 0.0)) if call_strikes else spot
-    put_wall = max(put_strikes, key=lambda k: oi_by_right_strike.get(("P", k), 0.0)) if put_strikes else spot
+    gex_by_right_strike: Dict[Tuple[str, float], float] = defaultdict(float)
+    for r in ne.rows:
+        gex_by_right_strike[(r.right, r.strike)] += (
+            r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
+            * spot ** 2 * 0.01
+        )
+    call_wall = max(call_strikes, key=lambda k: gex_by_right_strike.get(("C", k), 0.0)) if call_strikes else spot
+    put_wall = min(put_strikes, key=lambda k: gex_by_right_strike.get(("P", k), 0.0)) if put_strikes else spot
     band_lower = spot * (1 - tolerance_pct)
     band_upper = spot * (1 + tolerance_pct)
     # local GEX slope: net dollar-gamma-per-1% across the window from the
@@ -639,7 +646,9 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     return ExecutionLocus(
         spot=spot, zero_gamma=zero_gamma, call_wall=call_wall, put_wall=put_wall,
         band_lower=band_lower, band_upper=band_upper, tolerance_pct=tolerance_pct,
-        residual_delta=residual_delta, gex_slope=gex_slope)
+        residual_delta=residual_delta, gex_slope=gex_slope,
+        local_gamma_boundary=float(zero_gamma),
+        call_gamma_wall=float(call_wall), put_gamma_wall=float(put_wall))
 
 
 def hedge_flow_at(locus: ExecutionLocus, price: float) -> float:
@@ -655,9 +664,9 @@ def hedge_flow_at(locus: ExecutionLocus, price: float) -> float:
     # breach depth relative to band
     if price > locus.band_upper:
         depth = (price - locus.band_upper) / locus.band_upper
-        return locus.gex_slope * depth
+        return -locus.gex_slope * depth
     depth = (locus.band_lower - price) / locus.band_lower
-    return -locus.gex_slope * depth
+    return locus.gex_slope * depth
 
 
 # ---------------------------------------------------------------------------
@@ -729,7 +738,7 @@ def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
     gex = ne.gex()  # dollar-gamma-per-1%
     for scen, sgn in (("up_1pct", +1.0), ("down_1pct", -1.0)):
         act = _locus_activation(locus, scen, d_iv)
-        budget[scen]["gamma"] = gex * sgn * act
+        budget[scen]["gamma"] = -gex * sgn * act
         budget[scen]["vanna"] = 0.0
         budget[scen]["charm"] = 0.0
         budget[scen]["vega"] = 0.0

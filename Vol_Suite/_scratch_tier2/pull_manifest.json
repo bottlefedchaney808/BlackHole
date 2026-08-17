@@ -1,0 +1,317 @@
+{
+  "as_of": "2026-08-14",
+  "results": [
+    {
+      "ticker": "AAPL",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 796,
+      "oi_rows": 950,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_AAPL_20260817_short.json"
+    },
+    {
+      "ticker": "AMD",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 2409,
+      "oi_rows": 2588,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_AMD_20260817_short.json"
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 806,
+      "oi_rows": 880,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_AMZN_20260817_short.json"
+    },
+    {
+      "ticker": "GOOGL",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 811,
+      "oi_rows": 844,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_GOOGL_20260817_short.json"
+    },
+    {
+      "ticker": "JPM",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260821",
+      "dte": 7,
+      "eligible": [
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 1537,
+      "oi_rows": 1816,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_JPM_20260821_short.json"
+    },
+    {
+      "ticker": "META",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 1998,
+      "oi_rows": 2184,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_META_20260817_short.json"
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 1106,
+      "oi_rows": 1238,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_MSFT_20260817_short.json"
+    },
+    {
+      "ticker": "NFLX",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260821",
+      "dte": 7,
+      "eligible": [
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 2140,
+      "oi_rows": 2728,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_NFLX_20260821_short.json"
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 949,
+      "oi_rows": 1072,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_NVDA_20260817_short.json"
+    },
+    {
+      "ticker": "QQQ",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          4,
+          "20260818"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          6,
+          "20260820"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 2581,
+      "oi_rows": 2852,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_QQQ_20260817_short.json"
+    },
+    {
+      "ticker": "SPY",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          4,
+          "20260818"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          6,
+          "20260820"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 2553,
+      "oi_rows": 2860,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_SPY_20260817_short.json"
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": "2026-08-14",
+      "status": "ok",
+      "expiry": "20260817",
+      "dte": 3,
+      "eligible": [
+        [
+          3,
+          "20260817"
+        ],
+        [
+          5,
+          "20260819"
+        ],
+        [
+          7,
+          "20260821"
+        ]
+      ],
+      "greeks_rows": 1804,
+      "oi_rows": 1914,
+      "spot_rows": 11,
+      "error": null,
+      "file": "C:\\Users\\bottl\\FinancialDevelopment\\.worktrees\\dealer-exposure-dev\\Vol_Suite\\_scratch_tier2\\seed_data_TSLA_20260817_short.json"
+    }
+  ]
+}
