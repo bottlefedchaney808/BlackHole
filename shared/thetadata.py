@@ -425,6 +425,37 @@ class ThetaDataController:
         r.raise_for_status()
         return self._parse_rows(r)
 
+    def option_bulk_oi_latest(self, root: str, exp: str,
+                               lookback_days: int = 7) -> List[Dict]:
+        """Fallback OI fetch when the snapshot endpoint 404s.
+
+        ``bulk_snapshot/option/open_interest`` sometimes returns 404 for
+        expiries that have no current OI snapshot (e.g. a newly-listed
+        expiry that hasn't settled yet).  The historical endpoint
+        ``bulk_hist/option/open_interest`` *does* have OI for those
+        expiries -- it just takes a single date at a time, so we probe
+        backwards from today until we hit a trading day with data.
+
+        Returns the same list-of-dicts shape as ``option_bulk_oi``.
+        Returns ``[]`` if no recent trading day has OI for this expiry.
+        """
+        fmt = "%Y%m%d"
+        end_dt = datetime.now().date()
+        for offset in range(lookback_days):
+            day = end_dt - timedelta(days=offset)
+            if day.weekday() >= 5:  # skip Sat/Sun
+                continue
+            d = day.strftime(fmt)
+            path = f"/api/theta/bulk_hist/option/open_interest/{root}/{exp}"
+            r = self._get_with_retry(path, params={"start_date": d, "end_date": d})
+            if r.status_code == 404:
+                continue
+            r.raise_for_status()
+            rows = self._parse_rows(r)
+            if rows:
+                return rows
+        return []
+
     # ----- Per-contract historical data -----
 
     def option_hist_eod_single(

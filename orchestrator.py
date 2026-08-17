@@ -343,12 +343,15 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
                     # ThetaData sometimes has no OI snapshot at all for the
                     # exact expiry this run pinned max pain to (e.g. a 404 on
                     # bulk_snapshot/option/open_interest for that expiry) even
-                    # though the pinning itself is correct. Treat that as an
-                    # expected degraded result -- not a scanner crash -- so one
-                    # missing OI snapshot doesn't blank out the rest of the
-                    # bundle.
-                    _mp_err = getattr(scan, 'error', None) if scan is not None else '404'
-                    if scan is None or (_mp_err and ('404' in str(_mp_err) or 'Not Found' in str(_mp_err))):
+                    # though the pinning itself is correct. The scanner now
+                    # falls back to the historical OI endpoint internally, but
+                    # if that also fails, treat the result as an expected
+                    # degraded result -- not a scanner crash -- so one missing
+                    # OI snapshot doesn't blank out the rest of the bundle.
+                    _mp_err = getattr(scan, 'error', None) if scan is not None else 'no_oi'
+                    if scan is None or (_mp_err and any(
+                        tok in str(_mp_err) for tok in ('404', 'Not Found', 'no_oi', 'empty')
+                    )):
                         print(f"  {ticker:6s} | MAX_PAIN: no OI snapshot available for pinned "
                               f"expiry {_pinned_expiry}; reporting degraded result instead of failing.")
                         if scan is not None:

@@ -192,7 +192,13 @@ def scan_skew(ticker: str) -> SkewScan:
     if ref is not None:
         fitter = ref.fitter
         _sp = ref.sabr_params
-        if isinstance(_sp, dict) and _sp:
+        # Only treat sabr_params as SABR when it actually carries both rho and
+        # nu.  The SVI path also stores its params in sabr_params (SVI has a
+        # rho but no nu), and a SABR fallback under an 'svi' configured fitter
+        # keeps fitter='svi' with genuine SABR params -- so the params dict is
+        # the reliable discriminator, not the fitter name.  Reading a partial
+        # dict (rho without nu) produced sabr_nu=None, which crashed format_skew.
+        if isinstance(_sp, dict) and _sp.get("rho") is not None and _sp.get("nu") is not None:
             sabr_success = True
             sabr_alpha = _sp.get("alpha")
             sabr_rho = _sp.get("rho")

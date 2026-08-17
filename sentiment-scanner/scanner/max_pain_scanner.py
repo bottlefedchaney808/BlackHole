@@ -147,16 +147,24 @@ def scan_max_pain(ticker: str, expiry: Optional[str] = None, *,
         )
 
     # --- Fetch OI ---
+    # Try the snapshot endpoint first; if it 404s or comes back empty,
+    # fall back to the historical endpoint (bulk_hist/option/open_interest)
+    # which has OI for expiries that haven't settled into the snapshot yet.
     try:
         oi_rows = td.option_bulk_oi(ticker, expiry)
-    except Exception as e:
-        return MaxPainScan(
-            ticker=ticker, spot=spot, expiry=expiry, T_years=T_years,
-            max_pain_strike=0.0, max_pain_value=0.0,
-            second_pain_strike=0.0, price_vs_pain_pct=0.0,
-            near_pin=False, pain_profile=[], num_strikes=0,
-            timestamp=ts, error=str(e),
-        )
+    except Exception:
+        oi_rows = []
+    if not oi_rows:
+        try:
+            oi_rows = td.option_bulk_oi_latest(ticker, expiry)
+        except Exception as e:
+            return MaxPainScan(
+                ticker=ticker, spot=spot, expiry=expiry, T_years=T_years,
+                max_pain_strike=0.0, max_pain_value=0.0,
+                second_pain_strike=0.0, price_vs_pain_pct=0.0,
+                near_pin=False, pain_profile=[], num_strikes=0,
+                timestamp=ts, error=str(e),
+            )
 
     # Build strike -> OI maps
     call_oi_map: dict = {}

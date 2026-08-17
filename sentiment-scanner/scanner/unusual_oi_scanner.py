@@ -11,6 +11,7 @@ around a contested narrative.
 
 import json
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,6 +25,13 @@ OI_SURGE_MULTIPLIER = 2.0
 MIN_OI_FOR_FLAG = 50
 # Maximum number of expiries to scan for OI
 MAX_EXPIRIES = 5
+# How long (seconds) a baseline stays "fresh" before it's refreshed to the
+# current total.  Without a TTL, set_baseline runs on every scan, so the
+# baseline is always the immediately-previous scan's OI -- a gradual doubling
+# over multiple scans would never trigger because each step is only slightly
+# higher than the last.  With a 1-hour TTL, "2x surge" means "2x within the
+# last hour", which is a meaningful signal.
+BASELINE_TTL_SECONDS = 3600
 
 
 @dataclass
@@ -50,12 +58,18 @@ class UnusualOiScan:
 # ---- Baseline store, persisted to disk so it survives cold starts ----
 # Every fresh dashboard/orchestrator process previously started with an empty
 # in-memory dict, so the very first scan of a run always reported
-# baseline_total_oi=0 / oi_change_pct=0.0 no matter what the ticker's real OI
+# baseline_total_oi=0 / oi_change_pct=0 no matter what the ticker's real OI
 # history was. Persisting to JSON means only the first-ever scan of a ticker
-# is baseline-less; every subsequent process picks up where the last one left off.
+# is baseline-less; every subsequent process picks up where the last one left
+# off.
+#
+# Format: { "SPY": {"oi": 1200000, "ts": 1723456789.0}, ... }
+# The ts (Unix epoch) is checked against BASELINE_TTL_SECONDS so the baseline
+# is only refreshed periodically, not on every scan -- see BASELINE_TTL_SECONDS
+# docstring above.
 _BASELINE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "oi_baseline.json")
 
-_baselines: Dict[str, int] = {}
+_baselines: Dict[str, dict] = {}
 _baselines_loaded = False
 
 
@@ -68,7 +82,13 @@ def _load_baselines() -> None:
         with open(_BASELINE_FILE, "r") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            _baselines.update({str(k): int(v) for k, v in data.items()})
+            for k, v in data.items():
+                # Migrate legacy format: bare int -> {oi, ts}
+                if isinstance(v, (int, float)):
+                    _baselines[str(k)] = {"oi": int(v), "ts": 0.0}
+                elif isinstance(v, dict) and "oi" in v:
+                    _baselines[str(k)] = {"oi": int(v["oi"]),
+                                          "ts": float(v.get("ts", 0.0))}
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError, TypeError):
         pass
 
@@ -83,14 +103,36 @@ def _save_baselines() -> None:
 
 
 def set_baseline(ticker: str, total_oi: int) -> None:
+    """Record the current total OI as the new baseline for ``ticker``.
+
+    The timestamp is always updated so the TTL check in
+    ``_baseline_is_stale`` resets from this point forward.
+    """
     _load_baselines()
-    _baselines[ticker] = total_oi
+    _baselines[ticker] = {"oi": int(total_oi), "ts": time.time()}
     _save_baselines()
 
 
 def get_baseline(ticker: str) -> int:
+    """Return the baseline total OI for ``ticker`` (0 if none)."""
     _load_baselines()
-    return _baselines.get(ticker, 0)
+    entry = _baselines.get(ticker)
+    if entry is None:
+        return 0
+    return int(entry.get("oi", 0))
+
+
+def _baseline_is_stale(ticker: str) -> bool:
+    """True if the baseline for ``ticker`` is older than BASELINE_TTL_SECONDS
+    (or has no timestamp at all, e.g. migrated from the legacy bare-int format)."""
+    _load_baselines()
+    entry = _baselines.get(ticker)
+    if entry is None:
+        return True
+    ts = float(entry.get("ts", 0.0))
+    if ts <= 0:
+        return True
+    return (time.time() - ts) >= BASELINE_TTL_SECONDS
 
 
 def _sum_oi_for_expiry(td, ticker: str, exp: str) -> List[OiStrike]:
@@ -158,9 +200,13 @@ def scan_unusual_oi(
 
     current_total = sum(s.oi for s in all_strikes)
     baseline = get_baseline(ticker)
+    baseline_stale = _baseline_is_stale(ticker)
 
-    # If no baseline exists, set it now and report no surge
-    if baseline == 0:
+    # If no baseline exists (first-ever scan) or the baseline is stale (older
+    # than BASELINE_TTL_SECONDS), set it now and report no surge.  The TTL
+    # ensures "2x surge" means "2x within the last hour", not "2x vs the
+    # immediately-previous scan" (which a gradual ramp would never trigger).
+    if baseline == 0 or baseline_stale:
         set_baseline(ticker, current_total)
         oi_change_pct = 0.0
         surge = False
@@ -169,9 +215,10 @@ def scan_unusual_oi(
             ((current_total - baseline) / baseline) * 100.0 if baseline > 0 else 0.0
         )
         surge = current_total >= baseline * surge_multiplier
-
-    # Update baseline
-    set_baseline(ticker, current_total)
+        # Do NOT refresh the baseline here: the TTL window must keep the
+        # baseline fixed so a gradual ramp can accumulate against a stable
+        # reference.  Refreshing on every scan would make the baseline the
+        # immediately-previous scan's OI again, defeating the TTL entirely.
 
     # Top OI strikes
     top = sorted(all_strikes, key=lambda s: s.oi, reverse=True)[:10]

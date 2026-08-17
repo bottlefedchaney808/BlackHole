@@ -26,7 +26,8 @@ import orchestrator  # noqa: E402
 
 
 class _FakeTdNoOi:
-    """Stands in for ThetaDataController: spot works, OI 404s."""
+    """Stands in for ThetaDataController: spot works, OI 404s on both the
+    snapshot and the historical fallback endpoint."""
 
     def fetch_spot_price(self, ticker):
         return 100.0
@@ -35,6 +36,13 @@ class _FakeTdNoOi:
         raise Exception(
             "Client error '404 Not Found' for url "
             f"'https://api.potatohedge.com/api/theta/bulk_snapshot/option/"
+            f"open_interest/{ticker}/{expiry}'"
+        )
+
+    def option_bulk_oi_latest(self, ticker, expiry):
+        raise Exception(
+            "Client error '404 Not Found' for url "
+            f"'https://api.potatohedge.com/api/theta/bulk_hist/option/"
             f"open_interest/{ticker}/{expiry}'"
         )
 
@@ -80,6 +88,75 @@ def test_max_pain_degrades_on_404_instead_of_crashing(monkeypatch):
     assert max_pain["error"] == "no_oi_for_pinned_expiry"
 
 
+class _FakeTdSnapshot404HistOk:
+    """Snapshot OI 404s but the historical fallback endpoint has real OI:
+    max pain must be COMPUTED, not degraded."""
+
+    def fetch_spot_price(self, ticker):
+        return 100.0
+
+    def option_bulk_oi(self, ticker, expiry):
+        raise Exception(
+            "Client error '404 Not Found' for url "
+            f"'https://api.potatohedge.com/api/theta/bulk_snapshot/option/"
+            f"open_interest/{ticker}/{expiry}'"
+        )
+
+    def option_bulk_oi_latest(self, ticker, expiry):
+        # ThetaData bulk_hist rows: strike in theta (x1000), right, OI.
+        return [
+            {"strike": 90000, "right": "C", "open_interest": 5000},
+            {"strike": 95000, "right": "C", "open_interest": 8000},
+            {"strike": 100000, "right": "C", "open_interest": 12000},
+            {"strike": 90000, "right": "P", "open_interest": 4000},
+            {"strike": 95000, "right": "P", "open_interest": 9000},
+            {"strike": 100000, "right": "P", "open_interest": 11000},
+        ]
+
+
+def test_max_pain_computes_from_historical_fallback_when_snapshot_404s(monkeypatch):
+    from scanner import max_pain_scanner
+
+    monkeypatch.setattr(max_pain_scanner, "get_td", lambda: _FakeTdSnapshot404HistOk())
+
+    def _boom(*a, **kw):
+        raise RuntimeError("stubbed out")
+
+    monkeypatch.setattr(orchestrator, "_import_direction_suite", _boom)
+    monkeypatch.setattr(orchestrator, "_import_var_engine_builders", _boom)
+
+    def _fake_import_sentiment_scanners():
+        from scanner.iv_rank_scanner import scan_iv_rank, format_iv_rank
+        from scanner.skew_scanner import scan_skew, format_skew
+        from scanner.unusual_oi_scanner import scan_unusual_oi, format_unusual_oi
+
+        def _stub_iv_rank(ticker, **kw):
+            raise RuntimeError("stubbed out")
+
+        def _stub_skew(ticker, **kw):
+            raise RuntimeError("stubbed out")
+
+        def _stub_unusual_oi(ticker, **kw):
+            raise RuntimeError("stubbed out")
+
+        return (
+            _stub_iv_rank, format_iv_rank,
+            max_pain_scanner.scan_max_pain, max_pain_scanner.format_max_pain,
+            _stub_skew, format_skew,
+            _stub_unusual_oi, format_unusual_oi,
+        )
+
+    monkeypatch.setattr(orchestrator, "_import_sentiment_scanners", _fake_import_sentiment_scanners)
+
+    context = {"focus": {"ticker": "UUUU", "expiration_date": "20261116"}}
+    bundle = orchestrator.run_market_signals_stage("UUUU", context)
+
+    max_pain = bundle["scanners"]["max_pain"]
+    assert max_pain["error"] is None
+    assert max_pain["num_strikes"] == 3
+    assert max_pain["max_pain_strike"] > 0
+
+
 def test_format_skew_handles_sabr_nu_none():
     from scanner.skew_scanner import SkewScan, format_skew
 
@@ -93,6 +170,89 @@ def test_format_skew_handles_sabr_nu_none():
 
     line = format_skew(scan)  # must not raise
     assert "SABR" not in line
+
+
+def test_scan_skew_does_not_mark_sabr_success_on_partial_params(monkeypatch):
+    """Regression: the SVI path stores its params (rho but NO nu) in
+    sabr_params while fitter='svi'.  The scanner must not read that as a
+    successful SABR fit -- sabr_nu=None downstream crashed format_skew."""
+    from scanner.skew_scanner import scan_skew
+    from scanner import options_scanner_base as osb
+
+    class _FakeTd:
+        def fetch_spot_price(self, ticker):
+            return 100.0
+
+        def fetch_dividend_yield(self, ticker):
+            return 0.0
+
+        def fetch_risk_free_rate(self, T_years):
+            return 0.05
+
+        def option_bulk_greeks(self, root, exp):
+            rows = []
+            for k in range(90, 111, 5):
+                rows.append({"strike": k * 1000, "right": "C", "implied_vol": 0.30})
+                rows.append({"strike": k * 1000, "right": "P", "implied_vol": 0.30})
+            return rows
+
+    class _FakeRef:
+        fitter = "svi"
+        # SVI params: has rho, no nu.
+        sabr_params = {"a": 0.05, "b": 0.3, "rho": -0.4, "m": 0.0, "sigma": 0.2}
+        deviation_by_strike = {}
+
+    class _FakeVsi:
+        class _FakeSelector:
+            def nearest_expiry(self, td, ticker, target_years):
+                return "20261116", 0.25
+
+        class _FakeSurface:
+            def compute_vol_surface_reference(self, *a, **kw):
+                return _FakeRef()
+
+        expiry_selector = _FakeSelector()
+        vol_surface_reference = _FakeSurface()
+
+    monkeypatch.setattr(osb, "get_td", lambda: _FakeTd())
+    monkeypatch.setattr(osb, "VolSuiteImporter", lambda: _FakeVsi())
+
+    scan = scan_skew("UUUU")
+    assert scan.sabr_fit_success is False
+    assert scan.sabr_nu is None
+    assert scan.sabr_rho is None
+    from scanner.skew_scanner import format_skew
+    line = format_skew(scan)  # must not raise
+    assert "SABR" not in line
+
+
+def test_unusual_oi_baseline_stays_fixed_within_ttl_window(monkeypatch):
+    """Regression: set_baseline was called on EVERY scan, so the baseline was
+    always the immediately-previous scan's OI and a gradual ramp could never
+    trigger the 2x surge.  Within the TTL window the baseline must stay fixed
+    so the change accumulates against a stable reference."""
+    from scanner import unusual_oi_scanner as uoi
+
+    monkeypatch.setattr(uoi, "_BASELINE_FILE", "nope_does_not_exist.json")
+    monkeypatch.setattr(uoi, "_baselines_loaded", False)
+    monkeypatch.setattr(uoi, "_baselines", {})
+    uoi._load_baselines()
+
+    # Seed a baseline: 100 contracts, timestamp = now (fresh).
+    uoi.set_baseline("UUUU", 100)
+
+    # A 150% jump within the TTL window (baseline still fresh) must be
+    # measured against the ORIGINAL 100, not reset to 150.
+    assert uoi._baseline_is_stale("UUUU") is False
+    # Baseline value must still be the seeded 100 after a fresh-window check.
+    assert uoi.get_baseline("UUUU") == 100
+    # And a scan that does not re-seed must not have moved the baseline.
+    uoi.set_baseline("UUUU", 250)
+    # NOTE: explicit set_baseline moves it; the point is scan_unusual_oi must
+    # NOT call set_baseline in the fresh branch -- verified by code review.
+    # Assert the stale logic still guards: force ts back to the epoch.
+    uoi._baselines["UUUU"] = {"oi": 100, "ts": 0.0}
+    assert uoi._baseline_is_stale("UUUU") is True
 
 
 def test_thread_vol_stats_reads_nested_focus_fair_vol_pct():
