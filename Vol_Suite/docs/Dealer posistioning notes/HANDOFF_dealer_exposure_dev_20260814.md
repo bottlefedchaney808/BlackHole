@@ -49,6 +49,20 @@ the fixed composition; nothing about the promotion decision retroactively
 validates or invalidates those
 numbers.
 
+## Lesson learned: don't resubmit "fail loudly" for a per-day backtest classification gap
+
+`7e4b739` ("dealer_exposure_model fails loudly instead of silent None fallback", 2026-08-16) changed
+`backtest_stage3.py::_build_day_records` so a day with no classifiable dealer chain rows raised
+`ValueError` instead of leaving that day's regime unclassified. It was reverted the same day (`6e3cfa4`),
+no rationale recorded in either commit message. Reading the diff: this was a fail-loud check inside a
+**multi-day backtest loop**, not the single-day live render — raising on any one bad/thin data day would
+abort an entire 90+-day backtest run rather than skip that one day, which is the likely reason it didn't
+stick (inferred from the diff's context, not a stated rationale — if you know the real reason, replace
+this paragraph with it). If "fail loudly instead of silent fallback" comes up again for this code path,
+distinguish the live-render case (fail loud is right — CLAUDE.md's whole "no silent fallbacks" theme)
+from the backtest-loop case (a single bad day should probably still skip-and-continue, not abort the
+whole run) before resubmitting the same change.
+
 ---
 
 **Copy this as the first message in the new session.** Begin by anchoring to the worktree before any other tool use.
