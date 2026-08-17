@@ -68,7 +68,6 @@ import implied_vol as implied_vol_mod
 import replication_reference
 import vol_surface_reference
 import dealer_positioning
-import whale_scanner
 
 TRADING_DAYS_PER_YEAR = 252  # trading days/year, for realized-vol annualization from
                               # trading-day closes. NOT expiry_selector.DEFAULT_A (365,
@@ -102,12 +101,8 @@ class DayRecord:
     spot: float
     net_gamma_v1: float
     net_gamma_v2: float
-    net_gamma_v3: float
-    net_gamma_whale: float
     regime_v1: str              # 'long' or 'short'
     regime_v2: str
-    regime_v3: str
-    regime_whale: Optional[str]  # 'long'/'short', or None on a neutral/no-signal whale day
     fwd_realized_vol: Optional[float]  # annualized, None if too close to the end of the sample
     net_gamma_dealer: float = 0.0       # dealer_exposure_model net gex (dealer frame)
     regime_dealer_exposure: Optional[str] = None  # 'long'/'short' when the engine ran
@@ -135,22 +130,6 @@ class BacktestResult:
     v2_diff: float = float('nan')
     v2_tstat: float = float('nan')
     v2_pvalue: float = float('nan')
-    # v3 (vol_surface_replication_weighted -- backtest-only experiment)
-    v3_n_long: int = 0
-    v3_n_short: int = 0
-    v3_long_mean_vol: float = float('nan')
-    v3_short_mean_vol: float = float('nan')
-    v3_diff: float = float('nan')
-    v3_tstat: float = float('nan')
-    v3_pvalue: float = float('nan')
-    # whale (whale-flow, backtest-only experiment -- see whale_scanner.py)
-    whale_n_long: int = 0
-    whale_n_short: int = 0
-    whale_long_mean_vol: float = float('nan')
-    whale_short_mean_vol: float = float('nan')
-    whale_diff: float = float('nan')
-    whale_tstat: float = float('nan')
-    whale_pvalue: float = float('nan')
     # dealer_exposure (dealer-frame greeks engine, sourced from the
     # Dealer-Exposure-Dev worktree -- NOT merged into master)
     dealer_exposure_n_long: int = 0
@@ -393,11 +372,6 @@ def _build_day_records(ticker: str, expiry: str,
 
     gamma_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
     iv_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
-    # whale_rows_by_date feeds whale_scanner.classify_whale_bias directly --
-    # {'strike', 'right', 'volume', 'close'} per row, same route
-    # (option_bulk_hist_eod) already being iterated below for gamma/IV, so
-    # this costs zero extra network calls.
-    whale_rows_by_date: Dict[str, List[dict]] = defaultdict(list)
     n_derived = n_vendor = n_unrecoverable = 0
 
     for row in hist_greek_rows:
@@ -438,20 +412,6 @@ def _build_day_records(ticker: str, expiry: str,
             right = str(row['right']).upper()[:1]
         except (KeyError, TypeError, ValueError):
             continue
-
-        # Whale-flow capture: independent of whether IV/gamma are vendor or
-        # price-derived below -- 'volume'/'close' come straight off the same
-        # row. A row missing either (0 or non-numeric) simply isn't added,
-        # which is exactly right: classify_whale_bias treats an empty day
-        # as neutral, not a crash.
-        try:
-            whale_vol = float(row.get('volume', 0) or 0)
-            whale_close = float(row.get('close', 0) or 0)
-        except (TypeError, ValueError):
-            whale_vol = whale_close = 0.0
-        if whale_vol > 0 and whale_close > 0:
-            whale_rows_by_date[d].append(
-                {'strike': k, 'right': right, 'volume': whale_vol, 'close': whale_close})
 
         iv = float(row.get('implied_vol', 0) or 0)
         gamma = float(row.get('gamma', 0) or 0)
@@ -584,10 +544,6 @@ def _build_day_records(ticker: str, expiry: str,
                          for (k, right), gamma in gamma_map.items())
         else:
             net_v2 = _net_gamma_v2(gamma_map, oi_map, chain_iv, spot, forward, T)
-        net_v3 = _net_gamma_v3(gamma_map, oi_map, chain_iv, spot, forward, T)
-        whale_bias, _whale_stats = whale_scanner.classify_whale_bias(
-            whale_rows_by_date.get(d, []), price=spot)
-        net_whale = _net_gamma_whale(gamma_map, oi_map, chain_iv, spot, T, whale_bias)
 
         net_dealer = 0.0
         regime_dealer = None
@@ -619,13 +575,9 @@ def _build_day_records(ticker: str, expiry: str,
         fwd_vol = _forward_realized_vol(future_closes, forward_window_days)
 
         records.append(DayRecord(
-            date=d, spot=spot, net_gamma_v1=net_v1, net_gamma_v2=net_v2, net_gamma_v3=net_v3,
-            net_gamma_whale=net_whale,
+            date=d, spot=spot, net_gamma_v1=net_v1, net_gamma_v2=net_v2,
             regime_v1='long' if net_v1 > 0 else 'short',
             regime_v2='long' if net_v2 > 0 else 'short',
-            regime_v3='long' if net_v3 > 0 else 'short',
-            regime_whale=(None if whale_bias == 'neutral'
-                          else ('long' if net_whale > 0 else 'short')),
             fwd_realized_vol=fwd_vol,
             net_gamma_dealer=net_dealer, regime_dealer_exposure=regime_dealer,
         ))
@@ -679,8 +631,6 @@ def _run_backtest_from_history(ticker: str, expiry: str,
 
     v1 = _summarize(records, 'regime_v1')
     v2 = _summarize(records, 'regime_v2')
-    v3 = _summarize(records, 'regime_v3')
-    whale = _summarize(records, 'regime_whale')
     dealer = _summarize(records, 'regime_dealer_exposure')
 
     return BacktestResult(
@@ -692,12 +642,6 @@ def _run_backtest_from_history(ticker: str, expiry: str,
         v2_n_long=v2['n_long'], v2_n_short=v2['n_short'],
         v2_long_mean_vol=v2['long_mean_vol'], v2_short_mean_vol=v2['short_mean_vol'],
         v2_diff=v2['diff'], v2_tstat=v2['tstat'], v2_pvalue=v2['pvalue'],
-        v3_n_long=v3['n_long'], v3_n_short=v3['n_short'],
-        v3_long_mean_vol=v3['long_mean_vol'], v3_short_mean_vol=v3['short_mean_vol'],
-        v3_diff=v3['diff'], v3_tstat=v3['tstat'], v3_pvalue=v3['pvalue'],
-        whale_n_long=whale['n_long'], whale_n_short=whale['n_short'],
-        whale_long_mean_vol=whale['long_mean_vol'], whale_short_mean_vol=whale['short_mean_vol'],
-        whale_diff=whale['diff'], whale_tstat=whale['tstat'], whale_pvalue=whale['pvalue'],
         dealer_exposure_n_long=dealer['n_long'], dealer_exposure_n_short=dealer['n_short'],
         dealer_exposure_long_mean_vol=dealer['long_mean_vol'],
         dealer_exposure_short_mean_vol=dealer['short_mean_vol'],
@@ -784,7 +728,10 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
                 f"v2_live accumulation produced no position for {ticker} "
                 f"{expiry}; refusing to fall back to a same-day snapshot.")
 
-    use_dealer_exposure = sign_model == 'dealer_exposure'
+    # The study's default ('all') now runs all THREE of Jason's live models
+    # together: v1 (oi_heuristic), v2_live (accumulated, via `accumulate`), and
+    # dealer_exposure (dealer-frame engine). There is no per-model selector.
+    use_dealer_exposure = sign_model in ('all', 'dealer_exposure')
     if use_dealer_exposure and not _dealer_exposure_engine_available():
         raise ValueError(
             "dealer_exposure_model requires the Dealer-Exposure-Dev worktree "
@@ -801,37 +748,21 @@ def format_backtest_report(result: BacktestResult) -> str:
         f"Stage 3 backtest -- {result.ticker} {result.expiry} "
         f"({len(result.day_records)} days, {result.forward_window_days}d forward window)",
         "",
-        f"{'':20s}{'v1 (oi_heuristic)':>22s}{'v2 (vol_surface_replication)':>32s}{'v3 (weighted, experimental)':>32s}{'whale (backtest-only)':>28s}",
-        f"{'long-gamma days':20s}{result.v1_n_long:>22d}{result.v2_n_long:>32d}{result.v3_n_long:>32d}{result.whale_n_long:>28d}",
-        f"{'short-gamma days':20s}{result.v1_n_short:>22d}{result.v2_n_short:>32d}{result.v3_n_short:>32d}{result.whale_n_short:>28d}",
-        f"{'mean vol | long':20s}{result.v1_long_mean_vol:>22.4f}{result.v2_long_mean_vol:>32.4f}{result.v3_long_mean_vol:>32.4f}{result.whale_long_mean_vol:>28.4f}",
-        f"{'mean vol | short':20s}{result.v1_short_mean_vol:>22.4f}{result.v2_short_mean_vol:>32.4f}{result.v3_short_mean_vol:>32.4f}{result.whale_short_mean_vol:>28.4f}",
-        f"{'short - long':20s}{result.v1_diff:>22.4f}{result.v2_diff:>32.4f}{result.v3_diff:>32.4f}{result.whale_diff:>28.4f}",
-        f"{'t-stat':20s}{result.v1_tstat:>22.3f}{result.v2_tstat:>32.3f}{result.v3_tstat:>32.3f}{result.whale_tstat:>28.3f}",
-        f"{'p-value':20s}{result.v1_pvalue:>22.4f}{result.v2_pvalue:>32.4f}{result.v3_pvalue:>32.4f}{result.whale_pvalue:>28.4f}",
-        "",
-        f"dealer_exposure (dev-worktree engine): long-gamma {result.dealer_exposure_n_long} days, "
-        f"short-gamma {result.dealer_exposure_n_short} days, "
-        f"diff {result.dealer_exposure_diff:+.4f}, t {result.dealer_exposure_tstat:.3f}, "
-        f"p {result.dealer_exposure_pvalue:.4f}",
+        f"{'':20s}{'v1 (oi_heuristic)':>22s}{'v2_live (accumulated)':>32s}{'dealer_exposure':>28s}",
+        f"{'long-gamma days':20s}{result.v1_n_long:>22d}{result.v2_n_long:>32d}{result.dealer_exposure_n_long:>28d}",
+        f"{'short-gamma days':20s}{result.v1_n_short:>22d}{result.v2_n_short:>32d}{result.dealer_exposure_n_short:>28d}",
+        f"{'mean vol | long':20s}{result.v1_long_mean_vol:>22.4f}{result.v2_long_mean_vol:>32.4f}{result.dealer_exposure_long_mean_vol:>28.4f}",
+        f"{'mean vol | short':20s}{result.v1_short_mean_vol:>22.4f}{result.v2_short_mean_vol:>32.4f}{result.dealer_exposure_short_mean_vol:>28.4f}",
+        f"{'short - long':20s}{result.v1_diff:>22.4f}{result.v2_diff:>32.4f}{result.dealer_exposure_diff:>28.4f}",
+        f"{'t-stat':20s}{result.v1_tstat:>22.3f}{result.v2_tstat:>32.3f}{result.dealer_exposure_tstat:>28.3f}",
+        f"{'p-value':20s}{result.v1_pvalue:>22.4f}{result.v2_pvalue:>32.4f}{result.dealer_exposure_pvalue:>28.4f}",
         "",
         "Hypothesis: short-gamma days should show HIGHER forward realized vol "
         "(dealers trade with the tape) -- a positive, statistically significant "
-        "diff supports the model; a larger, more significant diff for v2/v3/whale "
-        "than v1 means the richer sign convention is reading something real, not "
-        "just producing a more sophisticated-looking chart. v3 (vol_surface_"
-        "replication_weighted) is a backtest-only experiment: same OTM gating "
-        "as v2, but the Layer 1a flip is gated on materiality vs. the SABR "
-        "fit's own RMSE and weighted by deviation magnitude instead of a flat "
-        "+/-1 -- see _resolve_sign_weighted's docstring. whale (whale-flow) is a "
-        "second backtest-only experiment: ONE uniform daily sign from large-"
-        "premium call-vs-put option flow (bullish/bearish/neutral), ported from "
-        "an external devnotes research package -- see whale_scanner.py and "
-        "docs/superpowers/specs/2026-08-06-whale-sign-model-backtest-design.md. "
-        "Neutral/no-signal whale days are EXCLUDED from n_long/n_short (not "
-        "folded into 'short'), so its n may be smaller than the other columns'. "
-        "Neither v3 nor whale is wired into the live dealer_positioning.py sign "
-        "models.",
+        "diff supports the model. v1 is the conventional GEX (oi_heuristic) sign; "
+        "v2_live is the live model's accumulated dealer book (vol_surface_replication "
+        "with multi-day accumulation); dealer_exposure is the dealer-frame greeks "
+        "engine (expiry_book_exposure, from the Dealer-Exposure-Dev worktree).",
     ]
     return "\n".join(lines)
 

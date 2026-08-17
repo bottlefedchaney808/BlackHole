@@ -93,7 +93,7 @@ def _iso_to_compact(date_str: Optional[str]) -> Optional[str]:
     return date_str
 
 
-_DEALER_SIGN_MODELS = {'v1', 'v2_live', 'dealer_exposure', 'all'}
+_DEALER_SIGN_MODELS = {'all'}
 
 
 def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -105,28 +105,27 @@ def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("mode='dealer_gamma_study' requires a ticker "
                           "(context['ticker'] or context.focus.ticker)")
 
-    sign_model = str(context.get("sign_model") or "all").strip().lower()
-    if sign_model not in _DEALER_SIGN_MODELS:
-        raise ValueError(
-            f"sign_model must be one of {sorted(_DEALER_SIGN_MODELS)}; got {sign_model!r}")
-
     expiration = context.get("expiration") or _iso_to_compact(focus.get("expiration_date"))
     target_years = float(context.get("target_years", focus.get("target_years", 0.25)))
     lookback_days = int(context.get("lookback_days", bs3.DEFAULT_LOOKBACK_DAYS))
     forward_window_days = int(context.get("forward_window_days", bs3.DEFAULT_FORWARD_WINDOW_DAYS))
 
+    # The study ALWAYS runs all THREE live models together (v1, v2_live,
+    # dealer_exposure) in one backtest -- there is no per-model selector. The
+    # legacy `sign_model` value is accepted for back-compat but no longer
+    # chooses which model runs; 'all' is the only meaningful mode.
     result = bs3.run_backtest(
         ticker,
         expiration=expiration,
         target_years=target_years,
         lookback_days=lookback_days,
         forward_window_days=forward_window_days,
-        accumulate=(sign_model == "v2_live"),
-        sign_model=sign_model,
+        accumulate=True,
+        sign_model='all',
     )
     return {
         "mode": "dealer_gamma_study",
-        "sign_model": sign_model,
+        "sign_model": "all",
         "report": bs3.format_backtest_report(result),
         "result": dataclasses.asdict(result),
     }

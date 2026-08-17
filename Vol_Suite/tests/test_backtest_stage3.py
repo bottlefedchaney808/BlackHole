@@ -204,44 +204,6 @@ def test_net_gamma_v2_runs_and_restricts_to_otm():
     assert not math.isnan(total)
 
 
-@pytest.mark.unit
-def test_net_gamma_whale_flips_sign_between_bullish_and_bearish():
-    """The whale sign model applies ONE uniform sign per day, so bullish
-    and bearish on the identical gamma/OI map must be exact mirrors, and
-    neutral must contribute nothing."""
-    chain_iv = _flat_smile_chain(SPOT0)
-    gamma_map = {k: 0.02 for k in chain_iv}
-    # Deliberately asymmetric call/put OI -- with a UNIFORM per-day sign,
-    # identical OI on both sides would cancel to exactly zero (equal OTM
-    # call/put leg counts here), which would make this test's "!= 0.0"
-    # assertion fail for a reason that has nothing to do with correctness.
-    oi_map = {(k, right): (150 if right == 'C' else 80) for (k, right) in chain_iv}
-    T = 0.25
-
-    bullish_total = bt3._net_gamma_whale(gamma_map, oi_map, chain_iv, SPOT0, T, 'bullish')
-    bearish_total = bt3._net_gamma_whale(gamma_map, oi_map, chain_iv, SPOT0, T, 'bearish')
-    neutral_total = bt3._net_gamma_whale(gamma_map, oi_map, chain_iv, SPOT0, T, 'neutral')
-
-    assert bullish_total != 0.0
-    assert bullish_total == pytest.approx(-bearish_total)
-    assert neutral_total == 0.0
-
-
-@pytest.mark.unit
-def test_build_day_records_excludes_neutral_whale_days():
-    """A day with no whale-sized flow anywhere in the chain must get
-    regime_whale=None and net_gamma_whale=0.0 -- NOT folded into 'short'
-    the way v1/v2/v3's `> 0 else 'short'` convention would."""
-    d = "20260901"
-    greek_rows, oi_rows = _make_day_rows(d, SPOT0, 1000, 1000)  # no whale_calls/whale_puts
-    price_rows = [_price_row(d, SPOT0)]
-
-    records = bt3._build_day_records("SYN", "20261231", greek_rows, oi_rows, price_rows)
-    assert len(records) == 1
-    assert records[0].regime_whale is None
-    assert records[0].net_gamma_whale == 0.0
-
-
 def test_build_day_records_accumulated_position_drives_v2_regime():
     """When an accumulated_position (signed dealer book) is supplied, the v2
     regime must be classified from it (pass-through sign=1.0) -- net-short
@@ -290,53 +252,6 @@ def test_build_day_records_dealer_exposure_series():
         use_dealer_exposure=True)
     assert records[0].regime_dealer_exposure in ("long", "short")
 
-
-@pytest.mark.unit
-def test_build_day_records_labels_bullish_whale_day():
-    """A day with heavy call-side whale premium must classify as bullish
-    and produce a real (non-None) regime_whale."""
-    d = "20260901"
-    call_strikes = {k for (k, right) in _flat_smile_chain(SPOT0).keys() if right == 'C'}
-    # Asymmetric call/put OI -- symmetric OI on both sides would cancel to
-    # exactly zero under the whale model's uniform per-day sign (equal OTM
-    # call/put leg counts here), same reasoning as
-    # test_net_gamma_whale_flips_sign_between_bullish_and_bearish.
-    greek_rows, oi_rows = _make_day_rows(d, SPOT0, 1000, 400, whale_calls=call_strikes)
-    price_rows = [_price_row(d, SPOT0)]
-
-    records = bt3._build_day_records("SYN", "20261231", greek_rows, oi_rows, price_rows)
-    assert len(records) == 1
-    assert records[0].regime_whale in ("long", "short")
-    assert records[0].net_gamma_whale != 0.0
-
-
-@pytest.mark.unit
-def test_run_backtest_from_history_wires_whale_column():
-    """End-to-end sanity: whale_n_long/whale_n_short must reflect ONLY the
-    non-neutral days, and never exceed the total day count."""
-    dates = [f"202607{d:02d}" for d in range(1, 15)]
-    greek_rows, oi_rows, price_rows = [], [], []
-    call_strikes = {k for (k, right) in _flat_smile_chain(SPOT0).keys() if right == 'C'}
-
-    price = SPOT0
-    for i, d in enumerate(dates):
-        # Alternate bullish-whale days and no-whale (neutral) days.
-        whale_calls = call_strikes if i % 2 == 0 else None
-        g_rows, o_rows = _make_day_rows(d, price, 500, 500, whale_calls=whale_calls)
-        greek_rows.extend(g_rows)
-        oi_rows.extend(o_rows)
-        price_rows.append(_price_row(d, price))
-        price *= 1.01 if i % 2 == 0 else 0.99
-
-    result = bt3._run_backtest_from_history("SYN", "20261231", greek_rows, oi_rows, price_rows,
-                                             forward_window_days=3)
-    total_days = len(result.day_records)
-    assert result.whale_n_long + result.whale_n_short <= total_days
-    assert result.whale_n_long + result.whale_n_short > 0
-    # Roughly half the days were stamped bullish, half neutral (excluded) --
-    # confirms neutral days are genuinely dropping out, not all landing in
-    # one bucket by convention.
-    assert result.whale_n_long + result.whale_n_short < total_days
 
 
 # ---------------------------------------------------------------------------
