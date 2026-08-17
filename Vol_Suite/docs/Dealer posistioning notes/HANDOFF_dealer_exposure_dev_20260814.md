@@ -24,15 +24,29 @@ describes the RETIRED model. `expiry_book_exposure.py`'s own module
 docstring carries the current, load-bearing description of what's live now.
 
 A 2026-08-17 CARL adversarial review of the swap found and the same session
-fixed: a guaranteed crash in `gex_scanner.py` on every successful scan (fixed
-in commit `1020eac`), and a real cross-greek vanna sign-composition bug where
-`dealer_frame_vanna` applied a double negation that made vanna compose as
-`+1*customer-raw` while delta/charm both compose as `-1*customer-raw` (fixed
-in commit `bd30cd8`, confirmed intentional-fix by Jason, not by Cem/the CARL
-loop below). The statistical-validation content below (Round-2 results,
-effective-n, Cem's required upgrade set) was NOT re-litigated by that review
-and remains exactly as accurate/inaccurate as it was on 2026-08-14 — nothing
-about the promotion decision retroactively validates or invalidates those
+fixed, all confirmed as intentional fixes by Jason (not by Cem/the CARL loop
+below):
+- a guaranteed crash in `gex_scanner.py` on every successful scan, and a
+  latent `total_net_gamma`/`total_net_dollar_gamma` field-duplication bug
+  (commit `1020eac`)
+- a cross-greek vanna sign-composition bug: `dealer_frame_vanna` applied a
+  double negation, composing vanna as `+1*customer-raw` while delta composed
+  as `-1*customer-raw` (commit `bd30cd8`)
+- while wiring dividend yield `q` through the engine (previously always
+  implicit 0.0, F5 from the same review): `bs_charm` had no `right` param
+  (always computed call charm) and was missing a whole term, exact only at
+  q=0 by coincidence; fixing that surfaced the SAME double-negation bug in
+  charm that vanna had, undetected until charm's q=0 call==put coincidence
+  broke while adding the `right` param (commits `6f589e4`, `3a7d5fa`) — so as
+  of this fix, delta/vanna/charm all correctly compose as `-1*customer-raw`.
+
+The statistical-validation content below (Round-2 results, effective-n,
+Cem's required upgrade set) was run against the PRE-fix vanna/charm sign
+composition and was NOT re-litigated by the 2026-08-17 review — it remains
+exactly as accurate/inaccurate as it was on 2026-08-14. If vanna or charm
+sign entered those Round-2 numbers anywhere, they may need re-running against
+the fixed composition; nothing about the promotion decision retroactively
+validates or invalidates those
 numbers.
 
 ---
