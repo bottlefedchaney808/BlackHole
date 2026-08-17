@@ -22,7 +22,7 @@ Pricing engine for fair variance swap strikes using model-free replication (fini
 - IV smile scatter (put IV vs call IV)
 - Plots: OTM prices, contribution bars, volatility smile, realized vs fair bar chart
 
-**Data Sources:** ThetaData (live), yfinance (historical)
+**Data Sources:** ThetaData (live quotes and historical prices; see §7 for the Yahoo Finance fallback)
 
 ### 2. Cross-Sectional Screener (`variance_swap_screener.py`)
 Multi-ticker ranking system for short-vol attractiveness.
@@ -190,7 +190,7 @@ unrecoverable strikes are dropped rather than imputed.
 
 | Phase | Module | Status |
 |-------|--------|--------|
-| 1 | Core variance swap calculator (yfinance) | ✅ Complete |
+| 1 | Core variance swap calculator (ThetaData) | ✅ Complete |
 | 2 | ThetaData integration | ✅ Complete |
 | 3 | Realized vol + VRP + ATM IV comparison | ✅ Complete |
 | 4 | Plots + CSV export | ✅ Complete |
