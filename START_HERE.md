@@ -66,13 +66,24 @@ Run these from Git Bash at the repo root when you need a quick workflow check:
 
 ## Sharing the dashboard publicly
 
-`cloudflared tunnel --url http://127.0.0.1:8787` gives a public HTTPS link
-(e.g. `https://<random-words>.trycloudflare.com`) that proxies to your local
-dashboard for as long as your machine and that command stay running — no
-port forwarding, no exposing your real IP. It's a free, account-less
-"quick tunnel"; the URL changes each time you start a new one.
+The dashboard has a built-in **Share** control in the top bar. Start the
+dashboard, click **Start sharing**, and confirm — a public HTTPS link
+(e.g. `https://<random-words>.trycloudflare.com`) appears that proxies to your
+local dashboard for as long as your machine and the dashboard stay running.
+Click **Stop sharing** (or close the dashboard) to take it down.
+
+Under the hood it runs Cloudflare's free, account-less "quick tunnel"
+(`cloudflared tunnel --url http://127.0.0.1:8787`). The URL changes each time
+you start a new one, and `cloudflared` must be installed and on PATH.
+
+**Stopping cleanly on Windows.** The Stop button and Ctrl+C both clean up the
+tunnel automatically. But a *hard* kill of the dashboard process (Task
+Manager "End task", or `taskkill /F`) bypasses the app's shutdown hook and can
+leave a `cloudflared` process running with the public URL still live. If that
+happens, stop it manually: `taskkill /F /IM cloudflared.exe` (in cmd) or
+`taskkill //F //IM cloudflared.exe` (in git-bash).
 
 **There is no password on the dashboard.** Anyone with the link can see all
 swap data and trigger orchestrator runs (which call real, billed ThetaData
 API requests). Only share the link with people you trust, and stop the
-tunnel (Ctrl+C) when you're done.
+tunnel when you're done.

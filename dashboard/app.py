@@ -48,6 +48,7 @@ from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 # --------------------------------------------------------------------------
@@ -70,6 +71,7 @@ from db_loader import SwapsLoader  # noqa: E402
 from swaps_query import SwapsQuery  # noqa: E402
 from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary  # noqa: E402
 from dashboard.auth import get_client_ip  # noqa: E402
+from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
 from shared.schemas import validate_quant_summary  # noqa: E402
 from shared.summary import build_run_summary  # noqa: E402
@@ -95,7 +97,17 @@ SUITE_ROOTS = orchestrator.SUITE_ROOTS
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, 'templates'))
 
-app = FastAPI(title='FinancialDevelopment Dashboard')
+tunnel_manager = TunnelManager()
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    # Best-effort cleanup so a tunnel never outlives the dashboard process.
+    await tunnel_manager.shutdown()
+
+
+app = FastAPI(title='FinancialDevelopment Dashboard', lifespan=_lifespan)
 
 # Rate limiter: max 1 run per 60s per IP, max 10 concurrent
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
@@ -118,6 +130,60 @@ def _db() -> Optional[sqlite3.Connection]:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# --------------------------------------------------------------------------
+# /swaps filter-option cache
+# --------------------------------------------------------------------------
+# `SELECT DISTINCT regulator`/`SELECT DISTINCT asset_class FROM swap_trades`
+# were being re-run on every /swaps request to populate the filter dropdowns.
+# On the production 342GB swaps.db these are effectively full scans (no
+# equality predicate to make an index seek selective) and were the remaining
+# source of the route's 15s timeout after migration 006 fixed search_trades
+# itself. The option set changes at most once per ingest cycle (new
+# regulator/asset_class values are rare), so a short in-process TTL cache is
+# safe and keeps the DB path as part of the key in case DB_PATH ever changes
+# within a process lifetime (e.g. tests).
+_SWAPS_OPTIONS_CACHE_TTL_SEC = 60
+_swaps_options_cache: Dict[str, Tuple[float, List[str], List[str]]] = {}
+_swaps_options_lock = threading.Lock()
+
+
+def _get_swaps_filter_options(conn: sqlite3.Connection, db_path: str) -> Tuple[List[str], List[str]]:
+    """Cached (regulators, asset_classes) distinct-value lists for the /swaps filter dropdowns.
+
+    Cache key is the DB path; TTL is short enough that a newly-seen regulator/
+    asset_class shows up within a minute, but long enough to keep this off the
+    hot path for the (much more frequent) row-filtering requests.
+    """
+    now = time.monotonic()
+    with _swaps_options_lock:
+        cached = _swaps_options_cache.get(db_path)
+        if cached is not None and (now - cached[0]) < _SWAPS_OPTIONS_CACHE_TTL_SEC:
+            return cached[1], cached[2]
+
+    # `SELECT DISTINCT regulator` benefits from idx_swap_trades_regulator_asset
+    # (regulator, asset_class) leading on regulator: SQLite can skip-scan
+    # between distinct regulator values instead of reading every row.
+    # `SELECT DISTINCT asset_class` alone can NOT use that same index (asset_class
+    # isn't the leading column), so instead of one unbounded scan we do one
+    # index-seek per already-known regulator (cardinality is low -- SEC/CFTC --
+    # so this stays a handful of cheap seeks against the same composite index,
+    # each bounded by that regulator's distinct asset_class values).
+    regulators = [r['regulator'] for r in conn.execute(
+        'SELECT DISTINCT regulator FROM swap_trades '
+        'WHERE regulator IS NOT NULL ORDER BY regulator;')]
+    asset_class_set: set = set()
+    for reg in regulators:
+        asset_class_set.update(
+            r['asset_class'] for r in conn.execute(
+                'SELECT DISTINCT asset_class FROM swap_trades '
+                'WHERE regulator = ? AND asset_class IS NOT NULL;', (reg,)))
+    asset_classes = sorted(asset_class_set)
+
+    with _swaps_options_lock:
+        _swaps_options_cache[db_path] = (now, regulators, asset_classes)
+    return regulators, asset_classes
 
 
 def _fmt_num(value: Any) -> str:
@@ -602,76 +668,80 @@ def home(request: Request):
 
 @app.get('/swaps', response_class=HTMLResponse)
 def swaps(request: Request,
+          q: str = '',
           regulator: str = '',
           asset_class: str = '',
+          cleared: str = '',
+          effective_date_from: str = '',
+          effective_date_to: str = '',
+          sort_by: str = 'ingested_at',
+          sort_dir: str = 'desc',
           page: int = 1,
           per_page: int = 50):
-    page = max(1, int(page or 1))
-    per_page = min(500, max(10, int(per_page or 50)))
-
     columns = ['dissemination_id', 'regulator', 'asset_class', 'action_type',
                'event_type', 'effective_date', 'expiration_date', 'cleared',
                'notional_amount_leg1', 'notional_currency_leg1', 'price',
-               'underlying_asset_name', 'upi', 'company_name', 'upi_underlier_name',
-               'ingested_at']
+               'underlying_asset_name', 'upi', 'company_name', 'ticker',
+               'upi_underlier_name', 'ingested_at']
     notional_cols = {'notional_amount_leg1'}
 
-    where, params = [], []
-    if regulator:
-        where.append('st.regulator = ?')
-        params.append(regulator)
-    if asset_class:
-        where.append('st.asset_class = ?')
-        params.append(asset_class)
-    where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+    cleared_bool: Optional[bool] = None
+    if cleared in ('1', 'true', 'True'):
+        cleared_bool = True
+    elif cleared in ('0', 'false', 'False'):
+        cleared_bool = False
 
-    rows: List[Dict[str, Any]] = []
-    total = 0
+    result: Dict[str, Any] = {
+        'rows': [], 'total': 0, 'count_is_exact': True, 'has_more': False,
+        'count_cap': SwapsQuery.SEARCH_COUNT_CAP, 'page': page, 'per_page': per_page,
+        'pages': 1, 'sort_by': sort_by, 'sort_dir': sort_dir,
+    }
     regulators: List[str] = []
     asset_classes: List[str] = []
     error: Optional[str] = None
 
-    conn = _db()
-    if conn is None:
+    if not os.path.exists(DB_PATH):
         error = f'swaps.db not found at {DB_PATH}'
     else:
         try:
-            select_cols = ", ".join(
-                'ur.company_name' if c == 'company_name' else f'st.{c}'
-                for c in columns
+            sq = SwapsQuery(DB_PATH)
+            result = sq.search_trades(
+                query=q, regulator=regulator or None, asset_class=asset_class or None,
+                cleared=cleared_bool,
+                effective_date_from=effective_date_from or None,
+                effective_date_to=effective_date_to or None,
+                sort_by=sort_by, sort_dir=sort_dir, page=page, per_page=per_page,
             )
-            total = conn.execute(
-                f'SELECT COUNT(*) AS n FROM swap_trades st {where_sql};',
-                params).fetchone()['n']
-            rows = [dict(r) for r in conn.execute(
-                f'SELECT {select_cols} FROM swap_trades st '
-                'LEFT JOIN upi_reference ur ON ur.upi = st.upi '
-                f'{where_sql} '
-                'ORDER BY st.ingested_at DESC, st.dissemination_id DESC LIMIT ? OFFSET ?;',
-                params + [per_page, (page - 1) * per_page])]
-            regulators = [r['regulator'] for r in conn.execute(
-                'SELECT DISTINCT regulator FROM swap_trades '
-                'WHERE regulator IS NOT NULL ORDER BY regulator;')]
-            asset_classes = [r['asset_class'] for r in conn.execute(
-                'SELECT DISTINCT asset_class FROM swap_trades '
-                'WHERE asset_class IS NOT NULL ORDER BY asset_class;')]
+            conn = _db()
+            if conn is not None:
+                try:
+                    regulators, asset_classes = _get_swaps_filter_options(conn, DB_PATH)
+                finally:
+                    conn.close()
         except Exception as e:
             error = f'{type(e).__name__}: {e}'
-        finally:
-            conn.close()
 
-    pages = max(1, (total + per_page - 1) // per_page) if total else 1
     return TEMPLATES.TemplateResponse(request, 'swaps.html', {
         'active': 'swaps',
         'columns': columns,
         'notional_cols': notional_cols,
-        'rows': rows,
-        'total': total,
-        'page': page,
-        'pages': pages,
-        'per_page': per_page,
+        'rows': result['rows'],
+        'total': result['total'],
+        'count_is_exact': result['count_is_exact'],
+        'has_more': result['has_more'],
+        'count_cap': result['count_cap'],
+        'page': result['page'],
+        'pages': result['pages'],
+        'per_page': result['per_page'],
+        'q': q,
         'regulator': regulator,
         'asset_class': asset_class,
+        'cleared': cleared,
+        'effective_date_from': effective_date_from,
+        'effective_date_to': effective_date_to,
+        'sort_by': result['sort_by'],
+        'sort_dir': result['sort_dir'],
+        'sort_columns': list(SwapsQuery.SEARCH_SORT_COLUMNS.keys()),
         'regulators': regulators,
         'asset_classes': asset_classes,
         'error': error,
@@ -1511,7 +1581,7 @@ def suite_output(request: Request, suite: str, run_id: Optional[str] = None):
             # path would have to populate too.
             names = [os.path.basename(f.abs_path) for f in run.files]
             grouped_file_views = {}
-            for s in ('options', 'var', 'sentiment', 'vol'):
+            for s in ('options', 'var', 'sentiment', 'vol', 'swaps'):
                 claimed = set(claim_files_for_suite(names, s))
                 s_files = [f for f in run.files if os.path.basename(f.abs_path) in claimed]
                 if not s_files:
@@ -1711,6 +1781,17 @@ def _strategy_map(contexts: List[Dict[str, Any]]) -> str:
         except Exception:
             continue
         strategies = full.get('strategies') or []
+        if not strategies:
+            # The chain scanner writes recommended strategies to
+            # chain_strategies.json next to suite_context.json, not inside the
+            # context file -- fall back to that artifact on this machine.
+            artifact = os.path.join(os.path.dirname(c['path']), 'chain_strategies.json')
+            if os.path.isfile(artifact):
+                try:
+                    with open(artifact, encoding='utf-8') as _f:
+                        strategies = (json.load(_f) or {}).get('strategies') or []
+                except (OSError, ValueError):
+                    strategies = []
         out[c['path']] = {
             'ticker': (full.get('focus') or {}).get('ticker'),
             'expiration_date': (full.get('focus') or {}).get('expiration_date'),
@@ -1803,6 +1884,7 @@ def tools_backtest_form(request: Request):
         'strategy_map_json': _strategy_map(contexts),
         'selected_path': '',
         'selected_mode': 'dealer_gamma_study',
+        'selected_sign_model': 'all',
         'entry_date': '',
         'exit_date': '',
         'expiry': '',
@@ -1826,6 +1908,7 @@ async def tools_backtest_run(request: Request):
     expiry = str(body.get('expiry') or '').strip()
     contract_multiplier = str(body.get('contract_multiplier') or '100').strip()
     strategy_index_raw = str(body.get('strategy_index') or '0').strip()
+    sign_model = str(body.get('sign_model') or 'all').strip().lower()
 
     context, error = _load_selected_context(context_path)
     result = None
@@ -1833,6 +1916,8 @@ async def tools_backtest_run(request: Request):
 
     if context is not None:
         context['mode'] = mode
+        if mode == 'dealer_gamma_study':
+            context['sign_model'] = sign_model
         if expiry:
             context['expiry'] = expiry
         if contract_multiplier:
@@ -1867,6 +1952,7 @@ async def tools_backtest_run(request: Request):
         'strategy_map_json': _strategy_map(contexts),
         'selected_path': context_path,
         'selected_mode': mode,
+        'selected_sign_model': sign_model,
         'entry_date': entry_date,
         'exit_date': exit_date,
         'expiry': expiry,
@@ -1878,13 +1964,105 @@ async def tools_backtest_run(request: Request):
     })
 
 
-# Tools whose UI is just "pick a context, run" (plus, for whale-flow, two
-# optional numeric overrides) -- everything registered in Tools.registry
-# except options-strategy and backtesting, which have bespoke forms above
-# because their run() takes extra required/structured inputs.
+@app.get('/tools/simulations', response_class=HTMLResponse)
+def tools_simulations_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_simulations.html', {
+        'active': 'tools', 'tool': get_tool('simulations'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': '', 'selected_mode': 'price_dist',
+        'horizon_days': '', 'n_sims': '', 'confidence': '', 'seed': '',
+        'result': None, 'result_json': None, 'error': None,
+    })
+
+
+@app.post('/tools/simulations', response_class=HTMLResponse)
+async def tools_simulations_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+    context_path = str(body.get('context_path') or '').strip()
+    mode = str(body.get('mode') or 'price_dist').strip().lower()
+    context, error = _load_selected_context(context_path)
+    result = None
+    if context is not None:
+        context['mode'] = mode
+        for key, cast in (('horizon_days', int), ('n_sims', int),
+                          ('confidence', float), ('seed', int)):
+            raw = str(body.get(key) or '').strip()
+            if raw:
+                try:
+                    context[key] = cast(raw)
+                except ValueError:
+                    error = f'{key} must be numeric, got {raw!r}'
+        if error is None:
+            result, run_error = _run_tool_safe('simulations', context)
+            if run_error:
+                error = run_error
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_simulations.html', {
+        'active': 'tools', 'tool': get_tool('simulations'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': context_path, 'selected_mode': mode,
+        'horizon_days': str(body.get('horizon_days') or ''),
+        'n_sims': str(body.get('n_sims') or ''),
+        'confidence': str(body.get('confidence') or ''),
+        'seed': str(body.get('seed') or ''),
+        'result': result, 'result_json': result_json, 'error': error,
+    })
+
+
+@app.get('/tools/directional-engine', response_class=HTMLResponse)
+def tools_directional_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_directional.html', {
+        'active': 'tools', 'tool': get_tool('directional-engine'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': '', 'selected_mode': 'unified',
+        'min_premium': '', 'threshold_bps': '',
+        'result': None, 'result_json': None, 'error': None,
+    })
+
+
+@app.post('/tools/directional-engine', response_class=HTMLResponse)
+async def tools_directional_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+    context_path = str(body.get('context_path') or '').strip()
+    mode = str(body.get('mode') or 'unified').strip().lower()
+    min_premium = str(body.get('min_premium') or '').strip()
+    threshold_bps = str(body.get('threshold_bps') or '').strip()
+    context, error = _load_selected_context(context_path)
+    result = None
+    if context is not None:
+        context['mode'] = mode
+        # whale-mode numeric overrides (min_premium / threshold_bps), the same
+        # the old standalone whale-flow tool accepted -- now folded into the
+        # Directional Engine's whale sub-signal.
+        if min_premium:
+            context['min_premium'] = min_premium
+        if threshold_bps:
+            context['threshold_bps'] = threshold_bps
+        result, run_error = _run_tool_safe('directional-engine', context)
+        if run_error:
+            error = run_error
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_directional.html', {
+        'active': 'tools', 'tool': get_tool('directional-engine'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': context_path, 'selected_mode': mode,
+        'min_premium': min_premium, 'threshold_bps': threshold_bps,
+        'result': result, 'result_json': result_json, 'error': error,
+    })
+
+
+# Tools whose UI is just "pick a context, run" -- everything registered in
+# Tools.registry except options-strategy and backtesting, which have bespoke
+# forms above because their run() takes extra required/structured inputs.
+# whale-flow / elliott-wave / bollinger / trend-engine / liquidity-map are NOT
+# listed: they moved inside Directional Engine as per-module modes.
 GENERIC_TOOL_SLUGS = {
-    'whale-flow', 'elliott-wave', 'bollinger', 'trend-engine',
-    'liquidity-map', 'direction-signal', 'hedge-optimizer',
+    'directional-engine', 'hedge-optimizer',
+    'vrp-term-structure', 'simulations',
 }
 
 
@@ -1923,11 +2101,6 @@ async def tools_generic_run(slug: str, request: Request):
     context, error = _load_selected_context(context_path)
     result = None
     if context is not None:
-        if slug == 'whale-flow':
-            if min_premium:
-                context['min_premium'] = min_premium
-            if threshold_bps:
-                context['threshold_bps'] = threshold_bps
         result, run_error = _run_tool_safe(slug, context)
         if run_error:
             error = run_error
@@ -2184,6 +2357,33 @@ def health():
                       if v.get('status') in ('queued', 'running')],
         'available_data_sources': orchestrator.discover_adapters(),
     }
+
+
+# --------------------------------------------------------------------------
+# /share -- Cloudflare quick-tunnel control
+# --------------------------------------------------------------------------
+
+@app.get('/share/status')
+async def share_status():
+    """Current tunnel state: running / url / state / pid / last_error."""
+    return tunnel_manager.status()
+
+
+@app.post('/share/start')
+async def share_start():
+    """Start a quick tunnel. 409 if cloudflared missing; 500 on start error."""
+    try:
+        return await tunnel_manager.start()
+    except TunnelUnavailable as e:
+        return JSONResponse({'error': str(e)}, status_code=409)
+    except TunnelStartError as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/share/stop')
+async def share_stop():
+    """Stop the running tunnel. Idempotent."""
+    return await tunnel_manager.stop()
 
 
 # ──────────────────────────────────────────────────────────────────────────

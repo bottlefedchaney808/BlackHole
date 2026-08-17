@@ -411,7 +411,7 @@ from dashboard.output_runs import (
 
 
 def test_suite_labels_covers_all_five_keys():
-    assert set(SUITE_LABELS) == {'options', 'vol', 'var', 'sentiment', 'unified'}
+    assert set(SUITE_LABELS) == {'options', 'vol', 'var', 'sentiment', 'swaps', 'unified'}
 
 
 def test_discover_runs_combines_sources_and_detects_unified_siblings(tmp_path, monkeypatch):

@@ -312,12 +312,26 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             ('unusual_oi', scan_unusual_oi, format_unusual_oi),
         ):
             try:
-                if key == 'max_pain':
+                _focus = context.get('focus') or {}
+                _garch_dec = _focus.get('garch_conditional_vol')
+                _fair_pct = _focus.get('fair_vol_pct')
+                _garch_pct = (float(_garch_dec * 100.0)
+                              if isinstance(_garch_dec, (int, float))
+                              and not isinstance(_garch_dec, bool) else None)
+                _fair_val = (float(_fair_pct)
+                             if isinstance(_fair_pct, (int, float))
+                             and not isinstance(_fair_pct, bool) else None)
+                if key == 'iv_rank':
+                    scan = scan_fn(ticker, garch_cond_vol_pct=_garch_pct,
+                                   fair_vol_pct=_fair_val)
+                elif key == 'max_pain':
                     # Pin Max Pain to the expiry this run is analyzing instead
-                    # of letting it self-select its own nearest-~30DTE one.
+                    # of letting it self-select its own nearest-~30DTE one, and
+                    # pass the context's GARCH/fair vol for its narrative.
                     scan = scan_fn(
                         ticker,
-                        expiry=(context.get('focus') or {}).get('expiration_date'),
+                        expiry=_focus.get('expiration_date'),
+                        garch_cond_vol_pct=_garch_pct, fair_vol_pct=_fair_val,
                     )
                 else:
                     scan = scan_fn(ticker)
@@ -787,6 +801,21 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
     except Exception as e:
         return _fail(f"Could not write context file {ctx_path}: {e}")
 
+    # Canonical copy: bridge latest_run()/_module_latest() and the dashboard's
+    # run discovery key on the canonical suite_context.json inside the run dir
+    # (run_unified writes it explicitly at the end). A single-suite run must
+    # publish it too, or the plugin/dashboard cannot see the run and fall back
+    # to an older one. Written with the same context dict, so content is
+    # identical to the unified path's canonical file.
+    canonical_path = os.path.join(output_dir, 'suite_context.json')
+    try:
+        with open(canonical_path, 'w', encoding='utf-8') as f:
+            json.dump(context, f, indent=2)
+            f.write('\n')
+    except Exception as e:
+        print(f"  [{name}] WARNING: could not write canonical suite_context.json: {e}",
+              file=sys.stderr)
+
     # Stale result from an earlier run must not be mistaken for this run's
     # output if the child dies before writing.
     if os.path.exists(out_path):
@@ -965,6 +994,62 @@ def _print_phase_header(phase_num: int, phase_name: str, description: str) -> No
     print("-" * 60)
 
 
+def _build_swaps_result(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the swaps_result.json artifact from context['swap_activity']
+    (already populated by build_context via get_recent_swap_activity).
+
+    Deliberately not added to `run_unified`'s `results` dict: swaps is a
+    same-process DB read with no subprocess/validation-gate lifecycle like
+    the other suites, so it never contributes to the unified run's ok/error
+    suite tally -- it's enrichment surfaced for visibility, with its own
+    artifact and its own Output-tab panel (see output_runs.py's
+    SUITE_MARKER_FILES['swaps']).
+    """
+    from shared.schemas import validate_swaps_result
+
+    ticker = (context.get('focus') or {}).get('ticker')
+    rows = context.get('swap_activity') or []
+    result = {
+        'schema_version': 1,
+        'suite': 'swaps',
+        'status': 'ok' if rows else 'no_data',
+        'ticker': ticker,
+        'timestamp': _iso_utc_now(),
+        'row_count': len(rows),
+        'top_notional': rows[:20],
+        'effective_date': rows[0].get('effective_date') if rows else None,
+    }
+    try:
+        validate_swaps_result(result)
+    except Exception as e:
+        print(f"  [swaps] WARNING: swaps_result failed validation: {e}", file=sys.stderr)
+    return result
+
+
+def _print_swaps_block(swaps_result: Dict[str, Any]) -> None:
+    """Bounded, clearly-delimited swaps summary in unified-run stdout --
+    at most 10 product lines regardless of how many rows swap_activity has,
+    with a graceful message when there is nothing to show (cold swaps.db or
+    no recent DTCC activity for this ticker)."""
+    print(f"\n{'-' * 60}")
+    print("  SWAPS (recent DTCC activity)")
+    print(f"{'-' * 60}")
+    if swaps_result['status'] != 'ok':
+        print("  No swap activity available -- swaps.db may be cold, or there is "
+              "no recent DTCC-reported activity for this ticker.")
+    else:
+        print(f"  {swaps_result['row_count']} product row(s) as of "
+              f"{swaps_result['effective_date']}")
+        for row in swaps_result['top_notional'][:10]:
+            notional = row.get('total_notional')
+            notional_str = f"${notional:,.0f}" if isinstance(notional, (int, float)) else '--'
+            product = str(row.get('product') or '?')[:40]
+            print(f"    {product:40s} {notional_str:>18s}  ({row.get('trade_count')} trades)")
+        if swaps_result['row_count'] > 10:
+            print(f"    ... and {swaps_result['row_count'] - 10} more (see swaps_result.json)")
+    print(f"{'-' * 60}")
+
+
 def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str, Any]) -> None:
     """Vol_Suite computes a real per-ticker realized annualized vol and a
     pairwise correlation matrix for the resolved basket (correlation_engine.py
@@ -1011,6 +1096,34 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
     garch_vol = ((vol_result or {}).get('vol_surface') or {}).get('garch_conditional_vol')
     if isinstance(garch_vol, (int, float)) and not isinstance(garch_vol, bool) and garch_vol > 0:
         context.setdefault('focus', {})['garch_conditional_vol'] = float(garch_vol)
+
+    # Fair variance-strike vol for the focus leg (vol_surface block). The
+    # IV-rank scanner reads fair_vol_pct to compute the RICH/CHEAP regime and
+    # VRP; without it the scanner silently degrades to 0.0 and reports UNKNOWN.
+    focus_surface = ((vol_result or {}).get('vol_surface') or {})
+    fair_vol_pct = focus_surface.get('fair_vol_pct')
+    if fair_vol_pct is None:
+        fair_vol_pct = focus_surface.get('fair_variance_swap_strike_vol_pct')
+    if isinstance(fair_vol_pct, (int, float)) and not isinstance(fair_vol_pct, bool):
+        context.setdefault('focus', {})['fair_vol_pct'] = float(fair_vol_pct)
+
+    # Expected return for the focus leg. Prefer a Vol_Suite-published value;
+    # else the correlation engine's basket expected return; else fall back to
+    # VaR's realized geometric annualized return for the focus ticker so the
+    # 1yr-out sims' `_resolve_drift_and_quality` reports source="context".
+    expected_return = focus_surface.get('expected_return')
+    if expected_return is None:
+        expected_return = ((vol_result or {}).get('correlation_engine') or {}).get('basket_expected_return')
+    if expected_return is None:
+        try:
+            from var_engine import data_loader  # VaR's drift estimator
+            _tk = (context.get('focus') or {}).get('ticker')
+            if _tk:
+                expected_return = data_loader.estimate_geometric_return(_tk)
+        except Exception:
+            expected_return = None
+    if isinstance(expected_return, (int, float)) and not isinstance(expected_return, bool):
+        context.setdefault('focus', {})['expected_return'] = float(expected_return)
 
 
 def run_unified(focus: Dict[str, Any],
@@ -1063,6 +1176,15 @@ def run_unified(focus: Dict[str, Any],
     if fail_on_suite_error:
         print("[unified] --fail-on-suite-error: the first invalid or failed "
               "stage aborts the chain.")
+
+    swaps_result = _build_swaps_result(context)
+    try:
+        with open(os.path.join(output_dir, 'swaps_result.json'), 'w', encoding='utf-8') as f:
+            json.dump(swaps_result, f, indent=2, default=str)
+            f.write('\n')
+    except Exception as e:
+        print(f"  [swaps] WARNING: could not write swaps_result.json: {e}", file=sys.stderr)
+    _print_swaps_block(swaps_result)
 
     aborted_by: Optional[str] = None
 
@@ -1180,6 +1302,7 @@ def run_unified(focus: Dict[str, Any],
         'context_path': os.path.join(output_dir, 'suite_context.json'),
         'focus': context['focus'],
         'swap_activity_rows': len(context.get('swap_activity') or []),
+        'swaps': swaps_result,
         'results': results,
         'fail_on_suite_error': bool(fail_on_suite_error),
         'aborted_by': aborted_by,

@@ -363,6 +363,34 @@ def _resolve_sign(right: str, strike: float, sign_model: str,
     raise ValueError(f"sign_model must be one of {VALID_SIGN_MODELS}, got {sign_model!r}")
 
 # ---------- Main computation ----------
+def compute_accumulated_position(ticker: str, expiry: str,
+                                 lookback_days: int = 150,
+                                 seed_mode: str = 'replication',
+                                 hist_rows: Optional[Tuple[List[dict], List[dict], List[dict]]] = None,
+                                 ) -> Optional[Dict[Tuple[float, str], float]]:
+    """THE single entry point for the live dealer-accumulation model.
+
+    dealer_positioning.py is the one live model; this is the ONLY place the
+    model layer calls into replication_reference for the accumulated dealer
+    book. Both the live render (compute_dealer_positioning) and the backtest's
+    v2_live consume this, so there is no second, separate accumulation path.
+
+    Returns the signed accumulated position (dict keyed by (strike, right)), or
+    None if it cannot be built (thin chain / insufficient history / proxy
+    hiccup). Callers decide the failure policy -- the live render falls back to
+    a same-day snapshot; the backtest's v2_live fails loudly.
+    """
+    try:
+        acc = replication_reference.compute_accumulated_position_for_expiry(
+            ticker, expiry, lookback_days=lookback_days, seed_mode=seed_mode,
+            _hist_rows=hist_rows)
+        return dict(acc.position_by_strike) if acc.position_by_strike else None
+    except Exception as exc:
+        print(f"  [dealer_positioning] accumulation failed for {ticker} {expiry}: "
+              f"{type(exc).__name__}: {exc}", flush=True)
+        return None
+
+
 def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
                                 max_days: Optional[int] = None,
                                 expiration: Optional[str] = None,
@@ -476,15 +504,12 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
     # fetch fails (thin chain, insufficient history, proxy hiccup, etc.).
     accumulated_position: Optional[Dict[Tuple[float, str], float]] = None
     if effective_accumulate and anchor_expiry:
-        try:
-            acc_result = replication_reference.compute_accumulated_position_for_expiry(
-                ticker, anchor_expiry, lookback_days=accumulation_lookback_days,
-                seed_mode=accumulation_seed_mode, _hist_rows=_accumulation_hist_rows,
-            )
-            accumulated_position = acc_result.position_by_strike
-        except Exception as exc:
+        accumulated_position = compute_accumulated_position(
+            ticker, anchor_expiry, lookback_days=accumulation_lookback_days,
+            seed_mode=accumulation_seed_mode, hist_rows=_accumulation_hist_rows)
+        if accumulated_position is None:
             print(f"  [accumulate] falling back to same-day snapshot for {ticker} "
-                  f"{anchor_expiry}: {exc}")
+                  f"{anchor_expiry}")
 
     for exp_str, tte in active_expiries:
         try:
@@ -1333,7 +1358,12 @@ def run_dealer_positioning(ticker: str, target_years: float = 0.25,
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     files: List[str] = []
-    result = compute_dealer_positioning(ticker, target_years, expiration=expiration, sign_model=sign_model)
+    # Accumulation ON by default for the live runner: the accumulated seed-plus-
+    # flow book (replication_reference) is the intended live model per Jason's
+    # directive ("if accumulation isn't turned on turn it on"). DEALER_ACCUMULATION=0 disables.
+    accumulate_live = os.environ.get("DEALER_ACCUMULATION", "1") == "1"
+    result = compute_dealer_positioning(ticker, target_years, expiration=expiration,
+                                        sign_model=sign_model, accumulate=accumulate_live)
     print_report(result)
     try:
         interp = None

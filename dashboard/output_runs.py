@@ -141,6 +141,7 @@ SUITE_MARKER_FILES = {
     'options': ('options_result.json', 'suite_context_options.json'),
     'var': ('var_result.json', 'suite_context_var.json'),
     'sentiment': ('sentiment_result.json', 'suite_context_sentiment.json'),
+    'swaps': ('swaps_result.json',),
 }
 
 #: Filenames no suite claims as "its own result to review" -- cross-suite
@@ -184,6 +185,8 @@ def label_from_marker(marker_path: str, suite: str) -> Optional[str]:
         return f"{data.get('module', '?')} · {status}"
     if suite == 'sentiment':
         return f"{data.get('ticker', '?')} · market signals · {status}"
+    if suite == 'swaps':
+        return f"{data.get('ticker', '?')} · {data.get('row_count', 0)} row(s) · {status}"
     return status
 
 
@@ -409,6 +412,7 @@ SUITE_LABELS = {
     'vol': 'Vol_Suite',
     'var': 'VaR_Tools_Simulations',
     'sentiment': 'Market Signals',
+    'swaps': 'Swaps',
     'unified': 'Unified',
 }
 
@@ -504,7 +508,7 @@ def _discover_unified_runs() -> List[RunInfo]:
         except OSError:
             continue
         per_suite = {s: claim_files_for_suite(names, s)
-                     for s in ('options', 'var', 'sentiment', 'vol')}
+                     for s in ('options', 'var', 'sentiment', 'vol', 'swaps')}
         suites_present = [s for s, claimed in per_suite.items() if claimed]
         if len(suites_present) < 2:
             continue

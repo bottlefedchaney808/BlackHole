@@ -60,30 +60,18 @@ def _load_tools() -> List[ToolSpec]:
     # and shrinking the registry with no error at all.
     from Tools.tools import options_strategy_tool
     from Tools.tools import backtesting_tool
-    from Tools.tools import whale_flow_tool
-    from Tools.tools import elliott_wave_tool
-    from Tools.tools import bollinger_tool
-    from Tools.tools import trend_engine_tool
-    from Tools.tools import liquidity_map_tool
     from Tools.tools import direction_signal_tool
     from Tools.tools import hedge_optimizer_tool
     from Tools.tools import vrp_term_structure_tool
     from Tools.tools import price_dist_tool
-    from Tools.tools import social_sentiment_tool
 
     return [
         options_strategy_tool.TOOL_SPEC,
         backtesting_tool.TOOL_SPEC,
-        whale_flow_tool.TOOL_SPEC,
-        elliott_wave_tool.TOOL_SPEC,
-        bollinger_tool.TOOL_SPEC,
-        trend_engine_tool.TOOL_SPEC,
-        liquidity_map_tool.TOOL_SPEC,
         direction_signal_tool.TOOL_SPEC,
         hedge_optimizer_tool.TOOL_SPEC,
         vrp_term_structure_tool.TOOL_SPEC,
         price_dist_tool.TOOL_SPEC,
-        social_sentiment_tool.TOOL_SPEC,
         # Add new tools' TOOL_SPEC here -- see module docstring above.
     ]
 

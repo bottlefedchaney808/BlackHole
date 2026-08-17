@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Simulations -- FinancialDevelopment Dashboard{% endblock %}
+{% block content %}
+<h1>Simulations</h1>
+<p class="sub">
+  {{ tool.description }}
+  <a href="/tools">&larr; back to Tools</a>
+</p>
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Run</h2></header>
+  <div class="body">
+    <form class="runform" method="post" action="/tools/simulations">
+      <div class="field" style="min-width:340px;">
+        <label for="context_path">Context (populates ticker/vol/drift)</label>
+        <select id="context_path" name="context_path">
+          <option value="" {{ 'selected' if not selected_path else '' }}>-- choose a context --</option>
+          {% for c in contexts if c.valid %}
+          <option value="{{ c.path }}" {{ 'selected' if c.path == selected_path else '' }}>
+            {{ c.ticker or '?' }} &middot; {{ c.suite }} &middot; {{ c.run_id }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode">
+          {% for m in ['price_dist', 'mc_sim', 'corr_sim'] %}
+          <option value="{{ m }}" {{ 'selected' if selected_mode == m else '' }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label for="horizon_days">Horizon days</label>
+        <input id="horizon_days" name="horizon_days" value="{{ horizon_days }}" size="8" autocomplete="off"></div>
+      <div class="field"><label for="n_sims">Iterations (n_sims)</label>
+        <input id="n_sims" name="n_sims" value="{{ n_sims }}" size="10" autocomplete="off"></div>
+      <div class="field"><label for="confidence">Confidence (0-1)</label>
+        <input id="confidence" name="confidence" value="{{ confidence }}" size="6" autocomplete="off"></div>
+      <div class="field"><label for="seed">Seed</label>
+        <input id="seed" name="seed" value="{{ seed }}" size="6" autocomplete="off"></div>
+      <button type="submit">Run simulation</button>
+    </form>
+  </div>
+</div>
+
+{% if result %}
+<div class="panel">
+  <header><h2>Result</h2></header>
+  <div class="body"><pre class="json">{{ result_json }}</pre></div>
+</div>
+{% endif %}
+{% endblock %}

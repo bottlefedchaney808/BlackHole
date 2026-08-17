@@ -1,0 +1,2 @@
+# generated data artifacts -- regenerable via build_broker_book.py / the Tools backtester
+*.csv

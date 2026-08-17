@@ -38,6 +38,7 @@ No signature drift to flag.
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -50,6 +51,32 @@ if str(_VOL_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_VOL_SUITE_ROOT))
 
 from Tools.registry import ToolSpec  # noqa: E402
+
+_CHAIN_STRATEGIES_FILENAME = "chain_strategies.json"
+
+
+def _resolve_strategies(context: Dict[str, Any]) -> list:
+    """Resolve the strategy list to backtest.
+
+    The chain scanner writes its recommended strategies to
+    <output_dir>/chain_strategies.json (format_strategies_artifact's shape),
+    NOT into suite_context.json -- so a context's own `strategies` key is
+    usually empty. Prefer the artifact when present, else fall back to the
+    context's inline `strategies`.
+    """
+    strategies = context.get("strategies") or []
+    if strategies:
+        return strategies
+    out_dir = context.get("_output_dir_override") or context.get("output_dir")
+    if out_dir:
+        artifact = Path(out_dir) / _CHAIN_STRATEGIES_FILENAME
+        if artifact.is_file():
+            try:
+                data = json.loads(artifact.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return []
+            return data.get("strategies") or []
+    return []
 
 
 def _iso_to_compact(date_str: Optional[str]) -> Optional[str]:
@@ -66,6 +93,9 @@ def _iso_to_compact(date_str: Optional[str]) -> Optional[str]:
     return date_str
 
 
+_DEALER_SIGN_MODELS = {'all'}
+
+
 def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
     import backtest_stage3 as bs3
 
@@ -80,15 +110,22 @@ def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
     lookback_days = int(context.get("lookback_days", bs3.DEFAULT_LOOKBACK_DAYS))
     forward_window_days = int(context.get("forward_window_days", bs3.DEFAULT_FORWARD_WINDOW_DAYS))
 
+    # The study ALWAYS runs all THREE live models together (v1, v2_live,
+    # dealer_exposure) in one backtest -- there is no per-model selector. The
+    # legacy `sign_model` value is accepted for back-compat but no longer
+    # chooses which model runs; 'all' is the only meaningful mode.
     result = bs3.run_backtest(
         ticker,
         expiration=expiration,
         target_years=target_years,
         lookback_days=lookback_days,
         forward_window_days=forward_window_days,
+        accumulate=True,
+        sign_model='all',
     )
     return {
         "mode": "dealer_gamma_study",
+        "sign_model": "all",
         "report": bs3.format_backtest_report(result),
         "result": dataclasses.asdict(result),
     }
@@ -105,7 +142,7 @@ def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
 
     strategy = context.get("strategy")
     if strategy is None:
-        strategies = context.get("strategies") or []
+        strategies = _resolve_strategies(context)
         strategy_index = int(context.get("strategy_index", 0))
         if not strategies:
             raise ValueError(
@@ -144,10 +181,18 @@ def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def run_broker_book_accuracy(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Aggregate the chain-scan corpus into a convention-free broker-book control
+    and backtest its predictive content against forward returns (pooled + cross-
+    sectional arms). See broker_book.py for the convention rules and design."""
+    from Tools.tools import broker_book
+    return broker_book.run_backtest(context)
+
+
 def run(context: Dict[str, Any]) -> Dict[str, Any]:
     """context: a validated suite_context.json dict (see
     context_loader.load_context), plus a required "mode" key selecting
-    which of the two independent backtests to run:
+    which of the independent backtests to run:
 
       mode="dealer_gamma_study" -- optional overrides: ticker, expiration
         (YYYYMMDD or ISO), target_years, lookback_days, forward_window_days.
@@ -158,6 +203,12 @@ def run(context: Dict[str, Any]) -> Dict[str, Any]:
         optional exit_date (default: hold to expiration), expiry (falls
         back to context.focus.expiration_date), contract_multiplier.
 
+      mode="broker_book_accuracy" -- aggregates every chain-scan CSV under
+        orchestrator_output/ and Vol_Suite/outputs/ into convention-free
+        broker-book nets, joins ThetaData forward returns, and runs the
+        pooled + cross-sectional accuracy backtest. Optional context keys:
+        roots, max_files, horizons, fetch_closes (see broker_book.run_backtest).
+
     Returns a dict with "mode", a human-readable "report" string, and the
     full "result" (the wrapped function's dataclass, as a plain dict).
     """
@@ -166,10 +217,13 @@ def run(context: Dict[str, Any]) -> Dict[str, Any]:
         return run_dealer_gamma_study(context)
     elif mode == "strategy_pnl":
         return run_strategy_pnl(context)
+    elif mode == "broker_book_accuracy":
+        return run_broker_book_accuracy(context)
     else:
         raise ValueError(
             f"backtesting_tool requires context['mode'] to be "
-            f"'dealer_gamma_study' or 'strategy_pnl'; got {mode!r}"
+            f"'dealer_gamma_study', 'strategy_pnl', or "
+            f"'broker_book_accuracy'; got {mode!r}"
         )
 
 
@@ -177,10 +231,12 @@ TOOL_SPEC = ToolSpec(
     name="Backtesting Tool",
     slug="backtesting",
     description=(
-        "Two backtests in one tool: a dealer-gamma-sign realized-vol study "
-        "(v1 oi_heuristic vs v2 vol_surface_replication), and a multi-leg "
+        "Three backtests in one tool: a dealer-gamma-sign realized-vol study "
+        "(v1 oi_heuristic vs v2 vol_surface_replication), a multi-leg "
         "strategy P&L simulation from an entry date to an exit/expiration "
-        "date. Select via context['mode']."
+        "date, and a broker-book accuracy study that aggregates chain-scan "
+        "outputs into convention-free nets and tests them against forward "
+        "returns (pooled + cross-sectional). Select via context['mode']."
     ),
     run=run,
 )

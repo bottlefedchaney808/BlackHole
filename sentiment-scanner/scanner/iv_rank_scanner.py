@@ -36,7 +36,8 @@ class IvRankScan:
     error: Optional[str] = None
 
 
-def scan_iv_rank(ticker: str) -> IvRankScan:
+def scan_iv_rank(ticker: str, *, garch_cond_vol_pct: Optional[float] = None,
+                 fair_vol_pct: Optional[float] = None) -> IvRankScan:
     """IV rank / percentile scan for one ticker.
 
     Fetches:
@@ -115,38 +116,45 @@ def scan_iv_rank(ticker: str) -> IvRankScan:
         pass
 
     # --- 4. GARCH conditional vol ---
-    garch_vol = 0.0
-    try:
-        garch_result = vsi.garch_analysis.run_garch_analysis(ticker)
-        # garch_result has .conditional_volatility (last value) and .forecast
-        # Extract the final conditional vol
-        if hasattr(garch_result, "conditional_volatility") and len(garch_result.conditional_volatility) > 0:
-            garch_vol = float(garch_result.conditional_volatility[-1] * 100.0)
-    except Exception:
-        pass
+    # A caller (the orchestrator's market-signals stage) may supply the
+    # Vol_Suite-computed GARCH conditional vol from context -- prefer it over
+    # re-fitting here, which can silently degrade to 0.0 when the fit fails.
+    garch_vol = float(garch_cond_vol_pct) if garch_cond_vol_pct else 0.0
+    if not garch_vol:
+        try:
+            garch_result = vsi.garch_analysis.run_garch_analysis(ticker)
+            # garch_result has .conditional_volatility (last value) and .forecast
+            # Extract the final conditional vol
+            if hasattr(garch_result, "conditional_volatility") and len(garch_result.conditional_volatility) > 0:
+                garch_vol = float(garch_result.conditional_volatility[-1] * 100.0)
+        except Exception:
+            pass
 
     # --- 5. Fair variance vol ---
-    fair_vol_rv = 0.0
-    try:
-        # Use the nearest ~60DTE expiry for the fair-vol calculation
-        fair_expiry, fair_T = vsi.expiry_selector.nearest_expiry(
-            td, ticker, target_years=0.167
-        )
-        if fair_expiry:
-            div_yield = td.fetch_dividend_yield(ticker)
-            r_live = td.fetch_risk_free_rate(fair_T)
-            r = r_live if r_live is not None else 0.05
-            chain = vsi.variance_swap_screener.fetch_chain_thetadata(
-                td, ticker, fair_expiry, r, div_yield
+    # Prefer a context-supplied fair vol (from Vol_Suite); only recompute here
+    # (which can silently degrade to 0.0 on failure) when none was given.
+    fair_vol_rv = float(fair_vol_pct) if fair_vol_pct else 0.0
+    if not fair_vol_rv:
+        try:
+            # Use the nearest ~60DTE expiry for the fair-vol calculation
+            fair_expiry, fair_T = vsi.expiry_selector.nearest_expiry(
+                td, ticker, target_years=0.167
             )
-            fair = vsi.variance_swap_screener.compute_fair_variance_strike(
-                chain, spot, fair_T
-            )
-            fair_vol_rv = fair.get("fair_vol_pct", 0.0)
-            if fair_vol_rv == 0.0:
-                fair_vol_rv = fair.get("fair_vol", 0.0) * 100.0
-    except Exception:
-        pass
+            if fair_expiry:
+                div_yield = td.fetch_dividend_yield(ticker)
+                r_live = td.fetch_risk_free_rate(fair_T)
+                r = r_live if r_live is not None else 0.05
+                chain = vsi.variance_swap_screener.fetch_chain_thetadata(
+                    td, ticker, fair_expiry, r, div_yield
+                )
+                fair = vsi.variance_swap_screener.compute_fair_variance_strike(
+                    chain, spot, fair_T
+                )
+                fair_vol_rv = fair.get("fair_vol_pct", 0.0)
+                if fair_vol_rv == 0.0:
+                    fair_vol_rv = fair.get("fair_vol", 0.0) * 100.0
+        except Exception:
+            pass
 
     # --- 6. Vol regime ---
     vrp = atm_iv_pct - fair_vol_rv if fair_vol_rv > 0 else 0.0

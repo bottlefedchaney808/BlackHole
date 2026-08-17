@@ -51,6 +51,15 @@
           <option value="strategy_pnl" {{ 'selected' if selected_mode == 'strategy_pnl' else '' }}>strategy_pnl</option>
         </select>
       </div>
+      <div class="field" id="sign_model_field">
+        <label for="sign_model">Model</label>
+        <select id="sign_model" name="sign_model">
+          <option value="all" {{ 'selected' if selected_sign_model == 'all' else '' }}>all (v1 + v2.1 + v3 + whale)</option>
+          <option value="v1" {{ 'selected' if selected_sign_model == 'v1' else '' }}>v1 (oi_heuristic / conventional GEX)</option>
+          <option value="v2_live" {{ 'selected' if selected_sign_model == 'v2_live' else '' }}>v2.1 vol-surface + accumulation (live)</option>
+          <option value="dealer_exposure" {{ 'selected' if selected_sign_model == 'dealer_exposure' else '' }}>dealer_exposure (dev engine)</option>
+        </select>
+      </div>
       <div class="field" id="strategy_field" style="display:none; min-width:320px;">
         <label for="strategy_index">Strategy</label>
         <select id="strategy_index" name="strategy_index"></select>
@@ -101,6 +110,7 @@ var INITIAL_STRATEGY_INDEX = {{ strategy_index }};
 function onModeChange() {
   var mode = document.getElementById('mode').value;
   var isStrategyPnl = mode === 'strategy_pnl';
+  document.getElementById('sign_model_field').style.display = isStrategyPnl ? 'none' : 'flex';
   document.getElementById('strategy_field').style.display = isStrategyPnl ? 'flex' : 'none';
   document.getElementById('entry_date_field').style.display = isStrategyPnl ? 'flex' : 'none';
   document.getElementById('exit_date_field').style.display = isStrategyPnl ? 'flex' : 'none';

@@ -39,8 +39,7 @@ if not errorlevel 1 (
 REM Give uvicorn a couple seconds to bind before opening the browser tab,
 REM so it doesn't load before anything is listening.
 start "" cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:8787"
-cd dashboard
-..\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8787
+.venv\Scripts\python.exe -m uvicorn dashboard.app:app --host 127.0.0.1 --port 8787
 if %ERRORLEVEL% neq 0 (
     echo.
     echo Dashboard exited with an error ^(see above^). If it says the port is

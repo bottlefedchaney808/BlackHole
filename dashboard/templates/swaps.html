@@ -2,27 +2,45 @@
 {% block title %}Swap trades -- FinancialDevelopment Dashboard{% endblock %}
 
 {% macro page_link(p) -%}
-/swaps?page={{ p }}&per_page={{ per_page }}{% if regulator %}&regulator={{ regulator }}{% endif %}{% if asset_class %}&asset_class={{ asset_class }}{% endif %}
+/swaps?page={{ p }}&per_page={{ per_page }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}{% if q %}&q={{ q }}{% endif %}{% if regulator %}&regulator={{ regulator }}{% endif %}{% if asset_class %}&asset_class={{ asset_class }}{% endif %}{% if cleared %}&cleared={{ cleared }}{% endif %}{% if effective_date_from %}&effective_date_from={{ effective_date_from }}{% endif %}{% if effective_date_to %}&effective_date_to={{ effective_date_to }}{% endif %}
+{%- endmacro %}
+
+{% macro sort_link(col, label) -%}
+{% set next_dir = 'asc' if (sort_by == col and sort_dir == 'desc') else 'desc' %}
+<a href="/swaps?page=1&per_page={{ per_page }}&sort_by={{ col }}&sort_dir={{ next_dir }}{% if q %}&q={{ q }}{% endif %}{% if regulator %}&regulator={{ regulator }}{% endif %}{% if asset_class %}&asset_class={{ asset_class }}{% endif %}{% if cleared %}&cleared={{ cleared }}{% endif %}{% if effective_date_from %}&effective_date_from={{ effective_date_from }}{% endif %}{% if effective_date_to %}&effective_date_to={{ effective_date_to }}{% endif %}">{{ label }}{% if sort_by == col %} {{ '&#9650;' if sort_dir == 'asc' else '&#9660;' }}{% endif %}</a>
 {%- endmacro %}
 
 {% block content %}
 <h1>Swap trades</h1>
 <p class="sub">
-  {{ total | num }} matching row{{ '' if total == 1 else 's' }} in <code>swap_trades</code>
-  &middot; page {{ page }} of {{ pages }}
-  {% if regulator or asset_class %}
+  {% if count_is_exact %}
+    {{ total | num }} matching row{{ '' if total == 1 else 's' }} in <code>swap_trades</code>
+    &middot; page {{ page }} of {{ pages }}
+  {% else %}
+    at least {{ total | num }} matching rows in <code>swap_trades</code> <span class="pill plain">count capped at {{ count_cap | num }}</span>
+    &middot; page {{ page }} of many
+  {% endif %}
+  {% if q or regulator or asset_class or cleared or effective_date_from or effective_date_to %}
     &middot; filtered by
+    {% if q %}<span class="pill plain">q={{ q }}</span>{% endif %}
     {% if regulator %}<span class="pill plain">regulator={{ regulator }}</span>{% endif %}
     {% if asset_class %}<span class="pill plain">asset_class={{ asset_class }}</span>{% endif %}
+    {% if cleared %}<span class="pill plain">cleared={{ cleared }}</span>{% endif %}
+    {% if effective_date_from %}<span class="pill plain">from={{ effective_date_from }}</span>{% endif %}
+    {% if effective_date_to %}<span class="pill plain">to={{ effective_date_to }}</span>{% endif %}
   {% endif %}
 </p>
 
 {% if error %}<div class="errbox">{{ error }}</div>{% endif %}
 
 <div class="panel">
-  <header><h2>Filter</h2><span class="note">query params: regulator, asset_class, page, per_page</span></header>
+  <header><h2>Search &amp; filter</h2><span class="note">query params: q, regulator, asset_class, cleared, effective_date_from, effective_date_to, sort_by, sort_dir, page, per_page</span></header>
   <div class="body">
     <form class="runform" method="get" action="/swaps">
+      <div class="field">
+        <label for="q">Search (UPI / ticker / company / raw underlier)</label>
+        <input id="q" name="q" value="{{ q }}" placeholder="e.g. AAPL, Apple Inc, or a UPI code" size="30">
+      </div>
       <div class="field">
         <label for="regulator">Regulator</label>
         <select id="regulator" name="regulator">
@@ -42,9 +60,27 @@
         </select>
       </div>
       <div class="field">
+        <label for="cleared">Cleared</label>
+        <select id="cleared" name="cleared">
+          <option value="">(any)</option>
+          <option value="1" {{ 'selected' if cleared == '1' else '' }}>Yes</option>
+          <option value="0" {{ 'selected' if cleared == '0' else '' }}>No</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="effective_date_from">Effective from</label>
+        <input id="effective_date_from" name="effective_date_from" value="{{ effective_date_from }}" placeholder="YYYY-MM-DD" size="10">
+      </div>
+      <div class="field">
+        <label for="effective_date_to">Effective to</label>
+        <input id="effective_date_to" name="effective_date_to" value="{{ effective_date_to }}" placeholder="YYYY-MM-DD" size="10">
+      </div>
+      <div class="field">
         <label for="per_page">Rows / page</label>
         <input id="per_page" name="per_page" value="{{ per_page }}" size="5">
       </div>
+      <input type="hidden" name="sort_by" value="{{ sort_by }}">
+      <input type="hidden" name="sort_dir" value="{{ sort_dir }}">
       <button type="submit">Apply</button>
       <a href="/swaps" style="align-self:center;">reset</a>
     </form>
@@ -53,24 +89,30 @@
 
 <div class="panel">
   <header>
-    <h2>Recent trades</h2>
-    <span class="note">ordered by ingested_at desc</span>
+    <h2>Results</h2>
+    <span class="note">click a column header to sort &middot; sorted by {{ sort_by }} {{ sort_dir }}</span>
   </header>
   {% if not rows %}
     <div class="body"><div class="empty">
-      {% if total %}Nothing on this page -- try page 1.{% else %}No swap trades match. Run the ingest (backfill.py / poll_ingest.py) to populate swap_trades.{% endif %}
+      {% if total %}Nothing on this page -- try page 1.{% elif q or regulator or asset_class or cleared or effective_date_from or effective_date_to %}No swap trades match this search/filter combination.{% else %}No swap trades match. Run the ingest (backfill.py / poll_ingest.py) to populate swap_trades.{% endif %}
     </div></div>
   {% else %}
   <div class="tablewrap scrollbox">
     <table>
       <thead><tr>
+        {% if q %}<th>match</th>{% endif %}
         {% for c in columns %}
-          <th class="{{ 'num' if c in notional_cols else '' }}">{{ c }}</th>
+          <th class="{{ 'num' if c in notional_cols else '' }}">
+            {% if c in sort_columns %}{{ sort_link(c, c) }}{% else %}{{ c }}{% endif %}
+          </th>
         {% endfor %}
       </tr></thead>
       <tbody>
       {% for row in rows %}
         <tr>
+          {% if q %}
+            <td class="small">{% if row.match_field %}<span class="pill plain">{{ row.match_field }}</span>{% else %}--{% endif %}</td>
+          {% endif %}
           {% for c in columns %}
             {% if c in notional_cols %}
               <td class="num">{{ row[c] | usd }}</td>
@@ -94,12 +136,20 @@
     {% else %}
       <span class="muted">&laquo; first</span><span class="muted">&lsaquo; prev</span>
     {% endif %}
-    <span class="muted small">page {{ page }} / {{ pages }}</span>
-    {% if page < pages %}
+    {% if count_is_exact %}
+      <span class="muted small">page {{ page }} / {{ pages }}</span>
+    {% else %}
+      <span class="muted small">page {{ page }} / many</span>
+    {% endif %}
+    {% if has_more or page < pages %}
       <a href="{{ page_link(page + 1) }}">next &rsaquo;</a>
+    {% else %}
+      <span class="muted">next &rsaquo;</span>
+    {% endif %}
+    {% if count_is_exact and page < pages %}
       <a href="{{ page_link(pages) }}">last &raquo;</a>
     {% else %}
-      <span class="muted">next &rsaquo;</span><span class="muted">last &raquo;</span>
+      <span class="muted">last &raquo;</span>
     {% endif %}
   </div>
   {% endif %}

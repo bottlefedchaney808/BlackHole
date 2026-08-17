@@ -894,6 +894,15 @@ class ThetaDataController:
             chunk_start = chunk_end + timedelta(days=1)
         return all_rows
 
+    def hist_stock_ohlc(self, root: str, start_date: str, end_date: str) -> List[Dict]:
+        """One-minute stock OHLCV history from the verified stock/ohlc route."""
+        r = self._get_with_retry(
+            f"/api/theta/hist/stock/ohlc/{root}",
+            params={"start_date": start_date, "end_date": end_date},
+        )
+        r.raise_for_status()
+        return self._parse_rows(r)
+
     def fetch_option_iv(
         self, ticker: str, strike: float, T: float,
         option_type: str = "call",

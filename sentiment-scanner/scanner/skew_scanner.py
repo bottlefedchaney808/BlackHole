@@ -191,12 +191,13 @@ def scan_skew(ticker: str) -> SkewScan:
 
     if ref is not None:
         fitter = ref.fitter
-        if ref.sabr_params:
+        _sp = ref.sabr_params
+        if isinstance(_sp, dict) and _sp:
             sabr_success = True
-            sabr_alpha = ref.sabr_params["alpha"]
-            sabr_rho = ref.sabr_params["rho"]
-            sabr_nu = ref.sabr_params["nu"]
-            sabr_rmse = ref.sabr_params.get("rmse")
+            sabr_alpha = _sp.get("alpha")
+            sabr_rho = _sp.get("rho")
+            sabr_nu = _sp.get("nu")
+            sabr_rmse = _sp.get("rmse")
 
         # Collect rich/cheap strikes
         for (k, right), dev in ref.deviation_by_strike.items():

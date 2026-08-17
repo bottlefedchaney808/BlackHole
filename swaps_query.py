@@ -1,5 +1,6 @@
 """Query layer for swaps database."""
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, date
 import logging
@@ -25,6 +26,27 @@ try:
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
+
+# In-process caches for search_trades()'s expensive COUNT(*) and the
+# swaps.html filter dropdowns (distinct regulator/asset_class lists).
+# Both are process-global (not per-SwapsQuery-instance) so every request
+# handler in the dashboard's threadpool shares one cache regardless of how
+# many SwapsQuery objects it constructs. Guarded by a plain threading.Lock
+# since FastAPI runs sync `def` routes like `/swaps` in a worker threadpool,
+# not a single event-loop thread -- concurrent requests are the normal case,
+# not an edge case.
+#
+# Counts may lag reality by up to the TTL below after a write (e.g. a
+# scheduled ingest poll landing new rows). Rows returned for the current
+# page are never cached -- only the total/pages figures used for pagination
+# math can be stale, and only within that TTL window.
+_COUNT_CACHE_LOCK = threading.Lock()
+_COUNT_CACHE: dict = {}
+_COUNT_CACHE_TTL_SEC = 15.0
+
+_FILTER_OPTIONS_CACHE_LOCK = threading.Lock()
+_FILTER_OPTIONS_CACHE: dict = {}
+_FILTER_OPTIONS_CACHE_TTL_SEC = 60.0
 
 
 class SwapsQuery:
@@ -471,6 +493,295 @@ class SwapsQuery:
             }
         finally:
             cur.close()
+
+    #: Columns callers may sort search_trades() results by, mapped to their
+    #: real qualified SQL column. This allowlist is what makes sort_by safe
+    #: to take directly from a query string -- anything not a key here
+    #: silently falls back to the default rather than being interpolated.
+    SEARCH_SORT_COLUMNS = {
+        'effective_date': 'st.effective_date',
+        'ingested_at': 'st.ingested_at',
+        'notional_amount_leg1': 'st.notional_amount_leg1',
+        'price': 'st.price',
+        'dissemination_id': 'st.dissemination_id',
+        'regulator': 'st.regulator',
+        'asset_class': 'st.asset_class',
+        'company_name': 'ur.company_name',
+        'ticker': 'ur.ticker',
+    }
+
+    #: swap_trades columns returned by search_trades(), before the
+    #: upi_reference join columns (company_name, ticker) and the computed
+    #: match_field are appended.
+    SEARCH_COLUMNS = (
+        'dissemination_id', 'regulator', 'asset_class', 'action_type', 'event_type',
+        'effective_date', 'expiration_date', 'cleared', 'notional_amount_leg1',
+        'notional_currency_leg1', 'price', 'underlying_asset_name', 'upi',
+        'upi_underlier_name', 'ingested_at',
+    )
+
+    #: Cap on how many matching rows search_trades() will actually count.
+    #: A plain `COUNT(*)` over a broad filter (e.g. regulator=SEC on a
+    #: 71M-row table) has to walk every matching index entry -- tens of
+    #: millions of rows -- which is what made cold /swaps requests exceed
+    #: 120s even with the (recency-limited) result cache below. Counting is
+    #: now done via `SELECT 1 ... LIMIT cap+1` wrapped in COUNT(*): SQLite
+    #: stops scanning as soon as cap+1 rows are found, so the count is
+    #: bounded no matter how large the true match set is. When the bounded
+    #: count comes back at cap+1, the true total is unknown -- callers get
+    #: `count_is_exact=False` and `total` set to the cap, not a fabricated
+    #: exact number. Overridable via SWAPS_SEARCH_COUNT_CAP for tests/tuning.
+    SEARCH_COUNT_CAP = int(os.environ.get('SWAPS_SEARCH_COUNT_CAP', '10000'))
+
+    #: sort_by keys with no usable swap_trades-side index. `notional_amount_leg1`
+    #: and `price` have no index at all; `company_name`/`ticker` are only
+    #: indexed on upi_reference, not on the swap_trades side of the join, so
+    #: ordering the *joined* result by them still can't be satisfied by that
+    #: index. On a 71M-row table, `ORDER BY <these> LIMIT ? OFFSET ?` makes
+    #: SQLite pull every filter-matching row into a temp B-tree to sort
+    #: before LIMIT applies -- unbounded work regardless of page size, the
+    #: same failure mode migration 006 fixed for the regulator+ingested_at
+    #: combo. A free-text `query` has the identical problem: the 5-column
+    #: LIKE (including two joined columns) can't use an index either. Both
+    #: cases fall back to the bounded-window pipeline below instead of a
+    #: plain filtered scan.
+    BOUNDED_SORT_COLUMNS = frozenset({'notional_amount_leg1', 'price', 'company_name', 'ticker'})
+
+    #: Row cap for the bounded-window pipeline used by free-text search and
+    #: by BOUNDED_SORT_COLUMNS sorts. Rather than let SQLite scan-and-sort
+    #: the full table (unbounded, and unbounded-fast-when-sparse -- a rare
+    #: search term can force nearly a full 71M-row scan just to confirm
+    #: there aren't enough matches to hit SEARCH_COUNT_CAP), these paths
+    #: first pull the most recent SEARCH_WINDOW_CAP rows via the existing
+    #: (ingested_at DESC, dissemination_id DESC) index -- an O(cap) indexed
+    #: LIMIT scan, not a table scan -- and only then apply the unindexed
+    #: LIKE filter / ORDER BY to that bounded set. This trades full-history
+    #: completeness for a hard bound on worst-case work: search/unindexed
+    #: sort results only cover the most recent SEARCH_WINDOW_CAP ingested
+    #: rows (see `windowed` in the returned dict). Benchmarked against the
+    #: production 342GB/71M-row swaps.db: the inner windowed scan alone
+    #: takes ~0.4-1.2s for cap 20k-100k, and the outer LIKE/sort over that
+    #: bounded set is sub-100ms. Overridable via SWAPS_SEARCH_WINDOW_CAP.
+    SEARCH_WINDOW_CAP = int(os.environ.get('SWAPS_SEARCH_WINDOW_CAP', '100000'))
+
+    def search_trades(self, query: str = None, regulator: str = None,
+                      asset_class: str = None, cleared: bool = None,
+                      effective_date_from: str = None, effective_date_to: str = None,
+                      sort_by: str = 'ingested_at', sort_dir: str = 'desc',
+                      page: int = 1, per_page: int = 50) -> dict:
+        """Parameterized free-text + filtered search over swap_trades, joined
+        to upi_reference (via upi) for company_name/ticker.
+
+        `query`, if given, is matched (case-insensitive substring) against
+        upi, ur.ticker, ur.company_name, upi_underlier_name (the raw DTCC
+        underlier name) and underlying_asset_name -- a single search box can
+        therefore hit a UPI code, a resolved ticker/company, or the raw
+        underlier text DTCC actually sent. Each returned row carries
+        `match_field`, naming which of those columns matched first (in that
+        priority order) -- without it, a company-name hit and a raw-text hit
+        that happens to contain the same substring are visually
+        indistinguishable, which is exactly the kind of ambiguity a search
+        UI needs to surface rather than hide.
+
+        `sort_by` must be a key of SEARCH_SORT_COLUMNS; anything else falls
+        back to 'ingested_at'. Every value (query, filters, sort selection,
+        limit/offset) is bound as a parameter or resolved through the
+        allowlist above -- none of it is ever interpolated into the SQL
+        text -- so this is safe against SQL injection despite taking
+        free-form input.
+
+        Pagination is deterministic: `dissemination_id DESC` is always
+        appended as a tiebreaker after the primary sort column (unless that
+        *is* the primary column), so rows with equal sort values don't
+        reorder between pages.
+
+        Returns {'rows': [...], 'total', 'count_is_exact', 'has_more',
+        'count_cap', 'page', 'per_page', 'pages', 'sort_by', 'sort_dir'}.
+
+        `total` is always safe to render, but its meaning depends on
+        `count_is_exact`: when True it's the real row count; when False the
+        real count is >= SEARCH_COUNT_CAP and `total`/`pages` reflect the cap,
+        not reality -- callers (the dashboard template) must not present it
+        as an exact total in that case, and should treat `has_more` (i.e.
+        `not count_is_exact`) as "there may be additional pages beyond
+        `pages`" rather than disabling further pagination.
+        """
+        start_time = time.time()
+        page = max(1, int(page or 1))
+        per_page = min(500, max(10, int(per_page or 50)))
+        sort_by = sort_by if sort_by in self.SEARCH_SORT_COLUMNS else 'ingested_at'
+        sort_col = self.SEARCH_SORT_COLUMNS[sort_by]
+        sort_dir = 'ASC' if str(sort_dir).lower() == 'asc' else 'DESC'
+
+        # Only the indexed filters (regulator/asset_class/cleared/date) --
+        # kept separate from the free-text `query` clause so both the
+        # bounded-window inner query below and the plain (non-windowed)
+        # path can reuse exactly this WHERE.
+        filter_clauses = []
+        filter_params: list = []
+        if regulator:
+            filter_clauses.append('st.regulator = ?')
+            filter_params.append(regulator)
+        if asset_class:
+            filter_clauses.append('st.asset_class = ?')
+            filter_params.append(asset_class)
+        if cleared is not None:
+            filter_clauses.append('st.cleared = ?')
+            filter_params.append(1 if cleared else 0)
+        if effective_date_from:
+            filter_clauses.append('st.effective_date >= ?')
+            filter_params.append(str(effective_date_from))
+        if effective_date_to:
+            filter_clauses.append('st.effective_date <= ?')
+            filter_params.append(str(effective_date_to))
+
+        query = (query or '').strip()
+        query_clause = None
+        query_params: list = []
+        match_field_sql = 'NULL'
+        if query:
+            like = f'%{query}%'
+            query_clause = (
+                '(st.upi LIKE ? OR ur.ticker LIKE ? OR ur.company_name LIKE ? '
+                'OR st.upi_underlier_name LIKE ? OR st.underlying_asset_name LIKE ?)'
+            )
+            query_params = [like, like, like, like, like]
+            match_field_sql = (
+                "CASE "
+                "WHEN st.upi LIKE ? THEN 'upi' "
+                "WHEN ur.ticker LIKE ? THEN 'ticker' "
+                "WHEN ur.company_name LIKE ? THEN 'company_name' "
+                "WHEN st.upi_underlier_name LIKE ? THEN 'raw_underlier_name' "
+                "WHEN st.underlying_asset_name LIKE ? THEN 'underlying_asset_name' "
+                "ELSE NULL END"
+            )
+        # select_params binds the match_field CASE's own placeholders (in
+        # the SELECT list); query_params binds the WHERE clause's -- same
+        # values, two distinct sets of `?`s in the SQL text.
+        select_params: list = list(query_params)
+
+        filter_where_sql = ('WHERE ' + ' AND '.join(filter_clauses)) if filter_clauses else ''
+        tiebreak = '' if sort_col == 'st.dissemination_id' else ', st.dissemination_id DESC'
+        join_sql = 'LEFT JOIN upi_reference ur ON ur.upi = st.upi'
+        select_cols = ', '.join(f'st.{c}' for c in self.SEARCH_COLUMNS) + ', ur.company_name, ur.ticker'
+        window_cap = self.SEARCH_WINDOW_CAP
+        inner_cols = ', '.join(f'st.{c}' for c in self.SEARCH_COLUMNS)
+        # Bounded-window inner query: the most recent `window_cap` rows
+        # matching the indexed filters, via the same (ingested_at DESC,
+        # dissemination_id DESC) index the default listing already uses --
+        # an O(window_cap) indexed LIMIT scan, never O(table). See
+        # BOUNDED_SORT_COLUMNS/SEARCH_WINDOW_CAP docstrings above.
+        window_inner_sql = (
+            f'SELECT {inner_cols} FROM swap_trades st {filter_where_sql} '
+            'ORDER BY st.ingested_at DESC, st.dissemination_id DESC LIMIT ?'
+        )
+
+        # A free-text `query` forces windowing for both the count and the
+        # row select (its LIKE can't use an index either way). A
+        # BOUNDED_SORT_COLUMNS sort_by only affects the row select -- COUNT
+        # has no ORDER BY, so an unindexed sort doesn't make counting any
+        # slower and can still use the plain (fast, existing) count path.
+        select_windowed = bool(query) or sort_by in self.BOUNDED_SORT_COLUMNS
+        count_windowed = bool(query)
+
+        if select_windowed:
+            base_sql = f'FROM ({window_inner_sql}) st {join_sql}'
+            base_params = list(filter_params) + [window_cap]
+        else:
+            base_sql = f'FROM swap_trades st {join_sql} {filter_where_sql}'
+            base_params = list(filter_params)
+        select_where_sql = f'WHERE {query_clause}' if query else ''
+        select_sql = (
+            f'SELECT {select_cols}, {match_field_sql} AS match_field {base_sql} {select_where_sql} '
+            f'ORDER BY {sort_col} {sort_dir}{tiebreak} LIMIT ? OFFSET ?;'
+        )
+        select_full_params = select_params + base_params + (list(query_params) if query else [])
+
+        # COUNT(*) only needs the upi_reference join when the free-text
+        # `query` filter is active -- that's the only thing that references
+        # ur.*. regulator/asset_class/cleared/date filters and pagination
+        # never touch ur.*, so for a plain filtered listing (the common
+        # case), skipping the join lets SQLite satisfy COUNT(*) from
+        # swap_trades' own indexes alone instead of probing upi_reference
+        # once per matching row -- on a 1.9M-row bench table this cut a
+        # regulator-filtered count from ~540ms to ~30ms.
+        if count_windowed:
+            count_base_sql = f'FROM ({window_inner_sql}) st {join_sql}'
+            count_base_params = list(filter_params) + [window_cap]
+        else:
+            count_base_sql = f'FROM swap_trades st {filter_where_sql}'
+            count_base_params = list(filter_params)
+        count_where_sql = f'WHERE {query_clause}' if query else ''
+        count_cap = self.SEARCH_COUNT_CAP
+        # Bounded count: cap the number of matching rows SQLite will ever
+        # walk to produce a count. The inner query stops at cap+1 rows (the
+        # "+1" is how we distinguish "exactly cap matches" from "more than
+        # cap matches" without an extra query), and the outer COUNT(*) just
+        # counts whatever the subquery returned -- never O(true match count).
+        # When count_windowed, that "matching rows" universe is itself
+        # already bounded to window_cap rows, not the full table -- see
+        # count_is_exact handling below, which is forced False in that case.
+        count_sql = (
+            f'SELECT COUNT(*) AS n FROM (SELECT 1 {count_base_sql} {count_where_sql} LIMIT ?) AS capped;'
+        )
+        count_full_params = count_base_params + (list(query_params) if query else [])
+
+        # Cache key covers db_path plus every filter value that changes the
+        # WHERE clause -- query text, regulator/asset_class/cleared/date
+        # range -- but deliberately excludes sort_by/sort_dir/page/per_page,
+        # since none of those affect the row count. Repeated requests that
+        # only page or re-sort through the same filtered result set reuse
+        # the cached total instead of re-running COUNT(*).
+        count_cache_key = (
+            self.db_path, query, regulator, asset_class, cleared,
+            effective_date_from, effective_date_to,
+        )
+
+        try:
+            conn = self.get_connection()
+            try:
+                cur = conn.cursor()
+
+                counted = None  # (total, count_is_exact)
+                now = time.time()
+                with _COUNT_CACHE_LOCK:
+                    cached = _COUNT_CACHE.get(count_cache_key)
+                    if cached is not None and (now - cached[2]) < _COUNT_CACHE_TTL_SEC:
+                        counted = (cached[0], cached[1])
+
+                if counted is None:
+                    cur.execute(count_sql, count_full_params + [count_cap + 1])
+                    n = cur.fetchone()['n']
+                    if n > count_cap:
+                        counted = (count_cap, False)
+                    else:
+                        counted = (n, True)
+                    with _COUNT_CACHE_LOCK:
+                        _COUNT_CACHE[count_cache_key] = (counted[0], counted[1], now)
+
+                total, count_is_exact = counted
+
+                offset = (page - 1) * per_page
+                cur.execute(select_sql, select_full_params + [per_page, offset])
+                rows = [dict(r) for r in cur.fetchall()]
+                cur.close()
+            finally:
+                conn.close()
+
+            duration = time.time() - start_time
+            self._monitor_query(select_sql, tuple(select_full_params + [per_page, offset]),
+                                duration, len(rows))
+            pages = max(1, (total + per_page - 1) // per_page) if total else 1
+            return {
+                'rows': rows, 'total': total, 'count_is_exact': count_is_exact,
+                'has_more': not count_is_exact, 'count_cap': count_cap,
+                'page': page, 'per_page': per_page,
+                'pages': pages, 'sort_by': sort_by, 'sort_dir': sort_dir.lower(),
+            }
+        except Exception as e:
+            duration = time.time() - start_time
+            self._monitor_query(select_sql, None, duration, 0, error=str(e))
+            raise
 
     def export_to_csv(self, upi: str, output_file: str, days_back: int = 30):
         """Export UPI data to CSV."""
