@@ -143,18 +143,36 @@ def bs_vanna(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
     return math.exp(-q * T) * _phi(d1) * (d2 / sigma)
 
 
-def bs_charm(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
-    """Raw charm = d(delta)/dT (time-to-maturity, years). Bloomberg-negative
-    convention: charm is the decay of delta toward its terminal value, so it
-    is reported here per the "decay toward +1 / 0" convention below."""
+def bs_charm(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0, right="C"):
+    """-1 * d(delta)/dT (Bloomberg-negative convention: charm is the decay of
+    delta toward its terminal value), ALREADY in that negated sign -- same
+    pattern as bs_vanna, see dealer_frame_vanna's docstring.
+
+    FIXED 2026-08-17 (CARL review, found while wiring dividend yield q
+    through): this formula was missing the q*disc*N(d1) term entirely (so it
+    silently returned a numerically wrong value the moment q != 0 -- exact at
+    q=0 only by coincidence), AND had no `right` parameter so it could never
+    distinguish call charm from put charm (harmless only because
+    charm_call == charm_put at q=0). Both are now fixed together and
+    verified against a finite-difference d(delta)/dT to 1e-4 relative error
+    for both rights at several (T, sigma, q) combinations.
+
+    Derivation: delta_call = disc*N(d1), so
+    d(delta_call)/dT = -q*disc*N(d1) + disc*phi(d1)*d(d1)/dT, and
+    d(d1)/dT = (r-q)/(sigma*sqrt(T)) - d2/(2T). Negating for the
+    Bloomberg-negative convention gives charm_call below. delta_put =
+    delta_call - disc, so charm_put = charm_call - q*disc (customer-frame),
+    i.e. -q*disc*N(-d1) + <same phi(d1) term> once negated (N(d1)-1 = -N(-d1)).
+    """
     d1, d2 = _d1d2(S, K, T, sigma, r, q)
     if math.isnan(d1):
         return float("nan")
     disc = math.exp(-q * T)
-    # d(delta_call)/dT = disc * phi(d1) * [ (d2)/(2T) - (r-q)/(sigma sqrt T) ]
-    charm_call = disc * _phi(d1) * (
+    phi_term = disc * _phi(d1) * (
         (d2 / (2.0 * T)) - (r - q) / (sigma * math.sqrt(T)))
-    return charm_call
+    if right == "C":
+        return q * disc * _N(d1) + phi_term
+    return -q * disc * _N(-d1) + phi_term
 
 
 def bs_volga(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
@@ -229,10 +247,21 @@ def dealer_frame_greek(greek, raw_value, right):
         # negation -- fixed 2026-08-17, see dealer_frame_vanna's docstring.
         return dealer_frame_vanna(raw_value)
     if greek == "charm":
-        # Charm in Bloomberg-negative / decay convention. Signed once by
-        # long/short option: a dealer-short OTM call unwinds its stock hedge as
-        # time passes -> the charm flow is the decay toward the terminal delta.
-        return -1.0 * raw_value
+        # Dealer-frame charm, composed like delta/vanna: -1 * customer-frame
+        # raw value. bs_charm already returns that negated (Bloomberg-
+        # negative) quantity -- see its docstring -- so this is a
+        # pass-through, not a second negation.
+        #
+        # FIXED 2026-08-17 (CARL review, found while wiring q through):
+        # this branch used to apply ANOTHER -1 on top of bs_charm's already-
+        # negated output, the exact same double-negation bug dealer_frame_vanna
+        # had (fixed earlier the same day). That made dealer-frame charm
+        # compose as +1*customer-raw while delta (and now-fixed vanna) both
+        # compose as -1*customer-raw -- an unnoticed cross-greek sign
+        # inconsistency, undetected until bs_charm's q=0 coincidental
+        # call==put symmetry broke while adding a right parameter and
+        # verifying the whole formula against finite differences.
+        return raw_value
     if greek in ("vega", "volga"):
         # Options/vol channel. Dealer-frame: the portfolio vol-book sensitivity
         # is the opposite of the option-holder's. Signed once, no right_dir.
@@ -305,13 +334,19 @@ class NetExposure:
 
 def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
                        expiry: str = "", T: Optional[float] = None,
-                       dte: Optional[int] = None) -> NetExposure:
+                       dte: Optional[int] = None, q: float = 0.0) -> NetExposure:
     """Build the per-strike, per-expiry, per-greek net-exposure snapshot vector.
 
     Each input row: {'strike', 'right', 'oi', 'implied_vol', [spot], [T]}.
     Greeks are derived from (real spot, strike, T, IV) via BS in the
     dealer frame. A NaN greek field degrades to a per-greek skip (record kept,
     exposure 0 for that greek), never raising.
+
+    `q`: continuous dividend yield, defaults to 0.0 (same default every
+    bs_* function already had). Added 2026-08-17 (CARL review) -- every
+    bs_* function always accepted q, but nothing upstream ever passed a
+    real one through. See expiry_book_production.py for where this now
+    comes from live.
     """
     if dte is None and T is not None:
         dte = max(int(round(T * DEFAULT_A)), 1)
@@ -332,17 +367,17 @@ def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
             strike=k, right=right, oi=oi, T=rT, dte=rr_dte, iv=iv)
         for greek in GREEKS:
             if greek == "charm":
-                raw = bs_charm(rspot, k, rT, iv)
+                raw = bs_charm(rspot, k, rT, iv, q=q, right=right)
             elif greek == "volga":
-                raw = bs_volga(rspot, k, rT, iv)
+                raw = bs_volga(rspot, k, rT, iv, q=q)
             elif greek == "vega":
-                raw = bs_vega(rspot, k, rT, iv)
+                raw = bs_vega(rspot, k, rT, iv, q=q)
             elif greek == "gamma":
-                raw = bs_gamma(rspot, k, rT, iv)
+                raw = bs_gamma(rspot, k, rT, iv, q=q)
             elif greek == "vanna":
-                raw = bs_vanna(rspot, k, rT, iv)
+                raw = bs_vanna(rspot, k, rT, iv, q=q)
             else:
-                raw = bs_delta(rspot, k, rT, iv, right=right)
+                raw = bs_delta(rspot, k, rT, iv, q=q, right=right)
             if math.isnan(raw):
                 ne_row.measured[greek] = "ESTIMATED-unavailable"
                 ne_row.exposure[greek] = 0.0
@@ -595,7 +630,7 @@ class ExecutionLocus:
 
 
 def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
-                    tolerance_pct: float = 0.01) -> ExecutionLocus:
+                    tolerance_pct: float = 0.01, q: float = 0.0) -> ExecutionLocus:
     """Compute the execution-locus map from a chain (rows -> NetExposure).
 
     - zero_gamma level: the strike where cumulative signed dealer gamma (in
@@ -606,7 +641,7 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     - gex_slope: local slope of dollar-gamma-per-1% vs strike at zero-gamma.
     - residual_delta: the carry DEX (signed shares) not yet offset.
     """
-    ne = build_net_exposure(rows, spot, T=T)
+    ne = build_net_exposure(rows, spot, T=T, q=q)
     strikes = sorted({r.strike for r in ne.rows})
     # dollar-gamma-per-1% per strike (call+put combined at the strike)
     dg_per_strike: Dict[float, float] = {}
@@ -747,7 +782,8 @@ def _locus_activation(locus: ExecutionLocus, scenario: str, d_iv: float) -> floa
 
 def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
                         dte: Optional[int] = None, tolerance_pct: float = 0.01,
-                        d_iv: float = 0.01, ticker: str = "MOCK") -> ScenarioBudget:
+                        d_iv: float = 0.01, ticker: str = "MOCK",
+                        q: float = 0.0) -> ScenarioBudget:
     """Build the scenario x channel hedge-flow budget for a chain.
 
     For each named scenario, report the forced dealer hedge flow as one signed
@@ -755,8 +791,8 @@ def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
     forecast). Channel split is exhaustive and non-overlapping over the six
     greeks.
     """
-    ne = build_net_exposure(rows, spot, T=T, dte=dte, ticker=ticker)
-    locus = execution_locus(rows, spot, T=T, tolerance_pct=tolerance_pct)
+    ne = build_net_exposure(rows, spot, T=T, dte=dte, ticker=ticker, q=q)
+    locus = execution_locus(rows, spot, T=T, tolerance_pct=tolerance_pct, q=q)
     budget: Dict[str, Dict[str, float]] = {s: {} for s in SCENARIOS}
 
     def _sum_exposure(greek):

@@ -71,6 +71,18 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
         spot = float(td.fetch_spot_price(ticker))
         rows = td.option_bulk_greeks(ticker, expiry)
         oi_rows = td.option_bulk_oi(ticker, expiry)
+        # Dividend yield -- added 2026-08-17 (CARL review): every bs_* greek
+        # in expiry_book_exposure.py always accepted q, but nothing upstream
+        # ever fetched or passed a real one through, so it was always 0.0.
+        # Falls back to 0.0 (the previous, always-implicit behavior) rather
+        # than failing the whole snapshot if the dividend-yield lookup
+        # itself errors -- q=0.0 for a real dividend payer understates the
+        # forward/greeks slightly but is not a fabricated value, it's the
+        # same assumption this code always silently made.
+        try:
+            q = float(td.fetch_dividend_yield(ticker))
+        except Exception:
+            q = 0.0
     except Exception as exc:
         raise ExpiryBookUnavailable(f"ThetaData snapshot unavailable: {type(exc).__name__}: {exc}") from exc
     oi_by_key = {}
@@ -96,11 +108,12 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
         merged.append(item)
     from datetime import date
     dte = (date.fromisoformat(f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:8]}") - date.today()).days
-    return production_result_from_rows(ticker, expiry, spot, merged, dte=dte)
+    return production_result_from_rows(ticker, expiry, spot, merged, dte=dte, q=q)
 
 
 def production_result_from_rows(ticker: str, expiry: str, spot: float,
-                                raw_rows: list[Mapping[str, Any]], *, dte: int) -> ProductionDealerExposure:
+                                raw_rows: list[Mapping[str, Any]], *, dte: int,
+                                q: float = 0.0) -> ProductionDealerExposure:
     if not isinstance(ticker, str) or not ticker.strip():
         raise ExpiryBookUnavailable("ticker is required")
     if not isinstance(expiry, str) or len(expiry) != 8 or not expiry.isdigit():
@@ -109,18 +122,21 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
         raise ExpiryBookUnavailable("real spot is required")
     if int(dte) <= 0:
         raise ExpiryBookUnavailable("positive DTE is required")
+    if not math.isfinite(float(q)):
+        raise ExpiryBookUnavailable("dividend yield q must be finite")
     rows = normalize_snapshot_rows(raw_rows)
     t = int(dte) / ebe.DEFAULT_A
     snapshot = ebe.build_net_exposure(rows, float(spot), ticker=ticker,
-                                      expiry=expiry, T=t, dte=int(dte))
+                                      expiry=expiry, T=t, dte=int(dte), q=float(q))
     if not snapshot.rows:
         raise ExpiryBookUnavailable("snapshot has no usable option rows")
-    locus = ebe.execution_locus(rows, float(spot), T=t)
-    budget = ebe.scenario_hedge_flow(rows, float(spot), T=t, dte=int(dte), ticker=ticker)
+    locus = ebe.execution_locus(rows, float(spot), T=t, q=float(q))
+    budget = ebe.scenario_hedge_flow(rows, float(spot), T=t, dte=int(dte), ticker=ticker, q=float(q))
     return ProductionDealerExposure(
         ticker=ticker.upper(), expiry=expiry, spot=float(spot), status="available",
         snapshot=snapshot, execution_locus=locus, scenario_budget=budget,
         structural=StructuralStatus("unavailable", "multi_expiry_book_required"),
         units={"gex": "dollar_gamma_per_1pct_move", "dex": "post_multiplier_shares", "vanna": "shares_per_vol_point"},
-        provenance={"source": "ThetaData snapshot", "greeks": "Black-Scholes from real spot/IV/DTE", "accumulation": "not_claimed"},
+        provenance={"source": "ThetaData snapshot", "greeks": "Black-Scholes from real spot/IV/DTE",
+                    "accumulation": "not_claimed", "dividend_yield_q": f"{float(q):.6f}"},
     )
