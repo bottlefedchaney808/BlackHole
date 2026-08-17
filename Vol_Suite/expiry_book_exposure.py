@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""expiry_book_exposure.py — a NEW, SEPARATE, TEST-ONLY "expiry book exposure"
-model.
+"""expiry_book_exposure.py — the LIVE dealer-frame greeks engine.
 
-Implements PLAN_expiry_book_exposure_v2_20260814.md Phases 0-6. This is a
-standalone module: it does NOT modify, import-lock, or re-wire the live
-dealer-positioning model. It reuses the shared scaling constants by reading
-them (never changing) from `dealer_positioning`.
+Implements PLAN_expiry_book_exposure_v2_20260814.md Phases 0-6. As of
+2026-08-17 this is the production dealer-positioning model: Jason decided to
+move forward with it in place of continuing to sink cost into the old
+`dealer_positioning.py` accumulation model, which was broken. See
+`docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md` for
+the full history and the explicit promotion decision (overriding the
+in-progress Cem-arbiter loop's "NOT ACCEPTED" verdict on cost/pragmatism
+grounds, not on a claim that the statistical validation completed). This file
+is consumed via `expiry_book_production.py` by `volatility_suite.py`,
+`options_chain_scanner.py`, and `sentiment-scanner/scanner/gex_scanner.py`.
+`dealer_positioning.py`'s `compute_dealer_positioning`/`compute_accumulated_position`
+are now locked (`_assert_legacy_backtest_access`) to backtest/test callers only.
 
 Global constraints honored (plan §4):
-  1. Live dealer-positioning model untouched — this file + its tests are the
-     only additions.
+  1. (Superseded 2026-08-17 — see above. This file is no longer a
+     read-only addition alongside an untouched live model; it IS the live
+     model.)
   2. All six greeks in DEALER-FRAME; sign each greek once, never stack a
      `right_dir`.
-  3. rec.vanna = -1 * BS_vanna is the vanna destination convention; raw BS
-     vanna is a magnitude reference only.
+  3. rec.vanna composes the same way as delta/charm: dealer-frame = -1 *
+     (customer-frame raw value). See `dealer_frame_vanna`'s docstring below
+     for the 2026-08-17 fix — the previous composition applied two
+     negations (one inside `bs_vanna`, one in `dealer_frame_vanna`) that
+     canceled out, silently breaking this consistency for vanna alone.
   4. Real spot, NOT median-strike.
   5. Charm scaled x(1/DEFAULT_A) if CHARM_ANNUALIZED; NEVER x(1/DTE).
   6. Vanna flow dIV unit is DECIMAL vol, ONE formula:
@@ -120,10 +131,12 @@ def bs_vega(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
 
 
 def bs_vanna(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
-    """Raw Black-Scholes vanna = d2Delta/dS dsigma (units: delta per vol).
-    Raw BS vanna has the SAME sign for call & put at the same OTM strike
-    (negative when d2 < 0). It is a MAGNITUDE reference only; the directional
-    object is rec.vanna = -1 * BS_vanna (dealer-frame)."""
+    """d(delta_call)/dsigma, ALREADY in the -1*customer-raw dealer-frame sign
+    (verified by calculus: d(d1)/dsigma = -d2/sigma, so this function's
+    phi(d1)*d2/sigma equals -1 * the textbook customer-frame d(delta_call)/dsigma).
+    Consumed directly by dealer_frame_vanna as a pass-through -- see that
+    function's docstring for the 2026-08-17 fix. Raw BS vanna has the SAME
+    sign for call & put at the same OTM strike (negative when d2 < 0)."""
     d1, d2 = _d1d2(S, K, T, sigma, r, q)
     if math.isnan(d1):
         return float("nan")
@@ -173,10 +186,23 @@ def _right_sign(right):
 
 
 def dealer_frame_vanna(raw_bs_vanna):
-    """rec.vanna = -1 * BS_vanna (the vanna destination convention). Raw BS
-    vanna is magnitude reference only. Magnitude |scale| ~ 1.04 (SPY -0.956,
-    QQQ -0.989 per Gate-0)."""
-    return -1.0 * raw_bs_vanna
+    """Dealer-frame vanna, composed the SAME way as dealer_frame_delta and
+    dealer_frame_charm: dealer-frame = -1 * (customer-frame raw value).
+
+    FIXED 2026-08-17 (CARL review): `bs_vanna(S,K,T,sigma)` = disc*phi(d1)*d2/sigma
+    already equals -1 * (customer-frame raw d(delta_call)/dsigma) -- verified
+    by direct calculus (d(d1)/dsigma = -d2/sigma, so
+    d(delta_call)/dsigma = phi(d1)*d(d1)/dsigma = -phi(d1)*d2/sigma, i.e. the
+    negative of bs_vanna's return value). Previously this function applied a
+    SECOND -1 on top of that, so the two negations canceled and
+    dealer_frame_vanna ended up equal to +1 * customer-frame raw -- the
+    opposite composition from delta/charm (both -1 * customer-frame raw),
+    with the flow-direction sign reversed for vanna alone. bs_vanna's own
+    return value already IS the correctly-composed dealer-frame quantity, so
+    this is now a pass-through -- do not re-add a negation here without
+    re-deriving both functions together.
+    """
+    return raw_bs_vanna
 
 
 def dealer_frame_greek(greek, raw_value, right):
@@ -197,8 +223,10 @@ def dealer_frame_greek(greek, raw_value, right):
         # -gamma, matching the standard GEX smile and the live sign model.
         return _right_sign(right) * raw_value
     if greek == "vanna":
-        # Vanna destination = rec.vanna = -1 * BS_vanna. Sign applied ONCE.
-        # The OTM call + / OTM put - pattern emerges from -1*BS automatically.
+        # Dealer-frame vanna, composed like delta/charm: -1 * customer-frame
+        # raw value. bs_vanna already returns that negated quantity (see its
+        # docstring), so dealer_frame_vanna is a pass-through, not a second
+        # negation -- fixed 2026-08-17, see dealer_frame_vanna's docstring.
         return dealer_frame_vanna(raw_value)
     if greek == "charm":
         # Charm in Bloomberg-negative / decay convention. Signed once by
