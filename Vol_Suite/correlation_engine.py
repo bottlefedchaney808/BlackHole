@@ -63,7 +63,7 @@ class BasketStats:
     dropped_tickers: List[str] = None  # tickers that were requested but had no usable price history
 
 
-# ---------- Price history (ThetaData first, yfinance fallback only) ----------
+# ---------- Price history (ThetaData only, fail-closed -- no yfinance fallback) ----------
 
 def _parse_period_years(period: str) -> float:
     period = (period or "2y").strip().lower()
@@ -117,9 +117,12 @@ def _rows_to_close_series(rows: List[dict]) -> Optional[pd.Series]:
 
 
 def fetch_price_history(tickers: List[str], period: str = "2y") -> pd.DataFrame:
-    """Fetch daily close price history for `tickers`. ThetaData is the primary
-    source (per project convention); yfinance is used only as a per-ticker
-    fallback if ThetaData is unavailable or doesn't cover a given ticker."""
+    """Fetch daily close price history for `tickers`. ThetaData/PotatoHedge is
+    the sole source -- there is no yfinance fallback (removed per project
+    policy: yfinance must never be a silent/automatic substitute for
+    ThetaData). If the ThetaData client is unavailable or a ticker has no
+    usable history, this fails closed: missing tickers are reported and, if
+    none could be fetched, a ValueError is raised."""
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=int(_parse_period_years(period) * 365.25))
     end_str, start_str = end_date.strftime("%Y%m%d"), start_date.strftime("%Y%m%d")
@@ -139,14 +142,16 @@ def fetch_price_history(tickers: List[str], period: str = "2y") -> pd.DataFrame:
                 print(f"  [ThetaData] History fetch failed for {t}: {e}")
         td.close()
     except Exception as e:
-        print(f"  [ThetaData] Client unavailable ({e}). Falling back to yfinance for all tickers.")
+        print(f"  [ThetaData] Client unavailable ({e}). No yfinance fallback (fail-closed by policy) -- these tickers will be reported missing.")
 
-    # yahoo purged: PotatoHedge/ThetaData EOD history is the sole source. Any
-    # tickers ThetaData couldn't cover are simply reported missing (the paginated
+    # yahoo purged: PotatoHedge/ThetaData EOD history is the sole source, and
+    # there is no automatic yfinance fallback (yfinance must never be a silent
+    # substitute for ThetaData -- see CLAUDE.md). Any tickers ThetaData
+    # couldn't cover are simply reported missing (the paginated
     # hist_stock_eod fix in thetadata_client made this path reliable on its own).
     missing = [t for t in tickers if t not in series]
     if missing:
-        print(f"  [ThetaData] No history for {len(missing)} ticker(s): {', '.join(missing)} (yahoo fallback removed).")
+        print(f"  [ThetaData] No history for {len(missing)} ticker(s): {', '.join(missing)} (fail-closed, no yfinance fallback).")
 
     if not series:
         raise ValueError(f"Could not fetch price history for any of {tickers} from PotatoHedge/ThetaData.")

@@ -76,8 +76,8 @@ def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None)
     print(f"{'=' * 70}")
     print(f"  Period: {start} to {end}")
 
-    # --- 1. Download (ThetaData first, yfinance fallback only -- see
-    # correlation_engine.fetch_price_history) ---
+    # --- 1. Download (ThetaData/PotatoHedge only, fail-closed -- no yfinance
+    # fallback; see correlation_engine.fetch_price_history) ---
     print(f"\n  Downloading {ticker} data...")
     try:
         start_dt = pd.to_datetime(start)
