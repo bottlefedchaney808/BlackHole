@@ -169,11 +169,13 @@ summary.
 
 - **Options_Suite** — American option pricing/Greeks/IV across CRR, Leisen-Reimer, Newton-Raphson,
   brute-force IV, SABR, Vanna-Volga, plain and Heston Monte Carlo LSM, and Barone-Adesi-Whaley, compared
-  against live ThetaData quotes. `main.py` is the entry point but is deliberately small (~120 lines,
-  two flags: `--context`/`--context-out`) — the heavier pricing/reporting code
-  (`vol_manager.py`, `chain_evaluation.py`, `reports.py`, `VannaVolga.py`, `bruteforceimpliedvol.py`) is
-  **not currently wired into `main.py`**; it's reachable via a separate `chain_evaluation.py` →
-  `reports.py` path. Shares `shared/thetadata.py` for data.
+  against live ThetaData quotes. `main.py` is 933 lines: a real interactive terminal mode (`main()`,
+  prompts for ticker/option type/strike/model choice) plus `--context`/`--context-out` headless mode
+  (`run_context_mode`), which fetches live spot/rate/dividend-yield and prices via LeisenReimer, writing
+  a schema-valid `options_result.json` (`method`/`sigma`/`price`/`greeks`) on success. (Corrected
+  2026-08-17 — this used to describe `main.py` as a ~120-line stub with pricing code unwired; that was
+  stale.) `chain_evaluation.py` → `reports.py` remains a genuinely separate multi-model reporting path
+  `main.py` doesn't call into. Shares `shared/thetadata.py` for data.
 - **Vol_Suite** — the largest suite (`volatility_suite.py`, ~1850 lines): dealer positioning (three
   sign conventions — `oi_heuristic` v1, `replication` v2-1b, `vol_surface_replication` v2-1a+1b),
   variance-swap replication (Carr-Madan/Demeterfi) and VRP term structure, correlation/basket
