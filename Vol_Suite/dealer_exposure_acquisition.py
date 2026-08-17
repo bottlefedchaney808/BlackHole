@@ -261,6 +261,12 @@ class _AdmissionContext:
                 # the in-flight call releases the slot in its finally block.
                 if state["limits"]["concurrency"] <= 0:
                     state["blocked"] = "authorization cost ceiling exceeded: concurrency"
+                    # _reject() re-verifies integrity via self._state(), which
+                    # reseals against the live state; that seal must already
+                    # reflect this mutation or the re-verification itself fails
+                    # closed with a misleading "integrity invalid" error instead
+                    # of the actual ceiling reason.
+                    _commit_state(self, state)
                 self._reject("authorization cost ceiling exceeded: concurrency")
             projected = dict(state["usage"])
             projected[f"{kind}_calls"] += 1
@@ -270,6 +276,8 @@ class _AdmissionContext:
             for field, limit in state["limits"].items():
                 if field in projected and projected[field] > limit:
                     state["blocked"] = f"authorization cost ceiling exceeded: {field}"
+                    # Same reseal-before-reject requirement as above.
+                    _commit_state(self, state)
                     self._reject(state["blocked"])
             # Atomic commit: no permitted call can be observed without its
             # probe/heavy/total/unit reservation already present in usage.
