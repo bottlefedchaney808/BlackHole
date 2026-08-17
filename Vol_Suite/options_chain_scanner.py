@@ -2,6 +2,13 @@
 """options_chain_scanner.py
 Single-expiry options chain scanner for the Volatility Suite.
 
+AGGREGATION NOTE (2026-08-16): the *chain_scan_*.csv files this module writes are the
+producer for the broker-book control corpus at _broker_control/ (build_broker_book.py globs
+every chain scan under orchestrator_output/ and Vol_Suite/outputs/ for a forward-return
+accuracy test of the dealer model). KEEP producing these scans -- each new one adds a
+snapshot to that corpus. See _broker_control/README.md for the convention rules
+(delta/vanna/charm taken as-is, NO direction assigned; GEX sign only on gamma).
+
 For a ticker + one chosen expiry (via expiry_selector.py -- closest weekly /
 closest monthly-OPEX / closest overall to whatever target_years the user
 gives), this pulls EVERY strike's full greek stack from ThetaData:

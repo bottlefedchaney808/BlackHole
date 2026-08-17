@@ -182,10 +182,18 @@ def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def run_broker_book_accuracy(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Aggregate the chain-scan corpus into a convention-free broker-book control
+    and backtest its predictive content against forward returns (pooled + cross-
+    sectional arms). See broker_book.py for the convention rules and design."""
+    from Tools.tools import broker_book
+    return broker_book.run_backtest(context)
+
+
 def run(context: Dict[str, Any]) -> Dict[str, Any]:
     """context: a validated suite_context.json dict (see
     context_loader.load_context), plus a required "mode" key selecting
-    which of the two independent backtests to run:
+    which of the independent backtests to run:
 
       mode="dealer_gamma_study" -- optional overrides: ticker, expiration
         (YYYYMMDD or ISO), target_years, lookback_days, forward_window_days.
@@ -196,6 +204,12 @@ def run(context: Dict[str, Any]) -> Dict[str, Any]:
         optional exit_date (default: hold to expiration), expiry (falls
         back to context.focus.expiration_date), contract_multiplier.
 
+      mode="broker_book_accuracy" -- aggregates every chain-scan CSV under
+        orchestrator_output/ and Vol_Suite/outputs/ into convention-free
+        broker-book nets, joins ThetaData forward returns, and runs the
+        pooled + cross-sectional accuracy backtest. Optional context keys:
+        roots, max_files, horizons, fetch_closes (see broker_book.run_backtest).
+
     Returns a dict with "mode", a human-readable "report" string, and the
     full "result" (the wrapped function's dataclass, as a plain dict).
     """
@@ -204,10 +218,13 @@ def run(context: Dict[str, Any]) -> Dict[str, Any]:
         return run_dealer_gamma_study(context)
     elif mode == "strategy_pnl":
         return run_strategy_pnl(context)
+    elif mode == "broker_book_accuracy":
+        return run_broker_book_accuracy(context)
     else:
         raise ValueError(
             f"backtesting_tool requires context['mode'] to be "
-            f"'dealer_gamma_study' or 'strategy_pnl'; got {mode!r}"
+            f"'dealer_gamma_study', 'strategy_pnl', or "
+            f"'broker_book_accuracy'; got {mode!r}"
         )
 
 
@@ -215,10 +232,12 @@ TOOL_SPEC = ToolSpec(
     name="Backtesting Tool",
     slug="backtesting",
     description=(
-        "Two backtests in one tool: a dealer-gamma-sign realized-vol study "
-        "(v1 oi_heuristic vs v2 vol_surface_replication), and a multi-leg "
+        "Three backtests in one tool: a dealer-gamma-sign realized-vol study "
+        "(v1 oi_heuristic vs v2 vol_surface_replication), a multi-leg "
         "strategy P&L simulation from an entry date to an exit/expiration "
-        "date. Select via context['mode']."
+        "date, and a broker-book accuracy study that aggregates chain-scan "
+        "outputs into convention-free nets and tests them against forward "
+        "returns (pooled + cross-sectional). Select via context['mode']."
     ),
     run=run,
 )
