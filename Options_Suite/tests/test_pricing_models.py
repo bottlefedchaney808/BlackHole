@@ -329,3 +329,65 @@ class TestHestonEuropeanCallPrice:
             f"xi->0 with theta=v0 -- a malformed discriminant would return "
             f"near-zero/negative instead"
         )
+
+
+# ---------------------------------------------------------------------------
+# main.py context-mode default pricing method (CLAUDE.md "Known fragile
+# surfaces": default must stay Leisen-Reimer, not CRR -- Jason has reported a
+# regression to CRR more than once, and until this test existed nothing in CI
+# would catch it. Network calls are mocked out; this only pins which method
+# name gets passed to VolManager.get_sigma.)
+# ---------------------------------------------------------------------------
+
+class TestContextModeDefaultPricingMethod:
+
+    @pytest.mark.unit
+    def test_run_context_mode_uses_leisen_reimer_by_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("THETADATA_CF_ACCESS_CLIENT_ID", "test-client-id")
+        monkeypatch.setenv("THETADATA_CF_ACCESS_CLIENT_SECRET", "test-client-secret")
+
+        import json as json_mod
+        import importlib
+        import main as options_main
+        importlib.reload(options_main)
+
+        context = {"focus": {"ticker": "AAPL", "option_type": "call", "target_years": 0.25}}
+        context_path = tmp_path / "ctx.json"
+        context_path.write_text(json_mod.dumps(context), encoding="utf-8")
+        out_path = tmp_path / "options_result.json"
+
+        calls = {}
+
+        class FakeMarketData:
+            def fetch_spot_price(self, ticker):
+                return 100.0
+
+            def fetch_risk_free_rate(self):
+                return 0.05
+
+            def fetch_dividend_yield(self, ticker):
+                return 0.0
+
+            def validate_strike(self, ticker, strike, target_years=None, expiration_date=None):
+                return {"closest": strike}
+
+        class FakeVolManager:
+            def get_sigma(self, ticker, K, target_years, method=None, option_type=None):
+                calls["method"] = method
+                return 0.20
+
+        monkeypatch.setattr(options_main, "MarketDataController", FakeMarketData)
+        monkeypatch.setattr(options_main, "VolManager", FakeVolManager)
+
+        rc = options_main.run_context_mode(str(context_path), str(out_path), no_interactive=True)
+
+        assert rc == 0
+        assert calls.get("method") == "LeisenReimer", (
+            f"run_context_mode's default pricing method regressed to "
+            f"{calls.get('method')!r} -- must stay 'LeisenReimer', not 'CRR' "
+            f"(see CLAUDE.md's Known Fragile Surfaces note)"
+        )
+
+        result = json_mod.loads(out_path.read_text(encoding="utf-8"))
+        assert result["method"] == "LeisenReimer"
+        assert result["status"] == "ok"
