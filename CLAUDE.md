@@ -183,10 +183,21 @@ summary.
   to cross-source UPIs via `shared.identifiers`. The screener's two historical failure modes (missing
   realized vol silently becoming `0.0`; a blanket `except` dropping tickers unmarked) are **fixed**
   (NaN + `data_quality` + `INSUFFICIENT DATA` signal + `skipped` reporting) — see README Phase 11.
-  **Dealer-sign convention = "whales as change of sign"** — before analyzing/editing dealer
-  positioning, read `Vol_Suite/docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md`
-  and `established_findings_20260811_session.md`, and the workstream memory
-  `dealer_positioning_whale_sign.md`; use that whale/change-of-sign implementation, not a naive reading.
+  **Live dealer model moved 2026-08-17**: the legacy `dealer_positioning.py` accumulation model
+  (`compute_dealer_positioning`/`compute_accumulated_position`) is now locked to backtest/test
+  callers only (`_assert_legacy_backtest_access`) on the `Dealer-Exposure-Dev` branch/worktree
+  (`.worktrees/dealer-exposure-dev`) — Jason's call, made because the old model was broken and not
+  worth continuing to fix, not because the new model's statistical validation was approved. The live
+  path is now `Vol_Suite/expiry_book_exposure.py` via `expiry_book_production.py`, wired into
+  `volatility_suite.py`, `options_chain_scanner.py`, and `sentiment-scanner/scanner/gex_scanner.py`
+  on that branch. Before analyzing/editing dealer positioning, read that branch's
+  `Vol_Suite/docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md` (has a
+  2026-08-17 supersession notice at the top) for the promotion history, plus `established_findings_20260811_session.md`
+  for the underlying whale/change-of-sign measurements the new model's vanna convention still follows
+  (`rec.vanna` composes like delta/charm as of the 2026-08-17 CARL-review fix — see
+  `expiry_book_exposure.py::dealer_frame_vanna`'s docstring). This branch (master/`fix/adversarial-audit-20260817`)
+  does not have `expiry_book_exposure.py`/`expiry_book_production.py` yet — they exist only on
+  `Dealer-Exposure-Dev` until merged.
 - **VaR_Tools_Simulations** — a Python port of a legacy Excel VaR toolkit (`VaRtools Samples.xls` is
   the source spec), one `var_engine/` module per original sheet: `corr_sim.py` (correlated GBM Monte
   Carlo), `mc_sim.py`, `hist_sim.py` (basic/Hull-White/FHS-GARCH), `copulas.py` (Gaussian/Student-T/
