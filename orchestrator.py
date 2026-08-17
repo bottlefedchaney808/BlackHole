@@ -328,11 +328,40 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
                     # Pin Max Pain to the expiry this run is analyzing instead
                     # of letting it self-select its own nearest-~30DTE one, and
                     # pass the context's GARCH/fair vol for its narrative.
-                    scan = scan_fn(
-                        ticker,
-                        expiry=_focus.get('expiration_date'),
-                        garch_cond_vol_pct=_garch_pct, fair_vol_pct=_fair_val,
-                    )
+                    _pinned_expiry = _focus.get('expiration_date')
+                    try:
+                        scan = scan_fn(
+                            ticker,
+                            expiry=_pinned_expiry,
+                            garch_cond_vol_pct=_garch_pct, fair_vol_pct=_fair_val,
+                        )
+                    except Exception as e:
+                        if _pinned_expiry and ('404' in str(e) or 'Not Found' in str(e)):
+                            scan = None
+                        else:
+                            raise
+                    # ThetaData sometimes has no OI snapshot at all for the
+                    # exact expiry this run pinned max pain to (e.g. a 404 on
+                    # bulk_snapshot/option/open_interest for that expiry) even
+                    # though the pinning itself is correct. Treat that as an
+                    # expected degraded result -- not a scanner crash -- so one
+                    # missing OI snapshot doesn't blank out the rest of the
+                    # bundle.
+                    _mp_err = getattr(scan, 'error', None) if scan is not None else '404'
+                    if scan is None or (_mp_err and ('404' in str(_mp_err) or 'Not Found' in str(_mp_err))):
+                        print(f"  {ticker:6s} | MAX_PAIN: no OI snapshot available for pinned "
+                              f"expiry {_pinned_expiry}; reporting degraded result instead of failing.")
+                        if scan is not None:
+                            scan = dataclasses.replace(scan, error='no_oi_for_pinned_expiry')
+                        else:
+                            from scanner.max_pain_scanner import MaxPainScan
+                            scan = MaxPainScan(
+                                ticker=ticker, spot=0.0, expiry=_pinned_expiry or "",
+                                T_years=0.0, max_pain_strike=0.0, max_pain_value=0.0,
+                                second_pain_strike=0.0, price_vs_pain_pct=0.0,
+                                near_pin=False, pain_profile=[], num_strikes=0,
+                                timestamp=_iso_utc_now(), error='no_oi_for_pinned_expiry',
+                            )
                 else:
                     scan = scan_fn(ticker)
                 line = fmt_fn(scan)
@@ -638,7 +667,7 @@ def build_context(focus: Dict[str, Any],
         sentiment_pack_json_path=focus.get('sentiment_pack_json_path'),
         sentiment_group_id=focus.get('sentiment_group_id'),
         sentiment_ranked_tickers=focus.get('sentiment_ranked_tickers') or [],
-        var_horizon_days=int(focus.get('var_horizon_days') or 1),
+        var_horizon_days=int(focus.get('var_horizon_days') or focus.get('horizon_days') or 252),
         var_confidence=float(focus.get('var_confidence') or 0.99),
         var_positions=focus.get('var_positions'),
         run_options_suite=bool(controls.get('run_options_suite', False)),
@@ -1101,7 +1130,10 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
     # IV-rank scanner reads fair_vol_pct to compute the RICH/CHEAP regime and
     # VRP; without it the scanner silently degrades to 0.0 and reports UNKNOWN.
     focus_surface = ((vol_result or {}).get('vol_surface') or {})
-    fair_vol_pct = focus_surface.get('fair_vol_pct')
+    focus_leg = focus_surface.get('focus')
+    fair_vol_pct = focus_leg.get('fair_vol_pct') if isinstance(focus_leg, dict) else None
+    if fair_vol_pct is None:
+        fair_vol_pct = focus_surface.get('fair_vol_pct')
     if fair_vol_pct is None:
         fair_vol_pct = focus_surface.get('fair_variance_swap_strike_vol_pct')
     if isinstance(fair_vol_pct, (int, float)) and not isinstance(fair_vol_pct, bool):

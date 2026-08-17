@@ -536,8 +536,12 @@ def _focus_from_body(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str
     if index:
         focus['index_ticker'] = index.upper()
 
-    # Optional VaR horizon override; orchestrator falls back to 1 day when absent.
+    # Optional VaR horizon override; orchestrator falls back to 252 days when
+    # absent. Accepts 'horizon_days' as a fallback alias for 'var_horizon_days'
+    # so a form field named either way still reaches build_context.
     horizon = body.get('var_horizon_days')
+    if horizon in (None, ''):
+        horizon = body.get('horizon_days')
     if horizon not in (None, ''):
         try:
             horizon = int(horizon)

@@ -256,7 +256,7 @@ def format_skew(scan: SkewScan) -> str:
     if scan.error:
         return f"  {scan.ticker:6s} | SKEW: ERROR — {scan.error}"
     sabr_info = ""
-    if scan.sabr_rho is not None:
+    if scan.sabr_rho is not None and scan.sabr_nu is not None:
         sabr_info = f" | SABR ρ={scan.sabr_rho:.2f} ν={scan.sabr_nu:.2f}"
     rich_n = len(scan.rich_strikes)
     cheap_n = len(scan.cheap_strikes)

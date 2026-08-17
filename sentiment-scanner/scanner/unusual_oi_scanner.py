@@ -9,6 +9,8 @@ when OI surges AND CNS is elevated, it suggests real money is positioning
 around a contested narrative.
 """
 
+import json
+import os
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,15 +47,49 @@ class UnusualOiScan:
     error: Optional[str] = None
 
 
-# ---- In-memory baseline store (per-session) ----
+# ---- Baseline store, persisted to disk so it survives cold starts ----
+# Every fresh dashboard/orchestrator process previously started with an empty
+# in-memory dict, so the very first scan of a run always reported
+# baseline_total_oi=0 / oi_change_pct=0.0 no matter what the ticker's real OI
+# history was. Persisting to JSON means only the first-ever scan of a ticker
+# is baseline-less; every subsequent process picks up where the last one left off.
+_BASELINE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "oi_baseline.json")
+
 _baselines: Dict[str, int] = {}
+_baselines_loaded = False
+
+
+def _load_baselines() -> None:
+    global _baselines_loaded
+    if _baselines_loaded:
+        return
+    _baselines_loaded = True
+    try:
+        with open(_BASELINE_FILE, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _baselines.update({str(k): int(v) for k, v in data.items()})
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError, TypeError):
+        pass
+
+
+def _save_baselines() -> None:
+    try:
+        os.makedirs(os.path.dirname(_BASELINE_FILE), exist_ok=True)
+        with open(_BASELINE_FILE, "w") as f:
+            json.dump(_baselines, f)
+    except OSError:
+        pass
 
 
 def set_baseline(ticker: str, total_oi: int) -> None:
+    _load_baselines()
     _baselines[ticker] = total_oi
+    _save_baselines()
 
 
 def get_baseline(ticker: str) -> int:
+    _load_baselines()
     return _baselines.get(ticker, 0)
 
 
