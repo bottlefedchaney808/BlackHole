@@ -28,6 +28,11 @@ FIX_PLAN items re-checked against current source (not trusted from the docs) —
 
 Still genuinely live: **no OI magnitude/outlier filtering in `dealer_positioning.py`'s gamma aggregation** (`oi > 0` only, line 449) — one large stale/illiquid strike can dominate the gamma/vanna read. Deliberately deferred (FIX_PLAN_20260725.md issue 4); confirmed still absent, no z-score/percentile/concentration logic exists in the file. If dealer-positioning output looks strike-dominated, this is why.
 
+Recurring bug classes (added 2026-08-17, from a fix-hotspot audit — vol-suite is one of the highest fix-ratio areas in the repo):
+- **`resolve_expiration`'s DTE math uses `datetime.now(timezone.utc).date()`, not local `date.today()`.** Any new code/test that computes "today" for an expiry/DTE comparison must match UTC, or it flakes at UTC-negative local offsets near midnight (`Vol_Suite/expiry_selector.py`; fixed for the test suite in `70fab50`, but the general rule applies to any new caller too).
+- **`vega_notional`/`variance_notional` must scale with spot, never a flat constant.** `variance_swap_live.py::compute_vega_notional` scales from a $100 reference-spot base (100k), floored so cheap tickers aren't sized near zero; `compute_variance_notional` returns `None` (not a `ZeroDivisionError`) when `compute_fair_variance_strike` legitimately returns `fair_vol = 0.0` on a degraded chain. Don't reintroduce a flat `100000` constant or a bare `N_vol / (2*sigma)` division (fixed `c292e6a`).
+- **A GARCH fit failure must reach `artifacts["errors"]`/`_note_error("garch")`, never fail silently.** `run_garch_module` deliberately swallows the underlying fit exception (one dead module shouldn't cost the whole dealer-positioning run) but must still surface it via `GarchModuleResult.error` so `volatility_suite.py` re-raises inside its own try and `garch_ran` ends up `False` — a bare `garch_conditional_vol is None` check is NOT a usable failure signal (a converged fit with an empty series also returns `None`) (fixed `feea260`).
+
 `requirements.txt` is runtime-only; `pytest` lives in `requirements-dev.txt`. The shared root `.venv` is usually built from `requirements.txt` alone, so `pytest` will fail with `ModuleNotFoundError` unless `requirements-dev.txt` was also installed.
 
 ## Quick Reference
