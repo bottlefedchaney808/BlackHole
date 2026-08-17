@@ -13,6 +13,7 @@ venv/
 # Editor / IDE
 .vs/
 .claude/worktrees/
+.worktrees/
 
 # Node (tradingview-mcp is flattened into root, not a submodule)
 node_modules/
@@ -51,6 +52,9 @@ screener_*.png
 *_variance_swap_strikes_*.csv
 *_variance_swap_summary_*.csv
 Screenshot *.png
+
+# Ad-hoc chart/review artifacts
+artifacts/
 
 # DTCC/swaps ingestion pipeline: raw pulls, derived DB, per-run output dirs
 CFTC_SLICE_EQUITIES_*/
