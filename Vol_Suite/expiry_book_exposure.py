@@ -20,11 +20,14 @@ Global constraints honored (plan §4):
      model.)
   2. All six greeks in DEALER-FRAME; sign each greek once, never stack a
      `right_dir`.
-  3. rec.vanna composes the same way as delta/charm: dealer-frame = -1 *
-     (customer-frame raw value). See `dealer_frame_vanna`'s docstring below
-     for the 2026-08-17 fix — the previous composition applied two
-     negations (one inside `bs_vanna`, one in `dealer_frame_vanna`) that
-     canceled out, silently breaking this consistency for vanna alone.
+  3. All five signed greeks (delta, vanna, charm, vega, volga) compose the
+     same way: dealer-frame = -1 * (customer-frame raw value). Fixed
+     2026-08-17 for vanna AND charm — both `bs_vanna` and `bs_charm` already
+     return that negated (Bloomberg-negative-style) quantity internally, but
+     `dealer_frame_greek` was applying a SECOND -1 on top for both of them,
+     so the two negations canceled and they composed as +1*customer-raw
+     instead — an unnoticed cross-greek sign inconsistency (delta was always
+     correct). See `dealer_frame_vanna`'s and `bs_charm`'s docstrings.
   4. Real spot, NOT median-strike.
   5. Charm scaled x(1/DEFAULT_A) if CHARM_ANNUALIZED; NEVER x(1/DTE).
   6. Vanna flow dIV unit is DECIMAL vol, ONE formula:
