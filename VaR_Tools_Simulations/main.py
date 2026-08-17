@@ -192,6 +192,7 @@ def _build_corr_sim_from_context(payload: dict):
     positions_raw = payload.get("positions")
     if positions_raw is None:
         positions_raw = var_cfg.get("positions")
+    positions_source = "provided" if positions_raw is not None else "derived"
     if positions_raw is None:
         total_notional = 1_000_000.0
         notionals = norm_weights * total_notional
@@ -314,6 +315,7 @@ def _build_corr_sim_from_context(payload: dict):
         "confidence": float(confidence),
         "horizon_days": int(horizon_days),
         "timestamp": datetime.utcnow().isoformat() + "Z",
+        "positions_source": positions_source,
         "notes": " | ".join(notes) if notes else "",
     }
 

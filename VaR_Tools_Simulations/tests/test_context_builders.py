@@ -218,6 +218,23 @@ def test_corr_sim_rejects_non_integer_horizon(stub_live_price):
         var_main._build_corr_sim_from_context(_corr_payload(corr_sim_days="ten"))
 
 
+# `positions_source` surfaces whether notionals came from real context data or
+# were synthesized from weights -- previously only discoverable by grepping the
+# free-text `notes` string.
+
+def test_corr_sim_positions_source_derived_when_positions_omitted(stub_live_price):
+    result = var_main._build_corr_sim_from_context(_corr_payload())
+    assert result["positions_source"] == "derived"
+    assert "positions missing" in result["notes"]
+
+
+def test_corr_sim_positions_source_provided_when_positions_given(stub_live_price):
+    payload = _corr_payload(positions=[500_000.0])
+    result = var_main._build_corr_sim_from_context(payload)
+    assert result["positions_source"] == "provided"
+    assert "positions missing" not in result["notes"]
+
+
 # ── price_dist (new context-mode builder) ─────────────────────────────────
 # price_dist.py had no context-mode builder at all, so its lognormal table and
 # MC probability engine were unreachable outside the interactive menu.
