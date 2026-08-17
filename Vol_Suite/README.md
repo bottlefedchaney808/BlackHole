@@ -3,7 +3,7 @@
 ## Overview
 A comprehensive Python suite for variance swap pricing, volatility screening, correlation/covariance analysis, dealer positioning, and portfolio-level statistics. Built around live options data via ThetaData, proxied through api.potatohedge.com.
 
-Yahoo has been purged from this suite — ThetaData is the sole market-data source. The one remaining outside dependency is stockanalysis.com for ETF constituent weights, which ThetaData doesn't carry; if it's unreachable, callers get an empty basket rather than a silent fallback to a different data source.
+ThetaData is the primary market-data source (live quotes and historical prices); yfinance is used only as a per-ticker fallback when ThetaData is unavailable (see §7). The one remaining outside dependency is stockanalysis.com for ETF constituent weights, which ThetaData doesn't carry; if it's unreachable, callers get an empty basket rather than a silent fallback to a different data source.
 
 ## Modules
 
