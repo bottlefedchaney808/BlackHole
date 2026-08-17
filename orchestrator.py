@@ -59,9 +59,11 @@ result is folded back into the shared context via
 later stage reads. The in-process market-signals stage does not mutate
 `suite_context.json` at all (it has no producer/consumer handoff to audit),
 so its verdict is recorded via the lightweight `_MarketSignalsAudit` stand-in
-rather than a real `shared/context_audit.py` transaction. Each audit lands in
-`orchestrator_runs` as a `context_audit:sentiment` row carrying before/after
-hashes, the changed keys and the per-check verdicts.
+rather than a real `shared/context_audit.py` transaction. Neither of these
+paths currently writes a `context_audit:sentiment` row into `orchestrator_runs`
+-- that row type is only emitted by `_audit_market_signals_fold`, an audited
+`shared/context_audit.py` transaction helper that exists for a real
+producer-fold use case but is not currently called by `run_unified`.
 """
 from __future__ import annotations
 
