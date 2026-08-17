@@ -19,8 +19,12 @@ Two things differ from `_run_child_suite`, both deliberate:
 
 2. It knows that not every suite speaks `--context/--context-out`. Options_Suite,
    VaR_Tools_Simulations and Vol_Suite all do (each exposes `run_context_mode`).
-   sentiment-scanner does not -- it is the *producer* end of the chain and
-   exposes `--export-context <path>` instead, which is why it runs first.
+   sentiment-scanner does not -- it exposes `--export-context <path>` instead,
+   since it is a standalone context producer. Note that `run_unified` does not
+   actually invoke sentiment-scanner as a subprocess stage: it is hard-skipped
+   by default ("unreliable network dependency") and the "market signals"
+   stage -- option-chain scanners run in-process via `run_market_signals_stage`
+   -- takes its place, running after Vol_Suite rather than before it.
 
 Vol_Suite used to be the exception, and it was the weakest joint in this file.
 `volatility_suite.py` had no argparse at all -- `main()` went straight to
@@ -49,17 +53,15 @@ artifacts before the next stage is allowed to consume it. The rules live in
 By default a FAIL is reported and the chain continues degraded (the historical
 behaviour); `--fail-on-suite-error` turns it into a hard abort.
 
-The context itself gets the same treatment where it is mutated. `run_unified`
-folds the sentiment producer's block back into the shared context, and that is
-the one write to an object every later stage reads. It runs through
-`shared/context_audit.py` as an audited transaction -- baseline hash, schema
-check before, fold, schema and scope check after -- and a mutation that does not
-survive the second check is rolled back in place and fails the run outright.
-`--fail-on-suite-error` has no say here: a suite failing is a judgement call
-about how much degradation to tolerate, whereas a context that just failed
-validation is not something the remaining stages can be run against at all. Each
-audit lands in `orchestrator_runs` as a `context_audit:sentiment` row carrying
-before/after hashes, the changed keys and the per-check verdicts.
+The context itself gets the same treatment where it is mutated. Vol_Suite's
+result is folded back into the shared context via
+`_thread_vol_stats_into_context`, and that is the one write to an object every
+later stage reads. The in-process market-signals stage does not mutate
+`suite_context.json` at all (it has no producer/consumer handoff to audit),
+so its verdict is recorded via the lightweight `_MarketSignalsAudit` stand-in
+rather than a real `shared/context_audit.py` transaction. Each audit lands in
+`orchestrator_runs` as a `context_audit:sentiment` row carrying before/after
+hashes, the changed keys and the per-check verdicts.
 """
 from __future__ import annotations
 
@@ -733,11 +735,11 @@ def _validate_suite_output(suite_name: str,
     return result
 
 
-def _audit_sentiment_fold(context: Dict[str, Any],
+def _audit_market_signals_fold(context: Dict[str, Any],
                           sentiment_result: Optional[Dict[str, Any]],
                           focus: Optional[Dict[str, Any]] = None
                           ) -> ContextMutationAudit:
-    """Fold the producer's sentiment block into *context* under audit, and log it.
+    """Fold the market-signals stage's block into *context* under audit, and log it.
 
     Thin orchestrator-side wrapper over
     `shared.context_audit.audit_sentiment_mutation`, in the same shape as
@@ -746,6 +748,12 @@ def _audit_sentiment_fold(context: Dict[str, Any],
     `context_audit:sentiment` row into `orchestrator_runs` whose `results_json`
     is the full audit entry (before/after hashes and snapshots, the changed
     keys, the per-check breakdown, and whether a rollback happened).
+
+    Not currently called by `run_unified`: the in-process market-signals stage
+    (`run_market_signals_stage`) does not mutate `suite_context.json`, so its
+    verdict is recorded via the lighter `_MarketSignalsAudit` stand-in instead.
+    Kept for the case a future market-signals block needs a real audited
+    context mutation again.
 
     The verdict is returned rather than raised. `context` comes back either
     mutated-and-valid (PASS) or restored to the pre-mutation baseline (FAIL) --
@@ -1470,7 +1478,7 @@ def run_unified_sources(tickers: List[str],
     1. Discovers or validates enabled data sources (env var DATA_SOURCES)
     2. Launches parallel adapters for each source to ingest swap data
     3. Aggregates results before passing to Vol_Suite
-    4. Runs the unified suite (sentiment -> vol -> options + var)
+    4. Runs the unified suite (vol -> market signals -> options + var)
 
     Args:
         tickers: List of focus ticker(s) to analyze
@@ -1716,13 +1724,13 @@ def _prompt_run_mode() -> str:
     print("  ORCHESTRATOR — Run Mode")
     print("=" * 60)
     print("\n  (1) UNIFIED (recommended)")
-    print("      Runs: sentiment (context) → vol → options + var")
+    print("      Runs: vol → market signals → options + var")
     print("\n  (2) VOL SUITE")
-    print("      Runs: sentiment (context) → vol only (fastest)")
+    print("      Runs: vol only (fastest)")
     print("\n  (3) OPTIONS SUITE")
-    print("      Runs: sentiment (context) → vol → options")
+    print("      Runs: vol → market signals → options")
     print("\n  (4) VAR TOOLS")
-    print("      Runs: sentiment (context) → vol → var")
+    print("      Runs: vol → market signals → var")
     print("\n  (5) CUSTOM")
     print("      Choose individual suites")
 
@@ -1920,11 +1928,12 @@ INTERACTIVE MODE (Recommended):
 
 UNIFIED RUN (CLI flags):
   orchestrator.py --unified --ticker NVDA --expiry 2026-10-16
-    Runs: sentiment -> vol -> options + var (all four suites in dependency order)
+    Runs: vol -> market signals -> options + var (sentiment-scanner is
+    hard-skipped by default; see module docstring)
 
 SINGLE SUITE (CLI flags):
   orchestrator.py --suite vol --ticker AAPL --target-years 0.25
-    Runs only Vol Suite (with sentiment context producer as dependency)
+    Runs only Vol Suite
 
 ADVANCED OPTIONS:
   orchestrator.py --unified --ticker SPY --expiry 2026-08-15 --fail-on-suite-error
@@ -1937,7 +1946,7 @@ ADVANCED OPTIONS:
     mode.add_argument('--interactive', action='store_true',
                       help='Launch in interactive mode: guided prompts for all parameters.')
     mode.add_argument('--unified', action='store_true',
-                      help='Run sentiment -> vol -> options + var in dependency order.')
+                      help='Run vol -> market signals -> options + var in dependency order.')
     mode.add_argument('--suite', choices=sorted(SUITE_ROOTS),
                       help='Run a single suite in context mode.')
     # Make --ticker optional (only required in CLI mode if --unified/--suite chosen)
