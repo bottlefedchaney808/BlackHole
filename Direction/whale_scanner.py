@@ -45,24 +45,29 @@ def _neutral_result(ticker: str) -> dict:
 
 
 def scan(ticker: str, min_premium: float = WHALE_THRESHOLD,
-          threshold_bps: Optional[float] = None) -> dict:
+         threshold_bps: Optional[float] = None,
+         as_of: Optional[str] = None) -> dict:
     """Scan the nearest expiry's chain for whale-sized flow (live ThetaData).
 
     Any fetch failure or empty chain degrades to a zeroed neutral result
     (signal False) -- never raises. Classification is delegated to
-    Vol_Suite.whale_scanner.classify_whale_bias.
+    Vol_Suite.whale_scanner.classify_whale_bias. With ``as_of`` set, uses
+    that day's EOD volume and close instead of today's.
     """
     result = _neutral_result(ticker)
     try:
         exps = data.get_expirations(ticker)
         if not exps:
             return result
-        today = date.today().strftime("%Y%m%d")
+        today = (as_of or date.today().strftime("%Y%m%d"))
         future = [e for e in exps if e >= today]
         expiry = future[0] if future else exps[-1]
 
-        rows = data.get_chain_eod_volume(ticker, expiry)
-        price = data.get_price(ticker)
+        rows = data.get_chain_eod_volume(ticker, expiry, as_of=as_of)
+        if as_of:
+            price = data.get_close_asof(ticker, as_of=as_of)
+        else:
+            price = data.get_price(ticker)
     except Exception:
         return result
 

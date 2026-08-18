@@ -31,7 +31,7 @@ def test_scan_degrades_to_neutral_on_no_expirations(monkeypatch):
 @pytest.mark.unit
 def test_scan_degrades_to_neutral_on_no_chain_rows(monkeypatch):
     monkeypatch.setattr(data, "get_expirations", lambda ticker: ["20261231"])
-    monkeypatch.setattr(data, "get_chain_eod_volume", lambda ticker, exp: None)
+    monkeypatch.setattr(data, "get_chain_eod_volume", lambda ticker, exp, as_of=None: None)
     monkeypatch.setattr(data, "get_price", lambda ticker: 100.0)
     result = dws.scan("SPY")
     assert result["direction"] == "neutral"
@@ -45,7 +45,7 @@ def test_scan_bullish_matches_vol_suite_classifier_directly(monkeypatch):
         _row(90, "P", 5, 10.0),     # $5,000 -- filtered out
     ]
     monkeypatch.setattr(data, "get_expirations", lambda ticker: ["20261231"])
-    monkeypatch.setattr(data, "get_chain_eod_volume", lambda ticker, exp: rows)
+    monkeypatch.setattr(data, "get_chain_eod_volume", lambda ticker, exp, as_of=None: rows)
     monkeypatch.setattr(data, "get_price", lambda ticker: 100.0)
 
     result = dws.scan("SPY")
@@ -63,7 +63,7 @@ def test_scan_bullish_matches_vol_suite_classifier_directly(monkeypatch):
 def test_scan_picks_nearest_future_expiry(monkeypatch):
     captured = {}
 
-    def _fake_chain(ticker, exp):
+    def _fake_chain(ticker, exp, as_of=None):
         captured["exp"] = exp
         return [_row(100, "C", 1, 1.0)]
 
@@ -72,3 +72,23 @@ def test_scan_picks_nearest_future_expiry(monkeypatch):
     monkeypatch.setattr(data, "get_price", lambda ticker: 100.0)
     dws.scan("SPY")
     assert captured["exp"] == "20990101"
+
+
+def test_scan_passes_as_of_to_data(monkeypatch):
+    from Direction import whale_scanner
+    from Direction import data as d
+    seen = {}
+
+    def _fake_chain_vol(ticker, exp, as_of=None):
+        seen["vol"] = as_of
+        return []  # empty chain -> scan degrades to neutral
+
+    monkeypatch.setattr(d, "get_expirations", lambda ticker: ["20260918"])
+    monkeypatch.setattr(d, "get_chain_eod_volume", _fake_chain_vol)
+    monkeypatch.setattr(d, "get_close_asof",
+                        lambda ticker, as_of=None, lookback_days=90: seen.setdefault("close", as_of) or 100.0)
+
+    out = whale_scanner.scan("SPY", as_of="2026-08-14")
+    assert seen["vol"] == "2026-08-14"
+    assert seen["close"] == "2026-08-14"
+    assert out["signal"] is False  # empty chain degrades to neutral
