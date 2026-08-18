@@ -74,6 +74,7 @@ def test_scan_picks_nearest_future_expiry(monkeypatch):
     assert captured["exp"] == "20990101"
 
 
+@pytest.mark.unit
 def test_scan_passes_as_of_to_data(monkeypatch):
     from Direction import whale_scanner
     from Direction import data as d
@@ -92,3 +93,24 @@ def test_scan_passes_as_of_to_data(monkeypatch):
     assert seen["vol"] == "2026-08-14"
     assert seen["close"] == "2026-08-14"
     assert out["signal"] is False  # empty chain degrades to neutral
+
+
+@pytest.mark.unit
+def test_scan_dash_as_of_selects_nearest_future_expiry(monkeypatch):
+    # Regression for finding I-1: a "YYYY-MM-DD" as_of must be normalized
+    # before comparing against "YYYYMMDD" expirations, otherwise the
+    # dash (ord 45 < ord '0') makes every same/later-year expiry compare
+    # >= as_of and an already-expired expiry gets selected.
+    captured = {}
+
+    def _fake_chain_vol(ticker, exp, as_of=None):
+        captured["exp"] = exp
+        return []  # empty chain -> scan degrades to neutral
+
+    monkeypatch.setattr(data, "get_expirations",
+                        lambda ticker: ["20260717", "20260821", "20260918"])
+    monkeypatch.setattr(data, "get_chain_eod_volume", _fake_chain_vol)
+    monkeypatch.setattr(data, "get_close_asof", lambda ticker, as_of=None, lookback_days=90: 100.0)
+
+    dws.scan("SPY", as_of="2026-08-14")
+    assert captured["exp"] == "20260821"  # nearest FUTURE expiry, not 20260717

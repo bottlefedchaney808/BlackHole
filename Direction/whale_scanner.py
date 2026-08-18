@@ -59,7 +59,7 @@ def scan(ticker: str, min_premium: float = WHALE_THRESHOLD,
         exps = data.get_expirations(ticker)
         if not exps:
             return result
-        today = (as_of or date.today().strftime("%Y%m%d"))
+        today = (as_of.replace("-", "") if as_of else date.today().strftime("%Y%m%d"))
         future = [e for e in exps if e >= today]
         expiry = future[0] if future else exps[-1]
 
