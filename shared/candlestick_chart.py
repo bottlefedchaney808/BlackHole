@@ -237,16 +237,22 @@ def _compress_non_trading_gaps(dates: list[float]) -> list[float]:
     return [float(index) for index, _ in enumerate(dates)]
 
 
-def _marker_for_conviction(conviction: str) -> str:
-    """Map a Direction conviction to a marker kind: buy/weak_buy/none.
+def _marker_for_score(score: int) -> str:
+    """Map a Direction suite score (0-5 signals fired) to a marker kind.
 
-    Only a real signal (conviction HIGH/MEDIUM) draws a marker; NONE (no
-    whale or <3/5 signals) draws nothing — the chart must not mark every bar.
+    Score-based convention (Jason, 2026-08-18):
+      0/5  -> "sell" (below-threshold read: avoid/exit)
+      1-2/5 -> "none" (no marker -- not enough signals)
+      3/5  -> "hold" (neutral -- NOT a buy)
+      4/5  -> "buy"
+      5/5  -> "add" (add to position)
     """
     return {
-        "HIGH": "buy",
-        "MEDIUM": "weak_buy",
-    }.get(str(conviction).upper(), "none")
+        0: "sell",
+        3: "hold",
+        4: "buy",
+        5: "add",
+    }.get(int(score), "none")
 
 
 def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
@@ -370,20 +376,20 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
             by_date = {str(entry.get("date")): entry for entry in direction_overlay if isinstance(entry, dict)}
             spread = max(obs.high - obs.low for obs in observations) or 1.0
             marker_style = {
-                "buy": ("^", "lime", 1.0),
-                "weak_buy": ("^", "cyan", 0.65),
+                "sell": ("v", "orchid", 1.0),     # 0/5 — avoid/exit, above bar
+                "hold": ("o", "gray", 0.6),       # 3/5 — neutral, below bar
+                "buy": ("^", "lime", 1.0),        # 4/5 — below bar
+                "add": ("D", "gold", 1.0),        # 5/5 — add to position, below bar
             }
             for i, obs in enumerate(observations):
-                entry = by_date.get(obs.timestamp.date().isoformat(), {})
-                # Only a real signal draws a marker: >=3 of 5 signals must
-                # fire (score >= 3) AND conviction must be HIGH/MEDIUM.
-                if int(entry.get("score", 0) or 0) < 3:
-                    continue
-                kind = _marker_for_conviction(entry.get("conviction", ""))
+                entry = by_date.get(obs.timestamp.date().isoformat())
+                if not entry:
+                    continue  # no overlay data for this bar -> no marker
+                kind = _marker_for_score(int(entry.get("score", 0) or 0))
                 if kind not in marker_style:
-                    continue
+                    continue  # 1-2/5 -> no marker
                 glyph, color, alpha = marker_style[kind]
-                y = obs.low - 0.03 * spread
+                y = obs.high + 0.03 * spread if kind == "sell" else obs.low - 0.03 * spread
                 axis.annotate(glyph, xy=(dates[i], y), fontsize=11, color=color,
                               alpha=alpha, ha="center", va="center",
                               annotation_clip=False)

@@ -204,13 +204,17 @@ assert CandlePayload is not None
 
 def test_render_candlestick_draws_direction_markers(tmp_path):
     from shared.chart_data import CandlePayload, CandleRecord
-    from shared.candlestick_chart import render_candlestick, _marker_for_conviction
+    from shared.candlestick_chart import render_candlestick, _marker_for_score
     from datetime import datetime
 
-    assert _marker_for_conviction("HIGH") == "buy"
-    assert _marker_for_conviction("MEDIUM") == "weak_buy"
-    assert _marker_for_conviction("NONE") == "none"  # no marker without 3/5 signals
-    assert _marker_for_conviction("BOGUS") == "none"
+    # Score-based convention: 0/5 sell, 3/5 hold (NOT a buy), 4/5 buy, 5/5 add.
+    assert _marker_for_score(0) == "sell"
+    assert _marker_for_score(3) == "hold"
+    assert _marker_for_score(4) == "buy"
+    assert _marker_for_score(5) == "add"
+    assert _marker_for_score(1) == "none"  # 1-2/5 -> no marker
+    assert _marker_for_score(2) == "none"
+    assert _marker_for_score(99) == "none"
 
     records = tuple(
         CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0, high=102.0,
@@ -232,13 +236,13 @@ def test_render_candlestick_draws_direction_markers(tmp_path):
 
 
 def test_render_candlestick_skips_markers_below_score_threshold(tmp_path):
-    """A bar only gets a marker when >=3 of 5 signals fire (score >= 3)."""
+    """A bar with 1-2/5 signals draws no marker; 3/5 is a HOLD, not a buy."""
     from shared.chart_data import CandlePayload, CandleRecord
-    from shared.candlestick_chart import render_candlestick, _marker_for_conviction
+    from shared.candlestick_chart import render_candlestick, _marker_for_score
     from datetime import datetime
 
-    # NONE at score 2 (only 2/5 signals) -> no marker, same as no overlay entry.
-    assert _marker_for_conviction("NONE") == "none"
+    # 1-2/5 signals -> no marker, same as no overlay entry.
+    assert _marker_for_score(2) == "none"
 
     records = tuple(
         CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0, high=102.0,
