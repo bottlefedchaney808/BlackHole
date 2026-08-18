@@ -16,6 +16,7 @@ Conviction rules (EXACT):
 from __future__ import annotations
 
 import argparse
+from typing import Optional
 
 from . import bollinger_analyzer, data, elliott_wave, liquidity_map, trend_engine, whale_scanner
 
@@ -27,31 +28,32 @@ def _sig(result) -> bool:
     return False
 
 
-def generate(ticker: str) -> dict:
+def generate(ticker: str, as_of: Optional[str] = None) -> dict:
     """Run all five modules and combine into a conviction call.
 
     Returns {"ticker", "price", "signals": {"whale","wave3","squeeze",
     "trend","liquidity": bool}, "score": int (0-5), "conviction":
-    "HIGH"|"MEDIUM"|"NONE", "details": {module-name: module-output-dict}}.
+    "HIGH"|"MEDIUM"|"NONE", "as_of": str|None, "details": {...}}.
+    With ``as_of`` set, every module evaluates that day's data.
     """
     try:
-        whale = whale_scanner.scan(ticker)
+        whale = whale_scanner.scan(ticker, as_of=as_of)
     except Exception:
         whale = {}
     try:
-        elliott = elliott_wave.analyze(ticker)
+        elliott = elliott_wave.analyze(ticker, as_of=as_of)
     except Exception:
         elliott = {}
     try:
-        bollinger = bollinger_analyzer.analyze(ticker)
+        bollinger = bollinger_analyzer.analyze(ticker, as_of=as_of)
     except Exception:
         bollinger = {}
     try:
-        trend = trend_engine.analyze_trend(ticker)
+        trend = trend_engine.analyze_trend(ticker, as_of=as_of)
     except Exception:
         trend = {}
     try:
-        liquidity = liquidity_map.get_liquidity(ticker)
+        liquidity = liquidity_map.get_liquidity(ticker, as_of=as_of)
     except Exception:
         liquidity = {}
 
@@ -98,6 +100,7 @@ def generate(ticker: str) -> dict:
         "signals": signals,
         "score": score,
         "conviction": conviction,
+        "as_of": as_of,
         "details": details,
     }
 
