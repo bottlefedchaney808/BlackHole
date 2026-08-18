@@ -11,7 +11,7 @@ Everything below is pure calendar arithmetic with `today` injected, so none of
 it touches the network or the clock. The only functions needing a client take
 a fake exposing just `list_expirations`.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -220,3 +220,64 @@ def test_resolve_expiration_falls_back_when_the_pin_is_not_listed(capsys):
 @pytest.mark.unit
 def test_resolve_expiration_without_a_pin_uses_nearest():
     assert es.resolve_expiration(FakeTD(), "SPY", None, 0.25)[0] in EXPIRIES
+
+
+# ---------------------------------------------------------------------------
+# choose_expiry_noninteractive -- headless equivalent of
+# choose_expiry_interactive, used by volatility_suite.py's --expiry/
+# --target-years CLI flags so a scripted run never blocks on stdin.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_noninteractive_explicit_expiry_is_used_verbatim():
+    """volatility_suite pins one expiry across the whole run; an explicit
+    --expiry must be respected exactly, like resolve_expiration's pin."""
+    now = datetime.now(timezone.utc).date()
+    future = now + timedelta(days=40)
+    listed = future.strftime("%Y%m%d")
+    exp, T = es.choose_expiry_noninteractive(FakeTD([listed]), "SPY", expiry=listed)
+    assert exp == listed
+    assert T == pytest.approx((future - now).days / es.DEFAULT_A)
+
+
+@pytest.mark.unit
+def test_noninteractive_explicit_expiry_accepts_dashed_format():
+    now = datetime.now(timezone.utc).date()
+    future = now + timedelta(days=40)
+    dashed = future.strftime("%Y-%m-%d")
+    compact = future.strftime("%Y%m%d")
+    exp, _ = es.choose_expiry_noninteractive(FakeTD([compact]), "SPY", expiry=dashed)
+    assert exp == compact
+
+
+@pytest.mark.unit
+def test_noninteractive_explicit_expiry_rejects_a_past_date():
+    now = datetime.now(timezone.utc).date()
+    past = (now - timedelta(days=10)).strftime("%Y%m%d")
+    with pytest.raises(ValueError, match="in the past"):
+        es.choose_expiry_noninteractive(FakeTD([past]), "SPY", expiry=past)
+
+
+@pytest.mark.unit
+def test_noninteractive_explicit_expiry_rejects_bad_format():
+    with pytest.raises(ValueError, match="Bad expiry format"):
+        es.choose_expiry_noninteractive(FakeTD(), "SPY", expiry="not-a-date")
+
+
+@pytest.mark.unit
+def test_noninteractive_target_years_auto_selects_nearest():
+    exp, T = es.choose_expiry_noninteractive(FakeTD(), "SPY", target_years=0.25)
+    assert exp in EXPIRIES
+    assert T > 0
+
+
+@pytest.mark.unit
+def test_noninteractive_raises_without_expiry_or_target_years():
+    with pytest.raises(ValueError, match="Need --expiry or --target-years"):
+        es.choose_expiry_noninteractive(FakeTD(), "SPY")
+
+
+@pytest.mark.unit
+def test_noninteractive_raises_when_ticker_has_no_options():
+    with pytest.raises(ValueError, match="No options found"):
+        es.choose_expiry_noninteractive(FakeTD([]), "NOPE", target_years=0.25)

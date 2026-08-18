@@ -230,3 +230,45 @@ def choose_expiry_interactive(td, ticker: str, target_years: Optional[float] = N
     chosen = candidates[idx]
     print(f"  -> Using {chosen.exp_str} ({_describe(chosen)})")
     return chosen.exp_str, chosen.T_years
+
+
+def choose_expiry_noninteractive(td, ticker: str,
+                                  expiry: Optional[str] = None,
+                                  target_years: Optional[float] = None
+                                  ) -> Tuple[str, float]:
+    """Non-interactive expiry selection for CLI-driven runs.
+
+    If *expiry* is provided (YYYYMMDD or YYYY-MM-DD), use it directly and
+    derive T_years from today.  If only *target_years* is provided, pick the
+    closest overall expiry.  If neither is provided, raise ValueError so the
+    caller knows to supply one.
+    """
+    avail = td.list_expirations(ticker)
+    if not avail:
+        raise ValueError(f"No options found for {ticker}")
+
+    # Normalise expiry to compact YYYYMMDD.
+    if expiry:
+        compact = str(expiry).replace("-", "")
+        today = datetime.now(timezone.utc).date()
+        try:
+            exp_date = datetime.strptime(compact, "%Y%m%d").date()
+        except ValueError:
+            raise ValueError(f"Bad expiry format '{expiry}' -- use YYYYMMDD or YYYY-MM-DD")
+        dte = (exp_date - today).days
+        if dte < 0:
+            raise ValueError(f"Expiry {expiry} is in the past")
+        t_years = dte / DEFAULT_A
+        print(f"  Using expiry {compact} (T={t_years:.4f}yr, {dte}DTE)")
+        return compact, t_years
+
+    if target_years is None:
+        raise ValueError("Need --expiry or --target-years for non-interactive expiry selection")
+
+    candidates = find_candidate_expiries(avail, target_years)
+    if not candidates:
+        raise ValueError(f"No suitable expiry found for {ticker}")
+
+    chosen = candidates[0]   # closest overall
+    print(f"  -> Auto-selected {chosen.exp_str} ({_describe(chosen)})")
+    return chosen.exp_str, chosen.T_years

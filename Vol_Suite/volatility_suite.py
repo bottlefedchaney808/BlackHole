@@ -81,19 +81,52 @@ def _ticker_exists(ticker: str) -> bool:
         return True
 
 
+# ---------------------------------------------------------------------------
+# Non-interactive overrides
+# ---------------------------------------------------------------------------
+# Populated from CLI flags in main() so the common single-ticker workflow can
+# run headless without stdin.  Keys are unique substrings of the prompt text
+# they bypass -- see _set_override calls in main().
+_noninteractive: Dict[str, str] = {}
+
+
+def _set_override(key: str, value: Optional[str]) -> None:
+    if value is not None:
+        _noninteractive[key] = str(value)
+
+
+def _ni_input(prompt: str, default: Optional[str] = None) -> str:
+    """Like input(), but honours _noninteractive overrides keyed by prompt text.
+
+    Keys that start with '_' are internal overrides not tied to a specific
+    prompt -- they're read through _get_noninteractive() instead.
+    """
+    for key, val in _noninteractive.items():
+        if key.startswith("_"):
+            continue
+        if key in prompt:
+            return val
+    return input(prompt) if default is None else input(prompt) or default
+
+
+def _get_noninteractive(key: str, default: Any = None) -> Any:
+    """Read an internal override (keys starting with '_') from the dict."""
+    return _noninteractive.get(key, default)
+
+
 def prompt_focus_ticker() -> str:
     """Prompt for the focus ticker, re-prompting on a symbol that doesn't
     resolve. A typo (e.g. NTFLX for NFLX) otherwise surfaces much later as
     'not found in any of the 15 tracked indices', which reads like a data-feed
     failure rather than a typo."""
     while True:
-        t = input("Focus ticker (e.g. MSFT): ").strip().upper()
+        t = _ni_input("Focus ticker (e.g. MSFT): ").strip().upper()
         if not t:
             return "MSFT"
         if _ticker_exists(t):
             return t
         print(f"  '{t}' doesn't resolve to a tradable symbol -- check the spelling.")
-        retry = input("  Enter a different ticker, or press Enter to use it anyway: ").strip().upper()
+        retry = _ni_input("  Enter a different ticker, or press Enter to use it anyway: ").strip().upper()
         if not retry:
             return t
         if _ticker_exists(retry):
@@ -120,7 +153,7 @@ def _load_json_file(path: str) -> Optional[dict]:
 
 def _load_ticker_pack_interactive() -> Optional[dict]:
     default_manifest = _default_pack_manifest_path()
-    manifest_path = input(f"Ticker-pack manifest path [default: {default_manifest}]: ").strip() or default_manifest
+    manifest_path = _ni_input(f"Ticker-pack manifest path [default: {default_manifest}]: ").strip() or default_manifest
     manifest = _load_json_file(manifest_path)
     if not manifest:
         print("  Could not load manifest file. Falling back to manual ticker entry.")
@@ -136,7 +169,7 @@ def _load_ticker_pack_interactive() -> Optional[dict]:
         count = p.get("ticker_count", 0)
         updated = p.get("last_updated_at") or p.get("created_at") or ""
         print(f"  {i:2d}. {gname} | {count} tickers | {gid} | {updated}")
-    choice = input("Choose pack number (default 1): ").strip()
+    choice = _ni_input("Choose pack number (default 1): ").strip()
     idx = 0
     if choice.isdigit():
         n = int(choice) - 1
@@ -165,7 +198,7 @@ def _load_ticker_pack_interactive() -> Optional[dict]:
         cns = t.get("cns", 0)
         conf = t.get("confidence", 0.0)
         print(f"  {i:2d}. {sym:6s} | CNS={cns:>3} | conf={float(conf):.2f}")
-    sel = input("Focus ticker from pack (number, default 1): ").strip()
+    sel = _ni_input("Focus ticker from pack (number, default 1): ").strip()
     sel_idx = 0
     if sel.isdigit():
         v = int(sel) - 1
@@ -193,7 +226,7 @@ def prompt_index_choice(ticker: str) -> Tuple[str, List[dict]]:
     idxmem.print_index_choices(ticker, matches)
     if matches:
         default_idx = matches[0]["index"]
-        choice = input(f"\nChoose an index by number, or type a ticker directly (default {default_idx}): ").strip()
+        choice = _ni_input(f"\nChoose an index by number, or type a ticker directly (default {default_idx}): ").strip()
         if not choice:
             return default_idx, matches
         if choice.isdigit():
@@ -202,8 +235,13 @@ def prompt_index_choice(ticker: str) -> Tuple[str, List[dict]]:
                 return matches[i]["index"], matches
         return choice.upper(), matches
     print(f"  {ticker} wasn't found in any tracked index/sector ETF.")
-    manual = input("Enter an index/sector ETF ticker manually (e.g. SPY, QQQ, XLK): ").strip().upper()
-    return (manual or "SPY"), matches
+    # In non-interactive mode, fall back to the override or SPY rather than
+    # blocking on a manual-entry prompt.
+    override = _get_noninteractive("Choose an index") or _get_noninteractive("Enter an index/sector ETF ticker manually")
+    if override:
+        return str(override).upper(), matches
+    print("  Falling back to SPY as the benchmark index.")
+    return "SPY", matches
 
 
 # Dual-class listings: the same issuer trading under two tickers. Both classes
@@ -336,7 +374,7 @@ def _resolve_ticker_universe(
     else:
         chosen_index, matches = prompt_index_choice(ticker)
         known_weight = next((m["weight"] for m in matches if m["index"] == chosen_index), None)
-        n_input = input("Basket size — number of index constituents to pull (default 10): ").strip()
+        n_input = _ni_input("Basket size — number of index constituents to pull (default 10): ").strip()
         top_n = int(n_input) if n_input else 10
 
     return group_tickers, use_pack_basket, chosen_index, known_weight, top_n, matches
@@ -363,12 +401,12 @@ def _run_id_now() -> str:
 
 
 def _choose_option_type() -> str:
-    raw = (input("Option type for shared context (call/put, default call): ").strip().lower() or "call")
+    raw = (_ni_input("Option type for shared context (call/put, default call): ").strip().lower() or "call")
     return "put" if raw == "put" else "call"
 
 
 def _choose_optional_strike() -> Optional[float]:
-    raw = input("Optional strike for shared context (press Enter to keep null): ").strip()
+    raw = _ni_input("Optional strike for shared context (press Enter to keep null): ").strip()
     if not raw:
         return None
     try:
@@ -379,7 +417,7 @@ def _choose_optional_strike() -> Optional[float]:
 
 
 def _prompt_yes_no(prompt: str, default: bool) -> bool:
-    choice = input(f"{prompt} (y/n, default {'y' if default else 'n'}): ").strip().lower()
+    choice = _ni_input(f"{prompt} (y/n, default {'y' if default else 'n'}): ").strip().lower()
     if not choice:
         return default
     return choice == "y"
@@ -421,7 +459,7 @@ def _prompt_sign_model_and_options_chain(pack_ctx: Optional[dict]) -> Tuple[str,
     if pack_ctx:
         options_hint = bool(pack_ctx["pack"].get("downstream_hints", {}).get("options_suite", False))
     options_default = "y" if options_hint else "n"
-    run_options_chain = (input(f"Run Options Chain Scanner step? (y/n, default {options_default}): ").strip().lower() or options_default) == "y"
+    run_options_chain = (_ni_input(f"Run Options Chain Scanner step? (y/n, default {options_default}): ").strip().lower() or options_default) == "y"
     return sign_model, run_options_chain
 
 
@@ -998,7 +1036,7 @@ def _run_core_analysis(
     group_screener_ran = False
     if pack_ctx or run_group_screener:
         if run_group_screener is None:
-            run_pack_screen = (input("Run variance screener on full highlighted group first? (y/n, default y): ").strip().lower() or "y") == "y"
+            run_pack_screen = (_ni_input("Run variance screener on full highlighted group first? (y/n, default y): ").strip().lower() or "y") == "y"
         else:
             run_pack_screen = bool(run_group_screener)
         if run_pack_screen and group_tickers:
@@ -1481,8 +1519,11 @@ def run_unified_flow():
     print("  VOLATILITY SUITE — Unified Cross-Suite Run")
     print("=" * 60)
 
-    load_mode = input("Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: ").strip()
-    pack_ctx = _load_ticker_pack_interactive() if load_mode == "2" else None
+    load_mode = _get_noninteractive("_load_mode") or _ni_input("Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: ").strip()
+    if str(load_mode).strip() == "2":
+        pack_ctx = _load_ticker_pack_interactive()
+    else:
+        pack_ctx = None
     ticker = (pack_ctx or {}).get("focus_ticker") or prompt_focus_ticker()
     if pack_ctx:
         print(f"\nUsing focus ticker from pack: {ticker}")
@@ -1495,7 +1536,14 @@ def run_unified_flow():
     print()
     td_for_expiry = ThetaDataController()
     try:
-        expiration, target_years = expiry_selector.choose_expiry_interactive(td_for_expiry, ticker)
+        if _get_noninteractive("_expiry") or _get_noninteractive("_target_years"):
+            expiration, target_years = expiry_selector.choose_expiry_noninteractive(
+                td_for_expiry, ticker,
+                expiry=_get_noninteractive("_expiry"),
+                target_years=float(_get_noninteractive("_target_years")) if _get_noninteractive("_target_years") else None,
+            )
+        else:
+            expiration, target_years = expiry_selector.choose_expiry_interactive(td_for_expiry, ticker)
     finally:
         td_for_expiry.close()
 
@@ -1671,10 +1719,11 @@ def run_focus_workflow():
     print("  VOLATILITY SUITE — Focus-Ticker Workflow")
     print("=" * 60)
 
-    load_mode = input("Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: ").strip()
-    pack_ctx = None
-    if load_mode == "2":
+    load_mode = _get_noninteractive("_load_mode") or _ni_input("Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: ").strip()
+    if str(load_mode).strip() == "2":
         pack_ctx = _load_ticker_pack_interactive()
+    else:
+        pack_ctx = None
     ticker = (pack_ctx or {}).get("focus_ticker") or prompt_focus_ticker()
     if pack_ctx:
         print(f"\nUsing focus ticker from pack: {ticker}")
@@ -1700,7 +1749,14 @@ def run_focus_workflow():
     print()
     td_for_expiry = ThetaDataController()
     try:
-        expiration, target_years = expiry_selector.choose_expiry_interactive(td_for_expiry, ticker)
+        if _get_noninteractive("_expiry") or _get_noninteractive("_target_years"):
+            expiration, target_years = expiry_selector.choose_expiry_noninteractive(
+                td_for_expiry, ticker,
+                expiry=_get_noninteractive("_expiry"),
+                target_years=float(_get_noninteractive("_target_years")) if _get_noninteractive("_target_years") else None,
+            )
+        else:
+            expiration, target_years = expiry_selector.choose_expiry_interactive(td_for_expiry, ticker)
     finally:
         td_for_expiry.close()
 
@@ -1711,7 +1767,7 @@ def run_focus_workflow():
     sign_model, run_options_chain = _prompt_sign_model_and_options_chain(pack_ctx)
     run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = _prompt_extra_analytics(pack_ctx)
 
-    pdf_choice = input("Compile outputs into single PDF? (y/n, default n): ").strip().lower() or 'n'
+    pdf_choice = _ni_input("Compile outputs into single PDF? (y/n, default n): ").strip().lower() or 'n'
 
     out_root = timestamped_output_dir()
     print(f"\nOutputs will be written to: {out_root}")
@@ -1937,10 +1993,118 @@ def main(argv: Optional[List[str]] = None) -> int:
              "enrich vol_result.json with cross-source normalized instrument "
              "identifiers for the focus/index tickers. Unset (default) skips "
              "enrichment entirely -- vol_result.json is unchanged.")
+    # ------------------------------------------------------------------
+    # Non-interactive workflow overrides
+    # ------------------------------------------------------------------
+    ni = parser.add_argument_group("non-interactive workflow overrides",
+        "When any of these flags is supplied, the corresponding prompt is "
+        "bypassed and the flag value is used instead.  Supplying enough of "
+        "them makes the run fully headless -- no stdin required.")
+    ni.add_argument("--ticker", default=None,
+                    help="Focus ticker (bypasses 'Focus ticker' prompt).")
+    ni.add_argument("--index", default=None,
+                    help="Benchmark/sector ETF ticker (bypasses index choice prompt).")
+    ni.add_argument("--basket-size", type=int, default=None,
+                    help="Number of index constituents to pull (bypasses basket size prompt).")
+    ni.add_argument("--expiry", default=None,
+                    help="Expiration date as YYYYMMDD or YYYY-MM-DD.  When supplied, "
+                         "the interactive expiry picker is skipped and target-years is "
+                         "computed from today.")
+    ni.add_argument("--target-years", type=float, default=None,
+                    help="Target time-to-expiry in years (e.g. 0.25).  Used with "
+                         "--expiry or to auto-select the nearest expiry.")
+    ni.add_argument("--option-type", default=None, choices=["call", "put"],
+                    help="Option type for shared context (bypasses option-type prompt).")
+    ni.add_argument("--strike", type=float, default=None,
+                    help="Optional strike for shared context (bypasses strike prompt).")
+    pack_group = ni.add_mutually_exclusive_group()
+    pack_group.add_argument("--pack", action="store_true", default=False,
+                            help="Use the highlighted ticker pack (selects pack mode).")
+    pack_group.add_argument("--no-pack", action="store_false", dest="pack",
+                            help="Skip the highlighted ticker pack (manual ticker mode, default).")
+    ni.add_argument("--pack-manifest-path", default=None,
+                    help="Path to the ticker-pack manifest JSON (bypasses manifest prompt).")
+    ni.add_argument("--pack-index", type=int, default=None,
+                    help="1-based index into the manifest's packs list (bypasses pack-choice prompt).")
+    ni.add_argument("--run-chain-scanner", action="store_true", default=None,
+                    help="Run the Options Chain Scanner step (y to the prompt).")
+    ni.add_argument("--no-chain-scanner", action="store_false", dest="run_chain_scanner",
+                    help="Skip the Options Chain Scanner step (n to the prompt).")
+    ni.add_argument("--run-group-screener", action="store_true", default=None,
+                    help="Run the variance screener on the full highlighted group first.")
+    ni.add_argument("--no-group-screener", action="store_false", dest="run_group_screener",
+                    help="Skip the variance screener on the full highlighted group.")
+    ni.add_argument("--run-2d-surface", action="store_true", default=None,
+                    help="Build the 2D vol surface (strike x tenor).")
+    ni.add_argument("--no-2d-surface", action="store_false", dest="run_2d_surface",
+                    help="Skip the 2D vol surface.")
+    ni.add_argument("--run-vrp", action="store_true", default=None,
+                    help="Run the VRP term structure (1-12mo).")
+    ni.add_argument("--no-vrp", action="store_false", dest="run_vrp",
+                    help="Skip the VRP term structure.")
+    ni.add_argument("--run-sentiment-backtest", action="store_true", default=None,
+                    help="Run the sentiment backtest on the highlighted-pack history.")
+    ni.add_argument("--no-sentiment-backtest", action="store_false", dest="run_sentiment_backtest",
+                    help="Skip the sentiment backtest.")
+    ni.add_argument("--compile-pdf", action="store_true", default=None,
+                    help="Compile outputs into a single PDF.")
+    ni.add_argument("--no-compile-pdf", action="store_false", dest="compile_pdf",
+                    help="Skip PDF compilation.")
+    ni.add_argument("--run-options-suite", action="store_true", default=None,
+                    help="Launch Options_Suite after writing context.")
+    ni.add_argument("--no-options-suite", action="store_false", dest="run_options_suite",
+                    help="Skip launching Options_Suite.")
+    ni.add_argument("--run-var-suite", action="store_true", default=None,
+                    help="Launch VaR_Tools_Simulations after writing context.")
+    ni.add_argument("--no-var-suite", action="store_false", dest="run_var_suite",
+                    help="Skip launching VaR_Tools_Simulations.")
+    ni.add_argument("--yes", action="store_true", default=None,
+                    help="Accept all yes/no defaults (equivalent to --run-chain-scanner "
+                         "--run-group-screener --run-2d-surface --run-vrp --compile-pdf "
+                         "--run-options-suite --run-var-suite).")
+
     args = parser.parse_args(argv)
+
+    # Apply --yes before individual flags so explicit flags can override it.
+    if args.yes:
+        for attr in ("run_chain_scanner", "run_group_screener", "run_2d_surface",
+                     "run_vrp", "compile_pdf", "run_options_suite", "run_var_suite"):
+            if getattr(args, attr) is None:
+                setattr(args, attr, True)
 
     if args.instrument_resolver:
         os.environ["VS_INSTRUMENT_RESOLVER"] = args.instrument_resolver
+
+    # Populate the non-interactive override dict so every prompt in the
+    # workflow can check _ni_input() instead of blocking on stdin.
+    # Keyed on the full "(e.g. MSFT)" prompt text, not just "Focus ticker" --
+    # that shorter substring also matches _load_ticker_pack_interactive's
+    # "Focus ticker from pack (number, default 1): " prompt, which expects a
+    # numeric selection, not a ticker string.
+    _set_override("Focus ticker (e.g. MSFT)", args.ticker)
+    _set_override("Choose an index", args.index)
+    _set_override("Enter an index/sector ETF ticker manually", args.index)
+    _set_override("Basket size", str(args.basket_size) if args.basket_size is not None else None)
+    _set_override("Option type", args.option_type)
+    _set_override("Optional strike", str(args.strike) if args.strike is not None else None)
+    _set_override("Ticker-pack manifest path", args.pack_manifest_path)
+    _set_override("Choose pack number", str(args.pack_index) if args.pack_index is not None else None)
+    _set_override("Run Options Chain Scanner step", "y" if args.run_chain_scanner else "n" if args.run_chain_scanner is False else None)
+    _set_override("Run variance screener", "y" if args.run_group_screener else "n" if args.run_group_screener is False else None)
+    _set_override("Build 2D vol surface", "y" if args.run_2d_surface else "n" if args.run_2d_surface is False else None)
+    _set_override("Run VRP term structure", "y" if args.run_vrp else "n" if args.run_vrp is False else None)
+    _set_override("Run sentiment backtest", "y" if args.run_sentiment_backtest else "n" if args.run_sentiment_backtest is False else None)
+    _set_override("Compile outputs into single PDF", "y" if args.compile_pdf else "n" if args.compile_pdf is False else None)
+    _set_override("Run Options_Suite after writing context", "y" if args.run_options_suite else "n" if args.run_options_suite is False else None)
+    _set_override("Run VaR_Tools_Simulations after writing context", "y" if args.run_var_suite else "n" if args.run_var_suite is False else None)
+    # Internal overrides (not tied to a specific prompt string).
+    if args.expiry:
+        _noninteractive["_expiry"] = args.expiry
+    if args.target_years is not None:
+        _noninteractive["_target_years"] = str(args.target_years)
+    if args.pack is not None:
+        _noninteractive["_load_mode"] = "2" if args.pack else "1"
+    # The mode prompt is handled by args.mode; no override needed.
 
     # The orchestrator sets SUITE_CONTEXT_PATH/SUITE_CONTEXT_MODE in the child's
     # environment as well as passing the flags. Honouring the environment means
