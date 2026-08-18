@@ -1,0 +1,83 @@
+# PHClient v2
+
+> Descriptor-driven Python client for the PotatoHedge financial-market API (`PH_API`).
+> Exposes ~126 read-only HTTP endpoints as namespaced methods on two parity clients:
+> synchronous `PHClient` and asynchronous `AsyncPHClient` (both in `potatohedge.client_v2`).
+> Every call returns a typed `ResponseEnvelope`; read payloads from `.data`.
+> Method names, namespaces, and per-method contracts are generated from `PH_API`'s OpenAPI
+> snapshot — this file orients an LLM agent; per-method semantics live in the bound method
+> signatures/docstrings and the generated references below.
+
+## Authentication
+
+- The API is fronted by Cloudflare Access. Callers supply a service token as request headers:
+`CF-Access-Client-Id` and `CF-Access-Client-Secret` (header names confirmed in
+`src/potatohedge/async_client.py:122` and `src/potatohedge/errors.py:15`).
+- v2 credentials are a per-capability mapping, not a single key pair. Each endpoint declares an
+`auth_capability` of the form `<namespace>.read` (e.g. `signals.read`, `options.read`).
+You configure `ClientConfig.credentials={"<namespace>.read": Credential(headers={...})}`.
+A `"*"` catch-all is rejected (`src/potatohedge/config.py:71`). Calling an endpoint whose
+capability is not configured raises `PHPermissionError` (`src/potatohedge/auth.py:66`).
+
+## Platform conventions
+
+- Dates: `YYYYMMDD` (8 digits, e.g. `20260724`); some endpoints also accept `YYYY-MM-DD`
+(per-param descriptions in the descriptors / generated API reference).
+- Strike prices: thousandths (a $200.00 strike is `200000`) — repo invariant, `CLAUDE.md`.
+- Sync/async parity: `PHClient` and `AsyncPHClient` expose identical namespaces and method
+signatures; the async variant awaits and supports `async with` (`src/potatohedge/client_v2.py`).
+- Optional-param handling: omit optional params entirely, or pass `None`; `None`-valued query
+params are dropped before the request (`src/potatohedge/transport.py:47`). Booleans serialize
+lowercase (`true`/`false`, `src/potatohedge/transport.py:50`).
+
+## Analytic safety (agent misuse guards)
+
+These are load-bearing interpretation rules the generated per-method references do not carry.
+Sources are `PH_API`'s MCP tool descriptions.
+
+- **Dealer Greeks are position-weighted — NEVER multiply by open interest.** `dealer.*`
+exposures (gamma, delta, vanna, charm) are already weighted by dealer position size;
+OI-weighting them double-counts and is the platform's #1 agent misuse mode
+(`PH_API/ph_mcp/server.py (tool-description text, verbatim-verified 2026-07-24; line numbers drift — grep the quoted text)`: "already weighted by position size. IMPORTANT: Do NOT
+multiply by OI").
+- **Vanna polarity is ticker-specific.** Standard convention: `-vanna = bullish`,
+`+vanna = bearish`. **IWM is the exception:** `+vanna = bullish`
+(`PH_API/ph_mcp/server.py (tool-description text, verbatim-verified 2026-07-24; line numbers drift — grep the quoted text)`: "SPY: -vanna = bullish (standard). IWM: +vanna = bullish
+(OPPOSITE!)"). Always check ticker-specific polarity before reading a vanna sign.
+- **The probabilistic envelope is a state descriptor, not a forecast.** `volatility.
+probabilistic_envelope` bands/anchors describe where the path *tends to react*; they do NOT
+forecast direction and must NEVER be presented as targets, magnets, floors, ceilings, or
+levels price is expected to reach (`PH_API/ph_mcp/server_public.py (tool-description text, verbatim-verified 2026-07-24; line numbers drift — grep the quoted text)`). Gate any rendering on
+the machine-readable contract fields, not on prose.
+
+## Namespaces
+
+- `market` — stock/index history (OHLC, EOD, quotes, dividends, splits), trading calendar, correlation matrix, yield curve, earnings, session info.
+- `options` — options chain, contract-by-OCC, historical option trades/quotes/OI/Greeks (all orders), straddle intraday, roots/contracts listings.
+- `dealer` — dealer positioning, Greek exposures, positioning regime history, dealer summary, zero-DTE charm.
+- `flow` — options-flow scanners, sweeps, unusual activity, momentum/anomalies, and swap-flow signals/alerts (S1–S5, bearish/long/maturity/validated).
+- `support_resistance` — S/R levels, tiers, flip levels, quadrant/position matrix, regime, composite hedge, zero-DTE gamma wall.
+- `signals` — registered strategies, per-date signals, signal validity, compound-alert status.
+- `volatility` — IV surface snapshots, IV rank, probabilistic envelope, surface change / z-history.
+- `regsho` — RegSHO screener: threshold/FTD history, cycles, correlation, current/watchlist/alerts.
+- `news` — company news and market news.
+- `recipes` — composite one-shot bundles (ticker/macro/news/quant) and chart summaries.
+
+(Namespace set is `INITIAL_PUBLIC_NAMESPACES`, `src/potatohedge/catalog/release.py:11`.)
+
+## Links
+
+- [Quickstart](AGENT_QUICKSTART.md): install, client construction (sync + async), one worked call, error envelope, routing hints.
+- [Cookbook](AGENT_COOKBOOK.md): multi-call recipes over conformance-verified endpoints.
+- [Client reference](generated/CLIENT_REFERENCE.md): full namespace → method → endpoint-id table (generated).
+- [API reference](generated/API_REFERENCE.md): per-endpoint id, path, and query-size warnings (generated).
+
+## Notes
+
+- Per-method parameter names, requiredness, and descriptions are the generated method signatures
+(`bind_method`, `src/potatohedge/_generated/methods.py:140`) plus the descriptor contracts in
+`src/potatohedge/_generated/descriptors.py`. This entry point does not restate them.
+- Runtime-conformance gate: as of the current snapshot all descriptors are `unverified`, so
+`PHClient(...)` / `AsyncPHClient(...)` construction raises `PHConfigurationError` until
+runtime conformance is verified (`src/potatohedge/client_v2.py:22`). Construction and call
+shape below are the intended API; live use is gated on that verification.

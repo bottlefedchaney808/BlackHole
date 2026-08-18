@@ -32,6 +32,7 @@ not preserved for their own sake.
 """
 
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -39,6 +40,10 @@ from typing import Optional, Tuple, List, Dict
 
 import httpx
 import numpy as _np
+
+from potatohedge.client_v2 import PHClient
+from potatohedge.config import ClientConfig, Credential
+from potatohedge.errors import PHClientError
 
 from shared.config import load_env_once
 
@@ -64,6 +69,352 @@ def strike_to_theta(k: float) -> int:
 def strike_from_theta(k: int) -> float:
     """Convert a theta integer (e.g. 450000) back to a dollar strike (e.g. 450.0)."""
     return k / 1000.0
+
+
+# ---------------------------------------------------------------------------
+# v2 transport shims
+# ---------------------------------------------------------------------------
+
+class _Credential(Credential):
+    pass
+
+
+class _ClientConfig(ClientConfig):
+    pass
+
+
+def _freeze_to_python(obj):
+    """Recursively convert PHClient FrozenMap/tuple leaves into plain Python
+    dicts/lists so downstream callers see the same shapes they got from
+    httpx.Response.json()."""
+    from collections.abc import Mapping
+    if isinstance(obj, Mapping):
+        return {k: _freeze_to_python(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_freeze_to_python(v) for v in obj]
+    return obj
+
+
+class _V2Response:
+    """Minimal stand-in for the v2 client's ResponseEnvelope payload."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        if self._data is None:
+            raise TypeError("v2 payload is None")
+        return _freeze_to_python(self._data)
+
+    def raise_for_status(self):
+        return None
+
+    @property
+    def status_code(self):
+        return 200 if self._data is not None else 500
+
+
+def _map_ph_error(exc: PHClientError):
+    mapped = httpx.HTTPStatusError(
+        f"[PHClient {exc.status}] {exc.message}",
+        request=None,
+        response=None,
+    )
+    mapped.status_code = exc.status or 500
+    return mapped
+
+
+_PATH_ALIASES = {
+    # exact match first
+    "/api/db/dealer_positioning": ("dealer", "positioning", {"use_csv": True}),
+    "/api/db/yield_curve": ("market", "yield_curve", {}),
+    "/api/theta/bulk_hist/option/eod_greeks/{root}/{exp}": (
+        "options",
+        "bulk_hist_option_eod_greeks",
+        {},
+    ),
+    "/api/theta/bulk_hist/option/open_interest/{root}/{exp}": (
+        "options",
+        "bulk_hist_option_open_interest",
+        {},
+    ),
+    "/api/theta/bulk_snapshot/option/all_greeks/{root}/{exp}": (
+        "options",
+        "bulk_snapshot_option_all_greeks",
+        {},
+    ),
+    "/api/theta/bulk_snapshot/option/greeks_second_order/{root}/{exp}": (
+        "options",
+        "bulk_snapshot_option_all_greeks",
+        {},
+    ),
+    "/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}": (
+        "options",
+        "bulk_snapshot_option_open_interest",
+        {},
+    ),
+    "/api/theta/hist/option/all_greeks/{root}/{exp}/{strike}/{right}": (
+        "options",
+        "hist_option_all_greeks",
+        {},
+    ),
+    "/api/theta/hist/option/eod/{root}/{exp}/{strike}/{right}": (
+        "options",
+        "hist_option_eod",
+        {},
+    ),
+    "/api/theta/hist/option/open_interest/{root}/{exp}/{strike}/{right}": (
+        "options",
+        "hist_option_open_interest",
+        {},
+    ),
+    "/api/theta/hist/stock/dividend/{ticker}": ("market", "stock_dividends", {}),
+    "/api/theta/hist/stock/eod/{ticker}": ("market", "stock_eod", {}),
+    "/api/theta/hist/stock/eod/{root}": ("market", "stock_eod", {}),
+    "/api/theta/hist/stock/ohlc/{ticker}": ("market", "stock_ohlc", {}),
+    "/api/theta/hist/stock/ohlc/{root}": ("market", "stock_ohlc", {}),
+    "/api/theta/list/expirations/{root}": ("options", "options_chain", {}),
+    "/api/theta/list/strikes/{root}/{exp}": ("options", "options_chain", {}),
+    "/api/theta/snapshot/option/quote/{root}/{exp}/{k}/{right}": (
+        "options",
+        "snapshot_option_quote",
+        {},
+    ),
+    "/api/theta/snapshot/stock/quote/{root}": (
+        "market",
+        "bulk_snapshot_stock_quote",
+        {},
+    ),
+    "/api/theta/snapshot/stock/trade/{root}": ("market", "snapshot_stock_trade", {}),
+}
+
+_compiled_aliases = {}
+for pattern, (ns, method, defaults) in _PATH_ALIASES.items():
+    regex = '^' + __import__('re').sub(r'\{([^}]+)\}', r'(?P<\1>[^/]+)', pattern) + '$'
+    _compiled_aliases[__import__('re').compile(regex)] = (ns, method, defaults)
+
+_PARAM_ALIASES = {
+    "root": "root",
+    "exp": "exp",
+    "k": "strike",
+    "strike_theta": "strike",
+    "right": "right",
+    "ticker": "root",
+    "start_date": "start_date",
+    "end_date": "end_date",
+    "start_datetime": "start_datetime",
+    "end_datetime": "end_datetime",
+    "date": "date",
+    "use_csv": "use_csv",
+    "adjusted": "adjusted",
+    "venue": "venue",
+    "annual_div": "annual_div",
+    "rate": "rate",
+    "rate_value": "rate_value",
+    "under_price": "under_price",
+    "signal_date": "signal_date",
+    "level": "level",
+    "latest_only": "latest_only",
+    "positioning_days": "positioning_days",
+    "max_dte": "max_dte",
+    "interval_type": "interval_type",
+    "ms_of_day": "ms_of_day",
+    "force_refresh": "force_refresh",
+    "min_score": "min_score",
+    "category": "category",
+    "sentiment": "sentiment",
+    "has_large_blocks": "has_large_blocks",
+    "has_sweep_activity": "has_sweep_activity",
+    "limit": "limit",
+    "sort_by": "sort_by",
+    "min_premium": "min_premium",
+    "min_contracts": "min_contracts",
+    "min_exchanges": "min_exchanges",
+    "min_sweeps": "min_sweeps",
+    "min_size": "min_size",
+    "max_size": "max_size",
+    "trade_type": "trade_type",
+    "option_type": "option_type",
+    "moneyness": "moneyness",
+    "min_dte": "min_dte",
+    "max_strike_distance": "max_strike_distance",
+    "min_score_delta": "min_score_delta",
+    "sort_order": "sort_order",
+    "offset": "offset",
+    "lookback": "lookback",
+    "min_severity": "min_severity",
+    "min_unusual_days": "min_unusual_days",
+    "window": "window",
+    "direction": "direction",
+    "lookback_sessions": "lookback_sessions",
+    "source_roots": "source_roots",
+    "min_volume": "min_volume",
+    "signal_type": "signal_type",
+    "aggregate_by": "aggregate_by",
+    "include_execution_metrics": "include_execution_metrics",
+    "include_variants": "include_variants",
+    "include_oi": "include_oi",
+    "normalize": "normalize",
+    "columns": "columns",
+    "use_cache": "use_cache",
+    "use_calculated_greeks": "use_calculated_greeks",
+    "positioning_start_date": "positioning_start_date",
+    "positioning_end_date": "positioning_end_date",
+    "rth": "rth",
+    "start_time": "start_time",
+    "end_time": "end_time",
+    "exclusive": "exclusive",
+    "req": "req",
+    "data_type": "data_type",
+    "occ": "occ",
+    "symbol": "root",
+    "days_back": "days_back",
+    "trade_right": "trade_right",
+    "strike_window_pct": "strike_window_pct",
+    "max_contracts": "max_contracts",
+    "mode": "mode",
+    "expiry": "expiration",
+    "include_chart_data": "include_chart_data",
+    "session_date": "session_date",
+    "tickers": "tickers",
+    "series_transform": "series_transform",
+    "min_threshold": "min_threshold",
+    "method": "method",
+    "metric": "metric",
+    "from_date": "from_date",
+    "lookback_hours": "lookback_hours",
+    "category": "category",
+    "include_history": "include_history",
+    "min_strength": "min_strength",
+    "greek_type": "greek_type",
+    "history_contract_version": "history_contract_version",
+    "level_type": "level_type",
+    "as_of_date": "as_of_date",
+    "price_range_pct": "price_range_pct",
+    "horizon_min": "horizon_min",
+    "analysis_mode": "analysis_mode",
+    "baseline_date": "baseline_date",
+    "asof_date": "asof_date",
+    "min_history": "min_history",
+    "expiration": "exp",
+    "positioning_days": "positioning_days",
+    "interval": "interval",
+    "min_ftd_quantity": "min_ftd_quantity",
+    "min_volume": "min_volume",
+    "include_neutral": "include_neutral",
+    "min_premium": "min_premium",
+    "min_size": "min_size",
+    "max_premium": "max_premium",
+    "max_size": "max_size",
+    "min_dte": "min_dte",
+    "max_dte": "max_dte",
+    "min_score_delta": "min_score_delta",
+    "sort_order": "sort_order",
+    "limit": "limit",
+    "offset": "offset",
+    "use_csv": "use_csv",
+}
+
+
+def _translate_path(path: str, params: dict):
+    p = path.split("?")[0]
+    for pattern, (ns, method, defaults) in _compiled_aliases.items():
+        m = pattern.match(p)
+        if m:
+            # Build raw params from path segments (already v2-named thanks
+            # to named regex groups), then apply legacy→v2 aliasing + defaults.
+            raw = dict(m.groupdict())
+            raw.update(params)
+            v2_params = _rewrite_params(raw, defaults)
+            # Method-specific renames that the generic alias table can't
+            # express without breaking other callers.
+            if method == "options_chain" and "root" in v2_params and "ticker" not in v2_params:
+                v2_params["ticker"] = v2_params.pop("root")
+            if method == "options_chain" and "exp" in v2_params and "expiration" not in v2_params:
+                v2_params["expiration"] = v2_params.pop("exp")
+            return ns, method, v2_params
+    # option_quote_at_time / option_trade_at_time not yet in v2 client;
+    # route to snapshot fallback for now.
+    if "/at_time/option/quote/" in p:
+        return ("options", "snapshot_option_quote", _rewrite_params(params, {
+            "root": _param(params, "root"),
+            "exp": _param(params, "exp"),
+            "strike": _param(params, "strike"),
+            "right": _param(params, "right"),
+            "start_date": _param(params, "start_date"),
+            "end_date": _param(params, "end_date"),
+            "ivl": _param(params, "ivl"),
+            "use_csv": False,
+        }))
+    if "/at_time/option/trade/" in p:
+        return ("options", "snapshot_option_trade", _rewrite_params(params, {
+            "root": _param(params, "root"),
+            "exp": _param(params, "exp"),
+            "strike": _param(params, "strike"),
+            "right": _param(params, "right"),
+            "start_date": _param(params, "start_date"),
+            "end_date": _param(params, "end_date"),
+            "ivl": _param(params, "ivl"),
+            "use_csv": False,
+        }))
+    if "/at_time/stock/quote/" in p:
+        return ("market", "stock_quote_at_time", _rewrite_params(params, {
+            "root": _param(params, "root"),
+            "start_date": _param(params, "start_date"),
+            "end_date": _param(params, "end_date"),
+            "ivl": _param(params, "ivl"),
+            "use_csv": False,
+        }))
+    if "/at_time/stock/trade/" in p:
+        return ("market", "stock_trade_at_time", _rewrite_params(params, {
+            "root": _param(params, "root"),
+            "start_date": _param(params, "start_date"),
+            "end_date": _param(params, "end_date"),
+            "ivl": _param(params, "ivl"),
+            "use_csv": False,
+        }))
+    raise ValueError(f"no v2 mapping for legacy path: {path}")
+
+
+def _param(params: dict, key: str):
+    return params.get(key)
+
+
+def _rewrite_params(params: dict, defaults: dict) -> dict:
+    out = dict(defaults)
+    for old, new in _PARAM_ALIASES.items():
+        if old in params and new not in out:
+            out[new] = params[old]
+    # passthrough anything already in v2 form
+    for k, v in params.items():
+        if k not in out and k in {
+            "root", "exp", "strike", "right", "start_date", "end_date",
+            "start_datetime", "end_datetime", "date", "interval", "use_csv",
+            "adjusted", "venue", "annual_div", "rate", "rate_value",
+            "under_price", "signal_date", "level", "latest_only",
+            "positioning_days", "max_dte", "interval_type", "ms_of_day",
+            "force_refresh", "data_type", "req", "occ",
+            "mode", "max_contracts", "strike_window_pct",
+            "include_chart_data", "session_date", "tickers",
+            "series_transform", "min_threshold", "method", "metric",
+            "from_date", "lookback_hours", "category", "include_history",
+            "min_strength", "greek_type", "history_contract_version",
+            "level_type", "as_of_date", "price_range_pct", "horizon_min",
+            "analysis_mode", "baseline_date", "asof_date", "min_history",
+            "positioning_start_date", "positioning_end_date", "rth",
+            "start_time", "end_time", "exclusive", "days_back",
+            "trade_right", "min_ftd_quantity", "min_volume",
+            "include_neutral", "min_premium", "min_size", "max_premium",
+            "max_size", "min_dte", "max_strike_distance", "min_score_delta",
+            "sort_order", "limit", "offset", "lookback", "min_severity",
+            "min_unusual_days", "window", "direction", "lookback_sessions",
+            "source_roots", "signal_type", "aggregate_by",
+            "include_execution_metrics", "include_variants", "include_oi",
+            "normalize", "columns", "use_cache", "use_calculated_greeks",
+            "ivl",
+        }:
+            out[k] = v
+    return {k: v for k, v in out.items() if v is not None and v != ""}
 
 
 # ---------------------------------------------------------------------------
@@ -96,20 +447,66 @@ class ThetaDataController:
                 "THETADATA_CF_ACCESS_CLIENT_SECRET as environment variables, or create a "
                 ".env file in the project root (see .env.example)."
             )
-        self.headers = {
+        self._cred = _Credential({
             "CF-Access-Client-Id": client_id,
             "CF-Access-Client-Secret": client_secret,
-        }
-        self.client = httpx.Client(headers=self.headers, timeout=60.0)
+        })
+        self._v2_config = _ClientConfig(
+            base_url=base_url,
+            credentials={
+                "market.read": self._cred,
+                "market.bulk.read": self._cred,
+                "market.refresh": self._cred,
+                "options.read": self._cred,
+                "options.bulk.read": self._cred,
+                "dealer.read": self._cred,
+                "dealer.bulk.read": self._cred,
+                "volatility.read": self._cred,
+                "volatility.compute": self._cred,
+                "flow.read": self._cred,
+                "flow.bulk.read": self._cred,
+                "signals.read": self._cred,
+                "regsho.read": self._cred,
+                "support_resistance.read": self._cred,
+                "recipes.read": self._cred,
+                "news.read": self._cred,
+            },
+            caller_id="zinko",
+            client_version="2",
+        )
+        # PHClient is not safe to share across threads (confirmed live: concurrent
+        # calls on one instance intermittently raise PHRequestValidationError even
+        # with valid, individually-working arguments -- looks like shared mutable
+        # state in the SDK's request-binding path). The suites fan out per-contract
+        # hist calls across a ThreadPoolExecutor (see option_bulk_hist_greeks /
+        # option_bulk_hist_oi / _enumerate_contracts), so give each thread its own
+        # PHClient built from the same config/credentials instead of one shared
+        # instance.
+        self._v2_local = threading.local()
+        self._v2_all: List[PHClient] = []
+        self._v2_lock = threading.Lock()
+        self._v2 = self._get_thread_client()
+
+    def _get_thread_client(self) -> PHClient:
+        client = getattr(self._v2_local, "client", None)
+        if client is None:
+            client = PHClient(self._v2_config)
+            client.__enter__()
+            self._v2_local.client = client
+            with self._v2_lock:
+                self._v2_all.append(client)
+        return client
 
     # ----- low-level HTTP helpers -----
 
-    def _get(self, path: str, params: Optional[dict] = None) -> httpx.Response:
-        """GET with optional query params.  Unified version of the old
-        _get / _get_params split from Options_Suite."""
-        return self.client.get(f"{self.base_url}{path}", params=params, timeout=60.0)
+    def _get(self, path: str, params: Optional[dict] = None) -> "_V2Response":
+        """Route a legacy path/params pair through PHClient."""
+        ns, method, v2_params = _translate_path(path, params or {})
+        client = getattr(self._get_thread_client(), ns)
+        env = getattr(client, method)(**v2_params)
+        return _V2Response(env.data)
 
-    def _get_params(self, path: str, params: dict) -> httpx.Response:
+    def _get_params(self, path: str, params: dict) -> "_V2Response":
         """Backward-compat wrapper for callers that used the old separate
         _get_params method.  Delegates to _get."""
         return self._get(path, params=params)
@@ -117,7 +514,7 @@ class ThetaDataController:
     def _get_with_retry(
         self, path: str, params: Optional[dict] = None,
         attempts: int = _RETRY_ATTEMPTS,
-    ) -> httpx.Response:
+    ) -> "_V2Response":
         """GET with bounded retry on transient failures.
 
         Retries on _RETRY_STATUSES and on transport-level errors (connection
@@ -135,6 +532,12 @@ class ThetaDataController:
                 time.sleep(0.5 * attempt)
             try:
                 r = self._get(path, params=params)
+            except PHClientError as e:
+                if getattr(e, 'retryable', False) or getattr(e, 'status', None) in _RETRY_STATUSES:
+                    last_exc = e
+                    last_response = _V2Response(None)
+                    continue
+                raise
             except httpx.TransportError as e:
                 last_exc = e
                 continue
@@ -147,14 +550,24 @@ class ThetaDataController:
 
     # ----- response parsing -----
 
-    def _parse_rows(self, r: httpx.Response):
-        """Parse a list-of-lists ThetaData response into a list of dicts.
+    def _parse_rows(self, r: "_V2Response"):
+        """Parse a ThetaData response into a list of dicts.
 
-        Expected shape:  [headers_row, data_row, data_row, ...]
+        Handles both legacy list-of-lists and v2/v3 list-of-dicts shapes.
+        Also handles plain list-of-strings (ticker/expiry lists).
         """
         data = r.json()
-        if not isinstance(data, list) or len(data) < 2:
+        if isinstance(data, dict):
+            return [data] if data else []
+        if not isinstance(data, list) or not data:
             return []
+        # Plain list-of-strings (tickers, expirations)
+        if isinstance(data[0], str):
+            return [{"value": e} for e in data]
+        # v2/v3 JSON decode returns list-of-dicts
+        if isinstance(data[0], dict):
+            return data
+        # legacy ThetaData list-of-lists: [headers_row, data_row, ...]
         headers = data[0]
         return [dict(zip(headers, row)) for row in data[1:]]
 
@@ -301,15 +714,39 @@ class ThetaDataController:
     # ======================================================================
 
     def list_expirations(self, root: str) -> List[str]:
-        """List available expiration dates (YYYYMMDD) for a given root."""
-        r = self._get_with_retry(f"/api/theta/list/expirations/{root}")
+        """List available expiration dates (YYYYMMDD) for a given root.
+
+        v2 has no direct `list_expirations` endpoint. We route to
+        `options_chain(ticker=root, date="latest", max_contracts=2000)` and
+        extract unique `expiration` values from the chain rows.
+        """
+        r = self._get_with_retry(
+            f"/api/theta/list/expirations/{root}",
+            params={"date": "latest", "max_contracts": 2000},
+        )
         r.raise_for_status()
-        raw = r.json()
-        if isinstance(raw, list):
-            return [str(e) for e in raw]
-        if isinstance(raw, str):
-            return [s.strip() for s in raw.split(",") if s.strip()]
-        return []
+        data = r.json()
+        if isinstance(data, list):
+            # legacy plain-list shape
+            return [str(e) for e in data]
+        # v2/v3 shape: {ticker, expiration, available_expirations: [...], ...}
+        # available_expirations entries are dicts (call_count/expiration/...);
+        # normalize the ISO 'YYYY-MM-DD' expiration field to compact YYYYMMDD
+        # to match this method's documented return format and every other
+        # facade method's `exp` convention.
+        exps = []
+        seen: set = set()
+        for e in data.get("available_expirations") or []:
+            raw = e.get("expiration") if isinstance(e, dict) else e
+            exp = str(raw).replace("-", "").strip()
+            if exp and exp not in seen:
+                seen.add(exp)
+                exps.append(exp)
+        if exps:
+            return exps
+        # last resort: single expiration returned as the field
+        exp = str(data.get("expiration", "")).replace("-", "").strip()
+        return [exp] if exp else []
 
     def resolve_longest_history_expiry(self, root: str, lookback_days: int = 150,
                                        min_dates: Optional[int] = None) -> str:
@@ -360,12 +797,32 @@ class ThetaDataController:
     def list_strikes(self, root: str, exp: str) -> List[float]:
         """List available strikes for a given root and expiration.
 
-        NOTE: Values are returned as-is (not divided by 1000).  Live testing
-        confirmed the /list/strikes endpoint already returns dollar-value
-        floats, not theta-scaled ints.
+        NOTE: Values are returned as-is (not divided by 1000).
         """
         r = self._get_with_retry(f"/api/theta/list/strikes/{root}/{exp}")
         r.raise_for_status()
+        data = r.json()
+        # v2/v3 maps this legacy route to options_chain. A single-expiration
+        # request returns a chain-summary dict with the per-strike rows
+        # nested under 'chain' (each row already has a dollar-float 'strike').
+        if isinstance(data, dict) and isinstance(data.get("chain"), list):
+            result = []
+            for row in data["chain"]:
+                try:
+                    result.append(float(row["strike"]))
+                except (KeyError, ValueError, TypeError):
+                    pass
+            return sorted(set(result))
+        # Some callers/mocks may still see a flat list of contract dicts.
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            result = []
+            for row in data:
+                try:
+                    result.append(float(row['strike']))
+                except (KeyError, ValueError, TypeError):
+                    pass
+            return sorted(set(result))
+        # Fallback: old list-of-lists shape
         rows = self._parse_rows(r)
         result = []
         for row in rows:
@@ -1179,5 +1636,8 @@ class ThetaDataController:
         return r.json()
 
     def close(self):
-        """Close the underlying httpx client."""
-        self.client.close()
+        """Close every thread-local v2 client created by this controller."""
+        with self._v2_lock:
+            clients, self._v2_all = self._v2_all, []
+        for client in clients:
+            client.close()
