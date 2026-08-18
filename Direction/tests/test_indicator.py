@@ -164,3 +164,210 @@ def test_defaults_to_intraday_bars_as_of(crafted_bars, monkeypatch):
     result = indicator._price_signals("SPY", ts, interval="3m")
     assert seen == {"ticker": "SPY", "interval": "3m", "ts": ts}
     assert result == {"wave3": True, "squeeze": False, "trend": True}
+
+
+# ---------------------------------------------------------------------------
+# Task 3 -- per-bar intraday whale-flow signal (_flow_signal)
+# ---------------------------------------------------------------------------
+# flow_fn contract: flow_fn(root, start_datetime, end_datetime, min_premium)
+# -> list[dict] of scanner flow rows ({"premium": $, "timestamp": ISO, ...}).
+# Window is [bar_ts - interval, bar_ts], closed at bar_ts; whale = any
+# in-window row with premium >= WHALE_PREMIUM.
+
+_BAR_TS = datetime(2026, 8, 14, 10, 0)          # 15m bar closed 10:00
+_WINDOW_START = datetime(2026, 8, 14, 9, 45)    # bar_ts - 15m
+
+
+def _flow_fn_with(rows):
+    """Injectable flow_fn stand-in returning the given rows."""
+
+    def _fn(root, start_datetime, end_datetime, min_premium):
+        return rows
+
+    return _fn
+
+
+def _row(premium: float, ts: str) -> dict:
+    return {"premium": premium, "timestamp": ts}
+
+
+@pytest.mark.unit
+def test_flow_signal_returns_exact_bool_keys():
+    rows = [_row(indicator.WHALE_PREMIUM, _BAR_TS.isoformat())]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert set(result.keys()) == {"whale"}
+    assert all(isinstance(value, bool) for value in result.values())
+
+
+@pytest.mark.unit
+def test_flow_signal_whale_true_for_in_window_premium_row():
+    """A row inside the bar's window with premium >= WHALE_PREMIUM is a whale."""
+    rows = [_row(indicator.WHALE_PREMIUM, "2026-08-14T09:50:00")]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": True}
+
+
+@pytest.mark.unit
+def test_flow_signal_closed_bar_semantics_trade_at_bar_ts_counts():
+    """A trade exactly at bar_ts is inside the window (closed-bar)."""
+    rows = [_row(indicator.WHALE_PREMIUM, _BAR_TS.isoformat())]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": True}
+
+
+@pytest.mark.unit
+def test_flow_signal_window_start_is_inclusive():
+    """A trade exactly at bar_ts - interval is inside the window."""
+    rows = [_row(indicator.WHALE_PREMIUM, _WINDOW_START.isoformat())]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": True}
+
+
+@pytest.mark.unit
+def test_flow_signal_out_of_window_row_is_not_whale():
+    """A high-premium trade BEFORE bar_ts - interval is NOT in this bar's
+    window -- it belongs to an earlier bar."""
+    rows = [_row(indicator.WHALE_PREMIUM, "2026-08-14T09:30:00")]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": False}
+
+
+@pytest.mark.unit
+def test_flow_signal_after_bar_ts_row_is_not_whale():
+    """A high-premium trade AFTER bar_ts is in a later bar's window."""
+    rows = [_row(indicator.WHALE_PREMIUM, "2026-08-14T10:15:00")]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": False}
+
+
+@pytest.mark.unit
+def test_flow_signal_below_threshold_row_is_not_whale():
+    """In-window but premium < WHALE_PREMIUM is not a whale."""
+    rows = [_row(indicator.WHALE_PREMIUM - 1.0, "2026-08-14T09:50:00")]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": False}
+
+
+@pytest.mark.unit
+def test_flow_signal_mixed_rows_whale_if_any_row_qualifies():
+    """whale is ANY qualifying row -- a below-threshold row must not mask a
+    qualifying one, and rows without a parseable timestamp still count on
+    premium alone (the provider was asked for the window)."""
+    rows = [
+        _row(indicator.WHALE_PREMIUM - 1.0, "2026-08-14T09:40:00"),
+        {"premium": indicator.WHALE_PREMIUM},  # no timestamp -> in-window
+    ]
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": True}
+
+
+@pytest.mark.unit
+def test_flow_signal_empty_rows_degrades_to_false():
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_flow_fn_with([]))
+    assert result == {"whale": False}
+
+
+@pytest.mark.unit
+def test_flow_signal_raising_flow_fn_degrades_to_false():
+    """A provider hiccup must not crash per-bar evaluation; degrade to
+    {"whale": False} -- never raise, never fabricate."""
+
+    def _boom(root, start_datetime, end_datetime, min_premium):
+        raise RuntimeError("flow provider down")
+
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_boom)
+    assert result == {"whale": False}
+
+
+@pytest.mark.unit
+def test_flow_signal_passes_closed_bar_window_to_flow_fn():
+    """flow_fn receives [bar_ts - interval, bar_ts] as start/end datetimes,
+    the ticker as root, and the WHALE_PREMIUM filter."""
+    seen = {}
+
+    def _capturing(root, start_datetime, end_datetime, min_premium):
+        seen.update(root=root, start=start_datetime, end=end_datetime,
+                    min_premium=min_premium)
+        return [_row(indicator.WHALE_PREMIUM, "2026-08-14T09:50:00")]
+
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m",
+                                    flow_fn=_capturing)
+    assert result == {"whale": True}
+    assert seen == {
+        "root": "SPY",
+        "start": _WINDOW_START,
+        "end": _BAR_TS,
+        "min_premium": indicator.WHALE_PREMIUM,
+    }
+
+
+@pytest.mark.unit
+def test_flow_signal_accepts_iso_string_bar_ts():
+    rows = [_row(indicator.WHALE_PREMIUM, "2026-08-14T09:50:00")]
+    result = indicator._flow_signal("SPY", _BAR_TS.isoformat(), interval="15m",
+                                    flow_fn=_flow_fn_with(rows))
+    assert result == {"whale": True}
+
+
+@pytest.mark.unit
+def test_flow_signal_default_flow_fn_uses_ph_flow_namespace(monkeypatch):
+    """With flow_fn=None the production default must call the PH v2 client's
+    flow.scanner_trades_in_time_range with root/start/end/min_premium and
+    unwrap the ResponseEnvelope's .data."""
+    seen = {}
+
+    class _FakeEnv:
+        def __init__(self, data):
+            self.data = data
+
+    class _FakeFlow:
+        def scanner_trades_in_time_range(self, **kwargs):
+            seen.update(kwargs)
+            return _FakeEnv([{"premium": indicator.WHALE_PREMIUM,
+                              "timestamp": "2026-08-14T09:50:00"}])
+
+    class _FakeClient:
+        flow = _FakeFlow()
+
+    monkeypatch.setattr(indicator, "_thread_client",
+                        lambda: _FakeClient())
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m")
+    assert result == {"whale": True}
+    assert seen["root"] == "SPY"
+    assert seen["start_datetime"] == _WINDOW_START.isoformat()
+    assert seen["end_datetime"] == _BAR_TS.isoformat()
+    assert seen["min_premium"] == indicator.WHALE_PREMIUM
+
+
+@pytest.mark.unit
+def test_flow_signal_default_flow_fn_failure_degrades_to_false(monkeypatch):
+    """A failure building/calling the PH client (e.g. missing credentials)
+    must degrade to {"whale": False}, never raise."""
+
+    def _no_client():
+        raise RuntimeError("ThetaData credentials not found")
+
+    monkeypatch.setattr(indicator, "_thread_client", _no_client)
+    result = indicator._flow_signal("SPY", _BAR_TS, interval="15m")
+    assert result == {"whale": False}
+
+
+@pytest.mark.unit
+def test_whale_premium_threshold_reused_from_v1(monkeypatch):
+    """WHALE_PREMIUM must reuse the v1 threshold constant from
+    whale_scanner (WHALE_THRESHOLD), not a locally invented value."""
+    import importlib
+    importlib.reload(indicator)
+    from Direction.whale_scanner import WHALE_THRESHOLD
+    assert indicator.WHALE_PREMIUM == WHALE_THRESHOLD
+

@@ -9,6 +9,14 @@ The module entry points (``analyze``/``analyze_trend``) are intentionally
 NOT used, and ``elliott_wave.py``/``bollinger_analyzer.py``/``trend_engine.py``
 are not modified.
 
+Task 3 of the v2 plan: the per-bar intraday whale-flow signal
+(``_flow_signal``).  Intraday option-flow data comes from the PH v2 SDK's
+``flow.scanner_trades_in_time_range`` (queried via a direct ``PHClient`` --
+``shared/thetadata.py`` does not expose the flow namespace yet).  This breaks
+the v1 "daily wall": the v1 suite judged whale flow from daily EOD option
+volume, whereas v2 judges each bar's own 15-minute window.  ``whale_scanner.py``
+is NOT touched; the v1 daily tool keeps its own path.
+
 Every bar of a chart is evaluated with the series as it existed up to that
 bar (closed-bar semantics via ``shared.spot_history.intraday_bars_as_of``),
 so verdicts move bar-to-bar -- the whole point of v2.
@@ -16,11 +24,17 @@ so verdicts move bar-to-bar -- the whole point of v2.
 
 from __future__ import annotations
 
-from typing import Callable
+import os
+import threading
+from collections.abc import Callable, Mapping
+from datetime import datetime, timedelta
 
 import numpy as np
+from potatohedge.client_v2 import PHClient
+from potatohedge.config import ClientConfig, Credential
 
 from shared.chart_data import CandleRecord
+from shared.config import load_env_once
 from shared.spot_history import intraday_bars_as_of
 
 from . import bollinger_analyzer as boll
@@ -36,7 +50,190 @@ _ADX_TREND_THRESHOLD = 25.0
 # bands need 20; MA50 needs 50) -- degrade to neutral instead of fabricating.
 _MIN_BARS = 3
 
+# Whale-flow premium threshold ($ of per-print gross premium) for the
+# intraday whale signal.  Reused from the v1 threshold constant --
+# Direction.whale_scanner re-exports Vol_Suite's WHALE_THRESHOLD (25k) --
+# per the Task-3 brief ("reuse the v1 threshold constant if importable from
+# whale_scanner WITHOUT touching it").  If that import ever breaks, fall back
+# to the brief's documented default.
+try:
+    from .whale_scanner import WHALE_THRESHOLD as WHALE_PREMIUM
+except Exception:  # pragma: no cover - import path is stable; defensive only
+    WHALE_PREMIUM = 100_000.0
+
 OHLCVFn = Callable[[str, str, object], list[CandleRecord]]
+
+# flow_fn contract: flow_fn(root, start_datetime, end_datetime, min_premium)
+# -> list[dict] of scanner flow rows ({"premium": $, "timestamp": ISO, ...}).
+FlowFn = Callable[[str, object, object, float], list[dict]]
+
+# Candidate timestamp keys on a scanner flow row, most specific first.
+_ROW_TS_KEYS = ("timestamp", "detection_timestamp", "execution_timestamp")
+
+
+def _interval_to_delta(interval: str) -> timedelta:
+    """Parse a bar interval like ``"15m"`` / ``"2h"`` into a timedelta.
+
+    Unparseable intervals fall back to 15 minutes (documented default) so a
+    weird interval string never crashes per-bar evaluation.
+    """
+    s = (interval or "").strip().lower()
+    if s.endswith("h"):
+        try:
+            return timedelta(hours=float(s[:-1]))
+        except ValueError:
+            pass
+    if s.endswith("m"):
+        try:
+            return timedelta(minutes=float(s[:-1]))
+        except ValueError:
+            pass
+    return timedelta(minutes=15)
+
+
+def _as_datetime(ts) -> datetime:
+    """Resolve bar_ts (datetime or ISO string) to a datetime."""
+    if isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, str):
+        return datetime.fromisoformat(ts)
+    raise TypeError(f"bar_ts must be a datetime or ISO string, got {type(ts).__name__}")
+
+
+def _row_ts(row: dict) -> datetime | None:
+    """Extract a row's trade timestamp; None when absent/unparseable.
+
+    Rows without a parseable timestamp are treated as in-window downstream
+    (the provider was asked for the window; we don't fabricate exclusions).
+    """
+    for key in _ROW_TS_KEYS:
+        value = row.get(key)
+        if value is None:
+            continue
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            continue
+    return None
+
+
+def _to_plain(obj):
+    """Coerce PHClient FrozenMap/tuple leaves into plain dicts/lists."""
+    if isinstance(obj, Mapping):
+        return {k: _to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_plain(v) for v in obj]
+    return obj
+
+
+# PHClient is not safe to share across threads (see the facade's comment in
+# shared/thetadata.py), so each thread gets its own client built from the
+# same config -- mirroring the facade's pattern for the flow namespace.
+_thread_local = threading.local()
+
+
+def _thread_client() -> PHClient:
+    """Build (once per thread) a PH v2 client with flow.read capability.
+
+    Credentials come from THETADATA_CF_ACCESS_CLIENT_ID/_SECRET env vars (or
+    the root .env via shared.config.load_env_once), exactly like the facade.
+    Raises RuntimeError when credentials are missing -- _flow_signal's caller
+    degrades on that.
+    """
+    client = getattr(_thread_local, "client", None)
+    if client is None:
+        load_env_once()
+        client_id = os.environ.get("THETADATA_CF_ACCESS_CLIENT_ID")
+        client_secret = os.environ.get("THETADATA_CF_ACCESS_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            raise RuntimeError(
+                "ThetaData credentials not found. Set THETADATA_CF_ACCESS_CLIENT_ID "
+                "and THETADATA_CF_ACCESS_CLIENT_SECRET as environment variables, or "
+                "create a .env file in the project root (see .env.example)."
+            )
+        cred = Credential({
+            "CF-Access-Client-Id": client_id,
+            "CF-Access-Client-Secret": client_secret,
+        })
+        config = ClientConfig(
+            base_url="https://api.potatohedge.com",
+            credentials={"flow.read": cred},
+            caller_id="zinko",
+            client_version="2",
+        )
+        client = PHClient(config)
+        client.__enter__()
+        _thread_local.client = client
+    return client
+
+
+def _default_flow_fn(root: str, start_dt, end_dt, min_premium: float) -> list:
+    """Production flow provider: PH v2 ``flow.scanner_trades_in_time_range``.
+
+    One sequential call for the bar's window (per the v2 wiki's concurrency
+    note -- do NOT fan out flow.* calls).  Returns the envelope's ``.data`` as
+    plain dicts.  Failures propagate to _flow_signal, which degrades.
+    """
+    client = _thread_client()
+    env = client.flow.scanner_trades_in_time_range(
+        root=root,
+        start_datetime=(start_dt.isoformat()
+                        if hasattr(start_dt, "isoformat") else str(start_dt)),
+        end_datetime=(end_dt.isoformat()
+                      if hasattr(end_dt, "isoformat") else str(end_dt)),
+        min_premium=min_premium,
+    )
+    data = getattr(env, "data", None)
+    if not isinstance(data, list):
+        return []
+    return [_to_plain(row) for row in data]
+
+
+def _flow_signal(ticker, bar_ts, interval: str = "15m",
+                 flow_fn: FlowFn | None = None) -> dict:
+    """Evaluate the intraday whale-flow signal for the bar closed at ``bar_ts``.
+
+    Returns ``{"whale": bool}`` where ``whale`` is True iff any flow row in
+    the bar's own window ``[bar_ts - interval, bar_ts]`` (closed at ``bar_ts``
+    -- a trade exactly at the close counts) carries ``premium >=
+    WHALE_PREMIUM``.  The window and the premium filter are passed to the
+    provider, which returns the window's scanner rows; rows are additionally
+    screened by their timestamp so an out-of-window row can never light the
+    signal (a row with no parseable timestamp is trusted as in-window since
+    the provider was asked for the window).
+
+    ``flow_fn`` is injectable for deterministic, network-free tests and
+    defaults to ``_default_flow_fn`` (PH v2 ``flow.scanner_trades_in_time_range``
+    via a direct per-thread ``PHClient``).  It is called as
+    ``flow_fn(root, start_datetime, end_datetime, min_premium)``.
+
+    Degrades to ``{"whale": False}`` -- NEVER raises, NEVER fabricates -- on
+    any provider failure (missing credentials, timeout, PHClientError), empty
+    rows, or rows that don't clear the premium bar.
+    """
+    provider = flow_fn if flow_fn is not None else _default_flow_fn
+    try:
+        end = _as_datetime(bar_ts)
+        start = end - _interval_to_delta(interval)
+        rows = provider(ticker, start, end, WHALE_PREMIUM)
+    except Exception:
+        rows = []
+
+    whale = False
+    for row in rows or []:
+        try:
+            if float(row.get("premium")) < WHALE_PREMIUM:
+                continue
+            ts = _row_ts(row)
+            if ts is not None and not (start <= ts <= end):
+                continue
+        except (TypeError, ValueError, AttributeError):
+            continue
+        whale = True
+        break
+    return {"whale": whale}
 
 
 def _price_signals(ticker, bar_ts, interval: str = "15m",
