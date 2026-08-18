@@ -52,7 +52,7 @@ def test_validate_impulse_false_when_wave2_exceeds_wave1_start():
 
 @pytest.mark.unit
 def test_analyze_degrades_to_unknown_signal_false_on_no_data(monkeypatch):
-    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=90: None)
+    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=90, as_of=None: None)
     result = ew.analyze("SPY")
     assert result == {"wave_count": 0, "wave_number": 0, "wave_type": "unknown", "signal": False}
 
@@ -62,7 +62,21 @@ def test_analyze_sets_signal_true_when_wave_type_is_impulse_wave_3(monkeypatch):
     closes = np.array([1, 5, 1, 2, 1, 8, 1], dtype=float)
     monkeypatch.setattr(
         data, "get_ohlcv",
-        lambda ticker, lookback_days=90: {"close": closes},
+        lambda ticker, lookback_days=90, as_of=None: {"close": closes},
     )
     result = ew.analyze("SPY")
     assert result["signal"] == (result["wave_type"] == "impulse_wave_3")
+
+
+def test_analyze_passes_as_of_to_ohlcv(monkeypatch):
+    from Direction import elliott_wave
+    from Direction import data as d
+    seen = {}
+
+    def _fake_get_ohlcv(ticker, lookback_days=90, as_of=None):
+        seen["as_of"] = as_of
+        return None  # no data -> analyze degrades to its neutral result
+
+    monkeypatch.setattr(d, "get_ohlcv", _fake_get_ohlcv)
+    elliott_wave.analyze("SPY", as_of="2026-08-14")
+    assert seen["as_of"] == "2026-08-14"

@@ -60,7 +60,7 @@ def test_regime_neutral_midband():
 
 @pytest.mark.unit
 def test_analyze_degrades_to_neutral_signal_false_on_no_data(monkeypatch):
-    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=90: None)
+    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=90, as_of=None: None)
     result = ba.analyze("SPY")
     assert result == {"squeeze": False, "regime": "neutral", "signal": False}
 
@@ -70,8 +70,22 @@ def test_analyze_signal_true_on_squeeze(monkeypatch):
     closes = np.array([100.0] * 25)
     monkeypatch.setattr(
         data, "get_ohlcv",
-        lambda ticker, lookback_days=90: {"close": closes},
+        lambda ticker, lookback_days=90, as_of=None: {"close": closes},
     )
     result = ba.analyze("SPY")
     assert result["squeeze"] is True
     assert result["signal"] is True
+
+
+def test_analyze_passes_as_of_to_ohlcv(monkeypatch):
+    from Direction import bollinger_analyzer
+    from Direction import data as d
+    seen = {}
+
+    def _fake_get_ohlcv(ticker, lookback_days=90, as_of=None):
+        seen["as_of"] = as_of
+        return None  # no data -> analyze degrades to its neutral result
+
+    monkeypatch.setattr(d, "get_ohlcv", _fake_get_ohlcv)
+    bollinger_analyzer.analyze("SPY", as_of="2026-08-14")
+    assert seen["as_of"] == "2026-08-14"

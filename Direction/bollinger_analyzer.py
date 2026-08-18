@@ -5,6 +5,8 @@ Squeeze (width < 2% of price) = volatile expansion imminent.
 Band thrust through upper/lower = momentum continuation.
 """
 
+from typing import Optional
+
 import numpy as np
 
 from . import data
@@ -57,10 +59,11 @@ def regime(bands: dict, price: float) -> str:
     return "neutral"
 
 
-def analyze(ticker: str) -> dict:
+def analyze(ticker: str, as_of: Optional[str] = None) -> dict:
     """3mo closes -> {"squeeze": bool, "regime": str, "signal": bool}.
-    signal = squeeze OR regime in (upper_thrust_bullish, lower_thrust_bearish)."""
-    ohlcv = data.get_ohlcv(ticker, lookback_days=90)  # ~3 months
+    signal = squeeze OR regime in (upper_thrust_bullish, lower_thrust_bearish).
+    With ``as_of`` set, the window ends on that date."""
+    ohlcv = data.get_ohlcv(ticker, lookback_days=90, as_of=as_of)  # ~3 months
     if ohlcv is None or ohlcv["close"] is None or len(ohlcv["close"]) == 0:
         return {"squeeze": False, "regime": "neutral", "signal": False}
     closes = ohlcv["close"]

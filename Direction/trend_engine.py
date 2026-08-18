@@ -5,6 +5,8 @@ ADX > 25 = confirmed trend. Price > MA20 > MA50 = uptrend confirmed.
 Weekly/Daily must align for high conviction.
 """
 
+from typing import Optional
+
 import numpy as np
 
 from . import data
@@ -82,12 +84,12 @@ def _neutral_trend() -> dict:
     }
 
 
-def analyze_trend(ticker: str) -> dict:
+def analyze_trend(ticker: str, as_of: Optional[str] = None) -> dict:
     """Resample daily ThetaData OHLCV to daily/weekly/monthly and return
     {"daily": {...}, "weekly": {...}, "monthly": {...}, "adx_ok": bool,
-     "aligned": bool, "signal": bool} where aligned = adx_ok AND daily/weekly
-     agree."""
-    daily_data = data.get_ohlcv(ticker, lookback_days=_LOOKBACK_DAYS)
+     "aligned": bool, "signal": bool}. With ``as_of`` set, the window ends
+     on that date."""
+    daily_data = data.get_ohlcv(ticker, lookback_days=_LOOKBACK_DAYS, as_of=as_of)
     if daily_data is None or daily_data["close"] is None or len(daily_data["close"]) == 0:
         return _neutral_trend()
 

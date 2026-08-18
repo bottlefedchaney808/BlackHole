@@ -53,7 +53,7 @@ def test_ma_alignment_mixed_on_missing_inputs():
 
 @pytest.mark.unit
 def test_analyze_trend_degrades_to_neutral_on_no_data(monkeypatch):
-    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=180: None)
+    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=180, as_of=None: None)
     result = te.analyze_trend("SPY")
     assert result["adx_ok"] is False
     assert result["aligned"] is False
@@ -69,7 +69,7 @@ def test_analyze_trend_aligned_true_when_daily_and_weekly_agree_and_adx_high(mon
         "high": closes + 1, "low": closes - 1, "close": closes,
         "volume": np.ones(n) * 1000,
     }
-    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=180: daily)
+    monkeypatch.setattr(data, "get_ohlcv", lambda ticker, lookback_days=180, as_of=None: daily)
     monkeypatch.setattr(data, "resample_ohlcv", lambda d, freq: daily)
     result = te.analyze_trend("SPY")
     assert result["daily"]["ma"] == "bullish"
@@ -124,7 +124,7 @@ def test_analyze_trend_weekly_and_monthly_are_not_stuck_mixed_with_real_resampli
     }
     received_lookback = {}
 
-    def _fake_get_ohlcv(ticker, lookback_days=180):
+    def _fake_get_ohlcv(ticker, lookback_days=180, as_of=None):
         received_lookback["value"] = lookback_days
         return daily
 
@@ -157,3 +157,17 @@ def test_timeframe_monthly_with_realistic_bar_count_degrades_to_mixed():
     }
     result = te._timeframe(monthly)
     assert result["ma"] == "mixed"
+
+
+def test_analyze_trend_passes_as_of_to_ohlcv(monkeypatch):
+    from Direction import trend_engine
+    from Direction import data as d
+    seen = {}
+
+    def _fake_get_ohlcv(ticker, lookback_days=180, as_of=None):
+        seen["as_of"] = as_of
+        return None  # no data -> analyze_trend degrades to its neutral result
+
+    monkeypatch.setattr(d, "get_ohlcv", _fake_get_ohlcv)
+    trend_engine.analyze_trend("SPY", as_of="2026-08-14")
+    assert seen["as_of"] == "2026-08-14"

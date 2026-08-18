@@ -4,6 +4,8 @@
 Wave 3 = strongest momentum entry; Wave 5 = exhaustion warning.
 """
 
+from typing import Optional
+
 from . import data
 
 
@@ -55,10 +57,11 @@ def validate_impulse(p1, p2, p3, p4, p5) -> bool:
     return (p2 < p1 and p3 > max(p1, p2) and p4 < p3 and p4 > p1 and p5 < p4)
 
 
-def analyze(ticker: str) -> dict:
+def analyze(ticker: str, as_of: Optional[str] = None) -> dict:
     """Pull 3mo closes via Direction.data and return count_waves output
-    plus ``signal`` (True when wave_type == 'impulse_wave_3')."""
-    ohlcv = data.get_ohlcv(ticker, lookback_days=90)  # ~3 months
+    plus ``signal`` (True when wave_type == 'impulse_wave_3'). With
+    ``as_of`` set, the window ends on that date."""
+    ohlcv = data.get_ohlcv(ticker, lookback_days=90, as_of=as_of)  # ~3 months
     if ohlcv is None or ohlcv["close"] is None or len(ohlcv["close"]) == 0:
         return {"wave_count": 0, "wave_number": 0, "wave_type": "unknown",
                 "signal": False}
