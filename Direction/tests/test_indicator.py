@@ -734,3 +734,264 @@ def test_liquidity_signal_default_oi_fn_failure_degrades(monkeypatch):
     assert indicator._default_oi_fn("SPY", "20260814") == {}
 
 
+# ---------------------------------------------------------------------------
+# Task 5 -- per-bar score composition + bar_eval
+# ---------------------------------------------------------------------------
+# bar_eval(ticker, bars, generate_fn=None) -> list[dict], one entry per bar:
+#   {"ts": ISO str, "score": int, "conviction": "HIGH"|"MEDIUM"|"NONE",
+#    "signals": {"whale","wave3","squeeze","trend","liquidity": bool}}
+# Composition rule replicated VERBATIM from signal_generator.generate():
+#   score   = number of True signals among the five (0-5)
+#   HIGH    = whale AND wave3 AND (squeeze OR trend) AND score >= 3
+#   MEDIUM  = whale AND score >= 3 AND not HIGH
+#   NONE    = otherwise
+# Per-bar failure degrades to {"ts", "score": 0, "conviction": "NONE",
+# "signals": {}} -- never raises, never fabricates.
+# generate_fn(ticker, bar_ts) -> signals dict (the five bool keys; missing
+# keys count as False).  generate_fn=None -> internal compose of the three
+# real legs with ONE caller-owned liquidity grid state threaded across the
+# whole bar sequence (a fresh session per bar_eval call).
+
+_T5_SIG_NAMES = ("whale", "wave3", "squeeze", "trend", "liquidity")
+
+
+def _t5_bars(n=5, interval_min=15) -> list[datetime]:
+    return [_LIQ_BAR0 + timedelta(minutes=interval_min * i) for i in range(n)]
+
+
+def _fake_generate(payload):
+    """generate_fn for tests: a fixed signals dict, or a per-call list of
+    dicts (last entry repeats).  Records (ticker, bar_ts) calls."""
+    calls = []
+
+    if isinstance(payload, dict):
+        def _fn(ticker, bar_ts):
+            calls.append((ticker, bar_ts))
+            return payload
+    else:
+        seq = list(payload)
+
+        def _fn(ticker, bar_ts):
+            calls.append((ticker, bar_ts))
+            return seq[min(len(calls) - 1, len(seq) - 1)]
+
+    _fn.calls = calls
+    return _fn
+
+
+@pytest.mark.unit
+def test_bar_eval_entry_shape_and_iso_ts():
+    """One bar -> one entry with exactly the four keys; ts is the ISO string
+    of the input datetime; signals carries exactly the five bool keys."""
+    ts = _t5_bars()[0]
+    out = indicator.bar_eval("SPY", [ts], generate_fn=_fake_generate({}))
+    assert len(out) == 1
+    entry = out[0]
+    assert set(entry.keys()) == {"ts", "score", "conviction", "signals"}
+    assert entry["ts"] == ts.isoformat()
+    assert isinstance(entry["score"], int)
+    assert entry["conviction"] in ("HIGH", "MEDIUM", "NONE")
+    assert set(entry["signals"].keys()) == set(_T5_SIG_NAMES)
+    assert all(isinstance(v, bool) for v in entry["signals"].values())
+
+
+@pytest.mark.unit
+def test_bar_eval_accepts_iso_string_bars():
+    out = indicator.bar_eval("SPY", ["2026-08-14T09:30:00"],
+                             generate_fn=_fake_generate({}))
+    assert out[0]["ts"] == "2026-08-14T09:30:00"
+
+
+@pytest.mark.unit
+def test_bar_eval_one_entry_per_bar_in_order():
+    ts = _t5_bars(5)
+    out = indicator.bar_eval("SPY", ts, generate_fn=_fake_generate({}))
+    assert len(out) == len(ts)
+    assert [e["ts"] for e in out] == [t.isoformat() for t in ts]
+
+
+@pytest.mark.unit
+def test_bar_eval_conviction_high_rule():
+    """HIGH = whale AND wave3 AND (squeeze OR trend) AND score >= 3."""
+    high_via_squeeze = {"whale": True, "wave3": True, "squeeze": True,
+                        "trend": False, "liquidity": False}   # score 3
+    high_via_trend = {"whale": True, "wave3": True, "squeeze": False,
+                      "trend": True, "liquidity": False}       # score 3
+    all_five = {name: True for name in _T5_SIG_NAMES}          # score 5
+    for signals in (high_via_squeeze, high_via_trend, all_five):
+        out = indicator.bar_eval("SPY", [_t5_bars()[0]],
+                                 generate_fn=_fake_generate(signals))
+        assert out[0]["score"] == sum(1 for v in signals.values() if v)
+        assert out[0]["conviction"] == "HIGH"
+        assert out[0]["signals"] == signals
+
+
+@pytest.mark.unit
+def test_bar_eval_conviction_medium_rule():
+    """MEDIUM = whale AND score >= 3 AND not HIGH: whale without wave3, or
+    whale+wave3 without squeeze/trend, both score 3."""
+    no_wave3 = {"whale": True, "wave3": False, "squeeze": True,
+                "trend": True, "liquidity": False}    # score 3, not HIGH
+    no_sq_tr = {"whale": True, "wave3": True, "squeeze": False,
+                "trend": False, "liquidity": True}    # score 3, not HIGH
+    for signals in (no_wave3, no_sq_tr):
+        out = indicator.bar_eval("SPY", [_t5_bars()[0]],
+                                 generate_fn=_fake_generate(signals))
+        assert out[0]["score"] == 3
+        assert out[0]["conviction"] == "MEDIUM"
+
+
+@pytest.mark.unit
+def test_bar_eval_conviction_none_rule():
+    """NONE = otherwise: no whale (any score), whale with score < 3, all
+    off."""
+    no_whale = {"whale": False, "wave3": True, "squeeze": True,
+                "trend": True, "liquidity": True}      # score 4, no whale
+    whale_low_score = {"whale": True, "wave3": True, "squeeze": False,
+                       "trend": False, "liquidity": False}   # score 2
+    all_off = {name: False for name in _T5_SIG_NAMES}   # score 0
+    for signals in (no_whale, whale_low_score, all_off):
+        out = indicator.bar_eval("SPY", [_t5_bars()[0]],
+                                 generate_fn=_fake_generate(signals))
+        assert out[0]["conviction"] == "NONE"
+        assert out[0]["score"] == sum(1 for v in signals.values() if v)
+
+
+@pytest.mark.unit
+def test_bar_eval_missing_and_extra_signal_keys():
+    """Only the five canonical names count: missing keys -> False, extra
+    keys ignored -- the chart overlay/replay consume exactly five."""
+    raw = {"whale": True, "bogus": True}   # score 1 after normalization
+    out = indicator.bar_eval("SPY", [_t5_bars()[0]],
+                             generate_fn=_fake_generate(raw))
+    entry = out[0]
+    assert set(entry["signals"].keys()) == set(_T5_SIG_NAMES)
+    assert entry["signals"] == {"whale": True, "wave3": False,
+                                "squeeze": False, "trend": False,
+                                "liquidity": False}
+    assert entry["score"] == 1
+    assert entry["conviction"] == "NONE"
+
+
+@pytest.mark.unit
+def test_bar_eval_generate_fn_receives_ticker_and_bar_ts():
+    seen = []
+    ts = _t5_bars(3)
+
+    def _capture(ticker, bar_ts):
+        seen.append((ticker, bar_ts))
+        return {}
+
+    indicator.bar_eval("NVDA", ts, generate_fn=_capture)
+    assert seen == [("NVDA", t) for t in ts]
+
+
+@pytest.mark.unit
+def test_bar_eval_failure_isolated_to_that_bar():
+    """generate_fn raising on one bar -> that bar degrades to NONE/0/{},
+    the other bars are computed normally -- never raises."""
+    ts = _t5_bars(3)
+    good = {"whale": True, "wave3": True, "squeeze": True,
+            "trend": False, "liquidity": False}   # score 3 -> HIGH
+    calls = []
+
+    def _flaky(ticker, bar_ts):
+        calls.append(bar_ts)
+        if len(calls) == 2:
+            raise RuntimeError("leg provider down")
+        return good
+
+    out = indicator.bar_eval("SPY", ts, generate_fn=_flaky)
+    assert len(out) == 3
+    assert out[0] == {"ts": ts[0].isoformat(), "score": 3,
+                      "conviction": "HIGH", "signals": good}
+    assert out[1] == {"ts": ts[1].isoformat(), "score": 0,
+                      "conviction": "NONE", "signals": {}}
+    assert out[2] == {"ts": ts[2].isoformat(), "score": 3,
+                      "conviction": "HIGH", "signals": good}
+
+
+@pytest.mark.unit
+def test_bar_eval_docstring_documents_the_rule():
+    """The composition rule must be documented on bar_eval itself (the one
+    place v2 mirrors the tool -- by explicit design)."""
+    doc = indicator.bar_eval.__doc__ or ""
+    assert "HIGH" in doc and "MEDIUM" in doc and "NONE" in doc
+    assert "whale" in doc and "score" in doc
+
+
+@pytest.mark.unit
+def test_bar_eval_default_compose_merges_real_legs(monkeypatch, crafted_bars):
+    """generate_fn=None -> the internal compose runs the three REAL legs
+    with the production defaults; with the defaults' providers injected, the
+    merged signals/score/conviction land end-to-end.  As-of the final
+    crafted bar (13:27) the price series yields wave3=True, squeeze=False,
+    trend=True (see module docstring); injected whale + liquidity True make
+    score 4 -> HIGH."""
+    monkeypatch.setattr(indicator, "intraday_bars_as_of",
+                        _ohlcv_fn_for(crafted_bars))
+    monkeypatch.setattr(
+        indicator, "_default_flow_fn",
+        lambda root, start, end, min_premium:
+            [{"premium": min_premium + 1.0, "timestamp": end.isoformat()}])
+    monkeypatch.setattr(indicator, "_default_gamma_fn",
+                        lambda root, bar_dt, interval: True)
+    monkeypatch.setattr(indicator, "_default_oi_fn",
+                        lambda root, as_of: _oi_neutral())
+
+    ts = datetime(2026, 8, 14, 13, 27)  # the final crafted bar
+    out = indicator.bar_eval("SPY-T5", [ts])
+    assert len(out) == 1
+    entry = out[0]
+    assert entry["signals"] == {"whale": True, "wave3": True, "squeeze": False,
+                                "trend": True, "liquidity": True}
+    assert entry["score"] == 4
+    assert entry["conviction"] == "HIGH"
+
+
+@pytest.mark.unit
+def test_bar_eval_default_compose_no_whale_is_none(monkeypatch, crafted_bars):
+    """Same real-leg wiring with the flow provider returning no rows: whale
+    False -> NONE even though the other three legs fire (score 3) -- the
+    rule's 'no whale = no trade' branch."""
+    monkeypatch.setattr(indicator, "intraday_bars_as_of",
+                        _ohlcv_fn_for(crafted_bars))
+    monkeypatch.setattr(indicator, "_default_flow_fn",
+                        lambda root, start, end, min_premium: [])
+    monkeypatch.setattr(indicator, "_default_gamma_fn",
+                        lambda root, bar_dt, interval: True)
+    monkeypatch.setattr(indicator, "_default_oi_fn",
+                        lambda root, as_of: _oi_neutral())
+
+    ts = datetime(2026, 8, 14, 13, 27)
+    entry = indicator.bar_eval("SPY-T5", [ts])[0]
+    assert entry["signals"]["whale"] is False
+    assert entry["score"] == 3  # wave3 + trend + liquidity
+    assert entry["conviction"] == "NONE"
+
+
+@pytest.mark.unit
+def test_bar_eval_threads_liquidity_grid_state_across_sequence(
+        monkeypatch, crafted_bars):
+    """The default compose must thread ONE caller-owned grid state across
+    the bar sequence: 10 bars -> exactly 3 gamma_fn calls (first bar forced
+    + session grid points), the same count as the direct-leg contract --
+    and the module-level grid store is left untouched (one fresh session
+    per bar_eval call)."""
+    monkeypatch.setattr(indicator, "intraday_bars_as_of",
+                        _ohlcv_fn_for(crafted_bars))
+    monkeypatch.setattr(indicator, "_default_flow_fn",
+                        lambda root, start, end, min_premium: [])
+    gamma = _gamma_fn_with(True)
+    monkeypatch.setattr(indicator, "_default_gamma_fn", gamma)
+    oi = _oi_fn_with(_oi_neutral())
+    monkeypatch.setattr(indicator, "_default_oi_fn", oi)
+
+    ts = _liq_bars(10)  # 09:30 .. 11:45 on 2026-08-14
+    out = indicator.bar_eval("SPY-T5", ts)
+    assert len(out) == 10
+    assert len(gamma.calls) == 3   # 09:30 forced, 10:00, 11:00 grid points
+    assert len(oi.calls) == 10     # OI is daily, called on every bar
+    assert ("SPY-T5", "20260814") not in indicator._LIQUIDITY_GRID_STATE
+
+

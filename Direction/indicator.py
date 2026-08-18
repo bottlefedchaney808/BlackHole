@@ -26,6 +26,15 @@ EOD OI max-pain stays daily (OI settles EOD by nature) and reuses the pure
 helpers of ``liquidity_map.py`` (``_pick_expiry``/``_max_pain``), which is
 NOT modified; the v1 daily entry point ``get_liquidity`` keeps its own path.
 
+Task 5 of the v2 plan: the per-bar score composition (``bar_eval``).  The
+three Task 2-4 legs are merged per bar and scored with the SAME rule
+``signal_generator.generate`` uses -- score = number of True signals among
+the five (whale, wave3, squeeze, trend, liquidity); HIGH = whale AND wave3
+AND (squeeze OR trend) AND score >= 3; MEDIUM = whale AND score >= 3 AND
+not HIGH; NONE = otherwise -- replicated VERBATIM from that module (the one
+place v2 mirrors the tool, by explicit scope design).  ``signal_generator.py``
+is NOT modified.
+
 Every bar of a chart is evaluated with the series as it existed up to that
 bar (closed-bar semantics via ``shared.spot_history.intraday_bars_as_of``),
 so verdicts move bar-to-bar -- the whole point of v2.
@@ -554,3 +563,101 @@ def _liquidity_signal(ticker, bar_ts, interval: str = "15m",
         oi = {}
 
     return {"liquidity": bool(gamma_bull or _v1_max_pain_signal(oi))}
+
+
+# ---------------------------------------------------------------------------
+# Task 5 -- per-bar score composition + bar_eval
+# ---------------------------------------------------------------------------
+# bar_eval merges the three Task 2-4 legs (_price_signals/_flow_signal/
+# _liquidity_signal) per bar and scores them with the SAME rule
+# signal_generator.generate() uses -- replicated VERBATIM from that module
+# (read-only reference; the v1 tool is untouched):
+#   score   = number of True signals among the five (0-5)
+#   HIGH    = whale AND wave3 AND (squeeze OR trend) AND score >= 3
+#   MEDIUM  = whale AND score >= 3 AND not HIGH
+#   NONE    = otherwise
+# The liquidity grid state is threaded across the bar sequence via ONE
+# caller-owned state dict per bar_eval call (a fresh session each call), so
+# the coarse gamma grid samples the whole sequence deterministically and the
+# module-level grid store is never touched by bar_eval.
+
+_SIGNAL_NAMES = ("whale", "wave3", "squeeze", "trend", "liquidity")
+
+
+def _score_conviction(signals: Mapping) -> tuple[int, str]:
+    """The v2 score/conviction rule, replicated verbatim from
+    ``signal_generator.generate``: score is the number of True signals among
+    the five; HIGH/MEDIUM/NONE use that module's exact constants/thresholds.
+    """
+    score = sum(1 for v in signals.values() if v)
+    if (signals.get("whale") and signals.get("wave3")
+            and (signals.get("squeeze") or signals.get("trend"))
+            and score >= 3):
+        conviction = "HIGH"
+    elif signals.get("whale") and score >= 3:
+        conviction = "MEDIUM"
+    else:
+        conviction = "NONE"
+    return score, conviction
+
+
+def _compose_signals(ticker, bar_ts, *, state: dict,
+                     interval: str = "15m") -> dict:
+    """Default per-bar compose path: merge the three Task 2-4 signal legs.
+
+    Each leg already degrades internally (never raises, never fabricates),
+    so the merged dict always carries the five canonical boolean keys.
+    ``state`` is the caller-owned liquidity grid state (one dict per
+    ``bar_eval`` call) so the coarse gamma grid threads across the sequence.
+    """
+    signals = {}
+    signals.update(_price_signals(ticker, bar_ts, interval=interval))
+    signals.update(_flow_signal(ticker, bar_ts, interval=interval))
+    signals.update(_liquidity_signal(ticker, bar_ts, interval=interval,
+                                     state=state))
+    return signals
+
+
+def bar_eval(ticker, bars, generate_fn=None) -> list[dict]:
+    """Evaluate every bar of a chart and return the v2 score/conviction.
+
+    ``bars`` is a list of bar timestamps (datetime or ISO strings,
+    ascending).  Returns one entry per bar::
+
+        {"ts": <ISO string>, "score": int (0-5),
+         "conviction": "HIGH" | "MEDIUM" | "NONE",
+         "signals": {"whale", "wave3", "squeeze", "trend", "liquidity": bool}}
+
+    ``generate_fn`` is injectable for deterministic, network-free tests:
+    ``generate_fn(ticker, bar_ts) -> dict`` with any of the five boolean
+    signal keys (missing keys count as False, extra keys are ignored).  When
+    None (the real path), the internal compose runs the three legs
+    ``_price_signals`` + ``_flow_signal`` + ``_liquidity_signal`` per bar,
+    threading ONE caller-owned liquidity grid state across the whole
+    sequence (a fresh session per call).
+
+    A bar whose generation raises degrades to
+    ``{"ts": ..., "score": 0, "conviction": "NONE", "signals": {}}`` --
+    never raises, never fabricates; the other bars are unaffected.
+    """
+    state: dict = {}
+    results: list[dict] = []
+    for bar_ts in bars:
+        try:
+            ts = _as_datetime(bar_ts).isoformat()
+        except (TypeError, ValueError):
+            ts = str(bar_ts)
+        try:
+            if generate_fn is not None:
+                raw = generate_fn(ticker, bar_ts)
+            else:
+                raw = _compose_signals(ticker, bar_ts, state=state)
+        except Exception:
+            results.append({"ts": ts, "score": 0, "conviction": "NONE",
+                            "signals": {}})
+            continue
+        signals = {name: bool(raw.get(name, False)) for name in _SIGNAL_NAMES}
+        score, conviction = _score_conviction(signals)
+        results.append({"ts": ts, "score": score, "conviction": conviction,
+                        "signals": signals})
+    return results
