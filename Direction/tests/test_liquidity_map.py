@@ -83,8 +83,37 @@ def test_get_liquidity_signal_true_when_max_pain_within_2pct_of_spot(monkeypatch
     chain = [_row(100, "C", 50), _row(100, "P", 50)]
     monkeypatch.setattr(data, "get_price", lambda ticker: 100.0)
     monkeypatch.setattr(data, "get_expirations", lambda ticker: ["20261231"])
-    monkeypatch.setattr(data, "get_chain_oi", lambda ticker, exp: chain)
+    monkeypatch.setattr(data, "get_chain_oi", lambda ticker, exp, as_of=None: chain)
     monkeypatch.setattr(data, "get_dealer_gamma", lambda ticker: None)
     result = lm.get_liquidity("SPY")
     assert result["signal"] is True
     assert result["max_pain"] == pytest.approx(100.0)
+
+
+@pytest.mark.unit
+def test_get_liquidity_passes_as_of_to_data(monkeypatch):
+    from Direction import liquidity_map as lm
+    from Direction import data as d
+    seen = {}
+
+    monkeypatch.setattr(d, "get_expirations", lambda ticker: ["20260918"])
+
+    def _fake_chain_oi(ticker, exp, as_of=None):
+        seen["oi"] = as_of
+        return []  # empty chain -> scan degrades to neutral
+
+    monkeypatch.setattr(d, "get_chain_oi", _fake_chain_oi)
+    monkeypatch.setattr(d, "get_dealer_gamma",
+                        lambda ticker, as_of=None: seen.setdefault("dealer", as_of) or None)
+    monkeypatch.setattr(d, "get_price", lambda ticker: 100.0)
+
+    def _fake_close(ticker, as_of=None, lookback_days=90):
+        seen["close"] = as_of
+        return 100.0
+
+    monkeypatch.setattr(d, "get_close_asof", _fake_close)
+
+    out = lm.get_liquidity("SPY", as_of="2026-08-14")
+    assert seen["oi"] == "2026-08-14"
+    assert seen["dealer"] == "2026-08-14"
+    assert out["pcr"] == 0.0  # empty chain -> neutral

@@ -31,16 +31,17 @@ the curve.)
 from __future__ import annotations
 
 from datetime import date
+from typing import Optional
 
 from . import data
 
 
-def _pick_expiry(expirations) -> "str | None":
-    """Nearest expiry: first >= today (YYYYMMDD string compare), else the
-    closest past one. Returns None when the list is empty."""
+def _pick_expiry(expirations, as_of: "str | None" = None) -> "str | None":
+    """Pick the nearest expiry (>= today, else closest past one). With
+    ``as_of``, 'today' is that date instead of the real today."""
     if not expirations:
         return None
-    today = date.today().strftime("%Y%m%d")
+    today = (as_of.replace("-", "") if as_of else date.today().strftime("%Y%m%d"))
     future = [e for e in expirations if e >= today]
     if future:
         return min(future)
@@ -85,7 +86,7 @@ def _max_pain(chain, default: float) -> float:
     return min(strikes, key=_payout)
 
 
-def get_liquidity(ticker: str) -> dict:
+def get_liquidity(ticker: str, as_of: Optional[str] = None) -> dict:
     """Return {"price", "expiry", "max_pain", "call_wall", "put_wall",
     "pcr", "signal": bool, "dealer"}.
 
@@ -98,17 +99,22 @@ def get_liquidity(ticker: str) -> dict:
     - ``signal``: True when max pain sits within 2% of spot (gravity
       proximity); always False on missing chain/price.
     - ``dealer``: raw dealer-positioning payload (GEX layer), may be None.
+
+    With ``as_of`` set, chain OI, dealer snapshot, and price are that day's.
     """
-    price = data.get_price(ticker)
+    if as_of:
+        price = data.get_close_asof(ticker, as_of=as_of)
+    else:
+        price = data.get_price(ticker)
     expirations = data.get_expirations(ticker) or []
-    exp = _pick_expiry(expirations)
+    exp = _pick_expiry(expirations, as_of=as_of)
 
     chain = None
     if exp is not None:
-        chain = data.get_chain_oi(ticker, exp)
+        chain = data.get_chain_oi(ticker, exp, as_of=as_of)
 
     try:
-        dealer = data.get_dealer_gamma(ticker)
+        dealer = data.get_dealer_gamma(ticker, as_of=as_of)
     except Exception:
         dealer = None
 
