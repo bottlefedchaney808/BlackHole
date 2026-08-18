@@ -10,6 +10,8 @@ The correlation engine uses this as IV_RANK_EXTREME when IV is in the
 tails of its distribution vs GARCH/RV.
 """
 
+import contextlib
+import io
 from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -122,7 +124,15 @@ def scan_iv_rank(ticker: str, *, garch_cond_vol_pct: Optional[float] = None,
     garch_vol = float(garch_cond_vol_pct) if garch_cond_vol_pct else 0.0
     if not garch_vol:
         try:
-            garch_result = vsi.garch_analysis.run_garch_analysis(ticker)
+            # run_garch_analysis is Vol_Suite's own interactive/report-mode
+            # entry point -- it prints a full report and saves 3 PNG charts
+            # per call.  Fine for one-off interactive use, but this scanner
+            # calls it once per ticker per loop pass, so silence the report
+            # printing here (chart files still get written to
+            # sentiment-scanner/outputs/ -- harmless, just unused by this
+            # caller) rather than touching the shared Vol_Suite module.
+            with contextlib.redirect_stdout(io.StringIO()):
+                garch_result = vsi.garch_analysis.run_garch_analysis(ticker)
             # garch_result has .conditional_volatility (last value) and .forecast
             # Extract the final conditional vol
             if hasattr(garch_result, "conditional_volatility") and len(garch_result.conditional_volatility) > 0:

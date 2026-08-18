@@ -17,7 +17,14 @@ pandas>=2.0
 scipy>=1.10            # norm/ttest_ind (backtest_stage3), minimize (SABR fit)
 
 # --- Data access ---
-httpx>=0.24            # thetadata_client -- the only HTTP client on the hot path
+httpx>=0.24            # legacy transport type references only (shared.thetadata no
+                        # longer does its own HTTP -- see potatohedge below)
+potatohedge==2.0.1      # shared/thetadata.py::ThetaDataController is a facade over
+                        # potatohedge.client_v2.PHClient as of the 2026-08 v2 migration;
+                        # every suite that imports shared.thetadata needs this, including
+                        # this project-local venv. Install from the local wheel if PyPI
+                        # isn't reachable: pip install ../potatohedge-2.0.1-py3-none-any.whl
+pyyaml>=6.0             # potatohedge 2.0.1 required transitive dependency
 
 # --- Charting ---
 matplotlib>=3.7

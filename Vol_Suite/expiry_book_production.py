@@ -26,21 +26,40 @@ def _number(row: Mapping[str, Any], names: tuple[str, ...], label: str) -> float
 
 
 def normalize_snapshot_rows(raw_rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize raw ThetaData option rows, dropping individually-unusable
+    contracts instead of failing the whole chain.
+
+    A single illiquid/far-dated contract with an uncomputable IV (ThetaData
+    returns implied_vol=0.0000 -- a real, legitimate response, not a
+    sentinel) or a missing field used to abort the ENTIRE snapshot. That's
+    wrong: the rest of the chain is still real, usable data. Only raise when
+    *nothing* in the chain survives normalization.
+    """
     if not raw_rows:
         raise ExpiryBookUnavailable("empty option snapshot")
     normalized: list[dict[str, Any]] = []
+    skip_reasons: list[str] = []
     for raw in raw_rows:
-        strike = _number(raw, ("strike", "strike_price"), "strike")
-        if abs(strike) > 10_000:
-            strike /= 1000.0
-        right = str(raw.get("right", raw.get("put_call", ""))).upper()[:1]
-        if right not in {"C", "P"}:
-            raise ExpiryBookUnavailable("missing or invalid option right")
-        oi = _number(raw, ("oi", "open_interest", "openInterest"), "open interest")
-        iv = _number(raw, ("implied_vol", "impliedVol", "iv", "IV"), "implied volatility")
-        if strike <= 0 or oi < 0 or iv <= 0:
-            raise ExpiryBookUnavailable("invalid normalized option row")
+        try:
+            strike = _number(raw, ("strike", "strike_price"), "strike")
+            if abs(strike) > 10_000:
+                strike /= 1000.0
+            right = str(raw.get("right", raw.get("put_call", ""))).upper()[:1]
+            if right not in {"C", "P"}:
+                raise ExpiryBookUnavailable("missing or invalid option right")
+            oi = _number(raw, ("oi", "open_interest", "openInterest"), "open interest")
+            iv = _number(raw, ("implied_vol", "impliedVol", "iv", "IV"), "implied volatility")
+            if strike <= 0 or oi < 0 or iv <= 0:
+                raise ExpiryBookUnavailable("invalid normalized option row")
+        except ExpiryBookUnavailable as exc:
+            skip_reasons.append(str(exc))
+            continue
         normalized.append({"strike": strike, "right": right, "oi": oi, "implied_vol": iv})
+    if not normalized:
+        raise ExpiryBookUnavailable(skip_reasons[0] if skip_reasons else "no usable option rows")
+    if skip_reasons:
+        print(f"  [normalize_snapshot_rows] dropped {len(skip_reasons)}/{len(raw_rows)} "
+              f"unusable contract(s) ({skip_reasons[0]!r} etc.), kept {len(normalized)}")
     return normalized
 
 

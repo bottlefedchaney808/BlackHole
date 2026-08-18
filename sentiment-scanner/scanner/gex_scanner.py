@@ -79,13 +79,14 @@ def scan_gex(
             timestamp=datetime.now(timezone.utc).isoformat(),
             error=str(e),
         )
-    finally:
-        td.close()
 
     return GexScan(
         ticker=ticker,
         spot=result.spot,
-        forward=result.forward,
+        # ProductionDealerExposure (expiry_book_production, the current
+        # dealer model as of 2026-08-17) has no forward-price concept --
+        # spot is the closest available anchor.
+        forward=result.spot,
         total_net_gamma=result.snapshot.gex(),
         total_net_dollar_gamma=result.snapshot.gex(),
         gamma_flip_level=result.execution_locus.local_gamma_boundary,
