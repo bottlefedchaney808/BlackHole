@@ -95,3 +95,93 @@ def test_resample_ohlcv_weekly_buckets_by_iso_week():
 @pytest.mark.unit
 def test_resample_ohlcv_returns_none_on_empty_daily():
     assert data.resample_ohlcv({"date": np.array([])}) is None
+
+
+from datetime import date, timedelta
+
+import pytest
+
+from Direction import data
+
+
+def _ohlcv_rows(days):
+    rows = []
+    for i, d in enumerate(days):
+        ymd = d.strftime("%Y%m%d")
+        rows.append({"date": ymd, "created": d.isoformat(), "high": "100", "low": "90",
+                     "close": str(100 + i), "volume": "1000"})
+    return rows
+
+
+def test_normalize_date_accepts_both_forms():
+    assert data._normalize_date("2026-08-14") == "2026-08-14"
+    assert data._normalize_date("20260814") == "2026-08-14"
+    assert data._normalize_date("") == ""
+    assert data._normalize_date("garbage") == ""
+
+
+def test_as_of_date_defaults_to_today():
+    assert data._as_of_date(None) == date.today()
+
+
+def test_get_ohlcv_ends_on_as_of(monkeypatch):
+    days = [date(2026, 8, 12), date(2026, 8, 13), date(2026, 8, 14)]
+    calls = {}
+
+    class FakeC:
+        def hist_stock_eod(self, root, start_date, end_date):
+            calls["start"] = start_date
+            calls["end"] = end_date
+            return _ohlcv_rows(days)
+
+    monkeypatch.setattr(data, "_get_controller", lambda: FakeC())
+    out = data.get_ohlcv("SPY", lookback_days=90, as_of="2026-08-14")
+    assert calls["end"] == "20260814"
+    assert out is not None and str(out["date"][-1]) == "2026-08-14"
+
+
+def test_get_chain_eod_volume_uses_as_of_window(monkeypatch):
+    calls = {}
+
+    class FakeC:
+        def option_bulk_hist_eod(self, root, exp, start_date, end_date):
+            calls["end"] = end_date
+            return [
+                {"date": "20260813", "strike": 100000, "right": "C", "volume": "5"},
+                {"date": "20260814", "strike": 100000, "right": "C", "volume": "9"},
+            ]
+
+    monkeypatch.setattr(data, "_get_controller", lambda: FakeC())
+    out = data.get_chain_eod_volume("SPY", "20260918", as_of="2026-08-14")
+    assert calls["end"] == "20260814"
+    # latest trading day <= as_of wins
+    assert len(out) == 1 and out[0]["volume"] == 9.0
+
+
+def test_get_chain_oi_as_of_uses_historical_probe(monkeypatch):
+    calls = {}
+
+    class FakeC:
+        def option_bulk_oi(self, root, exp):
+            raise AssertionError("snapshot must not be called when as_of is set")
+
+        def option_bulk_oi_latest(self, root, exp, lookback_days=7, as_of=None):
+            calls["as_of"] = as_of
+            return [{"strike": 100000, "right": "C", "open_interest": "50"}]
+
+    monkeypatch.setattr(data, "_get_controller", lambda: FakeC())
+    out = data.get_chain_oi("SPY", "20260918", as_of="2026-08-14")
+    assert calls["as_of"] == "2026-08-14"
+    assert out and out[0]["oi"] == 50.0
+
+
+def test_get_close_asof_returns_last_close(monkeypatch):
+    days = [date(2026, 8, 12), date(2026, 8, 13), date(2026, 8, 14)]
+
+    class FakeC:
+        def hist_stock_eod(self, root, start_date, end_date):
+            return _ohlcv_rows(days)
+
+    monkeypatch.setattr(data, "_get_controller", lambda: FakeC())
+    # fixture closes are 100+i -> [100.0, 101.0, 102.0]; last close <= as_of wins
+    assert data.get_close_asof("SPY", as_of="2026-08-14") == 102.0

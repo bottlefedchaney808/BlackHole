@@ -71,6 +71,19 @@ def strike_from_theta(k: int) -> float:
     return k / 1000.0
 
 
+def _as_of_date(as_of):
+    """Resolve an optional as_of (YYYY-MM-DD or YYYYMMDD) to a date (default: today)."""
+    if not as_of:
+        return datetime.now().date()
+    clean = str(as_of).replace("-", "")
+    if len(clean) != 8 or not clean.isdigit():
+        return datetime.now().date()
+    try:
+        return datetime.strptime(clean, "%Y%m%d").date()
+    except ValueError:
+        return datetime.now().date()
+
+
 # ---------------------------------------------------------------------------
 # v2 transport shims
 # ---------------------------------------------------------------------------
@@ -898,7 +911,8 @@ class ThetaDataController:
         return self._parse_rows(r)
 
     def option_bulk_oi_latest(self, root: str, exp: str,
-                               lookback_days: int = 7) -> List[Dict]:
+                               lookback_days: int = 7,
+                               as_of: Optional[str] = None) -> List[Dict]:
         """Fallback OI fetch when the snapshot endpoint 404s.
 
         ``bulk_snapshot/option/open_interest`` sometimes returns 404 for
@@ -906,13 +920,14 @@ class ThetaDataController:
         expiry that hasn't settled yet).  The historical endpoint
         ``bulk_hist/option/open_interest`` *does* have OI for those
         expiries -- it just takes a single date at a time, so we probe
-        backwards from today until we hit a trading day with data.
+        backwards from ``as_of`` (default: today) until we hit a trading
+        day with data.
 
         Returns the same list-of-dicts shape as ``option_bulk_oi``.
         Returns ``[]`` if no recent trading day has OI for this expiry.
         """
         fmt = "%Y%m%d"
-        end_dt = datetime.now().date()
+        end_dt = _as_of_date(as_of) if as_of else datetime.now().date()
         for offset in range(lookback_days):
             day = end_dt - timedelta(days=offset)
             if day.weekday() >= 5:  # skip Sat/Sun

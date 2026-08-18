@@ -26,6 +26,28 @@ import numpy as np
 
 from shared.thetadata import ThetaDataController, strike_from_theta
 
+
+def _normalize_date(value: str) -> str:
+    """Return canonical 'YYYY-MM-DD' from 'YYYY-MM-DD' or 'YYYYMMDD'; '' if invalid."""
+    if not value:
+        return ""
+    clean = str(value).replace("-", "")
+    if len(clean) != 8 or not clean.isdigit():
+        return ""
+    return f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
+
+
+def _as_of_date(as_of: Optional[str]) -> date:
+    """Resolve as_of to a date (defaults to today)."""
+    s = _normalize_date(as_of or "")
+    if not s:
+        return date.today()
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return date.today()
+
+
 # ---------------------------------------------------------------------------
 # Controller + caching
 # ---------------------------------------------------------------------------
@@ -86,12 +108,21 @@ def get_price(ticker: str) -> Optional[float]:
     return _cached(f"price:{ticker}", _produce)
 
 
-def get_ohlcv(ticker: str, lookback_days: int = 180) -> Optional[Dict]:
-    """Daily OHLCV history.
+def get_close_asof(ticker: str, as_of: Optional[str] = None,
+                   lookback_days: int = 90) -> Optional[float]:
+    """Last daily close on or before ``as_of`` (default: today)."""
+    ohlcv = get_ohlcv(ticker, lookback_days=lookback_days, as_of=as_of)
+    if ohlcv is None or len(ohlcv["close"]) == 0:
+        return None
+    return float(ohlcv["close"][-1])
+
+
+def get_ohlcv(ticker: str, lookback_days: int = 180,
+              as_of: Optional[str] = None) -> Optional[Dict]:
+    """Daily OHLCV history ending on ``as_of`` (default: today).
 
     Returns ``{"date": np.ndarray[str], "high": np.ndarray[float],
     "low": ..., "close": ..., "volume": ...}`` oldest -> newest, or None.
-    ``lookback_days`` is calendar days; the client paginates internally.
     """
     c = _get_controller()
     if c is None:
@@ -99,7 +130,7 @@ def get_ohlcv(ticker: str, lookback_days: int = 180) -> Optional[Dict]:
 
     def _produce():
         try:
-            end = date.today()
+            end = _as_of_date(as_of)
             start = end - timedelta(days=lookback_days)
             rows = c.hist_stock_eod(
                 ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
@@ -110,7 +141,7 @@ def get_ohlcv(ticker: str, lookback_days: int = 180) -> Optional[Dict]:
             return None
         return _ohlcv_from_rows(rows)
 
-    return _cached(f"ohlcv:{ticker}:{lookback_days}", _produce)
+    return _cached(f"ohlcv:{ticker}:{lookback_days}:{as_of or 'today'}", _produce)
 
 
 def _date_key(row: Dict) -> str:
@@ -275,10 +306,13 @@ def _normalize_chain_rows(rows: List[Dict]) -> List[Dict]:
     return out
 
 
-def get_chain_oi(ticker: str, exp: str) -> Optional[List[Dict]]:
+def get_chain_oi(ticker: str, exp: str,
+                 as_of: Optional[str] = None) -> Optional[List[Dict]]:
     """Per-strike open interest for one expiry.
 
-    Returns normalized rows ``{"strike", "right", "oi"}`` or None.
+    Returns normalized rows ``{"strike", "right", "oi"}`` or None. With
+    ``as_of`` the historical OI route (probed back from that date) is used;
+    otherwise the live snapshot endpoint.
     """
     c = _get_controller()
     if c is None:
@@ -286,16 +320,21 @@ def get_chain_oi(ticker: str, exp: str) -> Optional[List[Dict]]:
 
     def _produce():
         try:
-            rows = c.option_bulk_oi(ticker, exp)
+            if as_of:
+                rows = c.option_bulk_oi_latest(ticker, exp, lookback_days=35, as_of=as_of)
+            else:
+                rows = c.option_bulk_oi(ticker, exp)
         except Exception:
             return None
         rows = _normalize_chain_rows(rows)
         for r in rows:
+            if "oi" not in r and "open_interest" in r:
+                r["oi"] = r["open_interest"]
             if "oi" not in r:
                 r["oi"] = 0.0
         return rows or None
 
-    return _cached(f"oi:{ticker}:{exp}", _produce)
+    return _cached(f"oi:{ticker}:{exp}:{as_of or 'snapshot'}", _produce)
 
 
 def _latest_day_rows(rows: List[Dict]) -> List[Dict]:
@@ -307,15 +346,20 @@ def _latest_day_rows(rows: List[Dict]) -> List[Dict]:
     return [r for r in rows if str(r.get("date", "")) == latest]
 
 
-def get_chain_eod_volume(ticker: str, exp: str, lookback_days: int = 35) -> Optional[List[Dict]]:
-    """Latest trading day's volume + close for every contract in one expiry."""
+def get_chain_eod_volume(ticker: str, exp: str, lookback_days: int = 35,
+                         as_of: Optional[str] = None) -> Optional[List[Dict]]:
+    """Trading day's volume + close for every contract in one expiry.
+
+    With ``as_of``, the fetch window ends on that date and rows are the
+    latest trading day present (<= as_of). Without it, latest day as today.
+    """
     c = _get_controller()
     if c is None:
         return None
 
     def _produce():
         try:
-            end = date.today()
+            end = _as_of_date(as_of)
             start = end - timedelta(days=lookback_days)
             rows = c.option_bulk_hist_eod(
                 ticker, exp, start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
@@ -329,7 +373,7 @@ def get_chain_eod_volume(ticker: str, exp: str, lookback_days: int = 35) -> Opti
         rows = [r for r in rows if "volume" in r]
         return rows or None
 
-    return _cached(f"voleod:{ticker}:{exp}", _produce)
+    return _cached(f"voleod:{ticker}:{exp}:{as_of or 'today'}", _produce)
 
 
 def get_chain_quote(ticker: str, exp: str, strike: float, right: str = "C") -> Optional[Dict]:
@@ -357,15 +401,18 @@ def get_chain_quote(ticker: str, exp: str, strike: float, right: str = "C") -> O
     return _cached(f"quote:{ticker}:{exp}:{strike}:{right}", _produce)
 
 
-def get_dealer_gamma(ticker: str) -> Optional[Dict]:
-    """PotatoHedge's vendor dealer-positioning snapshot (latest day)."""
+def get_dealer_gamma(ticker: str, as_of: Optional[str] = None) -> Optional[Dict]:
+    """PotatoHedge's vendor dealer-positioning snapshot (latest day).
+
+    With ``as_of`` the 10-day fetch window ends on that date.
+    """
     c = _get_controller()
     if c is None:
         return None
 
     def _produce():
         try:
-            end = date.today()
+            end = _as_of_date(as_of)
             start = end - timedelta(days=10)
             payload = c.get_dealer_positioning(
                 ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
@@ -379,7 +426,7 @@ def get_dealer_gamma(ticker: str) -> Optional[Dict]:
             return {"rows": payload}
         return None
 
-    return _cached(f"dealer:{ticker}", _produce)
+    return _cached(f"dealer:{ticker}:{as_of or 'today'}", _produce)
 
 
 def clear_cache() -> None:
