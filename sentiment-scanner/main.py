@@ -242,6 +242,15 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="After scan, launch Volatility Suite on the highlight pack.",
     )
+    parser.add_argument(
+        "--universe",
+        default=None,
+        help="Comma-separated ticker list (e.g. SPY,QQQ,NVDA). Runs one directional "
+             "scan pass (narrative + 6 options scanners [no GEX] + real OI snapshot "
+             "+ composite signals) over exactly this list instead of StockTwits's "
+             "trending symbols, writes results to outputs/directional_scan_*.json, "
+             "and exits -- no looping, no sector-rotation/PDF prompts.",
+    )
     return parser.parse_args()
 
 
@@ -410,6 +419,118 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
     return alerts, cycle_raw
 
 
+# Signal names that, on their own, indicate a narrative-corroborated setup --
+# used by run_directional_scan's strong-signal gate below.
+_HIGH_CONVICTION_SIGNALS = (
+    "DIRECTIONAL_BET_FORMING", "VOL_EVENT_DETECTED", "GAMMA_SQUEEZE_RISK",
+    "OI_SURGE_WITH_NARRATIVE", "RICH_VOL_PLUS_NARRATIVE", "EXTREME_SKEW_PLUS_NARRATIVE",
+    "PIN_ACTION_WITH_NARRATIVE", "FAR_FROM_PAIN_PLUS_NARRATIVE",
+    "DISPERSION_SETUP_PLUS_NARRATIVE", "EARNINGS_VOL_PLUS_NARRATIVE",
+)
+
+
+def run_directional_scan(tickers, engine, benchmark="SPY"):
+    """Run the narrative + 6-scanner (GEX skipped -- expensive) + real-OI +
+    composite-signal pipeline over an explicit ticker universe, and write a
+    JSON results file. One-shot, not looped -- for "screen exactly this
+    watchlist" runs rather than StockTwits's trending-symbol discovery.
+
+    Returns (results, out_path): results maps ticker -> its result dict,
+    out_path is the JSON file written to outputs/.
+    """
+    st = StockTwitsScraper()
+    results = {}
+    start = time.time()
+    try:
+        for i, ticker in enumerate(tickers):
+            t0 = time.time()
+            row = {"ticker": ticker, "narrative": None, "scanners": {}, "oi": {},
+                   "signals": [], "severity": "LOW", "errors": []}
+
+            # 1. Narrative (CNS / war) -- feeds the signal rules
+            try:
+                msgs = st.get_ticker_stream(ticker, max_pages=2)
+                if msgs:
+                    scores = score_messages(msgs)
+                    engine.record_narrative(ticker, scores)
+                    row["narrative"] = {
+                        "cns": scores.get("contested_narrative_score"),
+                        "war": round(scores.get("war_score", 0), 3),
+                        "bullish_pct": scores.get("bullish_pct"),
+                        "bearish_pct": scores.get("bearish_pct"),
+                        "volume": scores.get("volume"),
+                    }
+                else:
+                    row["errors"].append("no_narrative_messages")
+            except Exception as e:
+                row["errors"].append(f"narrative:{e}")
+
+            # 2. Options scanners (GEX skipped -- expensive; 6 remain)
+            try:
+                _, raw = run_options_scanners(ticker, engine, benchmark=benchmark, skip_gex=True)
+                for name, r in raw.items():
+                    if r is None:
+                        continue
+                    err = getattr(r, "error", None)
+                    if err:
+                        row["scanners"][name] = {"status": "error", "error": str(err)}
+                    else:
+                        d = {"status": "ok"}
+                        for attr in ("surge_detected", "regime", "skew_signal", "near_pin",
+                                     "price_vs_pain_pct", "dispersion_signal", "premium_pct",
+                                     "atm_iv", "iv_rank", "total_oi", "call_oi", "put_oi"):
+                            v = getattr(r, attr, None)
+                            if v is not None and not callable(v):
+                                d[attr] = round(v, 4) if isinstance(v, float) else v
+                        row["scanners"][name] = d
+            except Exception as e:
+                row["errors"].append(f"scanners:{e}")
+
+            # 3. Real OI snapshot (feeds the OI signal rules)
+            try:
+                oi = build_oi_snapshot(ticker)
+                row["oi"] = oi if "error" not in oi else {"error": oi.get("error")}
+            except Exception as e:
+                row["oi"] = {"error": str(e)}
+
+            # 4. Composite signals
+            try:
+                sig = engine.correlate_with_oi(ticker, row["oi"])
+                row["signals"] = sig.get("signals", [])
+                row["severity"] = sig.get("severity", "LOW")
+            except Exception as e:
+                row["errors"].append(f"correlate:{e}")
+
+            # 5. Strong-signal gate for downstream unified runs
+            n_high = sum(1 for s in row["signals"] if s.endswith("_PLUS_NARRATIVE")
+                         or s in _HIGH_CONVICTION_SIGNALS)
+            cns = (row["narrative"] or {}).get("cns") or 0
+            row["strong"] = (row["severity"] == "HIGH") or (len(row["signals"]) >= 2) \
+                or (n_high >= 1 and cns >= 40)
+            row["elapsed_s"] = round(time.time() - t0, 1)
+            results[ticker] = row
+
+            print(f"[{i+1}/{len(tickers)}] {ticker:6s} | sev={row['severity']:6s} | "
+                  f"signals={len(row['signals']):2d} | CNS={cns:3d} | "
+                  f"strong={row['strong']} | {row['elapsed_s']}s", flush=True)
+            time.sleep(0.5)
+    finally:
+        st.close()
+
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(
+        out_dir, f"directional_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"timestamp": datetime.now().isoformat(), "universe_size": len(tickers),
+                   "results": results}, f, indent=2, default=str)
+
+    strong = [t for t, r in results.items() if r["strong"]]
+    print(f"\nDONE in {time.time()-start:.0f}s -- {len(strong)} strong: {', '.join(strong)}")
+    print(f"OUTPUT {out_path}")
+    return results, out_path
+
+
 def deep_dive(ticker):
     print(f"\n{'='*60}")
     print(f"DEEP DIVE: {ticker}")
@@ -476,6 +597,19 @@ def main():
             pass
 
     args = _parse_args()
+
+    if args.universe:
+        tickers = [t.strip().upper() for t in args.universe.split(",") if t.strip()]
+        if not tickers:
+            print("--universe was given but contained no tickers.")
+            return
+        engine = CorrelationEngine()
+        try:
+            run_directional_scan(tickers, engine, benchmark=args.benchmark)
+        finally:
+            close_td()
+        return
+
     print("="*60)
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")
     print("="*60)

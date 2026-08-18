@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -537,6 +538,7 @@ class TestMainKeyboardInterruptBeforeFirstCycle:
         fake_args.skip_youtube = False
         fake_args.export_context_path = None
         fake_args.launch_vol_suite = False
+        fake_args.universe = None
         monkeypatch.setattr(main_mod, "_parse_args", lambda: fake_args)
 
         st = MagicMock()
@@ -566,3 +568,146 @@ class TestMainKeyboardInterruptBeforeFirstCycle:
         assert report_calls == [{}]
         assert launch_calls == []
         st.close.assert_called_once()
+
+
+class TestRunDirectionalScan:
+    """--universe TICKER,TICKER runs this instead of the trending-symbol
+    scrape: narrative + 6 scanners (GEX skipped) + real OI + composite
+    signals over an explicit ticker list, one-shot, JSON output."""
+
+    def _patch_common(self, monkeypatch, oi_snapshot=None, correlate_result=None):
+        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
+        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+        monkeypatch.setattr(
+            main_mod, "_scan_earnings_ticker", lambda ticker, td=None: _FakeScan("earn"))
+        monkeypatch.setattr(
+            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}")
+        monkeypatch.setattr(
+            main_mod, "build_oi_snapshot",
+            lambda ticker: oi_snapshot if oi_snapshot is not None else {"total_oi": 100})
+
+        st = MagicMock()
+        st.get_ticker_stream.return_value = [{"body": "to the moon"}]
+        monkeypatch.setattr(main_mod, "StockTwitsScraper", lambda: st)
+
+        monkeypatch.setattr(
+            main_mod, "score_messages",
+            lambda msgs: {
+                "contested_narrative_score": 55, "war_score": 0.4,
+                "bullish_pct": 60.0, "bearish_pct": 20.0, "volume": len(msgs),
+            },
+        )
+        return st
+
+    def test_writes_a_result_per_ticker_and_a_json_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
+        self._patch_common(monkeypatch)
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {"signals": [], "severity": "LOW"}
+
+        results, out_path = main_mod.run_directional_scan(["AAPL", "NVDA"], engine)
+
+        assert set(results) == {"AAPL", "NVDA"}
+        assert results["AAPL"]["narrative"]["cns"] == 55
+        assert results["AAPL"]["scanners"]["unusual_oi"]["status"] == "ok"
+        assert "gex" not in results["AAPL"]["scanners"]  # GEX always skipped here
+        assert Path(out_path).exists()
+        saved = json.loads(Path(out_path).read_text(encoding="utf-8"))
+        assert saved["universe_size"] == 2
+        assert set(saved["results"]) == {"AAPL", "NVDA"}
+
+    def test_strong_flag_set_when_severity_is_high(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
+        self._patch_common(monkeypatch)
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {
+            "signals": ["GAMMA_SQUEEZE_RISK"], "severity": "HIGH"}
+
+        results, _ = main_mod.run_directional_scan(["AAPL"], engine)
+
+        assert results["AAPL"]["strong"] is True
+
+    def test_strong_flag_false_on_low_severity_single_signal_low_cns(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
+        self._patch_common(monkeypatch)
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {
+            "signals": ["OI_SURGE_WITH_NARRATIVE"], "severity": "LOW"}
+        monkeypatch.setattr(
+            main_mod, "score_messages",
+            lambda msgs: {
+                "contested_narrative_score": 10, "war_score": 0.1,
+                "bullish_pct": 50.0, "bearish_pct": 50.0, "volume": 1,
+            },
+        )
+
+        results, _ = main_mod.run_directional_scan(["AAPL"], engine)
+
+        assert results["AAPL"]["strong"] is False
+
+    def test_a_ticker_erroring_does_not_abort_the_rest_of_the_universe(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ) -> None:
+        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
+        st = self._patch_common(monkeypatch)
+
+        def _stream(ticker, max_pages=2):
+            if ticker == "BAD":
+                raise RuntimeError("stocktwits boom")
+            return [{"body": "hi"}]
+        st.get_ticker_stream.side_effect = _stream
+
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {"signals": [], "severity": "LOW"}
+
+        results, _ = main_mod.run_directional_scan(["BAD", "AAPL"], engine)
+
+        assert results["BAD"]["errors"] == ["narrative:stocktwits boom"]
+        assert results["AAPL"]["narrative"]["cns"] == 55
+
+
+class TestMainUniverseDispatch:
+    def test_universe_flag_dispatches_to_run_directional_scan_and_returns(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_args = MagicMock()
+        fake_args.universe = "aapl, nvda ,,spy"
+        monkeypatch.setattr(main_mod, "_parse_args", lambda: fake_args)
+        monkeypatch.setattr(main_mod, "CorrelationEngine", lambda: MagicMock())
+        close_calls = []
+        monkeypatch.setattr(main_mod, "close_td", lambda: close_calls.append(1))
+
+        calls = []
+
+        def _fake_run(tickers, engine, benchmark="SPY"):
+            calls.append(tickers)
+            return {}, "out.json"
+
+        monkeypatch.setattr(main_mod, "run_directional_scan", _fake_run)
+
+        main_mod.main()
+
+        assert calls == [["AAPL", "NVDA", "SPY"]], "must upper-case, strip, and drop blanks"
+        assert close_calls == [1]
+
+    def test_universe_with_only_blanks_prints_a_message_and_does_not_scan(
+        self, monkeypatch: pytest.MonkeyPatch, capsys,
+    ) -> None:
+        fake_args = MagicMock()
+        fake_args.universe = " , , "
+        monkeypatch.setattr(main_mod, "_parse_args", lambda: fake_args)
+
+        calls = []
+        monkeypatch.setattr(
+            main_mod, "run_directional_scan", lambda *a, **kw: calls.append(1))
+
+        main_mod.main()
+
+        assert calls == []
+        assert "no tickers" in capsys.readouterr().out
