@@ -10,6 +10,7 @@ from typing import Any
 
 from shared.chart_data import (
     CandlePayload,
+    CandleRecord,
     ChartDataError,
     _parse_timestamp,
     normalize_candles,
@@ -264,4 +265,49 @@ def fetch_intraday_candles(
         raise ChartDataError(f"intraday spot-history provider failed ({type(exc).__name__})") from exc
 
 
-__all__ = ["fetch_daily_candles", "fetch_intraday_candles", "validate_intraday_lookback"]
+_RTH_START = time(9, 30)
+_RTH_END = time(16, 0)
+
+
+def _is_rth_session(timestamp: datetime) -> bool:
+    """Return whether ``timestamp`` falls inside regular trading hours."""
+    return _RTH_START <= timestamp.time() < _RTH_END
+
+
+def intraday_bars_as_of(ticker: str, interval: str, ts: datetime | str) -> list[CandleRecord]:
+    """Return intraday OHLCV bars for ``ticker`` as they existed up to ``ts``.
+
+    Fetches one intraday payload via ``fetch_intraday_candles`` (default
+    one-day lookback) and filters in Python to bars with
+    ``timestamp <= ts`` — a bar exactly at ``ts`` is INCLUDED (closed-bar
+    semantics) — that fall inside regular trading hours (09:30–16:00,
+    exchange-local). The result is sorted ascending. ``ts`` may be a naive
+    exchange-local ``datetime`` or an ISO-8601 string.
+
+    Never raises: a failed fetch, an unparseable ``ts``, or an empty payload
+    all degrade to ``[]`` so indicator callers can treat missing data as
+    neutral without fabricating bars.
+    """
+    try:
+        cutoff = _parse_timestamp(ts)
+    except ChartDataError:
+        return []
+    try:
+        payload = fetch_intraday_candles(ticker, interval=interval)
+    except Exception:
+        return []
+    bars = [
+        observation
+        for observation in payload.observations
+        if observation.timestamp <= cutoff and _is_rth_session(observation.timestamp)
+    ]
+    bars.sort(key=lambda record: record.timestamp)
+    return bars
+
+
+__all__ = [
+    "fetch_daily_candles",
+    "fetch_intraday_candles",
+    "intraday_bars_as_of",
+    "validate_intraday_lookback",
+]

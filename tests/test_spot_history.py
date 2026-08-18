@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 
 import pytest
 
-from shared.chart_data import CandlePayload, ChartDataError
+from shared.chart_data import CandlePayload, CandleRecord, ChartDataError
 import shared.spot_history as spot_history
 from shared.spot_history import fetch_daily_candles, fetch_intraday_candles
 
@@ -328,3 +328,136 @@ def test_fetch_intraday_defaults_to_one_day_and_validates_lookback():
     assert calls == ["1d"]
     with pytest.raises(ChartDataError, match="intraday lookback"):
         fetch_intraday_candles("SPY", lookback="6m", provider=provider)
+
+
+def _as_of_payload() -> CandlePayload:
+    """SPY 15m fixture: four RTH bars plus one after-hours (16:00) bar."""
+    return CandlePayload(
+        ticker="SPY",
+        interval="15m",
+        lookback="1d",
+        source="test",
+        observations=(
+            CandleRecord(timestamp=datetime(2026, 8, 14, 9, 30), open=100.0, high=101.0, low=99.0, close=100.5, volume=10.0),
+            CandleRecord(timestamp=datetime(2026, 8, 14, 9, 45), open=100.5, high=102.0, low=100.0, close=101.5, volume=20.0),
+            CandleRecord(timestamp=datetime(2026, 8, 14, 10, 0), open=101.5, high=103.0, low=101.0, close=102.0, volume=30.0),
+            CandleRecord(timestamp=datetime(2026, 8, 14, 10, 15), open=102.0, high=103.5, low=101.5, close=103.0, volume=40.0),
+            CandleRecord(timestamp=datetime(2026, 8, 14, 16, 0), open=103.0, high=104.0, low=102.5, close=103.5, volume=50.0),
+        ),
+    )
+
+
+def _stub_intraday_fetch(monkeypatch, payload):
+    monkeypatch.setattr(spot_history, "fetch_intraday_candles", lambda *args, **kwargs: payload)
+
+
+def test_intraday_bars_as_of_returns_bars_up_to_ts_ascending(monkeypatch):
+    _stub_intraday_fetch(monkeypatch, _as_of_payload())
+
+    bars = spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 9, 45))
+
+    assert [bar.timestamp for bar in bars] == [
+        datetime(2026, 8, 14, 9, 30),
+        datetime(2026, 8, 14, 9, 45),
+    ]
+    assert all(isinstance(bar, CandleRecord) for bar in bars)
+
+
+def test_intraday_bars_as_of_includes_bar_at_ts(monkeypatch):
+    _stub_intraday_fetch(monkeypatch, _as_of_payload())
+
+    bars = spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 10, 0))
+
+    assert [bar.timestamp for bar in bars] == [
+        datetime(2026, 8, 14, 9, 30),
+        datetime(2026, 8, 14, 9, 45),
+        datetime(2026, 8, 14, 10, 0),
+    ]
+
+
+def test_intraday_bars_as_of_before_first_bar_returns_empty(monkeypatch):
+    _stub_intraday_fetch(monkeypatch, _as_of_payload())
+
+    assert spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 9, 15)) == []
+
+
+def test_intraday_bars_as_of_excludes_after_hours_bars(monkeypatch):
+    _stub_intraday_fetch(monkeypatch, _as_of_payload())
+
+    bars = spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 16, 30))
+
+    assert [bar.timestamp for bar in bars] == [
+        datetime(2026, 8, 14, 9, 30),
+        datetime(2026, 8, 14, 9, 45),
+        datetime(2026, 8, 14, 10, 0),
+        datetime(2026, 8, 14, 10, 15),
+    ]
+    assert all(bar.timestamp.hour < 16 for bar in bars)
+
+
+def test_intraday_bars_as_of_accepts_iso_string_ts(monkeypatch):
+    _stub_intraday_fetch(monkeypatch, _as_of_payload())
+
+    bars = spot_history.intraday_bars_as_of("SPY", "15m", "2026-08-14T09:45:00")
+
+    assert [bar.timestamp for bar in bars] == [
+        datetime(2026, 8, 14, 9, 30),
+        datetime(2026, 8, 14, 9, 45),
+    ]
+
+
+def test_intraday_bars_as_of_forwards_ticker_interval_and_default_lookback(monkeypatch):
+    calls = []
+
+    def fake_fetch(ticker, *, interval="15m", lookback="1d", provider=None):
+        calls.append((ticker, interval, lookback))
+        return _as_of_payload()
+
+    monkeypatch.setattr(spot_history, "fetch_intraday_candles", fake_fetch)
+
+    spot_history.intraday_bars_as_of("SPY", "5m", datetime(2026, 8, 14, 9, 45))
+
+    assert calls == [("SPY", "5m", "1d")]
+
+
+def test_intraday_bars_as_of_sorts_unsorted_payload(monkeypatch):
+    payload = CandlePayload(
+        ticker="SPY",
+        interval="15m",
+        lookback="1d",
+        source="test",
+        observations=(
+            CandleRecord(timestamp=datetime(2026, 8, 14, 10, 15), open=102.0, high=103.5, low=101.5, close=103.0, volume=40.0),
+            CandleRecord(timestamp=datetime(2026, 8, 14, 9, 30), open=100.0, high=101.0, low=99.0, close=100.5, volume=10.0),
+        ),
+    )
+    _stub_intraday_fetch(monkeypatch, payload)
+
+    bars = spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 16, 0))
+
+    assert [bar.timestamp for bar in bars] == [
+        datetime(2026, 8, 14, 9, 30),
+        datetime(2026, 8, 14, 10, 15),
+    ]
+
+
+def test_intraday_bars_as_of_degrades_to_empty_on_fetch_failure(monkeypatch):
+    def fake_fetch(ticker, *, interval="15m", lookback="1d", provider=None):
+        raise ChartDataError("provider failed")
+
+    monkeypatch.setattr(spot_history, "fetch_intraday_candles", fake_fetch)
+
+    assert spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 9, 45)) == []
+
+
+def test_intraday_bars_as_of_degrades_to_empty_on_empty_payload(monkeypatch):
+    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d", source="test", observations=())
+    _stub_intraday_fetch(monkeypatch, payload)
+
+    assert spot_history.intraday_bars_as_of("SPY", "15m", datetime(2026, 8, 14, 9, 45)) == []
+
+
+def test_intraday_bars_as_of_degrades_to_empty_on_invalid_ts(monkeypatch):
+    _stub_intraday_fetch(monkeypatch, _as_of_payload())
+
+    assert spot_history.intraday_bars_as_of("SPY", "15m", "not-a-timestamp") == []
