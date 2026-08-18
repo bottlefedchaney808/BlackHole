@@ -209,7 +209,7 @@ def test_render_candlestick_draws_direction_markers(tmp_path):
 
     assert _marker_for_conviction("HIGH") == "buy"
     assert _marker_for_conviction("MEDIUM") == "weak_buy"
-    assert _marker_for_conviction("NONE") == "sell"
+    assert _marker_for_conviction("NONE") == "none"  # no marker without 3/5 signals
     assert _marker_for_conviction("BOGUS") == "none"
 
     records = tuple(
@@ -224,6 +224,34 @@ def test_render_candlestick_draws_direction_markers(tmp_path):
                               direction_overlay=[
                                   {"date": "2026-08-12", "conviction": "HIGH",
                                    "score": 4, "signals": {}},
+                                  {"date": "2026-08-13", "conviction": "NONE",
+                                   "score": 1, "signals": {}},
                               ],
                               live_note="LIVE: HIGH (4/5)")
+    assert path.exists() and path.stat().st_size > 0
+
+
+def test_render_candlestick_skips_markers_below_score_threshold(tmp_path):
+    """A bar only gets a marker when >=3 of 5 signals fire (score >= 3)."""
+    from shared.chart_data import CandlePayload, CandleRecord
+    from shared.candlestick_chart import render_candlestick, _marker_for_conviction
+    from datetime import datetime
+
+    # NONE at score 2 (only 2/5 signals) -> no marker, same as no overlay entry.
+    assert _marker_for_conviction("NONE") == "none"
+
+    records = tuple(
+        CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0, high=102.0,
+                     low=99.0, close=101.0, volume=1000)
+        for _ in range(2)
+    )
+    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d",
+                            source="thetadata", observations=records)
+    out = tmp_path / "chart.png"
+    path = render_candlestick(payload, out,
+                              direction_overlay=[
+                                  {"date": "2026-08-12", "conviction": "NONE",
+                                   "score": 2, "signals": {}},
+                              ],
+                              live_note="LIVE: NONE (2/5)")
     assert path.exists() and path.stat().st_size > 0

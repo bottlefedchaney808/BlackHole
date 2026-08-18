@@ -238,11 +238,14 @@ def _compress_non_trading_gaps(dates: list[float]) -> list[float]:
 
 
 def _marker_for_conviction(conviction: str) -> str:
-    """Map a Direction conviction to a marker kind: buy/weak_buy/sell/none."""
+    """Map a Direction conviction to a marker kind: buy/weak_buy/none.
+
+    Only a real signal (conviction HIGH/MEDIUM) draws a marker; NONE (no
+    whale or <3/5 signals) draws nothing — the chart must not mark every bar.
+    """
     return {
         "HIGH": "buy",
         "MEDIUM": "weak_buy",
-        "NONE": "sell",
     }.get(str(conviction).upper(), "none")
 
 
@@ -369,16 +372,18 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
             marker_style = {
                 "buy": ("^", "lime", 1.0),
                 "weak_buy": ("^", "cyan", 0.65),
-                "sell": ("v", "orchid", 1.0),
             }
             for i, obs in enumerate(observations):
-                kind = _marker_for_conviction(
-                    by_date.get(obs.timestamp.date().isoformat(), {}).get("conviction", "")
-                )
+                entry = by_date.get(obs.timestamp.date().isoformat(), {})
+                # Only a real signal draws a marker: >=3 of 5 signals must
+                # fire (score >= 3) AND conviction must be HIGH/MEDIUM.
+                if int(entry.get("score", 0) or 0) < 3:
+                    continue
+                kind = _marker_for_conviction(entry.get("conviction", ""))
                 if kind not in marker_style:
                     continue
                 glyph, color, alpha = marker_style[kind]
-                y = obs.low - 0.03 * spread if kind != "sell" else obs.high + 0.03 * spread
+                y = obs.low - 0.03 * spread
                 axis.annotate(glyph, xy=(dates[i], y), fontsize=11, color=color,
                               alpha=alpha, ha="center", va="center",
                               annotation_clip=False)
