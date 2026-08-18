@@ -92,6 +92,280 @@ network, and are **not caused by this migration**:
    approved-by-implementation at this point).
 5. Get user sign-off, then commit. Nothing has been committed yet — this is still all working-tree state.
 
+## 2026-08-18 — Intraday-capability inventory (from installed SDK, not docs)
+
+Source of truth: `potatohedge==2.0.1` installed SDK's `METHOD_GRAPH` (`potatohedge/client_v2.py`),
+enumerated live from `.venv/Lib/site-packages/potatohedge/_generated/descriptors.py`. This corrects
+the earlier assumption that only EOD/daily data exists for flow/liquidity — several namespaces expose
+**intraday** endpoints (interval/ms-of-day/window parameters). Relevant for the Direction-chart
+indicator work (per-bar replay) and any intraday research.
+
+### flow namespace — intraday-capable (whale-flow wall is soft, not hard)
+
+| Endpoint | Signature (key params) | Intraday? |
+|---|---|---|
+| `flow.recent` | `window` (5/15/30/60 min), `limit`, `sort_by`, `direction` | ✅ snapshot, windowed |
+| `flow.scanner_trades` | `start_date`, `end_date`, **`start_time`, `end_time`**, `root`, `min_premium`, `min_size`, `trade_type`, `sentiment`, `option_type`, `moneyness`, `min_dte`, `max_dte`, `min_score_delta` | ✅ time-filtered trades |
+| `flow.scanner_trades_in_time_range` | `root`, **`start_datetime`, `end_datetime`**, `min_premium`, `sentiment` | ✅ explicit datetime range |
+| `flow.sweeps` | `start_date`, `end_date`, `root`, `sentiment`, `min_premium`, `min_contracts`, `min_exchanges` | ✅ date-range sweeps |
+| `flow.sweeps_intensity` | `start_date`, `end_date`, `root`, `min_sweeps` | ✅ date-range |
+| `flow.timeseries` | `start_date`, `end_date`, `root`, `aggregate_by`, **`interval`** | ✅ interval-aggregated series |
+| `flow.iso_sweep_aggregate` | `ticker`, `date`, `window`, `sentiment`, `min_premium`, `min_size` | ✅ windowed iso sweeps |
+| `flow.unusual` / `flow.unusual_summary` | `start_date`, `end_date`, `root`, `min_score`, `category`, `sentiment`, `has_large_blocks`, `has_sweep_activity` | ✅ date-range |
+| `flow.analysis` | `root`, `date`, `exp`, `aggregate_by`, `include_execution_metrics` | date-level (aggregate_by) |
+| `flow.option_volume_analysis` | `root`, `lookback_sessions`, `end_date`, `source_roots` | multi-session |
+| swap-flow family (`flow.signal`, `s1`–`s5`, `validated_signals`, alerts…) | `ticker`/`signal_date` | signal-date level |
+
+### dealer namespace — intraday-capable (dealer-gamma wall is soft too)
+
+| Endpoint | Signature (key params) | Intraday? |
+|---|---|---|
+| `dealer.weighted_greeks` | `root`, `exp`, `max_dte`, `start_date`, `end_date`, `positioning_start/end_date`, **`interval`**, **`ms_of_day`**, `normalize`, `include_oi`, `use_calculated_greeks` | ✅ **interval + ms_of_day** |
+| `dealer.weighted_greeks_summary` | same minus per-strike; has `interval`, `ms_of_day` | ✅ **interval + ms_of_day** |
+| `dealer.greek_exposures` | `ticker`, `start_date`, `end_date`, `greek_types`, `analysis_mode` | date-range history |
+| `dealer.regime_history` | `ticker`, `start_date`, `end_date` | daily history |
+| `dealer.positions` | `root`, `expiration`, `max_dte`, `start/end_date`, `latest_only`, `positioning_days` | date-range |
+| `dealer.positioning` | `root`, `expiration`, `strike`, `start/end_date`, `latest_only`, `level` | date-range |
+| `dealer.summary` | `root`, `date`, `positioning_days` | single date |
+
+### support_resistance namespace
+
+| Endpoint | Signature (key params) | Intraday? |
+|---|---|---|
+| `support_resistance.history_intraday` | `ticker`, `date`, **`interval`**, `min_strength`, `greek_type` | ✅ **intraday level history** |
+| `support_resistance.zero_dte_gamma_wall` | `ticker`, `signal_date` | signal-date |
+| `support_resistance.snapshot` | `ticker`, `as_of_date`, `price_range_pct` | snapshot/as-of |
+| `support_resistance.tiers` | `ticker`, `date`, `interval`, `limit`, `exp` | date-level |
+| `support_resistance.position_matrix` / `quadrant_summary` | `ticker`, `date`, `interval` | date-level (interval param) |
+| `support_resistance.flip_levels` / `composite_hedge` / `regime` / `positioning_context` | `ticker`, `date` | single date |
+
+### volatility namespace
+
+| Endpoint | Signature (key params) | Intraday? |
+|---|---|---|
+| `volatility.iv_surface_snapshot` | `ticker`, `trade_date`, `interval_type`, **`ms_of_day`**, `include_expiry_params` | ✅ **ms_of_day** |
+| `volatility.surface_z_history` | `root`, `expiration`, `asof_date`, `window`, `min_history`, `interval_type`, `ms_of_day` | ✅ ms_of_day |
+| `volatility.surface_change` | `root`, `expiration`, `baseline_date`, `asof_date`, `interval_type`, `ms_of_day` | ✅ ms_of_day |
+| `volatility.iv_rank` | `root`, `as_of_date`, `lookback_days` | as-of |
+| `volatility.term_structure` | `root`, `trade_date` | date-level |
+| `volatility.probabilistic_envelope` | `ticker`, `horizon_min`, `analysis_mode` | snapshot (state descriptor, NOT forecast) |
+
+### Takeaways for per-bar indicator work
+
+1. **The daily wall is NOT hard.** `dealer.weighted_greeks(interval=, ms_of_day=)`,
+   `support_resistance.history_intraday(interval=)`, `flow.scanner_trades(start_time=, end_time=)`,
+   `flow.scanner_trades_in_time_range(start_datetime=, end_datetime=)`, and
+   `volatility.iv_surface_snapshot(ms_of_day=)` all give genuine intraday resolution.
+2. **Cost/feasibility is the real constraint, not availability.** `dealer.weighted_greeks` is
+   `retry_policy=unsafe` + risk MEDIUM (per descriptor) — heavy; `flow.timeseries`/`scanner_trades`
+   are `safe`/low-risk. Per-bar fan-out of heavy endpoints will still need staged concurrency (see the
+   pitfall: >2 concurrent heavy runs → 502 storms).
+3. **EOD contract endpoints remain daily** (`option_bulk_hist_eod`, `option_bulk_hist_oi`,
+   `option_bulk_hist_greeks`) — those are the volume/OI *history* feeds, not intraday. Intraday option
+   *trades/greeks* come from the flow namespace + `volatility.*` + `dealer.weighted_greeks`.
+4. Facade (`shared/thetadata.py`) does not yet expose most of these — direct
+   `potatohedge.client_v2.PHClient` usage is needed for anything beyond the ~28 wrapped methods.
+
+## 2026-08-18 — Complete endpoint catalog (installed SDK 2.0.1, all namespaces)
+
+Source: `potatohedge==2.0.1` `METHOD_GRAPH` enumerated from the installed SDK at
+Total: **140 endpoints** across 10 namespaces.
+`.venv/Lib/site-packages/potatohedge/_generated/descriptors.py` (machine-readable contracts —
+path, params, auth, retry). This is the FULL catalog; the intraday-capability tables above are a subset.
+
+Auth capabilities: `market.read/refresh`, `options.read`, `dealer.read/bulk.read`, `flow.read`,
+`volatility.read/compute`, `support_resistance.read`, `news.read`, `recipes.read`, `regsho.read`,
+`signals.read`. Retry policies: `safe` (low risk) vs `unsafe` (bulk/heavy).
+
+### dealer (8)
+
+| Method | Path | Params |
+|---|---|---|
+| `dealer.greek_exposures` | `/api/greeks/exposures/{ticker}` | `ticker, start_date, end_date, greek_types, analysis_mode` |
+| `dealer.positioning` | `/api/db/dealer_positioning` | `root, expiration, strike, trade_right, start_date, end_date, latest_only, level, use_csv` |
+| `dealer.positions` | `/api/dealer/positions` | `root, expiration, max_dte, strike, trade_right, start_date, end_date, latest_only, level, positioning_days, use_csv` |
+| `dealer.regime_history` | `/api/dealer/regime-history/{ticker}` | `ticker, start_date, end_date` |
+| `dealer.summary` | `/api/dealer/summary/{root}` | `root, date, positioning_days` |
+| `dealer.weighted_greeks` | `/api/dealer/weighted-greeks/{root}` | `root, exp, max_dte, start_date, end_date, positioning_start_date, positioning_end_date, positioning_days, interval, ms_of_day, normalize, use_csv, include_oi, columns, use_cache, use_calculated_greeks` |
+| `dealer.weighted_greeks_summary` | `/api/dealer/weighted-greeks/{root}/summary` | `root, exp, start_date, end_date, positioning_start_date, positioning_end_date, positioning_days, interval, ms_of_day, use_cache, use_calculated_greeks` |
+| `dealer.zero_dte_charm` | `/api/zero-dte/charm/{ticker}` | `ticker, signal_date` |
+
+### flow (34)
+
+| Method | Path | Params |
+|---|---|---|
+| `flow.analysis` | `/api/flow/analysis/{root}` | `root, date, exp, aggregate_by, include_execution_metrics, use_csv` |
+| `flow.anomalies` | `/api/flow/anomalies` | `date, root, lookback, min_severity, limit, use_csv` |
+| `flow.bearish_alerts` | `/api/swap-flow/bearish-alerts` | `signal_date, limit` |
+| `flow.compound_bearish` | `/api/swap-flow/compound-bearish` | `signal_date, limit` |
+| `flow.entry_price` | `/api/swap-flow/entry-price/{ticker}` | `ticker, date` |
+| `flow.iso_sweep_aggregate` | `/api/flow/iso-sweep-aggregate` | `ticker, date, window, sentiment, min_premium, min_size, include_neutral` |
+| `flow.long_alerts` | `/api/swap-flow/long-alerts` | `signal_date, limit` |
+| `flow.maturity_alerts` | `/api/swap-flow/maturity-alerts` | `signal_date, limit` |
+| `flow.momentum` | `/api/flow/momentum` | `date, root, limit, min_volume, use_csv` |
+| `flow.non_roll` | `/api/swap-flow/non-roll/{ticker}` | `ticker, date` |
+| `flow.option_volume_analysis` | `/api/flow/option-volume-analysis/{root}` | `root, lookback_sessions, end_date, source_roots` |
+| `flow.recent` | `/api/flow/recent` | `window, limit, sort_by, direction, use_csv` |
+| `flow.s1` | `/api/swap-flow/s1/{ticker}` | `ticker, signal_date` |
+| `flow.s1_alerts` | `/api/swap-flow/s1/alerts` | `signal_date` |
+| `flow.s2` | `/api/swap-flow/s2/{ticker}` | `ticker, signal_date` |
+| `flow.s2_alerts` | `/api/swap-flow/s2/alerts` | `signal_date` |
+| `flow.s3` | `/api/swap-flow/s3/{ticker}` | `ticker, signal_date` |
+| `flow.s3_alerts` | `/api/swap-flow/s3/alerts` | `signal_date` |
+| `flow.s4` | `/api/swap-flow/s4/{ticker}` | `ticker, signal_date` |
+| `flow.s4_alerts` | `/api/swap-flow/s4/alerts` | `signal_date` |
+| `flow.s5` | `/api/swap-flow/s5/{ticker}` | `ticker, signal_date` |
+| `flow.s5_alerts` | `/api/swap-flow/s5/alerts` | `signal_date` |
+| `flow.scanner_summary` | `/api/scanner/stats/summary` | `date, root, use_csv` |
+| `flow.scanner_trades` | `/api/scanner/trades` | `start_date, end_date, start_time, end_time, root, min_premium, max_premium, min_size, max_size, trade_type, sentiment, option_type, moneyness, min_dte, max_dte, max_strike_distance, min_score_delta, sort_by, sort_order, limit, offset, use_csv` |
+| `flow.scanner_trades_in_time_range` | `/api/scanner/trades/time-range` | `root, start_datetime, end_datetime, min_premium, sentiment, sort_by, sort_order, limit, use_csv` |
+| `flow.signal` | `/api/swap-flow/signal/{ticker}` | `ticker, signal_date` |
+| `flow.sweeps` | `/api/flow/sweeps` | `start_date, end_date, root, sentiment, min_premium, min_contracts, min_exchanges, limit, sort_by, use_csv` |
+| `flow.sweeps_intensity` | `/api/flow/sweeps/intensity` | `start_date, end_date, root, min_sweeps, limit, use_csv` |
+| `flow.timeseries` | `/api/flow/timeseries` | `start_date, end_date, root, aggregate_by, interval, include_variants, use_csv` |
+| `flow.top_movers` | `/api/swap-flow/top-movers` | `signal_date, limit` |
+| `flow.top_symbols` | `/api/scanner/top-symbols` | `date, sort_by, sentiment, limit, use_csv` |
+| `flow.unusual` | `/api/flow/unusual` | `start_date, end_date, root, min_score, category, sentiment, has_large_blocks, has_sweep_activity, limit, sort_by, use_csv` |
+| `flow.unusual_summary` | `/api/flow/unusual/summary` | `days, min_unusual_days, limit, use_csv` |
+| `flow.validated_signals` | `/api/swap-flow/validated-signals` | `signal_date, limit` |
+
+### market (28)
+
+| Method | Path | Params |
+|---|---|---|
+| `market.bulk_snapshot_stock_ohlc` | `/api/theta/bulk_snapshot/stock/ohlc/{root}` | `root, venue, use_csv` |
+| `market.bulk_snapshot_stock_quote` | `/api/theta/bulk_snapshot/stock/quote/{root}` | `root, venue, use_csv` |
+| `market.correlation_matrix` | `/api/correlation/matrix` | `tickers, metric, window, series_transform, min_threshold, method, date` |
+| `market.earnings_calendar` | `/api/market/earnings-calendar` | `ticker, start_date, end_date` |
+| `market.eod_readiness` | `/rollup/status` | `session_date, ticker` |
+| `market.hist_index_ohlc` | `/api/theta/hist/index/ohlc/{root}` | `root, start_date, end_date, ivl, use_csv` |
+| `market.hist_stock_quote` | `/api/theta/hist/stock/quote/{root}` | `root, start_date, end_date, ivl, rth, start_time, end_time, venue, use_csv` |
+| `market.hist_stock_trade` | `/api/theta/hist/stock/trade/{root}` | `root, start_date, end_date, use_csv` |
+| `market.hist_stock_trade_quote` | `/api/theta/hist/stock/trade_quote/{root}` | `root, start_date, end_date, exclusive, use_csv` |
+| `market.index_eod` | `/api/theta/hist/index/eod/{root}` | `root, start_date, end_date, use_csv` |
+| `market.index_price` | `/api/theta/hist/index/price/{root}` | `root, start_date, end_date, ivl, rth, use_csv` |
+| `market.is_market_open` | `/api/market/is_open` | `` |
+| `market.last_index_price` | `/api/theta/snapshot/index/price/{root}` | `root, use_csv, force_refresh` |
+| `market.last_trading_day` | `/api/market/last_trading_day` | `` |
+| `market.market_schedule` | `/api/market/schedule` | `start_date, end_date` |
+| `market.market_session_info` | `/api/market/session-info` | `root, series_expiry, timestamp_utc, session_mode` |
+| `market.next_trading_day` | `/api/market/next_trading_day` | `from_date` |
+| `market.snapshot_stock_ohlc` | `/api/theta/snapshot/stock/ohlc/{root}` | `root, venue, use_csv, force_refresh` |
+| `market.snapshot_stock_trade` | `/api/theta/snapshot/stock/trade/{root}` | `root, venue, use_csv` |
+| `market.stock_dividends` | `/api/theta/hist/stock/dividend/{root}` | `root, start_date, end_date, use_csv` |
+| `market.stock_eod` | `/api/theta/hist/stock/eod/{root}` | `root, start_date, end_date, use_csv, adjusted` |
+| `market.stock_ohlc` | `/api/theta/hist/stock/ohlc/{root}` | `root, start_date, end_date, ivl, rth, start_time, end_time, use_csv, venue` |
+| `market.stock_quote_at_time` | `/api/theta/at_time/stock/quote/{root}` | `root, start_date, end_date, ivl, rth, use_csv, venue` |
+| `market.stock_splits` | `/api/theta/hist/stock/split/{root}` | `root, start_date, end_date, use_csv` |
+| `market.stock_trade_at_time` | `/api/theta/at_time/stock/trade/{root}` | `root, start_date, end_date, ivl, rth, use_csv, venue` |
+| `market.ticker_variants` | `/api/market/ticker-variants/{root}` | `root` |
+| `market.trading_days` | `/api/market/trading_days` | `start_date, end_date` |
+| `market.yield_curve` | `/api/db/yield_curve` | `start_date, end_date, target_date, use_csv` |
+
+### news (2)
+
+| Method | Path | Params |
+|---|---|---|
+| `news.company_news` | `/news/company` | `ticker, lookback_hours, limit` |
+| `news.market_news` | `/news/market` | `category, limit` |
+
+### options (35)
+
+| Method | Path | Params |
+|---|---|---|
+| `options.bulk_hist_option_eod` | `/api/theta/bulk_hist/option/eod/{root}/{exp}` | `root, exp, start_date, end_date, use_csv` |
+| `options.bulk_hist_option_eod_greeks` | `/api/theta/bulk_hist/option/eod_greeks/{root}/{exp}` | `root, exp, start_date, end_date, annual_div, rate, rate_value, under_price, use_csv` |
+| `options.bulk_hist_option_open_interest` | `/api/theta/bulk_hist/option/open_interest/{root}/{exp}` | `root, exp, start_date, end_date, use_csv` |
+| `options.bulk_snapshot_option_all_greeks` | `/api/theta/bulk_snapshot/option/all_greeks/{root}/{exp}` | `root, exp, annual_div, rate, rate_value, under_price, use_csv` |
+| `options.bulk_snapshot_option_greeks` | `/api/theta/bulk_snapshot/option/greeks/{root}/{exp}` | `root, exp, annual_div, rate, rate_value, under_price, use_csv` |
+| `options.bulk_snapshot_option_open_interest` | `/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}` | `root, exp, use_csv` |
+| `options.bulk_snapshot_option_quote` | `/api/theta/bulk_snapshot/option/quote/{root}/{exp}` | `root, exp, use_csv` |
+| `options.greeks_timeseries` | `/api/greeks/timeseries/{ticker}` | `ticker, date, interval, greek` |
+| `options.hist_option_all_greeks` | `/api/theta/hist/option/all_greeks/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv` |
+| `options.hist_option_all_trade_greeks` | `/api/theta/hist/option/all_trade_greeks/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, use_csv` |
+| `options.hist_option_eod` | `/api/theta/hist/option/eod/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, use_csv` |
+| `options.hist_option_greeks` | `/api/theta/hist/option/greeks/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv` |
+| `options.hist_option_greeks_second_order` | `/api/theta/hist/option/greeks_second_order/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv` |
+| `options.hist_option_greeks_third_order` | `/api/theta/hist/option/greeks_third_order/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv` |
+| `options.hist_option_implied_volatility` | `/api/theta/hist/option/implied_volatility/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv` |
+| `options.hist_option_ohlc` | `/api/theta/hist/option/ohlc/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv` |
+| `options.hist_option_open_interest` | `/api/theta/hist/option/open_interest/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, use_csv` |
+| `options.hist_option_quote` | `/api/theta/hist/option/quote/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, rth, use_csv, start_time, end_time` |
+| `options.hist_option_trade` | `/api/theta/hist/option/trade/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, use_csv` |
+| `options.hist_option_trade_greeks` | `/api/theta/hist/option/trade_greeks/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, use_csv` |
+| `options.hist_option_trade_greeks_second_order` | `/api/theta/hist/option/trade_greeks_second_order/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, use_csv` |
+| `options.hist_option_trade_greeks_third_order` | `/api/theta/hist/option/trade_greeks_third_order/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, use_csv` |
+| `options.hist_option_trade_quote` | `/api/theta/hist/option/trade_quote/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, exclusive, use_csv` |
+| `options.list_option_contracts` | `/api/theta/list/contracts/option/{req}` | `req, date, root` |
+| `options.list_roots` | `/api/theta/list/roots/{data_type}` | `data_type, use_csv` |
+| `options.oi_concentration` | `/api/greeks/oi-concentration/{ticker}` | `ticker, days_back` |
+| `options.option_quote_at_time` | `/api/theta/at_time/option/quote/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, use_csv` |
+| `options.option_trade_at_time` | `/api/theta/at_time/option/trade/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, start_date, end_date, ivl, use_csv` |
+| `options.options_chain` | `/api/options/chain` | `ticker, date, mode, interval_type, ms_of_day, expiration, expiry, max_contracts, strike_window_pct` |
+| `options.options_contract` | `/api/options/chain/contract/{occ}` | `occ, date, mode, interval_type, ms_of_day` |
+| `options.snapshot_option_ohlc` | `/api/theta/snapshot/option/ohlc/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, use_csv` |
+| `options.snapshot_option_open_interest` | `/api/theta/snapshot/option/open_interest/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, use_csv` |
+| `options.snapshot_option_quote` | `/api/theta/snapshot/option/quote/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, use_csv` |
+| `options.snapshot_option_trade` | `/api/theta/snapshot/option/trade/{root}/{exp}/{strike}/{right}` | `root, exp, strike, right, use_csv` |
+| `options.straddle_intraday` | `/api/options/{ticker}/straddle/intraday` | `ticker, date, interval, expiration` |
+
+### recipes (5)
+
+| Method | Path | Params |
+|---|---|---|
+| `recipes.chart_summaries` | `/recipes/chart_summaries` | `date, ticker` |
+| `recipes.macro_bundle` | `/recipes/bundle/macro` | `date` |
+| `recipes.news_bundle` | `/recipes/bundle/news` | `date, watchlist` |
+| `recipes.quant_bundle` | `/recipes/bundle/quant` | `date, tickers` |
+| `recipes.ticker_bundle` | `/recipes/bundle/ticker` | `ticker, date, include_position_matrix` |
+
+### regsho (7)
+
+| Method | Path | Params |
+|---|---|---|
+| `regsho.alerts` | `/api/regsho/screener/alerts` | `` |
+| `regsho.correlation` | `/api/regsho/correlation/{symbol}` | `symbol, start_date, end_date, include_chart_data` |
+| `regsho.current` | `/api/regsho/screener/current` | `min_ftd_quantity, limit, offset` |
+| `regsho.ftd_history` | `/api/regsho/ftd/{symbol}` | `symbol, start_date, end_date, limit, offset` |
+| `regsho.options_correlation` | `/api/regsho/options/{symbol}` | `symbol, analysis_date` |
+| `regsho.threshold_history` | `/api/regsho/threshold/{symbol}` | `symbol, start_date, end_date, limit, offset` |
+| `regsho.watchlist` | `/api/regsho/screener/watchlist` | `limit, offset` |
+
+### signals (4)
+
+| Method | Path | Params |
+|---|---|---|
+| `signals.compound_alert_status` | `/api/alerts/compound` | `date` |
+| `signals.for_date` | `/api/signals/date/{signal_date}` | `signal_date, direction` |
+| `signals.strategies` | `/api/signals/strategies` | `signal_type, is_active` |
+| `signals.validity` | `/api/signals/validity/{ticker}` | `ticker, strategies, signal_type` |
+
+### support_resistance (11)
+
+| Method | Path | Params |
+|---|---|---|
+| `support_resistance.composite_hedge` | `/api/sr/composite-hedge/{ticker}` | `ticker, date, scenario` |
+| `support_resistance.flip_levels` | `/api/sr/flip-levels/{ticker}` | `ticker, date, greek_type` |
+| `support_resistance.history_intraday` | `/api/sr/levels/{ticker}/history/intraday` | `ticker, date, interval, min_strength, greek_type, use_csv, history_contract_version` |
+| `support_resistance.hit_rate` | `/api/sr/levels/{ticker}/hit-rate` | `ticker, end_date, lookback_days, min_tests, greek_type, level_type, use_csv` |
+| `support_resistance.position_matrix` | `/api/sr/position-matrix/{ticker}` | `ticker, date, interval, include_history` |
+| `support_resistance.positioning_context` | `/api/sr/positioning-context/{ticker}` | `ticker, date` |
+| `support_resistance.quadrant_summary` | `/api/sr/quadrant-summary/{ticker}` | `ticker, date, interval` |
+| `support_resistance.regime` | `/api/sr/regime/{ticker}` | `ticker, date, use_csv` |
+| `support_resistance.snapshot` | `/api/sr/levels/{ticker}/snapshot` | `ticker, as_of_date, price_range_pct, use_csv` |
+| `support_resistance.tiers` | `/api/sr/tiers/{ticker}` | `ticker, date, interval, limit, exp` |
+| `support_resistance.zero_dte_gamma_wall` | `/api/zero-dte/gamma-wall/{ticker}` | `ticker, signal_date` |
+
+### volatility (6)
+
+| Method | Path | Params |
+|---|---|---|
+| `volatility.iv_rank` | `/api/volatility/iv_rank/{root}` | `root, as_of_date, lookback_days, use_csv` |
+| `volatility.iv_surface_snapshot` | `/api/volatility/iv-surfaces/{ticker}` | `ticker, trade_date, interval_type, ms_of_day, include_expiry_params` |
+| `volatility.probabilistic_envelope` | `/api/envelope/{ticker}` | `ticker, horizon_min, analysis_mode` |
+| `volatility.surface_change` | `/api/volatility/surface_change/{root}` | `root, expiration, baseline_date, asof_date, interval_type, ms_of_day` |
+| `volatility.surface_z_history` | `/api/volatility/surface_z_history/{root}` | `root, expiration, asof_date, window, min_history, interval_type, ms_of_day` |
+| `volatility.term_structure` | `/api/volatility/term_structure/{root}` | `root, trade_date, use_csv` |
 ## Original brainstorming-phase content below (superseded, kept for history)
 
 ## What triggered this
