@@ -18,6 +18,7 @@ from shared.candlestick_chart import (
     _candle_width,
     _configure_date_axis,
     _format_volume,
+    _match_overlay_entry,
     _title,
     render_candlestick,
 )
@@ -226,9 +227,9 @@ def test_render_candlestick_draws_direction_markers(tmp_path):
     out = tmp_path / "chart.png"
     path = render_candlestick(payload, out,
                               direction_overlay=[
-                                  {"date": "2026-08-12", "conviction": "HIGH",
+                                  {"ts": "2026-08-12T09:30:00", "conviction": "HIGH",
                                    "score": 4, "signals": {}},
-                                  {"date": "2026-08-13", "conviction": "NONE",
+                                  {"ts": "2026-08-12T09:45:00", "conviction": "NONE",
                                    "score": 1, "signals": {}},
                               ],
                               live_note="LIVE: HIGH (4/5)")
@@ -254,8 +255,107 @@ def test_render_candlestick_skips_markers_below_score_threshold(tmp_path):
     out = tmp_path / "chart.png"
     path = render_candlestick(payload, out,
                               direction_overlay=[
-                                  {"date": "2026-08-12", "conviction": "NONE",
+                                  {"ts": "2026-08-12T09:30:00", "conviction": "NONE",
                                    "score": 2, "signals": {}},
                               ],
                               live_note="LIVE: NONE (2/5)")
     assert path.exists() and path.stat().st_size > 0
+
+
+def test_match_overlay_entry_ts_keyed_same_day_bars_get_own_markers():
+    """v2: each same-day bar matches its own ts-keyed entry -> own marker."""
+    from shared.candlestick_chart import _marker_for_score
+
+    overlay = [
+        {"ts": "2026-08-12T09:30:00", "conviction": "LOW", "score": 0, "signals": {}},
+        {"ts": "2026-08-12T09:45:00", "conviction": "HIGH", "score": 4, "signals": {}},
+        {"ts": "2026-08-12T10:00:00", "conviction": "HIGH", "score": 5, "signals": {}},
+    ]
+    bar_times = [
+        datetime(2026, 8, 12, 9, 30),
+        datetime(2026, 8, 12, 9, 45),
+        datetime(2026, 8, 12, 10, 0),
+    ]
+    entries = [_match_overlay_entry(ts, overlay) for ts in bar_times]
+    assert entries == overlay  # each bar matched its own entry, not a shared one
+    assert len({id(entry) for entry in entries}) == 3
+    kinds = [_marker_for_score(int(entry["score"])) for entry in entries]
+    assert kinds == ["sell", "buy", "add"]
+
+
+def test_match_overlay_entry_normalizes_ts_on_both_sides():
+    """Entry ts and bar ts normalize identically (seconds, datetime values)."""
+    overlay = [{"ts": "2026-08-12T09:30", "score": 4}]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), overlay) is overlay[0]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 45), overlay) is None
+
+    overlay = [{"ts": datetime(2026, 8, 12, 9, 30), "score": 4}]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), overlay) is overlay[0]
+
+
+def test_match_overlay_entry_legacy_date_key_fallback():
+    """v1 back-compat: a date-keyed entry matches every bar of that day."""
+    overlay = [{"date": "2026-08-12", "conviction": "HIGH", "score": 3, "signals": {}}]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), overlay) is overlay[0]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 15, 45), overlay) is overlay[0]
+    assert _match_overlay_entry(datetime(2026, 8, 13, 9, 30), overlay) is None
+
+
+def test_match_overlay_entry_prefers_ts_over_legacy_date():
+    """An entry carrying both keys matches by ts; other bars of the day miss."""
+    overlay = [{"date": "2026-08-12", "ts": "2026-08-12T09:30:00", "score": 4}]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), overlay) is overlay[0]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 10, 0), overlay) is None
+
+
+def test_match_overlay_entry_skips_entries_without_ts_or_date():
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), None) is None
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), []) is None
+    overlay = [{"conviction": "HIGH", "score": 4, "signals": {}}]
+    assert _match_overlay_entry(datetime(2026, 8, 12, 9, 30), overlay) is None
+
+
+def test_match_overlay_entry_missing_score_defaults_to_sell_marker():
+    from shared.candlestick_chart import _marker_for_score
+
+    overlay = [{"ts": "2026-08-12T09:30:00", "conviction": "HIGH"}]
+    entry = _match_overlay_entry(datetime(2026, 8, 12, 9, 30), overlay)
+    assert entry is overlay[0]
+    assert _marker_for_score(int(entry.get("score", 0) or 0)) == "sell"
+
+
+def test_render_candlestick_same_day_bars_each_get_own_marker(tmp_path, monkeypatch):
+    """Renderer-level: per-ts scores on one day draw one distinct marker per bar."""
+    from matplotlib import axes as mpl_axes
+
+    from shared.candlestick_chart import render_candlestick
+
+    records = tuple(
+        CandleRecord(timestamp=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=1000)
+        for ts in (
+            datetime(2026, 8, 12, 9, 30),
+            datetime(2026, 8, 12, 9, 45),
+            datetime(2026, 8, 12, 10, 0),
+        )
+    )
+    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d",
+                            source="thetadata", observations=records)
+    calls = []
+    original_annotate = mpl_axes.Axes.annotate
+
+    def capture_annotate(axis, glyph, xy, *args, **kwargs):
+        calls.append((xy[0], glyph))
+        return original_annotate(axis, glyph, xy, *args, **kwargs)
+
+    monkeypatch.setattr(mpl_axes.Axes, "annotate", capture_annotate)
+    out = tmp_path / "chart.png"
+    path = render_candlestick(
+        payload, out,
+        direction_overlay=[
+            {"ts": "2026-08-12T09:30:00", "conviction": "LOW", "score": 0, "signals": {}},
+            {"ts": "2026-08-12T09:45:00", "conviction": "HIGH", "score": 4, "signals": {}},
+            {"ts": "2026-08-12T10:00:00", "conviction": "HIGH", "score": 5, "signals": {}},
+        ],
+    )
+    assert path.exists() and path.stat().st_size > 0
+    assert sorted(glyph for _, glyph in calls) == ["D", "^", "v"]  # add, buy, sell

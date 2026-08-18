@@ -255,6 +255,50 @@ def _marker_for_score(score: int) -> str:
     }.get(int(score), "none")
 
 
+def _normalize_ts(value: object) -> str:
+    """Canonicalize a bar timestamp to its ``datetime.isoformat()`` form.
+
+    Overlay ``ts`` values (v2) and rendered bar timestamps both pass through
+    this path so that e.g. an entry written as ``"2026-08-12T09:30"`` matches
+    a bar at 09:30:00, and datetime-valued keys match string-valued ones.
+    Unparseable values fall back to their raw string form (they simply never
+    match a real bar).
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    try:
+        return datetime.fromisoformat(str(value)).isoformat()
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _match_overlay_entry(obs_ts: datetime, overlay: list | None) -> dict | None:
+    """Return the direction overlay entry matching a bar timestamp, or None.
+
+    v2 entries carry ``"ts"`` (an ISO timestamp, preferred): an entry matches
+    a bar when ``obs_ts`` and the entry's ``ts`` normalize to the same
+    ``datetime.isoformat()`` string — so every bar of a day matches its OWN
+    per-timestamp evaluation.  Legacy v1 entries carry ``"date"``
+    (YYYY-MM-DD): they match any bar whose local date equals that string (all
+    intraday bars of a day share one legacy marker).  Entries with neither key
+    are skipped.  When an entry carries both keys, ``ts`` wins.
+    """
+    if not overlay:
+        return None
+    obs_norm = _normalize_ts(obs_ts)
+    obs_date = obs_ts.date().isoformat()
+    for entry in overlay:
+        if not isinstance(entry, dict):
+            continue
+        if "ts" in entry:
+            if _normalize_ts(entry["ts"]) == obs_norm:
+                return entry
+        elif "date" in entry:
+            if str(entry["date"]) == obs_date:
+                return entry
+    return None
+
+
 def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
                        *, direction_overlay: list | None = None,
                        live_note: str | None = None) -> Path:
@@ -373,7 +417,6 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
         figure.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.12)
 
         if direction_overlay:
-            by_date = {str(entry.get("date")): entry for entry in direction_overlay if isinstance(entry, dict)}
             spread = max(obs.high - obs.low for obs in observations) or 1.0
             marker_style = {
                 "sell": ("v", "orchid", 1.0),     # 0/5 — avoid/exit, above bar
@@ -382,7 +425,7 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
                 "add": ("D", "gold", 1.0),        # 5/5 — add to position, below bar
             }
             for i, obs in enumerate(observations):
-                entry = by_date.get(obs.timestamp.date().isoformat())
+                entry = _match_overlay_entry(obs.timestamp, direction_overlay)
                 if not entry:
                     continue  # no overlay data for this bar -> no marker
                 kind = _marker_for_score(int(entry.get("score", 0) or 0))
