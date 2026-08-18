@@ -79,3 +79,12 @@ Vol_Suite/debug_output/
 
 # sentiment-scanner dated export snapshots (latest_manifest.json stays tracked)
 sentiment-scanner/data/exports/highlighted_ticker_packs/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
+
+# sentiment-scanner's unusual-OI cross-process baseline cache (regenerates
+# on every scan; see scanner/unusual_oi_scanner.py's _BASELINE_FILE)
+sentiment-scanner/data/oi_baseline.json
+
+# Downloaded vendor wheel (source of truth is install.potatohedge.com --
+# see docs/phclient_v2/WIKI.md; re-download rather than commit the binary)
+potatohedge-*.whl
+.whl-inspect/
