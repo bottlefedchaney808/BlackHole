@@ -41,9 +41,17 @@ def normalize_snapshot_rows(raw_rows: list[Mapping[str, Any]]) -> list[dict[str,
     skip_reasons: list[str] = []
     for raw in raw_rows:
         try:
-            strike = _number(raw, ("strike", "strike_price"), "strike")
-            if abs(strike) > 10_000:
-                strike /= 1000.0
+            # ThetaData reports strikes as theta-integers (integer thousandths
+            # of a dollar, e.g. 8000 == $8.00 -- see shared/thetadata.py's
+            # strike_from_theta) unconditionally, never raw dollars. A
+            # magnitude heuristic here (the old "> 10_000" check) silently
+            # left any strike below $10 unconverted while still converting
+            # strikes above it, producing a chain with two incompatible units
+            # mixed together -- e.g. TGB ($8.35 spot) came back as strikes
+            # {1000, 2000, ..., 9000, 10.0, 11.0, ..., 15.0}, which wrecked
+            # both the NetExposure aggregation and the vanna-by-strike chart's
+            # x-axis (a 0-10000 range dominated by one bar).
+            strike = _number(raw, ("strike", "strike_price"), "strike") / 1000.0
             right = str(raw.get("right", raw.get("put_call", ""))).upper()[:1]
             if right not in {"C", "P"}:
                 raise ExpiryBookUnavailable("missing or invalid option right")
@@ -92,26 +100,28 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
         oi_rows = td.option_bulk_oi(ticker, expiry)
     except Exception as exc:
         raise ExpiryBookUnavailable(f"ThetaData snapshot unavailable: {type(exc).__name__}: {exc}") from exc
+    # Match greeks rows to OI rows on the raw theta-integer strike ThetaData
+    # returns both in -- normalize_snapshot_rows (below, via
+    # production_result_from_rows) does the one canonical theta->dollar
+    # conversion, so this merge step must not also try to detect/convert
+    # units itself (that duplicated heuristic used to be wrong for strikes
+    # under $10; see normalize_snapshot_rows's comment).
     oi_by_key = {}
     for row in oi_rows or []:
         try:
             strike = float(row.get("strike", 0.0))
-            if abs(strike) > 10_000:
-                strike /= 1000.0
             right = str(row.get("right", "")).upper()[:1]
-            oi_by_key[(round(strike, 8), right)] = row.get("open_interest", row.get("oi"))
+            oi_by_key[(strike, right)] = row.get("open_interest", row.get("oi"))
         except (TypeError, ValueError):
             continue
     merged = []
     for row in rows or []:
         strike = float(row.get("strike", 0.0))
-        if abs(strike) > 10_000:
-            strike /= 1000.0
         right = str(row.get("right", "")).upper()[:1]
         item = dict(row)
         item["strike"] = strike
         item["right"] = right
-        item["open_interest"] = oi_by_key.get((round(strike, 8), right), row.get("open_interest"))
+        item["open_interest"] = oi_by_key.get((strike, right), row.get("open_interest"))
         merged.append(item)
     from datetime import date
     dte = (date.fromisoformat(f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:8]}") - date.today()).days

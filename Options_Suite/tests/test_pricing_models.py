@@ -7,7 +7,11 @@ Covers:
   - AmericanLSMPricer from MC.py can be instantiated
 """
 
+import importlib.util
 import math
+import sys
+from pathlib import Path
+
 import pytest
 
 
@@ -339,6 +343,66 @@ class TestHestonEuropeanCallPrice:
 # name gets passed to VolManager.get_sigma.)
 # ---------------------------------------------------------------------------
 
+def _load_options_main():
+    """Load Options_Suite/main.py under a unique module name.
+
+    Options_Suite, VaR_Tools_Simulations and sentiment-scanner each ship
+    their own `main.py` -- a bare `import main` silently returns whichever
+    one another test file already cached in sys.modules under that generic
+    name during pytest's combined collection, instead of raising. This is
+    the same hazard VaR_Tools_Simulations/tests/test_context_builders.py and
+    sentiment-scanner/tests/test_main.py already work around; mirror their
+    pattern rather than a bare `import main`, which under a repo-root-wide
+    `pytest` run was observed loading VaR_Tools_Simulations/main.py instead
+    (a stale sys.modules['main'] entry, or a sys.path race depending on
+    conftest collection order -- either way, a bare `import main` is not
+    reliable in this monorepo's combined test session).
+
+    Loading main.py under a unique name isn't sufficient by itself, though:
+    main.py's own body does more flat, cwd-relative imports (`from config
+    import PricingConfig`, `from market_data import ...`, etc.) that resolve
+    via sys.path/sys.modules at exec time, same as the top-level `import
+    main` did. Reordering sys.path alone doesn't fix this: sentiment-scanner
+    (and shared/) ship their own unrelated config.py, and sentiment-scanner's
+    test collection (which runs to completion, along with every other
+    testpath, before ANY test executes) has already imported and cached its
+    own config.py under sys.modules['config'] by the time this test runs --
+    Python checks sys.modules by name FIRST, before ever consulting sys.path,
+    so a bare `from config import PricingConfig` would keep resolving to the
+    wrong cached module even with Options_Suite/ moved to sys.path[0].
+    Stash any pre-existing entries for main.py's flat import names, let
+    exec_module populate Options_Suite's own versions, then restore the
+    stashed entries afterward so this doesn't leak Options_Suite's config.py
+    (etc.) into whatever a later-executing suite's tests expect to find
+    there. Mirrors the defensive pattern Vol_Suite/tests/conftest.py already
+    uses for its own expiry_selector.py collision with Options_Suite's.
+    """
+    module_name = "options_suite_main"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    options_suite_root = str(Path(__file__).resolve().parent.parent)
+    flat_names = (
+        "config", "market_data", "vol_manager", "american_binomial", "MC",
+        "VannaVolga", "NewtonRaphsonIV", "bruteforceimpliedvol", "SABRModel",
+        "barone_adesi_whaley",
+    )
+    stashed = {name: sys.modules.pop(name) for name in flat_names if name in sys.modules}
+    spec = importlib.util.spec_from_file_location(
+        module_name, str(Path(__file__).resolve().parent.parent / "main.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    original_path = list(sys.path)
+    try:
+        sys.path = [options_suite_root] + [p for p in sys.path if p != options_suite_root]
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path = original_path
+        for name in flat_names:
+            sys.modules.pop(name, None)
+        sys.modules.update(stashed)
+    return mod
+
+
 class TestContextModeDefaultPricingMethod:
 
     @pytest.mark.unit
@@ -347,9 +411,7 @@ class TestContextModeDefaultPricingMethod:
         monkeypatch.setenv("THETADATA_CF_ACCESS_CLIENT_SECRET", "test-client-secret")
 
         import json as json_mod
-        import importlib
-        import main as options_main
-        importlib.reload(options_main)
+        options_main = _load_options_main()
 
         context = {"focus": {"ticker": "AAPL", "option_type": "call", "target_years": 0.25}}
         context_path = tmp_path / "ctx.json"

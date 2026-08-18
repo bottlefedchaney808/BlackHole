@@ -98,8 +98,21 @@ def _freeze_to_python(obj):
 class _V2Response:
     """Minimal stand-in for the v2 client's ResponseEnvelope payload."""
 
-    def __init__(self, data):
+    def __init__(self, data, status_code=None):
         self._data = data
+        # Explicit override for the retry-exhausted-on-PHClientError path,
+        # where there is no real payload but the underlying error DID carry
+        # a real status (e.g. a persistent 404) that callers like
+        # option_hist_eod_single's `if r.status_code == 404: continue` need
+        # to see. Without this, every retry-exhausted PHClientError reported
+        # status_code=500 regardless of the real status, so a genuine
+        # "no data for this contract" 404 fell through the 404 check, then
+        # through the no-op raise_for_status(), and only surfaced when
+        # .json() finally raised a generic TypeError -- misclassifying an
+        # expected data gap as a "genuine error" (see option_bulk_hist_eod's
+        # empty/errored split, and the desk-note "v2 payload is None" reports
+        # this was masking as dealer-positioning being broken).
+        self._status_override = status_code
 
     def json(self):
         if self._data is None:
@@ -111,6 +124,8 @@ class _V2Response:
 
     @property
     def status_code(self):
+        if self._status_override is not None:
+            return self._status_override
         return 200 if self._data is not None else 500
 
 
@@ -535,7 +550,7 @@ class ThetaDataController:
             except PHClientError as e:
                 if getattr(e, 'retryable', False) or getattr(e, 'status', None) in _RETRY_STATUSES:
                     last_exc = e
-                    last_response = _V2Response(None)
+                    last_response = _V2Response(None, status_code=getattr(e, 'status', None))
                     continue
                 raise
             except httpx.TransportError as e:

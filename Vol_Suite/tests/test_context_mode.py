@@ -37,6 +37,21 @@ from shared.schemas import validate_vol_result
 from suite_context import build_suite_context
 
 
+@pytest.fixture(autouse=True)
+def _clear_noninteractive_overrides():
+    """vsuite.main() populates the module-level _noninteractive dict from CLI
+    flags and never clears it -- by design, a real CLI invocation is a fresh
+    process. In-process this leaks between tests: e.g. an unrelated bug where
+    --pack/--no-pack's old `default=False` (instead of None) meant every
+    vsuite.main() call here unconditionally set _noninteractive["_load_mode"],
+    which then hijacked test_run_modes_smoke.py's scripted load-mode prompt
+    in a combined run. Match test_volatility_suite_noninteractive.py's own
+    cleanup discipline here too, since this file also calls vsuite.main()."""
+    vsuite._noninteractive.clear()
+    yield
+    vsuite._noninteractive.clear()
+
+
 # ---------------------------------------------------------------------------
 # stubs
 # ---------------------------------------------------------------------------

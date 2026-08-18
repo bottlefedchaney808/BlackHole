@@ -208,7 +208,13 @@ def test_run_suite_detects_vol_suite_that_produced_no_files(fake_env):
 
 @pytest.mark.unit
 def test_run_suite_detects_vol_suite_missing_required_csvs(fake_env):
-    """Marker fine, PNGs rendered, dealer positioning never wrote its CSV."""
+    """Marker fine, PNGs rendered, correlation engine never wrote its CSVs.
+
+    (Not gamma-records CSVs -- the expiry_book dealer-positioning engine that
+    replaced dealer_positioning.py keeps its per-strike rows in memory and
+    never writes a {ticker}_gamma_records_*.csv, so that's no longer in
+    SUITE_REQUIREMENTS['vol'].required_globs; see shared/suite_validation.py.)
+    """
     def child(out_path, output_dir):
         with open(os.path.join(output_dir, 'NVDA_heatmap.png'), 'w') as f:
             f.write('x')
@@ -221,7 +227,8 @@ def test_run_suite_detects_vol_suite_missing_required_csvs(fake_env):
     result = orchestrator.run_suite('vol', fake_env.context, timeout=5)
 
     assert 'error' in result
-    assert 'NVDA_gamma_records_*.csv' in result['validation']['missing_files']
+    assert 'correlation_matrix_*.csv' in result['validation']['missing_files']
+    assert 'correlation_pairs_*.csv' in result['validation']['missing_files']
     # The marker itself was fine: the failure is specifically the artifact set.
     assert all(c['status'] == 'PASS' for c in result['validation']['checks']
                if c['check'] == 'schema_valid')
@@ -432,6 +439,33 @@ def test_unified_continues_past_a_failed_stage_by_default(unified_env):
     assert unified_env.calls == ['vol', 'options', 'var']
     assert combined['status'] == 'partial'
     assert combined['aborted_by'] is None
+
+
+@pytest.mark.unit
+def test_unified_threads_vol_stats_even_when_vol_output_failed_validation(unified_env):
+    """A Vol_Suite run can fail the marker's required-file check (e.g. no
+    gamma_records CSV because dealer_positioning hit a data outage) while
+    still having computed real numbers -- GARCH fit, fair vol -- that
+    run_suite carries along under `payload`. Losing that GARCH/fair-vol
+    threading into context just because an unrelated required-file check
+    failed used to leave the Market Signals stage's IV-rank scanner seeing
+    None and silently degrading to 0.0/UNKNOWN -- see the 'invalid' outcome
+    below, which has both `error` (validation failed) and `payload` (the
+    real vol_result), matching what run_suite actually returns in that
+    case."""
+    vol_payload = vol_marker(ticker='NVDA')
+    unified_env.outcomes['vol'] = {
+        'suite': 'vol',
+        'error': 'vol output validation FAILED: required_file[NVDA_gamma_records_*.csv]: no file',
+        'validation': {'status': 'FAIL', 'errors': ['required_file[...]: no file']},
+        'payload': vol_payload,
+    }
+
+    combined = orchestrator.run_unified({'ticker': 'NVDA'})
+
+    assert combined['status'] == 'partial'
+    assert combined['aborted_by'] is None
+    assert unified_env.context['focus']['fair_vol_pct'] == 42.0
 
 
 @pytest.mark.unit

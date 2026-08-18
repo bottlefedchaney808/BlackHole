@@ -58,10 +58,12 @@ def _compute_pain_for_strike(K: float, strikes: np.ndarray,
                               call_oi: np.ndarray, put_oi: np.ndarray) -> float:
     """Total dollar cost of OI at expiry if spot settles at K.
 
-    Sum over all strikes: call_oi * max(0, strike - K) + put_oi * max(0, K - strike)
+    A call struck below K is ITM (payout K - strike); a put struck above K is
+    ITM (payout strike - K).
+    Sum over all strikes: call_oi * max(0, K - strike) + put_oi * max(0, strike - K)
     """
-    call_payout = call_oi * np.maximum(strikes - K, 0.0)
-    put_payout = put_oi * np.maximum(K - strikes, 0.0)
+    call_payout = call_oi * np.maximum(K - strikes, 0.0)
+    put_payout = put_oi * np.maximum(strikes - K, 0.0)
     return float(np.sum(call_payout + put_payout))
 
 
@@ -203,13 +205,15 @@ def scan_max_pain(ticker: str, expiry: Optional[str] = None, *,
         for K in all_strikes
     ])
 
-    # Max pain = strike with highest pain value
-    max_idx = int(np.argmax(pain_values))
+    # Max pain = strike with the LOWEST payout to option holders (that's what
+    # inflicts the most pain on them -- the strike a naive argmax over
+    # pain_values would pick is the strike that pays holders the MOST).
+    max_idx = int(np.argmin(pain_values))
     max_pain = float(strikes_arr[max_idx])
     max_val = float(pain_values[max_idx])
 
-    # Second highest
-    pain_sorted = np.argsort(pain_values)[::-1]
+    # Second-most-pain = strike with the second-lowest payout.
+    pain_sorted = np.argsort(pain_values)
     second_idx = pain_sorted[1] if len(pain_sorted) > 1 else max_idx
     second_pain = float(strikes_arr[second_idx])
 

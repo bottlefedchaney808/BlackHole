@@ -197,10 +197,18 @@ SUITE_REQUIREMENTS: Dict[str, SuiteRequirement] = {
         marker='vol_result.json',
         validator=validate_vol_result,
         schema_version=VOL_RESULT_SCHEMA_VERSION,
-        # Focus-workflow deliverables: dealer-positioning gamma records (written
-        # with save_csv=True) and the correlation-engine basket CSVs.
+        # Focus-workflow deliverable: the correlation-engine basket CSVs.
+        # {ticker}_gamma_records_*.csv was required here for the legacy
+        # dealer_positioning.py engine (save_csv=True wrote one every run).
+        # The expiry_book engine that replaced it (2026-08-17 promotion,
+        # volatility_suite.py's dealer_positioning step) keeps its per-strike
+        # rows in memory (artifacts["gamma_records"] stays [] with
+        # gamma_records_csv=None by design) and never writes that CSV, so
+        # requiring it here hard-failed every otherwise-successful vol run
+        # under --fail-on-suite-error. dealer_positioning correctness is
+        # already enforced by validate_vol_result's scalar-field checks, not
+        # by this file's presence.
         required_globs=(
-            '{ticker}_gamma_records_*.csv',
             'correlation_matrix_*.csv',
             'correlation_pairs_*.csv',
         ),

@@ -812,32 +812,36 @@ def compute_dealer_positioning(ticker: str, target_years: float = 0.25,
 
 # ---------- Plotting — Professional Edition ----------
 
-# Color palette
-DARK_BG = '#0d1117'
-GRID_COLOR = '#21262d'
-TEXT_COLOR = '#c9d1d9'
-ACCENT_BLUE = '#58a6ff'
-ACCENT_GREEN = '#3fb950'
-ACCENT_RED = '#f85149'
-ACCENT_GOLD = '#d29922'
-ACCENT_PURPLE = '#bc8cff'
-ACCENT_CYAN = '#39d2c0'
-ACCENT_ORANGE = '#f0883e'
+# Color palette -- matches shared/candlestick_chart.py's navy-to-purple dark
+# theme (the renderer behind trading_journal's SPY/NKE candlestick charts) so
+# every Vol_Suite chart reads as one consistent visual system instead of two
+# unrelated dark themes living side by side.
+DARK_BG = '#081326'
+PANEL_BG = '#101d34'
+GRID_COLOR = '#64748B'
+TEXT_COLOR = '#F4F7FF'
+ACCENT_BLUE = '#38BDF8'    # == candlestick_chart._UP (bullish/positive)
+ACCENT_GREEN = '#34D399'
+ACCENT_RED = '#C084FC'     # == candlestick_chart._DOWN (bearish/negative -- violet, not red, by design)
+ACCENT_GOLD = '#FBBF24'
+ACCENT_PURPLE = '#A78BFA'
+ACCENT_CYAN = '#22D3EE'
+ACCENT_ORANGE = '#FB923C'
 
 # Custom colormaps
+# Diverging colormaps -- violet (negative/short) through the navy background
+# to cyan (positive/long), matching candlestick_chart.py's _DOWN/_UP pair
+# instead of the old purple->orange->green "heatmap_pro" gradient.
 HEATMAP_CMAP = LinearSegmentedColormap.from_list('heatmap_pro',
-    ['#1a0533', '#3b0764', '#5b21b6', '#7c3aed', '#a855f7',
-     '#d946ef', '#f97316', '#fbbf24', '#fde68a', '#ffffff',
-     '#bbf7d0', '#4ade80', '#22c55e', '#16a34a', '#15803d',
-     '#166534', '#14532d'], N=256)
+    ['#2e1065', ACCENT_RED, '#4c2f73', DARK_BG, '#134a63', ACCENT_BLUE, '#a5e6fb'], N=256)
 
 GAMMA_BAR_CMAP = LinearSegmentedColormap.from_list('gamma_bar',
-    ['#f85149', '#ffa07a', '#ffffff', '#90ee90', '#3fb950'], N=256)
+    [ACCENT_RED, '#4c2f73', PANEL_BG, '#134a63', ACCENT_BLUE], N=256)
 
 
 def _style_axis(ax, title='', xlabel='', ylabel=''):
     """Apply consistent professional styling."""
-    ax.set_facecolor('#161b22')
+    ax.set_facecolor(PANEL_BG)
     ax.set_title(title, color=TEXT_COLOR, fontsize=13, fontweight='bold', pad=12)
     ax.set_xlabel(xlabel, color=TEXT_COLOR, fontsize=10)
     ax.set_ylabel(ylabel, color=TEXT_COLOR, fontsize=10)
@@ -855,8 +859,8 @@ def _add_annotation_box(ax, x, y, text, color, fontsize=9, ha='left', va='bottom
         text, xy=(x, y), xytext=(x, y),
         fontsize=fontsize, color=color, fontweight='bold',
         ha=ha, va=va,
-        path_effects=[pe.withStroke(linewidth=3, foreground='#161b22')],
-        bbox=dict(boxstyle='round,pad=0.3', facecolor='#161b22',
+        path_effects=[pe.withStroke(linewidth=3, foreground=PANEL_BG)],
+        bbox=dict(boxstyle='round,pad=0.3', facecolor=PANEL_BG,
                   edgecolor=color, alpha=0.9)
     )
 
@@ -1125,7 +1129,7 @@ def _greek_panel(ax, K, values, title, ylabel, spot, available, missing_note=Non
     existing ACCENT_BLUE/ACCENT_RED usage elsewhere; flip PANEL_POS_COLOR/
     PANEL_NEG_COLOR below if a live render shows this doesn't match
     convention), gold dashed spot line, strike prices on the x-axis."""
-    ax.set_facecolor('#161b22')
+    ax.set_facecolor(PANEL_BG)
     ax.set_title(title, color=TEXT_COLOR, fontsize=12, fontweight='bold', pad=18)
     ax.text(0.5, 1.02, f"${spot:.2f}", color=ACCENT_GOLD, fontsize=8,
             ha='center', va='bottom', transform=ax.transAxes)
@@ -1163,7 +1167,7 @@ def _greek_panel(ax, K, values, title, ylabel, spot, available, missing_note=Non
         Patch(facecolor=PANEL_NEG_COLOR, label='Negative'),
     ]
     ax.legend(handles=legend_handles, loc='upper right', fontsize=8,
-              facecolor='#161b22', edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR,
+              facecolor=PANEL_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR,
               framealpha=0.8)
 
 
@@ -1215,6 +1219,258 @@ def plot_greek_exposure_comparison(result: DealerPositioningResult,
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{result.ticker}_greek_exposure_comparison_{timestamp}.png")
+    plt.savefig(filename, dpi=200, bbox_inches='tight', facecolor=DARK_BG, edgecolor='none')
+    plt.close(fig)
+    return filename
+
+
+# ---------- Plotting -- Production expiry-book engine ----------
+# The engine that replaced compute_dealer_positioning/compute_accumulated_position
+# on the live path (2026-08-17 promotion; see expiry_book_production.py) never
+# gained a plotting layer of its own, so a live run stopped producing the
+# {ticker}_greek_exposure_comparison_*.png / {ticker}_hedging_heatmap_*.png
+# pair above even though volatility_suite.py's dealer-positioning step still
+# runs (and succeeds) every time. These functions restore that pair for
+# ProductionDealerExposure, reusing this file's palette/_style_axis/_greek_panel
+# so they render identically in style (and, for the heatmap, panel layout) to
+# the legacy-engine versions above.
+
+
+def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) -> str:
+    """4-panel Gamma/Delta/Vanna/Charm dealer exposure-by-strike chart for a
+    ProductionDealerExposure (expiry_book_production.fetch_production_result).
+    Mirrors plot_greek_exposure_comparison's layout for the legacy engine,
+    built from NetExposure.rows (exposure_of(greek) is already
+    signed_greek * OI * CONTRACT_MULTIPLIER) instead of the legacy per-greek
+    arrays."""
+    rows = result.snapshot.rows
+    strikes = sorted({r.strike for r in rows})
+    K = np.asarray(strikes, dtype=float)
+
+    def _by_strike(greek: str) -> np.ndarray:
+        agg: Dict[float, float] = defaultdict(float)
+        for r in rows:
+            agg[r.strike] += r.exposure_of(greek)
+        return np.asarray([agg.get(k, 0.0) for k in strikes], dtype=float)
+
+    fig = plt.figure(figsize=(16, 11), facecolor=DARK_BG)
+    gs = fig.add_gridspec(2, 2, hspace=0.45, wspace=0.28,
+                          left=0.07, right=0.96, top=0.90, bottom=0.07)
+    fig.text(0.5, 0.96,
+              f"{result.ticker} Dealer Greek Exposure Comparison (expiry {result.expiry}) "
+              f"— expiry-book engine",
+              color=TEXT_COLOR, fontsize=18, fontweight='bold', ha='center')
+
+    spot = result.spot
+    have_data = len(K) > 0
+    ax1 = fig.add_subplot(gs[0, 0])
+    _greek_panel(ax1, K, _by_strike('gamma'), 'Gamma Exposure',
+                 'Gamma (shares/$1)', spot, have_data)
+    ax2 = fig.add_subplot(gs[0, 1])
+    _greek_panel(ax2, K, _by_strike('delta'), 'Delta Exposure',
+                 'Delta (shares)', spot, have_data)
+    ax3 = fig.add_subplot(gs[1, 0])
+    _greek_panel(ax3, K, _by_strike('vanna'), 'Vanna Exposure',
+                 'Vanna (shares / 1pp IV)', spot, have_data)
+    ax4 = fig.add_subplot(gs[1, 1])
+    _greek_panel(ax4, K, _by_strike('charm'), 'Charm Exposure',
+                 'Charm (shares/day)', spot, have_data)
+
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
+    os.makedirs(out_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(out_dir, f"{result.ticker}_greek_exposure_comparison_{timestamp}.png")
+    plt.savefig(filename, dpi=200, bbox_inches='tight', facecolor=DARK_BG, edgecolor='none')
+    plt.close(fig)
+    return filename
+
+
+def _expiry_book_gamma_surface(result, spot_pct_range=(0.85, 1.15), n_spot=61,
+                                iv_shift_range=(-0.15, 0.15), n_iv=31):
+    """Re-price this snapshot's actual strikes/OI/IV across a (spot%, IV
+    shift) grid via the same BS-gamma + dealer-frame sign convention
+    (expiry_book_exposure.bs_gamma / _right_sign) the live snapshot itself
+    uses -- a real repricing of this expiry's book, not a decorative fill.
+    Returns (spot_pct_axis, iv_pct_axis, dollar_gamma_surface[$M])."""
+    import expiry_book_exposure as ebe
+    rows = result.snapshot.rows
+    K = np.array([r.strike for r in rows])
+    right_sign = np.array([1.0 if str(r.right).upper().startswith('C') else -1.0 for r in rows])
+    oi = np.array([r.oi for r in rows])
+    iv0 = np.array([r.iv for r in rows])
+    T = rows[0].T
+    spot0 = result.spot
+
+    spot_pct = np.linspace(spot_pct_range[0], spot_pct_range[1], n_spot)
+    iv_shift = np.linspace(iv_shift_range[0], iv_shift_range[1], n_iv)
+    surface = np.zeros((n_spot, n_iv))
+    sqrtT = math.sqrt(T)
+    for i, pct in enumerate(spot_pct):
+        s = spot0 * pct
+        for j, dshift in enumerate(iv_shift):
+            iv = np.clip(iv0 + dshift, 0.01, None)
+            d1 = (np.log(s / K) + (ebe.RISK_FREE_RATE + 0.5 * iv ** 2) * T) / (iv * sqrtT)
+            phi = np.exp(-0.5 * d1 ** 2) / math.sqrt(2.0 * math.pi)
+            gamma = phi / (s * iv * sqrtT)
+            signed_dollar_gamma = right_sign * gamma * oi * CONTRACT_MULTIPLIER * s ** 2 * 0.01
+            surface[i, j] = float(np.sum(signed_dollar_gamma)) / 1e6  # $M
+    iv_pct_axis = (iv0.mean() + iv_shift) * 100.0
+    return spot_pct, iv_pct_axis, surface
+
+
+def plot_expiry_book_heatmap(result, output_dir: Optional[str] = None) -> str:
+    """4-panel hedging heatmap for a ProductionDealerExposure, matching
+    plot_heatmap's legacy panel layout (gamma-by-strike, OI-by-strike, a
+    real spot% x IV% dealer-gamma surface, gamma profile vs spot) so the
+    production engine's chart reads the same as the legacy engine's --
+    just this file's updated palette, not a different chart shape."""
+    rows = result.snapshot.rows
+    strikes = sorted({r.strike for r in rows})
+    K = np.asarray(strikes, dtype=float)
+    gamma_by_strike: Dict[float, float] = defaultdict(float)
+    oi_by_strike: Dict[float, float] = defaultdict(float)
+    for r in rows:
+        gamma_by_strike[r.strike] += r.exposure_of('gamma')
+        oi_by_strike[r.strike] += r.oi
+    gamma_M = np.array([gamma_by_strike.get(k, 0.0) for k in strikes]) / 1e6
+    oi_arr = np.array([oi_by_strike.get(k, 0.0) for k in strikes])
+    spot = result.spot
+    flip_level = result.execution_locus.local_gamma_boundary
+    highest_gamma_strike = K[int(np.argmax(np.abs(gamma_M)))] if len(K) else spot
+
+    fig = plt.figure(figsize=(20, 14), facecolor=DARK_BG)
+    gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.30,
+                          left=0.08, right=0.92, top=0.83, bottom=0.08)
+
+    total_net_dollar_gamma = result.snapshot.gex()
+    gamma_tag = "AMPLIFYING" if total_net_dollar_gamma < 0 else "DAMPENING"
+    gamma_color = ACCENT_RED if total_net_dollar_gamma < 0 else ACCENT_GREEN
+
+    fig.text(0.08, 0.965, f"{result.ticker}  DEALER POSITIONING",
+             fontsize=22, fontweight='bold', color=TEXT_COLOR, va='center')
+    fig.text(0.08, 0.935, "sign model: expiry-book engine",
+             fontsize=12, fontweight='bold', color='#8b949e', va='center')
+    fig.text(0.36, 0.90, f"Spot: ${spot:.2f}",
+             fontsize=14, color=ACCENT_BLUE, va='center',
+             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
+    fig.text(0.48, 0.90, f"Flip: ${flip_level:.2f}",
+             fontsize=14, color=ACCENT_PURPLE, va='center',
+             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
+    fig.text(0.60, 0.90, f"Hedge: {abs(total_net_dollar_gamma * 0.01):,.0f} sh/1%",
+             fontsize=14, color=ACCENT_GOLD, va='center',
+             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
+    fig.text(0.76, 0.90, f"Gamma: {gamma_tag}",
+             fontsize=14, color=gamma_color, va='center', fontweight='bold',
+             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
+    fig.text(0.90, 0.90, f"expiry {result.expiry} · {len(rows)} rec",
+             fontsize=10, color='#8b949e', va='center')
+
+    # ====== PLOT 1: Gamma by Strike (top-left) ======
+    ax1 = fig.add_subplot(gs[0, 0])
+    _style_axis(ax1, 'DEALER GAMMA BY STRIKE (expiry-book engine)', 'Strike', 'Dollar Gamma ($M)')
+    bar_width = (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5)
+                 * 0.7) if len(K) else np.array([])
+    norm_bar = plt.Normalize(vmin=-max(abs(gamma_M).max(), 1e-9), vmax=max(abs(gamma_M).max(), 1e-9))
+    bar_colors = [GAMMA_BAR_CMAP(norm_bar(g)) for g in gamma_M]
+    ax1.bar(K, gamma_M, width=bar_width, color=bar_colors, alpha=0.85, edgecolor='none')
+    ax1.axvline(x=spot, color=ACCENT_BLUE, linestyle='--', linewidth=2.5, alpha=0.9, zorder=5)
+    ax1.axvline(x=flip_level, color=ACCENT_GOLD, linestyle=':', linewidth=2.5, alpha=0.9, zorder=5)
+    ax1.axvline(x=highest_gamma_strike, color=ACCENT_PURPLE, linestyle='-.', linewidth=2, alpha=0.7, zorder=5)
+    ax1.axhline(y=0, color='#8b949e', linewidth=0.8, alpha=0.5)
+    _add_annotation_box(ax1, spot, ax1.get_ylim()[1] * 0.95, f'Spot ${spot:.2f}', ACCENT_BLUE, ha='center')
+    _add_annotation_box(ax1, flip_level, ax1.get_ylim()[1] * 0.85, f'Γ-Flip ${flip_level:.2f}', ACCENT_GOLD, ha='center')
+    _add_annotation_box(ax1, highest_gamma_strike, ax1.get_ylim()[1] * 0.75,
+                        f'Max Γ ${highest_gamma_strike:.2f}', ACCENT_PURPLE, ha='center')
+
+    # ====== PLOT 2: OI by Strike (top-right) ======
+    ax2 = fig.add_subplot(gs[0, 1])
+    _style_axis(ax2, 'OPEN INTEREST BY STRIKE', 'Strike', 'Open Interest')
+    oi_max = oi_arr.max() if len(oi_arr) and oi_arr.max() > 0 else 1.0
+    oi_colors = plt.cm.Blues(oi_arr / oi_max * 0.6 + 0.4)
+    ax2.bar(K, oi_arr, width=bar_width, color=oi_colors, alpha=0.85, edgecolor='none')
+    ax2.axvline(x=spot, color=ACCENT_BLUE, linestyle='--', linewidth=2.5, alpha=0.9, zorder=5)
+    ax2.axvline(x=highest_gamma_strike, color=ACCENT_PURPLE, linestyle='-.', linewidth=2, alpha=0.7, zorder=5)
+    _add_annotation_box(ax2, spot, oi_max * 0.95, f'Spot ${spot:.2f}', ACCENT_BLUE, ha='center')
+    _add_annotation_box(ax2, highest_gamma_strike, oi_max * 0.85,
+                        f'Max Γ ${highest_gamma_strike:.2f}', ACCENT_PURPLE, ha='center')
+
+    # ====== PLOT 3: Hedging Heatmap -- real spot% x IV% gamma surface ======
+    ax3 = fig.add_subplot(gs[1, 0])
+    _style_axis(ax3, 'HEDGING HEATMAP — DEALER GAMMA SURFACE (expiry-book engine)',
+                'Spot Price (% of Current)', 'Implied Volatility (%)')
+    spot_pct, iv_pct, surface_gamma = _expiry_book_gamma_surface(result)
+    max_abs = np.max(np.abs(surface_gamma))
+    if max_abs > 0:
+        norm = mcolors.TwoSlopeNorm(vmin=-max_abs, vcenter=0, vmax=max_abs)
+        im = ax3.pcolormesh(spot_pct, iv_pct, surface_gamma.T,
+                            cmap=HEATMAP_CMAP, norm=norm, shading='auto', rasterized=True)
+    else:
+        im = ax3.pcolormesh(spot_pct, iv_pct, surface_gamma.T,
+                            cmap=HEATMAP_CMAP, shading='auto', rasterized=True)
+    cbar = plt.colorbar(im, ax=ax3, shrink=0.8, pad=0.02)
+    cbar.set_label('Dealer Gamma', color=TEXT_COLOR, fontsize=10, fontweight='bold')
+    cbar.ax.yaxis.set_tick_params(color=TEXT_COLOR)
+    plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=TEXT_COLOR)
+    ax3.axvline(x=1.0, color=ACCENT_BLUE, linestyle='--', linewidth=3, alpha=0.9, zorder=5)
+    flip_pct = flip_level / spot
+    ax3.axvline(x=flip_pct, color=ACCENT_GOLD, linestyle=':', linewidth=3, alpha=0.9, zorder=5)
+    _add_annotation_box(ax3, 1.0, iv_pct[-1] * 0.95, f'Current Spot ${spot:.2f}', ACCENT_BLUE, ha='center')
+    _add_annotation_box(ax3, flip_pct, iv_pct[-1] * 0.85, f'Γ-Flip ${flip_level:.2f}', ACCENT_GOLD, ha='center')
+    if np.any(surface_gamma > 0):
+        ax3.text(0.75, 0.05, 'LONG Γ', fontsize=11, color=ACCENT_GREEN, fontweight='bold',
+                 transform=ax3.transAxes, alpha=0.7,
+                 path_effects=[pe.withStroke(linewidth=2, foreground=DARK_BG)])
+    if np.any(surface_gamma < 0):
+        ax3.text(1.08, 0.05, 'SHORT Γ', fontsize=11, color=ACCENT_RED, fontweight='bold',
+                 transform=ax3.transAxes, alpha=0.7,
+                 path_effects=[pe.withStroke(linewidth=2, foreground=DARK_BG)])
+
+    # ====== PLOT 4: Gamma Profile vs Spot (bottom-right) ======
+    # IV held at each row's own current level (iv_shift=0 slice of the same
+    # surface) -- the standard "what does gamma do as only spot moves" read.
+    ax4 = fig.add_subplot(gs[1, 1])
+    _style_axis(ax4, 'GAMMA PROFILE vs SPOT (expiry-book engine)', 'Spot Price (% of Current)', 'Dealer Gamma ($M)')
+    zero_shift_idx = int(np.argmin(np.abs(np.linspace(-0.15, 0.15, surface_gamma.shape[1]))))
+    gamma_profile = surface_gamma[:, zero_shift_idx]
+    ax4.fill_between(spot_pct, gamma_profile, 0, where=(gamma_profile > 0), color=ACCENT_GREEN, alpha=0.25, interpolate=True)
+    ax4.fill_between(spot_pct, gamma_profile, 0, where=(gamma_profile < 0), color=ACCENT_RED, alpha=0.25, interpolate=True)
+    ax4.plot(spot_pct, gamma_profile, color=TEXT_COLOR, linewidth=2.5, alpha=0.9, zorder=3)
+    ax4.plot(spot_pct, gamma_profile, color=ACCENT_BLUE, linewidth=1.5, alpha=0.5, zorder=4)
+    ax4.axhline(y=0, color='#8b949e', linewidth=0.8, alpha=0.5)
+    ax4.axvline(x=1.0, color=ACCENT_BLUE, linestyle='--', linewidth=2.5, alpha=0.9, zorder=5)
+    ax4.axvline(x=flip_pct, color=ACCENT_GOLD, linestyle=':', linewidth=2.5, alpha=0.9, zorder=5)
+    zero_mask = np.where(np.diff(np.sign(gamma_profile)))[0]
+    for idx in zero_mask:
+        cross_pct = spot_pct[idx]
+        ax4.axvline(x=cross_pct, color=ACCENT_ORANGE, linestyle='--', linewidth=1.5, alpha=0.6, zorder=5)
+        _add_annotation_box(ax4, cross_pct, 0, 'Γ=0', ACCENT_ORANGE, ha='center', fontsize=8)
+    has_long_regime = bool(np.any(gamma_profile > 0))
+    has_short_regime = bool(np.any(gamma_profile < 0))
+    y_mid = max(abs(gamma_profile).max(), 1e-9) * 0.5
+    if has_long_regime:
+        ax4.text(0.72, y_mid, 'LONG Γ\nDAMPEN', fontsize=10, color=ACCENT_GREEN, fontweight='bold',
+                 transform=ax4.transData, ha='center', alpha=0.8,
+                 path_effects=[pe.withStroke(linewidth=2, foreground=DARK_BG)])
+    if has_short_regime:
+        ax4.text(1.12, -y_mid, 'SHORT Γ\nAMPLIFY', fontsize=10, color=ACCENT_RED, fontweight='bold',
+                 transform=ax4.transData, ha='center', alpha=0.8,
+                 path_effects=[pe.withStroke(linewidth=2, foreground=DARK_BG)])
+    if not has_long_regime:
+        ax4.text(0.5, 0.92, 'NO DAMPENING REGION IN THIS WINDOW', fontsize=9, color=ACCENT_GOLD,
+                 fontweight='bold', transform=ax4.transAxes, ha='center', alpha=0.85,
+                 path_effects=[pe.withStroke(linewidth=2, foreground=DARK_BG)])
+
+    footer_ax = fig.add_axes([0.08, 0.02, 0.84, 0.02], facecolor=DARK_BG)
+    footer_ax.axis('off')
+    footer_ax.text(0, 0.5, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M UTC")}',
+                   fontsize=8, color='#8b949e', va='center', transform=footer_ax.transAxes)
+    footer_ax.text(1, 0.5, 'Data: ThetaData', fontsize=8, color='#8b949e', va='center', ha='right',
+                   transform=footer_ax.transAxes)
+
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
+    os.makedirs(out_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(out_dir, f"{result.ticker}_hedging_heatmap_{timestamp}.png")
     plt.savefig(filename, dpi=200, bbox_inches='tight', facecolor=DARK_BG, edgecolor='none')
     plt.close(fig)
     return filename

@@ -354,7 +354,15 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
                     # OI snapshot doesn't blank out the rest of the bundle.
                     _mp_err = getattr(scan, 'error', None) if scan is not None else 'no_oi'
                     if scan is None or (_mp_err and any(
-                        tok in str(_mp_err) for tok in ('404', 'Not Found', 'no_oi', 'empty')
+                        tok in str(_mp_err) for tok in (
+                            '404', 'Not Found', 'no_oi', 'empty',
+                            # shared/thetadata.py's _V2Response.json() raises this
+                            # plain TypeError when the v2 client's retries are
+                            # exhausted and the envelope's .data is None -- the
+                            # same "no usable OI data" outcome as a 404, just
+                            # surfaced through a different exception shape.
+                            'v2 payload is None',
+                        )
                     )):
                         print(f"  {ticker:6s} | MAX_PAIN: no OI snapshot available for pinned "
                               f"expiry {_pinned_expiry}; reporting degraded result instead of failing.")
@@ -642,11 +650,32 @@ def build_context(focus: Dict[str, Any],
     if not expiration and target_years is None:
         raise ValueError("focus needs expiration_date and/or target_years")
     if not expiration:
-        # suite_context requires a concrete expiration_date string. Derive one
-        # from target_years rather than making the caller supply both.
-        days = max(1, int(round(float(target_years) * 365)))
-        expiration = (datetime.now(timezone.utc).date()
-                      + _timedelta_days(days)).strftime('%Y-%m-%d')
+        # suite_context requires a concrete expiration_date string. Snap to a
+        # real ThetaData-listed expiration near the requested horizon instead
+        # of picking an arbitrary calendar date -- naive "today + N days"
+        # arithmetic (the old behavior here) routinely lands on a date
+        # ThetaData has never listed a snapshot for (e.g. target_years=0.25
+        # from 2026-08-18 landed on 2026-11-17, which isn't one of SPY's
+        # listed expiries), and that 404s every downstream bulk-snapshot call
+        # -- dealer_positioning, chain scanner -- for EVERY ticker, not just
+        # illiquid ones. Reuses the same expiry_selector.nearest_expiry the
+        # interactive flow and screener already rely on for this.
+        try:
+            import expiry_selector
+            from shared.thetadata import ThetaDataController
+            _import_volatility_suite()  # puts Vol_Suite root on sys.path
+            td = ThetaDataController()
+            exp_str, _resolved_years = expiry_selector.nearest_expiry(
+                td, ticker, float(target_years))
+            expiration = sc._normalize_expiration(exp_str)
+        except Exception as exc:
+            print(f"WARNING: could not snap target_years={target_years} to a "
+                  f"real ThetaData-listed expiration for {ticker} ({exc}); "
+                  f"falling back to naive calendar-date arithmetic, which may "
+                  f"pick a date ThetaData has no snapshot data for.")
+            days = max(1, int(round(float(target_years) * 365)))
+            expiration = (datetime.now(timezone.utc).date()
+                          + _timedelta_days(days)).strftime('%Y-%m-%d')
     if target_years is None:
         exp_date = datetime.strptime(
             sc._normalize_expiration(expiration), '%Y-%m-%d').date()
@@ -1260,6 +1289,17 @@ def run_unified(focus: Dict[str, Any],
         aborted_by = 'vol'
     elif 'error' not in results['vol']:
         _thread_vol_stats_into_context(context, results['vol'])
+    elif isinstance(results['vol'].get('payload'), dict):
+        # Validation FAILED (e.g. a downstream step like dealer_positioning
+        # left a required file missing -- see run_suite/_finalize), but the
+        # suite still computed and returned real numbers (vol_surface's GARCH
+        # fit, fair vol, correlation matrix, ...) in `payload`. Don't let an
+        # unrelated required-file check silently blank out the Market Signals
+        # stage's context threading -- that used to mean garch_conditional_vol
+        # /fair_vol_pct stayed None (scanners degrading to 0.0/UNKNOWN) purely
+        # because, say, the gamma_records CSV never got written, which has
+        # nothing to do with whether the GARCH fit itself succeeded.
+        _thread_vol_stats_into_context(context, results['vol']['payload'])
 
     # ---- 2. MARKET SIGNALS (option-chain scanners + 1yr sims + direction suite) ----
     # Replaces the old sentiment-scanner stage (StockTwits/Reddit/YouTube/GEX),

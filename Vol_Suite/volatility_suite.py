@@ -469,6 +469,7 @@ def _run_production_dealer_positioning(ticker: str, target_years: float,
     """Run the authoritative expiry-book engine for the production suite."""
     from expiry_book_production import fetch_production_result
     from thetadata_client import ThetaDataController
+    from dealer_positioning import plot_expiry_book_greek_exposure, plot_expiry_book_heatmap
 
     td = ThetaDataController()
     try:
@@ -483,7 +484,11 @@ def _run_production_dealer_positioning(ticker: str, target_years: float,
         f"Call gamma wall: ${result.execution_locus.call_gamma_wall:.2f}\n"
         f"Put gamma wall: ${result.execution_locus.put_gamma_wall:.2f}"
     )
-    return [], interp, result
+    files = [
+        plot_expiry_book_greek_exposure(result, output_dir=output_dir),
+        plot_expiry_book_heatmap(result, output_dir=output_dir),
+    ]
+    return files, interp, result
 
 
 def _prompt_extra_analytics(pack_ctx: Optional[dict]) -> Tuple[bool, bool, bool]:
@@ -1408,6 +1413,7 @@ def _run_core_analysis(
 
     print(f"\n[Running] Dealer Positioning (sign_model={sign_model})")
     dp_result = None
+    dealer_positioning_ok = False
     try:
         files, interp, dp_result = _run_production_dealer_positioning(
             ticker=ticker, target_years=target_years, output_dir=out_root,
@@ -1418,14 +1424,30 @@ def _run_core_analysis(
             "images": [f for f in files if f.lower().endswith('.png')]
         })
         if hasattr(dp_result, "snapshot"):
+            total_net_dollar_gamma = dp_result.snapshot.gex()
             artifacts["dealer_positioning"] = {
                 "available": dp_result.status == "available",
                 "engine": "expiry_book", "sign_model": "expiry_book",
                 "units": dp_result.units, "provenance": dp_result.provenance,
                 "spot": dp_result.spot, "expiry": dp_result.expiry,
-                "gex": dp_result.snapshot.gex(), "dex": dp_result.snapshot.dex(),
+                "gex": total_net_dollar_gamma, "dex": dp_result.snapshot.dex(),
                 "execution_locus": vars(dp_result.execution_locus),
                 "structural": vars(dp_result.structural),
+                # shared/schemas.py::validate_vol_result's dealer_positioning
+                # contract predates the expiry_book engine and still requires
+                # these four scalar keys when available=True -- without them
+                # self-validation below fails and _error_vol_result() discards
+                # this entire payload (vol_surface/correlation/GARCH included),
+                # not just the dealer-positioning block. total_net_gamma is the
+                # raw (non-dollarized) net gamma; hedge_requirement matches the
+                # legacy dealer_positioning.py convention (CLAUDE.md: "hedge_
+                # requirement = abs(net_dollar_gamma * 0.01)"); gamma_flip_level
+                # is the execution-locus zero-gamma crossing already computed
+                # as local_gamma_boundary.
+                "total_net_gamma": dp_result.snapshot.net("gamma"),
+                "total_net_dollar_gamma": total_net_dollar_gamma,
+                "hedge_requirement": abs(total_net_dollar_gamma * 0.01),
+                "gamma_flip_level": dp_result.execution_locus.local_gamma_boundary,
             }
             artifacts["gamma_records"] = []
             artifacts["gamma_records_total"] = 0
@@ -1443,20 +1465,38 @@ def _run_core_analysis(
             artifacts["gamma_records_total"] = total
             artifacts["gamma_records_truncated"] = truncated
             artifacts["gamma_records_csv"] = gamma_csv
+        dealer_positioning_ok = True
     except Exception as e:
         print(f"  Dealer positioning failed: {e}")
         _note_error("dealer_positioning", e)
 
     # ---- Step 5: options chain scanner on the resolved expiry ----
-    if run_options_chain:
+    if run_options_chain and not dealer_positioning_ok:
+        # Step 4 failed (see the except block above) -- dp_result may be None
+        # or may hold a partial value, but either way there's no trustworthy
+        # shared dealer-engine result. run_chain_scanner would happily make
+        # its OWN independent fetch_production_result call when
+        # dealer_result=None, which defeats
+        # the whole point of sharing step 4's result (see the "two-vanna" bug
+        # note below) and can render a misleading vanna chart -- e.g. a
+        # single-strike bar -- that looks legitimate even though the primary
+        # dealer-positioning step already failed for this ticker/expiry.
+        # Skip it and report the dependency plainly instead of masking the
+        # upstream failure.
+        print("\n[5/5] Skipping Options Chain Scanner: dealer positioning "
+              "(step 4) failed, so no shared dealer-engine result is available "
+              "to plot the vanna panel from.")
+        artifacts["chain_scan"] = {"available": False, "error": "dealer_positioning_unavailable"}
+    elif run_options_chain:
         print(f"\n[5/5] Running Options Chain Scanner for {ticker} @ {expiration}...")
         try:
             import options_chain_scanner as ocs
-            # Share the dealer-positioning engine's own result (if step 4
-            # succeeded) so the scanner's vanna panel matches the 4-panel
-            # dealer chart exactly instead of computing a second, independent
-            # vanna series -- see options_chain_scanner.compute_vanna_positioning's
-            # docstring for the "two-vanna" bug this closes.
+            # Share the dealer-positioning engine's own result (step 4 just
+            # succeeded, since dp_result is not None here) so the scanner's
+            # vanna panel matches the 4-panel dealer chart exactly instead of
+            # computing a second, independent vanna series -- see
+            # options_chain_scanner.compute_vanna_positioning's docstring for
+            # the "two-vanna" bug this closes.
             files, interp, scan_result = ocs.run_chain_scanner(
                 ticker, target_years, expiration=expiration, output_dir=out_root,
                 dealer_result=dp_result)
@@ -2018,7 +2058,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ni.add_argument("--strike", type=float, default=None,
                     help="Optional strike for shared context (bypasses strike prompt).")
     pack_group = ni.add_mutually_exclusive_group()
-    pack_group.add_argument("--pack", action="store_true", default=False,
+    pack_group.add_argument("--pack", action="store_true", default=None,
                             help="Use the highlighted ticker pack (selects pack mode).")
     pack_group.add_argument("--no-pack", action="store_false", dest="pack",
                             help="Skip the highlighted ticker pack (manual ticker mode, default).")

@@ -63,7 +63,7 @@ from variance_swap_screener import compute_realized_vol
 from correlation_engine import fetch_price_history
 from vs_utils import timestamped_output_dir
 from dealer_positioning import (
-    DARK_BG, GRID_COLOR, TEXT_COLOR, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED,
+    DARK_BG, PANEL_BG, GRID_COLOR, TEXT_COLOR, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED,
     ACCENT_GOLD, ACCENT_PURPLE, ACCENT_CYAN, ACCENT_ORANGE,
     sign_model_render_label,
 )
@@ -758,7 +758,7 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), facecolor=DARK_BG)
 
     # ---- Panel 1: IV smile with fit + edge flags ----
-    ax1.set_facecolor('#161b22')
+    ax1.set_facecolor(PANEL_BG)
     otm = df[df['is_otm'] & df['iv'].notna()]
     ax1.scatter(otm['strike'], otm['iv'] * 100, s=28, color=ACCENT_BLUE, alpha=0.85, label='Market IV (OTM)', zorder=3)
     fit_sorted = df.sort_values('strike')
@@ -780,7 +780,7 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
     ax1.grid(True, color=GRID_COLOR, alpha=0.4)
     for spine in ax1.spines.values():
         spine.set_color(GRID_COLOR)
-    ax1.legend(facecolor='#161b22', edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, fontsize=8)
+    ax1.legend(facecolor=PANEL_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, fontsize=8)
 
     # ---- Panel 2: net vanna by strike ----
     # Rendered from the SHARED dealer engine result -- the same series the
@@ -793,7 +793,7 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
     # and the legacy DealerPositioningResult (`strike_grid` /
     # `vanna_shares_by_strike`), mirroring compute_vanna_positioning's dual
     # read so the chart can never disagree with the numbers it annotates.
-    ax2.set_facecolor('#161b22')
+    ax2.set_facecolor(PANEL_BG)
     dr = result.dealer_result
     if dr is None:
         raise ValueError("plot_scanner_charts requires the shared dealer engine "
