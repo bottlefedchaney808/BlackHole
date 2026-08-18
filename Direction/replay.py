@@ -1,51 +1,83 @@
 """Direction/replay.py -- per-bar historical replay of the Direction suite.
 
-Evaluates ``signal_generator.generate(ticker, as_of=date)`` for each bar
-date in a chart's visible range so a candlestick chart can show a
-buy/sell marker per bar. ``generate_fn`` is injectable for tests; a
-per-date failure degrades to a neutral entry, never an invented signal.
+Evaluates the v2 indicator's per-bar signal composition for each bar
+timestamp in a chart's visible range so a candlestick chart can show a
+buy/sell marker per bar.  One evaluation per BAR TIMESTAMP (v1 evaluated
+once per unique calendar date, so every intraday bar of a day carried the
+same verdict).  ``generate_fn`` is injectable for tests; a per-bar failure
+degrades to a neutral entry, never an invented signal.
 
 Known limitation (current-expiry universe): each bar is evaluated
 against the CURRENT expiry universe -- ``data.get_expirations`` returns
-today's list, and expiry availability as-of the bar date is not modeled.
-A replay bar whose only candidate expiries postdate the as-of bar date
-may therefore be evaluated against expiries that did not exist that day.
-This degrades neutrally (unfetchable data -> neutral entry), never
-fabricates, but can miss signals that existed at the bar date or skew
+today's list, and expiry availability as-of the bar timestamp is not
+modeled.  A replay bar whose only candidate expiries postdate the as-of
+bar may therefore be evaluated against expiries that did not exist that
+day.  This degrades neutrally (unfetchable data -> neutral entry), never
+fabricates, but can miss signals that existed at the bar or skew
 nearest-expiry selection later than the bar's true nearest expiry.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
+
+from .indicator import _SIGNAL_NAMES, _as_datetime, _score_conviction
+
+
+def _default_generate_fn() -> Callable:
+    """Build the default per-bar generate fn: the v2 indicator's real path.
+
+    Returns a closure ``generate_fn(ticker, *, ts)`` that runs the v2
+    indicator's per-bar signal composition (``indicator._compose_signals``
+    -- the same real path ``indicator.bar_eval`` uses), threading ONE
+    liquidity-grid state across the whole replay so the coarse gamma grid
+    samples the sequence exactly as ``bar_eval`` would.
+    """
+    state: dict = {}
+
+    def _generate(ticker: str, *, ts) -> dict:
+        from . import indicator
+
+        return indicator._compose_signals(ticker, ts, state=state)
+
+    return _generate
 
 
 def replay_direction(
     ticker: str,
-    bar_dates: List[str],
-    generate_fn: Optional[Callable] = None,
-) -> List[Dict]:
-    """Return [{date, conviction, score, signals}] for each bar date.
+    bar_timestamps: list[object],
+    generate_fn: Callable | None = None,
+) -> list[dict]:
+    """Return [{ts, conviction, score, signals}] for each bar timestamp.
 
-    ``bar_dates`` are canonical 'YYYY-MM-DD' strings. ``generate_fn``
-    defaults to ``signal_generator.generate`` and is called as
-    ``generate_fn(ticker, as_of=date)``. A failing evaluation degrades to
-    ``{"conviction": "NONE", "score": 0, "signals": {}}``.
+    ``bar_timestamps`` is a list of datetime or ISO-8601 string
+    timestamps (ascending); one evaluation PER BAR TIMESTAMP (v1
+    evaluated per unique calendar date).  ``generate_fn`` defaults to the
+    v2 indicator's per-bar composition and is called as
+    ``generate_fn(ticker, ts=...)``, returning a dict of boolean signal
+    keys -- the five canonical whale/wave3/squeeze/trend/liquidity
+    (missing keys count as False, extra keys are ignored) -- the same
+    contract as ``indicator.bar_eval``'s injectable generate_fn.  A
+    failing bar degrades to ``{"ts": ..., "conviction": "NONE", "score":
+    0, "signals": {}}`` without raising; the other bars are unaffected.
     """
     if generate_fn is None:
-        from .signal_generator import generate as _generate
-        generate_fn = _generate
+        generate_fn = _default_generate_fn()
 
-    out: List[Dict] = []
-    for d in bar_dates:
+    out: list[dict] = []
+    for bar_ts in bar_timestamps:
         try:
-            r = generate_fn(ticker, as_of=d)
-            out.append({
-                "date": d,
-                "conviction": r.get("conviction", "NONE"),
-                "score": int(r.get("score", 0) or 0),
-                "signals": r.get("signals", {}),
-            })
+            ts = _as_datetime(bar_ts).isoformat()
+        except (TypeError, ValueError):
+            ts = str(bar_ts)
+        try:
+            raw = generate_fn(ticker, ts=bar_ts)
+            signals = {name: bool(raw.get(name, False)) for name in _SIGNAL_NAMES}
+            score, conviction = _score_conviction(signals)
         except Exception:
-            out.append({"date": d, "conviction": "NONE", "score": 0, "signals": {}})
+            out.append({"ts": ts, "conviction": "NONE", "score": 0, "signals": {}})
+            continue
+        out.append(
+            {"ts": ts, "conviction": conviction, "score": score, "signals": signals}
+        )
     return out
