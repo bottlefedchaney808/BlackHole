@@ -92,6 +92,8 @@ def render_spot_chart(
     output_path: str | PathLike[str],
     provider=None,
     renderer: Renderer | None = None,
+    direction_overlay: list | None = None,
+    live_note: str | None = None,
 ) -> ChartArtifact:
     """Fetch, normalize, and render a daily spot chart.
 
@@ -99,6 +101,11 @@ def render_spot_chart(
     unsupported interval cannot invoke a provider. ``provider`` and ``renderer``
     are injectable to keep callers and tests independent of network access and
     the matplotlib implementation.
+
+    ``direction_overlay`` is a list of {"date": "YYYY-MM-DD",
+    "conviction": "HIGH"|"MEDIUM"|"NONE", "score": int} entries from
+    ``Direction.replay.replay_direction``; markers are drawn at matching
+    bars. ``live_note`` stamps the last bar with the current conviction.
     """
     request = build_spot_chart_request(
         ticker,
@@ -116,7 +123,11 @@ def render_spot_chart(
             request.ticker, interval=request.interval, lookback=request.lookback, provider=provider
         )
     selected_renderer = renderer if renderer is not None else render_candlestick
-    selected_renderer(payload, path)
+    if direction_overlay is not None or live_note is not None:
+        selected_renderer(payload, path, direction_overlay=direction_overlay,
+                          live_note=live_note)
+    else:
+        selected_renderer(payload, path)
 
     observations = payload.observations
     if not observations:

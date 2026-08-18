@@ -237,7 +237,18 @@ def _compress_non_trading_gaps(dates: list[float]) -> list[float]:
     return [float(index) for index, _ in enumerate(dates)]
 
 
-def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str]) -> Path:
+def _marker_for_conviction(conviction: str) -> str:
+    """Map a Direction conviction to a marker kind: buy/weak_buy/sell/none."""
+    return {
+        "HIGH": "buy",
+        "MEDIUM": "weak_buy",
+        "NONE": "sell",
+    }.get(str(conviction).upper(), "none")
+
+
+def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
+                       *, direction_overlay: list | None = None,
+                       live_note: str | None = None) -> Path:
     """Render ``payload`` to a deterministic PNG and return its path.
 
     The renderer only reads the immutable normalized payload. Empty, malformed,
@@ -351,6 +362,30 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str])
             volume_axis.margins(x=0.025, y=0.08)
 
         figure.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.12)
+
+        if direction_overlay:
+            by_date = {str(entry.get("date")): entry for entry in direction_overlay if isinstance(entry, dict)}
+            spread = max(obs.high - obs.low for obs in observations) or 1.0
+            marker_style = {
+                "buy": ("^", "lime", 1.0),
+                "weak_buy": ("^", "cyan", 0.65),
+                "sell": ("v", "orchid", 1.0),
+            }
+            for i, obs in enumerate(observations):
+                kind = _marker_for_conviction(
+                    by_date.get(obs.timestamp.date().isoformat(), {}).get("conviction", "")
+                )
+                if kind not in marker_style:
+                    continue
+                glyph, color, alpha = marker_style[kind]
+                y = obs.low - 0.03 * spread if kind != "sell" else obs.high + 0.03 * spread
+                axis.annotate(glyph, xy=(dates[i], y), fontsize=11, color=color,
+                              alpha=alpha, ha="center", va="center",
+                              annotation_clip=False)
+        if live_note:
+            axis.text(0.012, 0.985, live_note, transform=axis.transAxes,
+                      fontsize=9, color="white", alpha=0.9, va="top",
+                      bbox=dict(boxstyle="round,pad=0.3", fc="#1b2a4a", ec="none"))
 
         figure.savefig(path, format="png", facecolor=figure.get_facecolor(), bbox_inches="tight")
     except (IndexError, TypeError, ValueError, OverflowError) as exc:

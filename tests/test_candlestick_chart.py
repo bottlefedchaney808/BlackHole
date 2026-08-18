@@ -200,3 +200,30 @@ def test_render_rejects_malformed_numeric_ohlc_as_chart_data_error(
 
 # Keep accidental imports from silently masking the intended contract.
 assert CandlePayload is not None
+
+
+def test_render_candlestick_draws_direction_markers(tmp_path):
+    from shared.chart_data import CandlePayload, CandleRecord
+    from shared.candlestick_chart import render_candlestick, _marker_for_conviction
+    from datetime import datetime
+
+    assert _marker_for_conviction("HIGH") == "buy"
+    assert _marker_for_conviction("MEDIUM") == "weak_buy"
+    assert _marker_for_conviction("NONE") == "sell"
+    assert _marker_for_conviction("BOGUS") == "none"
+
+    records = tuple(
+        CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0, high=102.0,
+                     low=99.0, close=101.0, volume=1000)
+        for _ in range(3)
+    )
+    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d",
+                            source="thetadata", observations=records)
+    out = tmp_path / "chart.png"
+    path = render_candlestick(payload, out,
+                              direction_overlay=[
+                                  {"date": "2026-08-12", "conviction": "HIGH",
+                                   "score": 4, "signals": {}},
+                              ],
+                              live_note="LIVE: HIGH (4/5)")
+    assert path.exists() and path.stat().st_size > 0

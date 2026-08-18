@@ -167,3 +167,27 @@ def test_render_spot_chart_rejects_unsafe_ticker_before_provider(tmp_path):
         render_spot_chart("BRK.B?x=1", output_path=tmp_path / "chart.png", provider=provider)
 
     assert called is False
+
+
+def test_render_spot_chart_accepts_direction_overlay(tmp_path, monkeypatch):
+    from shared.chart_data import CandlePayload, CandleRecord
+    from shared import chart_request as cr
+    from datetime import datetime
+
+    records = (CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0,
+                            high=102.0, low=99.0, close=101.0, volume=1000),)
+    payload = CandlePayload(ticker="SPY", interval="1d", lookback="6m",
+                            source="thetadata", observations=records)
+
+    def fake_provider(ticker, lookback=None, provider=None):
+        return payload
+
+    monkeypatch.setattr(cr, "fetch_daily_candles", fake_provider)
+    out = tmp_path / "chart.png"
+    art = cr.render_spot_chart("SPY", interval="1d", output_path=out,
+                               direction_overlay=[
+                                   {"date": "2026-08-12", "conviction": "HIGH",
+                                    "score": 4, "signals": {}},
+                               ],
+                               live_note="LIVE: HIGH (4/5)")
+    assert art.path.exists()
