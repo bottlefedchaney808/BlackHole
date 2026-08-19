@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from shared.candlestick_chart import apply_position_gate  # noqa: E402
 from shared.chart_request import render_spot_chart  # noqa: E402
 
 
@@ -65,8 +66,10 @@ def main(argv=None) -> int:
                             lookback=args.lookback, output_path=out,
                             direction_overlay=overlay, live_note=live_note)
     scores = [entry.get("score", 0) for entry in overlay]
+    markers = apply_position_gate(overlay)
     print(f"saved {art.path} | {art.row_count} bars | {bar_ts[0]} -> {bar_ts[-1]}")
     print(f"scores: {scores}")
+    print(f"markers: {markers}")
     print(f"live: {live_note}")
     return 0
 

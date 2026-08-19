@@ -123,3 +123,37 @@ def test_custom_out_path_is_forwarded(monkeypatch, capsys):
                      "--out", "artifacts/custom.png"]) == 0
     assert captured["out"].endswith("artifacts/custom.png")
     assert "scores: [0]" in capsys.readouterr().out
+
+
+def test_cli_prints_gated_markers_next_to_raw_scores(monkeypatch, capsys):
+    """Fake overlay scores [0, 4, 0] print raw scores plus gated markers."""
+    from shared import spot_history
+    from Direction import replay as replay_mod
+
+    bar_times = (datetime(2026, 8, 17, 9, 30), datetime(2026, 8, 17, 9, 45),
+                 datetime(2026, 8, 17, 10, 0))
+
+    monkeypatch.setattr(spot_history, "fetch_intraday_candles",
+                        lambda ticker, *, interval, lookback: _payload(*bar_times))
+    monkeypatch.setattr(replay_mod, "replay_direction",
+                        lambda ticker, bar_ts, generate_fn=None: [
+                            {"ts": bar_ts[0], "conviction": "NONE", "score": 0,
+                             "signals": {}},
+                            {"ts": bar_ts[1], "conviction": "HIGH", "score": 4,
+                             "signals": {}},
+                            {"ts": bar_ts[2], "conviction": "NONE", "score": 0,
+                             "signals": {}},
+                        ])
+
+    cli = _load_cli()
+
+    def fake_render(ticker, *, interval, lookback, output_path,
+                    direction_overlay=None, live_note=None):
+        return _artifact(row_count=3)
+
+    monkeypatch.setattr(cli, "render_spot_chart", fake_render)
+
+    assert cli.main(["SPY", "--interval", "15m", "--lookback", "5d"]) == 0
+    out = capsys.readouterr().out
+    assert "scores: [0, 4, 0]" in out
+    assert "markers: ['none', 'buy', 'sell']" in out
