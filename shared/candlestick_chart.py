@@ -449,13 +449,30 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
                 "buy": ("^", "lime", 1.0),        # 4/5 — below bar
                 "add": ("D", "gold", 1.0),        # 5/5 — add to position, below bar
             }
+            gated = apply_position_gate(direction_overlay)
+            kind_by_ts: dict[str, str] = {}
+            kind_by_date: dict[str, str] = {}
+            for entry, kind in zip(direction_overlay, gated):
+                if not isinstance(entry, dict):
+                    continue
+                if "ts" in entry:
+                    key = _normalize_ts(entry["ts"])
+                    if key not in kind_by_ts:
+                        kind_by_ts[key] = kind
+                elif "date" in entry:
+                    key = str(entry["date"])
+                    if key not in kind_by_date:
+                        kind_by_date[key] = kind
             for i, obs in enumerate(observations):
                 entry = _match_overlay_entry(obs.timestamp, direction_overlay)
                 if not entry:
                     continue  # no overlay data for this bar -> no marker
-                kind = _marker_for_score(int(entry.get("score", 0) or 0))
+                if "ts" in entry:
+                    kind = kind_by_ts.get(_normalize_ts(entry["ts"]))
+                else:
+                    kind = kind_by_date.get(str(entry["date"]))
                 if kind not in marker_style:
-                    continue  # 1-2/5 -> no marker
+                    continue  # gated none / 1-2/5 -> no marker
                 glyph, color, alpha = marker_style[kind]
                 y = obs.high + 0.03 * spread if kind == "sell" else obs.low - 0.03 * spread
                 axis.annotate(glyph, xy=(dates[i], y), fontsize=11, color=color,

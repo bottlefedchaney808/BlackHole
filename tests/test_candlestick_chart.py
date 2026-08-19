@@ -358,7 +358,55 @@ def test_render_candlestick_same_day_bars_each_get_own_marker(tmp_path, monkeypa
         ],
     )
     assert path.exists() and path.stat().st_size > 0
-    assert sorted(glyph for _, glyph in calls) == ["D", "^", "v"]  # add, buy, sell
+    assert sorted(glyph for _, glyph in calls) == ["D", "^"]  # add, buy; score-0 is gated none
+
+
+def test_render_candlestick_position_gate_hides_sell_hold_until_long(tmp_path, monkeypatch):
+    """Same-day scores [0, 3, 4, 3, 0] draw none, none, buy, hold, sell."""
+    from matplotlib import axes as mpl_axes
+
+    from shared.candlestick_chart import render_candlestick
+
+    bar_times = (
+        datetime(2026, 8, 12, 9, 30),
+        datetime(2026, 8, 12, 9, 45),
+        datetime(2026, 8, 12, 10, 0),
+        datetime(2026, 8, 12, 10, 15),
+        datetime(2026, 8, 12, 10, 30),
+    )
+    records = tuple(
+        CandleRecord(timestamp=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=1000)
+        for ts in bar_times
+    )
+    payload = CandlePayload(
+        ticker="SPY",
+        interval="15m",
+        lookback="1d",
+        source="thetadata",
+        observations=records,
+    )
+    calls = []
+    original_annotate = mpl_axes.Axes.annotate
+
+    def capture_annotate(axis, glyph, xy, *args, **kwargs):
+        calls.append((xy[0], glyph))
+        return original_annotate(axis, glyph, xy, *args, **kwargs)
+
+    monkeypatch.setattr(mpl_axes.Axes, "annotate", capture_annotate)
+    out = tmp_path / "chart.png"
+    path = render_candlestick(
+        payload,
+        out,
+        direction_overlay=[
+            {"ts": ts.isoformat(), "conviction": "NONE", "score": score, "signals": {}}
+            for ts, score in zip(bar_times, [0, 3, 4, 3, 0])
+        ],
+    )
+    assert path.exists() and path.stat().st_size > 0
+    glyph_to_kind = {"v": "sell", "o": "hold", "^": "buy", "D": "add"}
+    kinds_by_x = {x: glyph_to_kind[g] for x, g in calls}
+    kinds = [kinds_by_x.get(float(i), "none") for i in range(5)]
+    assert kinds == ["none", "none", "buy", "hold", "sell"]
 
 
 def test_position_gate_buy_in_hold_sell_out():
