@@ -359,3 +359,21 @@ def test_render_candlestick_same_day_bars_each_get_own_marker(tmp_path, monkeypa
     )
     assert path.exists() and path.stat().st_size > 0
     assert sorted(glyph for _, glyph in calls) == ["D", "^", "v"]  # add, buy, sell
+
+
+def test_position_gate_buy_in_hold_sell_out():
+    from shared.candlestick_chart import apply_position_gate
+    entries = [{"score": s} for s in [0, 3, 4, 3, 0, 0]]
+    assert apply_position_gate(entries) == ["none", "none", "buy", "hold", "sell", "none"]
+
+
+def test_position_gate_add_increments_then_flatten():
+    from shared.candlestick_chart import apply_position_gate
+    entries = [{"score": s} for s in [5, 5, 0]]
+    assert apply_position_gate(entries) == ["add", "add", "sell"]
+
+
+def test_position_gate_empty_and_missing_score():
+    from shared.candlestick_chart import apply_position_gate
+    assert apply_position_gate([]) == []
+    assert apply_position_gate([{}]) == ["none"]

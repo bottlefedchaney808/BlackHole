@@ -255,6 +255,31 @@ def _marker_for_score(score: int) -> str:
     }.get(int(score), "none")
 
 
+def apply_position_gate(entries) -> list[str]:
+    """Return one marker kind per overlay entry, gated on simulated long state."""
+    position = 0
+    kinds = []
+    for entry in entries:
+        score = int(entry.get("score", 0) or 0)
+        if score == 4:
+            position = max(position, 1)
+            kinds.append("buy")
+        elif score == 5:
+            if position == 0:
+                position = 1
+            else:
+                position += 1
+            kinds.append("add")
+        elif score == 3 and position > 0:
+            kinds.append("hold")
+        elif score == 0 and position > 0:
+            position = 0
+            kinds.append("sell")
+        else:
+            kinds.append("none")
+    return kinds
+
+
 def _normalize_ts(value: object) -> str:
     """Canonicalize a bar timestamp to its ``datetime.isoformat()`` form.
 
@@ -450,4 +475,4 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
     return path
 
 
-__all__ = ["render_candlestick"]
+__all__ = ["render_candlestick", "apply_position_gate"]
