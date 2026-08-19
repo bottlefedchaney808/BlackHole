@@ -26,3 +26,49 @@ Plan: staged acquisition authorization hardening
 - Authorization Task 3: complete (e4660ea..7e51936, review clean)
 - OpEx Calendar Stages 1-3: complete (review clean)
 - Authorization Task 4: complete (74e7462..7721d4c, review clean; executor identity + post-validation probe receipts; 3 Minor non-blocking)
+
+## SDD Ledger — 2026-08-18 Direction chart overlay (plan 2026-08-18-direction-chart-overlay.md)
+- Pre-flight: Claude's verified fix wave committed as f5cf319 (branch fix/adversarial-audit-20260817). latest_manifest.json data churn intentionally left unstaged.
+- Branch: fix/adversarial-audit-20260817 (HEAD f5cf319). Not master.
+- Task 1: complete (commits f5cf319..141e0a6, review clean; 4 Minor hygiene, no Critical/Important; ⚠️ closed by controller live-verify: bulk_hist OI returns open_interest key — alias correct)
+- Task 2: complete (commits 465bd78 + fix 17b2d39; review approved; I-1 expiry-filter normalization fixed + regression proven to fail pre-fix; 66 passed; ⚠️-3 (replay uses today's expiry list) flagged for Task 3 review)
+- Task 3: complete (commit a45a819, review PASS/Approved, 4 Minor, no Crit/Imp; I-1 normalization applied to _pick_expiry controller-endorsed; ⚠️-3 CLOSED: today's-expiry-universe limitation to be documented in Task 6 replay.py docstring + plan Task 6 section)
+- Task 3 Minor (record for final review): M-1 no regression test for _pick_expiry dash-as_of normalization; M-2 seen["close"] never asserted in new test; M-3/M-4 hygiene.
+- Task 4: complete (commit 081c791, review PASS/Approved, 4 Minor, no Crit/Imp)
+- Task 4 Minor (final review triage): M-1/M-2 brief verbatims (@pytest.mark.unit missing, redundant re-imports); M-3 report undercounted mock updates (actual 7, not 6); M-4 venv ruff UP045 on Optional[str] (brief-mandated style, no gate wired).
+- Task 5: complete (commit ca89828, review PASS/Approved; backward compat verified at 6 call sites; 71 passed)
+- Task 6: complete (commit 87090f5, review PASS/Approved, 4 Minor informational; ⚠️-3 limitation documented in replay.py docstring — CLOSED)
+- Task 7: complete (commit 466fbd4, review PASS/Approved; placement verified at lines 366-388 after subplots_adjust before savefig; ⚠️ pixel-level + end-to-end verification deferred to Task 8's real render)
+- Task 8: complete (commit aad047d, review PASS/Approved, 3 Minor; PNG pixel-verified by controller: 52 bars, markers + live stamp confirmed)
+- ALL 8 TASKS COMPLETE. Branch commits: f5cf319 (pre-flight fix wave) + 141e0a6, 465bd78, 17b2d39, a45a819, 081c791, ca89828, 87090f5, 466fbd4, aad047d
+- FINAL REVIEW: VERDICT SHIP (no Critical/Important, no pre-merge fixes; 170 passed re-verified; cheap follow-ups: _pick_expiry dash-as_of regression test, @pytest.mark.unit on replay tests, MEDIUM marker renders filled cyan ▲ vs documented △, replay refetches OHLCV per bar ~4x documented)
+- ⏸️ ON HOLD (Jason, 2026-08-18): direction-chart overlay feature iteration STOPPED. Committed state: master @ fedd92f (aad047d CLI + a643979 ≥3/5 gate + fedd92f score-based markers 0=▼sell/3=●hold/4=▲buy/5=◆add). Skills updated to score-based convention. User: "still needs a ton of work" — do NOT resume iteration without explicit go-ahead.
+## v2 indicator plan (feat/direction-indicator-v2) — resumed full-auto 2026-08-18
+- Task 1: complete (commit fb3150a, review PASS/Approved, no Crit/Imp; RTH 09:30<=t<16:00 exclusive + unparseable-ts->[] adjudicated correct; ⚠️ carry: ThetaData may stamp 15:45-16:00 bar at 16:00 -> RTH filter could drop final bar — verify live in T2+)
+- Task 2: complete (commit 1495fb8, review PASS/Approved, no Crit/Imp; disclosures adjudicated ACCEPTED: count_waves->wave_type=="impulse_wave_3", adx>25 strict per entry point, trend is single-TF (Task 5 must not expect multi-TF); ⚠️ carry: 16:00 close-bar RTH drop -> one-bar lag on last bar, confirm live; RED-phase report-only)
+- Task 3: complete (commit 53f3116, review PASS/Approved, no Crit/Imp; row-key handling adjudicated defensible, whale_scanner byte-identical; ⚠️ carry to T8: live scanner row-key (premium vs premium_paid) + use_csv string-coercion unverified live; ⚠️ carry to T4: ~5s SDK transport timeout -> stage per-bar flow calls)
+- Task 4: complete (commit 6f8badb, review PASS/Approved, no Crit/Imp; rule deviation adjudicated: v1 max-pain-within-2% governs per brief's match-v1-if-readable clause; ⚠️ carry to T8: live dealer.weighted_greeks wire format (header placement) unverified — one-off live smoke before production wiring)
+- Task 5: complete (commit 880186d, review PASS/Approved, no Crit/Imp; mirror contract verified side-by-side IDENTICAL to signal_generator.generate; signal_generator.py byte-identical; notes: bar_eval default interval 15m, NONE entries carry {} signals)
+- Task 6: complete (commit 9cc2fda, review PASS/Approved, no Crit/Imp; lazy resolution adjudicated; 3 Minor informational; ⚠️ carry to T8: injectable generate_fn contract divergence (kw vs positional) — recheck when T8 wires a real generate_fn; CLI breakage expected until T8)
+- Task 7: complete (commit 66dd373, review PASS/Approved, no Crit/Imp; 3 Minor informational: linear scan perf, dup-ts first-wins, ts:None edge; ⚠️ carry: naive-tz assumption on obs.timestamp — production bars must be naive local datetimes)
+- Task 8: complete (commit 8bf3f9f, review PASS/Approved, no Crit/Imp; live run 78 bars scores VARY [0]x50->[1]x14->[2]x8->[3]x6 — v2 point PROVEN; controller pixel-verified PNG (78 candles, ▼+● markers, no lime/gold); ⚠️ carry: flow premium key unverified 3/3 live timeouts — whale leg degrades off, needs re-probe; ▲/◆ paths unit-tested only, not live)
+- Task 9: complete (commit ca62dfd; full regression 226 passed on the brief's exact suite, 228 passed incl. tests/test_render_direction_chart.py; root tests/ 683 passed / 44 skipped / 5 failed — all 5 pre-existing in tests/test_suite_validation.py (Vol_Suite output-marker validation: required_file NVDA_gamma_records check, strict-env default, json-serializable checks), file + shared/schemas.py + shared/suite_validation.py untouched by branch; scope-boundary diff EMPTY for the six Direction module files + signal_generator.py; indicator.py docstring honest-data contract appended; WIKI.md v2-indicator section appended). Calibration: v2 closed-bar per-bar semantics = data as of bar_ts INCLUSIVE via intraday_bars_as_of; whale flow intraday via PH v2 flow.scanner_trades_in_time_range (bar's own 15-min window, not v1 EOD wall); dealer gamma SAMPLED coarse-grid every N bars, last regime HELD neutral between grid points — never interpolated-as-fact, never fabricated; OI max-pain EOD (OI settles daily by nature); unfetchable per-bar legs degrade to neutral (NONE/0/False) — documented in both indicator.py docstring and WIKI.md.
+- Task 9: complete (commit ca62dfd, review PASS/Approved, no Crit/Imp; scope boundary held — 6 modules + signal_generator.py 0-byte diff vs master; 226/228 passed; 5 root failures pre-existing test_suite_validation.py; docstring honest-data contract + wiki v2 section landed)
+- ALL 9 TASKS COMPLETE (v2 indicator). Commits: fb3150a, 1495fb8, 53f3116, 6f8badb, 880186d, 9cc2fda, 66dd373, 8bf3f9f, ca62dfd
+
+## position-gated markers (feat/position-gated-markers) — started 2026-08-19
+- Task 1: complete (commit ea16315, review PASS/Approved, no Crit/Imp; helper unused by draw loop as required)
+- Task 2: complete (commit 492270f, review PASS/Approved, no Crit/Imp; 2 Minor informational; controller re-ran test_candlestick_chart.py)
+- Task 3: complete (commit 5334216, review PASS/Approved, no Crit/Imp; live markers all none — plan-correct, no 4/5; 54 passed)
+- ALL 3 TASKS COMPLETE (position-gated markers). Commits: ea16315, 492270f, 5334216
+
+## native chart app phase 1 (feat/native-chart-app) — started 2026-08-19
+- Task 1: complete (commit 6668a63, review PASS/Approved; ⚠️ carry to T8: add chart_app/tests to pyproject testpaths)
+- Task 2: complete (commit 22447b1, review PASS/Approved; warmup <50 plan-mandated)
+- Task 3: complete (commit 9bfff5d, review PASS/Approved; live HIGH/MEDIUM honest-off until whale sampled)
+- Task 4: complete (commit 897a80a, review PASS/Approved)
+- Task 5: complete (commit 3009528, review PASS/Approved; 2 Minor: zoom reset on poll, sell=rotated triangle)
+- Task 6: complete (commit be5413f, review PASS/Approved; controller re-ran 16 passed; Direction/dashboard empty)
+- Task 7: complete (commit 968a24a, review PASS/Approved; /api/order 404; skill outside git)
+- Task 8: complete (commit 75fa9f2, review PASS/Approved; 22 bars 07-20→08-18; testpaths fixed)
+- ALL 8 TASKS COMPLETE (native chart app). Commits: 6668a63 22447b1 9bfff5d 897a80a 3009528 be5413f 968a24a 75fa9f2

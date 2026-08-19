@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tradingview": {
+      "command": "node",
+      "args": ["C:\\Users\\bottl\\FinancialDevelopment\\tradingview-mcp\\src\\server.js"]
+    },
+    "robinhood": {
+      "type": "http",
+      "url": "https://agent.robinhood.com/mcp/trading"
+    }
+  }
+}

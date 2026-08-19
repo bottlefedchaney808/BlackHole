@@ -1,69 +1,45 @@
-# Task 3 Report: `output_runs.py` -- Vol_Suite standalone runs + legacy loose bucket
+# Task 3 Report — Snapshot contract
 
-## What was implemented
+**Status:** DONE_WITH_CONCERNS
+**Commit:** `9bfff5d` (`feat(chart-app): agent snapshot contract`)
+**Full hash:** `9bfff5d80a633621c4d24f7aeabcb52916eaeaf2`
+**Branch:** `feat/native-chart-app` (parent HEAD `22447b1`)
+**Tests:** `chart_app/tests/test_snapshot.py` 2 passed; chart_app suite 7 passed in 0.66s.
 
-Appended `discover_loose_bucket(directory, suite, run_id, label) -> Optional[RunInfo]` to
-`dashboard/output_runs.py`, verbatim from the task brief. It wraps every *file* (not
-subdirectory) directly inside a flat directory as one synthetic `RunInfo`, for the legacy
-`Vol_Suite/vs_output/` location that has no per-run separation. Returns `None` if the
-directory is missing or contains no files directly in it (subdirectories and unreadable
-entries are skipped, not counted as content).
+## What was delivered
 
-Also confirmed (via the first appended test) that `Vol_Suite/outputs/<ts>/` -- which *does*
-have one directory per run -- needs no new function at all; Task 2's `discover_rundir_runs`
-already handles it directly when pointed at `Vol_Suite/outputs/*`.
+- `chart_app/snapshot.py` — `build_state(cache, ticker, interval, rh=None) -> dict`
+- `chart_app/tests/test_snapshot.py` — brief-verbatim empty + length tests
 
-No changes to any other function; nothing from Tasks 1-2 was touched.
+Commit staged **only** those two files. Not staged: `.superpowers/sdd/*`, `sentiment-scanner/*`, `trading_journal/*`, `docs/`.
 
-## RED/GREEN test evidence
+## TDD
 
-**RED** (before implementation, tests appended to `dashboard/tests/test_output_runs.py`):
+1. **RED:** wrote `test_snapshot.py` first. Collection failed with `ModuleNotFoundError: No module named 'chart_app.snapshot'` (expected).
+2. **GREEN:** implemented `build_state`. Both tests passed.
+3. **No extra tests** beyond the brief.
+
+## Contract
+
+Exact keys: `ticker`, `interval`, `as_of`, `bars`, `scores`, `markers`, `overlays`, `live`, `rh`.
+
+- Empty cache: `bars=[]`, `live={"conviction":"NONE","score":0}`, `rh.position is None`, `as_of=None`, no raise.
+- Lengths: `scores`, `markers`, and every overlay list match `len(bars)`.
+- Overlays keys: `ema20`, `ema50`, `vwap`, `bb_mid`, `bb_upper`, `bb_lower`.
+- Scores are raw ints from `price_scores`; markers from `gated_markers`.
+- `rh=None` → `{"position": None, "fills": []}`. Passed-in `rh` is echoed (`position` + `fills`).
+- Live conviction uses the **same rule as** `signal_generator.generate` (HIGH = whale AND wave3 AND (squeeze OR trend) AND score >= 3; MEDIUM = whale AND score >= 3 AND not HIGH). whale/liq stay False via `price_scores`, so HIGH/MEDIUM from whale will not fire. Live stamp is honest `NONE (n/5)`. Whale is not faked. No live PH.
+
+## Test command
+
 ```
-ImportError while importing test module '...\dashboard\tests\test_output_runs.py'.
-dashboard\tests\test_output_runs.py:264: in <module>
-    from dashboard.output_runs import discover_loose_bucket
-E   ImportError: cannot import name 'discover_loose_bucket' from 'dashboard.output_runs'
-Interrupted: 1 error during collection
+env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest chart_app/tests/test_snapshot.py chart_app/tests/test_score_engine.py chart_app/tests/test_bar_cache.py -v
 ```
 
-**GREEN** (after implementation):
-```
-.venv\Scripts\python.exe -m pytest dashboard/tests/test_output_runs.py -v
-...
-35 passed in 0.07s
-```
-All 4 new tests pass, plus all 31 pre-existing Tasks 1-2 tests -- no regressions.
-
-New tests:
-- `test_vol_standalone_rundir_is_discovered_via_discover_rundir_runs` -- PASSED
-- `test_discover_loose_bucket_wraps_a_flat_directory_as_one_run` -- PASSED
-- `test_discover_loose_bucket_returns_none_for_empty_or_missing_directory` -- PASSED
-- `test_discover_loose_bucket_ignores_subdirectories` -- PASSED
-
-## Files changed
-
-- `C:\Users\bottl\FinancialDevelopment\dashboard\output_runs.py` -- appended `discover_loose_bucket` (37 lines, verbatim from brief), after `discover_rundir_runs`.
-- `C:\Users\bottl\FinancialDevelopment\dashboard\tests\test_output_runs.py` -- appended 4 tests + the new import (49 lines, verbatim from brief).
-
-Commit: `db9e841` -- "feat: add loose-bucket discovery for legacy ungrouped output dirs"
-(branch `feat/dashboard-output-tab-redesign`, not switched/created per instructions).
-
-## Self-review
-
-- **Completeness**: both new functions/behaviors from the brief are present; all 5 checklist
-  steps (write tests, verify RED, write impl, verify GREEN, commit) were executed in order.
-- **Quality**: code matches the brief exactly, verbatim -- no edits, no "improvements" to the
-  given implementation.
-- **Discipline / scope**: `git diff` confirmed only the two intended files changed, and the
-  diff content is an exact match to the brief's Step 1 and Step 3 blocks. No unrelated
-  reformatting, no touching of Task 1-2 code. Other unrelated dirty-tree files (progress.md,
-  Options_Suite test files, swaps.db.lock, some tarballs/zips) were left untouched and
-  unstaged -- not part of this task's commit.
-- **Testing**: RED confirmed as `ImportError` (matches brief's expectation exactly); GREEN
-  confirmed as 35/35 passed, including all pre-existing tests -- genuine regression check, not
-  just the new tests in isolation.
+→ **7 passed in 0.66s**
 
 ## Concerns
 
-None. The task was small, self-contained, and the brief's code required no adaptation to the
-existing file structure -- it appended cleanly at the end of both files.
+1. **HIGH/MEDIUM never fire on this path.** Brief says "HIGH if wave3 and (squeeze or trend) and score >= 3" while also saying use `generate` **price-only** and that whale-gated HIGH/MEDIUM will not fire. Implementation keeps whale in the generate rule (honest). If the reviewer wanted a price-only HIGH that drops the whale AND, that is a plan ambiguity — current live stamp will stay `NONE`.
+2. Brief tests do not assert ticker/interval/as_of/bar field names/overlay key set/rh.fills. Those are implemented to the contract but untested.
+3. `chart_app/tests` still not in `pyproject.toml` testpaths (Task 1 carry). Tests were invoked by explicit path.
