@@ -38,6 +38,26 @@ is NOT modified.
 Every bar of a chart is evaluated with the series as it existed up to that
 bar (closed-bar semantics via ``shared.spot_history.intraday_bars_as_of``),
 so verdicts move bar-to-bar -- the whole point of v2.
+
+Honest-data contract (what v2 claims -- and does NOT claim):
+
+* Closed-bar semantics: each bar is evaluated with data as of its bar
+  timestamp INCLUSIVE (``intraday_bars_as_of``), so a verdict never uses
+  information from after the bar closed.
+* Whale flow is intraday: the per-bar leg queries PH v2
+  ``flow.scanner_trades_in_time_range`` for the bar's own 15-minute window,
+  not the v1 daily EOD option-volume wall.
+* Dealer gamma is SAMPLED, not per-bar: ``dealer.weighted_greeks`` is heavy
+  (retry_policy=unsafe / risk MEDIUM) so it is called once per coarse-grid
+  point (every N bars, sequential) and the last computed regime is HELD
+  neutral between grid points -- never interpolated as fact, never
+  fabricated.
+* OI max-pain remains EOD: OI settles daily by nature, so the liquidity
+  leg's max-pain input is the bar's YYYYMMDD EOD value, reused per bar.
+* Unfetchable per-bar data degrades to neutral, never guesses: any leg that
+  cannot fetch its per-bar input (flow timeout, gamma failure, missing
+  bars) contributes NONE/0/False to the bar's score instead of a made-up
+  value.
 """
 
 from __future__ import annotations

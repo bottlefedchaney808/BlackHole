@@ -540,3 +540,29 @@ Jason/zinko is the specific caller these 404s are attributed to, so it's presuma
 - Downloaded (not yet installed): `C:\Users\bottl\Downloads\potatohedge-2.0.1-py3-none-any.whl`
   (sha256 verified against manifest).
 - No repo source files modified. No packages installed. No commits made.
+
+## 2026-08-18 — v2 direction indicator (feat/direction-indicator-v2)
+
+The v2 per-bar direction indicator (`Direction/indicator.py`) is the first
+consumer of the intraday capability inventory above. What it actually uses
+(direct `potatohedge.client_v2.PHClient`, not the `shared/thetadata.py`
+facade — the facade does not expose these namespaces yet):
+
+- `flow.scanner_trades_in_time_range` — per-bar whale-flow leg (`flow.read`
+  capability). Each bar queries its own 15-minute window, so the whale
+  signal is intraday, not the v1 daily EOD option-volume wall.
+- `dealer.weighted_greeks` — per-bar liquidity leg (`dealer.read`
+  capability). Heavy endpoint (`retry_policy=unsafe`, risk MEDIUM;
+  fan-out 502-storms), so it is **SAMPLED on a coarse grid**: one
+  sequential call every N bars, the last computed regime held between grid
+  points. **Caveat: gamma is a coarse sample, never interpolated-as-fact;
+  between grid points the signal is whatever the last grid point returned,
+  and failures degrade to neutral** (retried at the next grid point).
+- EOD OI max-pain (via `Direction.data` cache + `liquidity_map` pure
+  helpers) — OI settles EOD by nature, so max-pain stays daily and is
+  reused per bar within the session.
+
+Per-bar semantics: every bar is evaluated **closed-bar** — data as of the
+bar timestamp inclusive (`shared.spot_history.intraday_bars_as_of`) — so
+verdicts move bar-to-bar. Unfetchable per-bar inputs degrade to neutral
+(NONE/0/False), never fabricated.
