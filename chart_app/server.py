@@ -13,9 +13,10 @@ from pydantic import BaseModel
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 from chart_app.bar_cache import BarCache
+from chart_app.ingest import refresh_cache
 from chart_app.snapshot import build_state
 from shared.chart_data import SUPPORTED_INTERVALS, ChartDataError
-from shared.spot_history import validate_ticker
+from shared.spot_history import fetch_daily_candles, fetch_intraday_candles, validate_ticker
 
 
 class _SymbolBody(BaseModel):
@@ -33,11 +34,17 @@ class _RhBody(BaseModel):
     fills: list[Any] = []
 
 
+class _RefreshBody(BaseModel):
+    lookback: str
+
+
 def create_app(
     cache: BarCache,
     *,
     default_ticker: str = "SPY",
     default_interval: str = "15m",
+    daily_fn=fetch_daily_candles,
+    intrad_fn=fetch_intraday_candles,
 ) -> FastAPI:
     app = FastAPI()
     session: dict[str, Any] = {
@@ -74,9 +81,26 @@ def create_app(
         session["rh"] = {"position": position, "fills": list(body.fills)}
         return {"ok": True}
 
+    @app.post("/api/refresh")
+    def post_refresh(body: _RefreshBody) -> dict[str, Any]:
+        upserted = refresh_cache(
+            cache,
+            session["ticker"],
+            session["interval"],
+            body.lookback,
+            daily_fn=daily_fn,
+            intrad_fn=intrad_fn,
+        )
+        return {"ok": True, "upserted": upserted}
+
     @app.get("/", response_class=HTMLResponse)
     def root() -> str:
         return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     return app
+
+
+_DEFAULT_CACHE = Path("artifacts/chart_app_bars.db")
+_DEFAULT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+app = create_app(BarCache(_DEFAULT_CACHE))
