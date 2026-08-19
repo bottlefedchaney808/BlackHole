@@ -5,8 +5,18 @@ Usage:
   python scripts/render_direction_chart.py QQQ --interval 1h --lookback 30d --out artifacts/qqq_dir.png
 
 The chart shows one marker per bar (HIGH=▲ buy, MEDIUM=△ weak buy,
-NONE=▼ sell) computed by replaying the Direction suite as-of each bar's
-date, plus a live conviction stamp on the last bar.
+NONE=▼ sell) computed by replaying the Direction v2 indicator AS-OF EACH
+BAR'S OWN TIMESTAMP (per-bar intraday whale-flow + coarse-grid dealer gamma
+via ``Direction.replay.replay_direction``), plus a live conviction stamp on
+the last bar.  v1 replayed once per unique calendar date, so every intraday
+bar of a day carried the same verdict; v2 evaluates every bar timestamp, so
+markers change intraday when the signals actually change.
+
+Live note: the v2 indicator's evaluation of the LAST bar -- the same
+per-bar compose path the overlay uses (``_compose_signals`` with one shared
+liquidity-grid session), read from the replay's final entry so the stamp
+always equals the marker drawn on the newest bar.  Not the v1
+``signal_generator.generate`` path.
 """
 
 import argparse
@@ -38,21 +48,25 @@ def main(argv=None) -> int:
     else:
         payload = spot_history.fetch_intraday_candles(
             args.ticker, interval=args.interval, lookback=args.lookback)
-    bar_dates = sorted({obs.timestamp.date().isoformat() for obs in payload.observations})
+    # EVERY bar timestamp, ascending (v1 deduped to unique dates here).
+    bar_ts = [obs.timestamp.isoformat() for obs in payload.observations]
 
-    # 2. Replay the Direction suite as-of each bar date.
-    overlay = replay_direction(args.ticker, bar_dates)
+    # 2. Replay the v2 indicator as-of EACH bar timestamp (per-bar verdicts).
+    overlay = replay_direction(args.ticker, bar_ts)
 
-    # 3. Live stamp: current conviction + score.
-    from Direction.signal_generator import generate
-    live = generate(args.ticker)
-    live_note = f"LIVE: {live['conviction']} ({live['score']}/5)"
+    # 3. Live stamp: the v2 indicator's evaluation of the LAST bar (the
+    #    replay's final entry -- one shared liquidity-grid session, so the
+    #    stamp matches the newest bar's marker exactly).
+    last = overlay[-1] if overlay else {"conviction": "NONE", "score": 0}
+    live_note = f"LIVE: {last['conviction']} ({last['score']}/5)"
 
     # 4. Render.
     art = render_spot_chart(args.ticker, interval=args.interval,
                             lookback=args.lookback, output_path=out,
                             direction_overlay=overlay, live_note=live_note)
-    print(f"saved {art.path} | {art.row_count} bars | {bar_dates[0]} -> {bar_dates[-1]}")
+    scores = [entry.get("score", 0) for entry in overlay]
+    print(f"saved {art.path} | {art.row_count} bars | {bar_ts[0]} -> {bar_ts[-1]}")
+    print(f"scores: {scores}")
     print(f"live: {live_note}")
     return 0
 
