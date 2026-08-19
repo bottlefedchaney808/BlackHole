@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -30,6 +30,8 @@ class _PositionBody(BaseModel):
 
 
 class _RhBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     position: _PositionBody | None = None
     fills: list[Any] = []
 
