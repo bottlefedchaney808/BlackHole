@@ -12,18 +12,69 @@
       font: 13px/1.4 system-ui, sans-serif;
     }
     #meta {
-      height: 36px;
+      height: 40px;
       box-sizing: border-box;
-      padding: 8px 12px;
+      padding: 6px 12px;
       color: #A9B7D0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
     #meta strong { color: #F4F7FF; letter-spacing: 0.04em; }
-    #chart { position: absolute; top: 36px; left: 0; right: 0; bottom: 0; }
+    #meta input, #meta select, #meta button {
+      background: #1b2433;
+      color: #F4F7FF;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      height: 26px;
+      font: 12px/1 system-ui, sans-serif;
+    }
+    #ticker { width: 72px; text-transform: uppercase; padding: 0 8px; }
+    #interval { padding: 0 6px; }
+    #apply { padding: 0 10px; cursor: pointer; }
+    #apply:disabled { opacity: 0.5; cursor: wait; }
+    #stamp { margin-left: 8px; }
+    #legs { display: flex; gap: 4px; margin-left: auto; }
+    #legs span {
+      font: 10px/24px ui-monospace, Consolas, monospace;
+      letter-spacing: 0.04em;
+      padding: 0 6px;
+      border-radius: 4px;
+      border: 1px solid #334155;
+      color: #64748B;
+      background: #111827;
+    }
+    #legs span.on { color: #0e1117; background: #34d399; border-color: #34d399; }
+    #legs span.off { opacity: 0.55; }
+    #legs span.pending { color: #94a3b8; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; }
   </style>
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
 <body>
-  <div id="meta"><strong id="label">—</strong> <span id="stamp"></span></div>
+  <div id="meta">
+    <input id="ticker" type="text" maxlength="8" value="SPY" spellcheck="false" />
+    <select id="interval">
+      <option>3m</option>
+      <option>5m</option>
+      <option>10m</option>
+      <option selected>15m</option>
+      <option>30m</option>
+      <option>1h</option>
+      <option>4h</option>
+      <option>1d</option>
+    </select>
+    <button id="apply" type="button">Load</button>
+    <strong id="label">—</strong>
+    <span id="stamp"></span>
+    <div id="legs">
+      <span data-leg="wave3" title="Elliott wave 3">W3</span>
+      <span data-leg="squeeze" title="Bollinger squeeze">SQ</span>
+      <span data-leg="trend" title="ADX + MA trend">TR</span>
+      <span data-leg="whale" title="Whale flow (sampled later)">WH</span>
+      <span data-leg="liquidity" title="Dealer liquidity (sampled later)">LQ</span>
+    </div>
+  </div>
   <div id="chart"></div>
   <script>
     const UP = "#38BDF8";
@@ -51,6 +102,27 @@
         connectNulls: false,
         lineStyle: { color: color, width: width || 1, type: dash || "solid" },
         itemStyle: { color: color },
+      };
+    }
+
+    function whaleMarks(bars, signals) {
+      const data = [];
+      for (let i = 0; i < bars.length; i++) {
+        if (!signals[i] || !signals[i].whale) continue;
+        data.push({
+          value: [bars[i].ts, bars[i].high],
+          symbol: "circle",
+          symbolSize: 8,
+          itemStyle: { color: "#f59e0b" },
+        });
+      }
+      return {
+        name: "whale",
+        type: "scatter",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: data,
+        tooltip: { formatter: "whale" },
       };
     }
 
@@ -89,6 +161,12 @@
       if (live.score != null) bits.push("score " + live.score);
       if (live.conviction) bits.push(live.conviction);
       document.getElementById("stamp").textContent = bits.join("  ·  ");
+      const sig = live.signals || {};
+      document.querySelectorAll("#legs [data-leg]").forEach((el) => {
+        const on = !!sig[el.dataset.leg];
+        el.classList.toggle("on", on);
+        el.classList.toggle("off", !on);
+      });
 
       const bars = state.bars || [];
       const overlays = state.overlays || {};
@@ -100,14 +178,29 @@
         itemStyle: { color: b.close >= b.open ? UP : DOWN },
       }));
 
-      chart.setOption({
+      const key = ticker + "|" + interval + "|" + bars.length;
+      const resetZoom = key !== lastKey;
+      lastKey = key;
+      const show = Math.min(bars.length, VISIBLE[interval] || bars.length || 1);
+      const startPct = bars.length ? 100 * (bars.length - show) / bars.length : 0;
+
+      const opt = {
         backgroundColor: "#0e1117",
         animation: false,
+        legend: {
+          top: 0,
+          right: 8,
+          itemWidth: 10,
+          itemHeight: 6,
+          textStyle: { color: MUTED, fontSize: 10 },
+          inactiveColor: "#334155",
+          data: ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
+        },
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
         axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
         grid: [
-          { left: 56, right: 16, top: 12, height: "68%" },
-          { left: 56, right: 16, top: "78%", height: "16%" },
+          { left: 56, right: 16, top: 8, height: "62%" },
+          { left: 56, right: 16, top: "72%", height: "12%" },
         ],
         xAxis: [
           { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
@@ -137,6 +230,7 @@
           line("bb_upper", overlays.bb_upper || [], "#64748B", 1),
           line("bb_mid", overlays.bb_mid || [], "#94a3b8", 1, "dotted"),
           line("bb_lower", overlays.bb_lower || [], "#64748B", 1),
+          whaleMarks(bars, state.signals || []),
           markerSeries(bars, markers),
           {
             name: "volume",
@@ -147,18 +241,91 @@
           },
         ],
         textStyle: { color: TEXT },
-      }, true);
+      };
+      if (resetZoom) {
+        opt.dataZoom = [
+          {
+            type: "inside",
+            xAxisIndex: [0, 1],
+            filterMode: "none",
+            zoomOnMouseWheel: true,
+            moveOnMouseMove: true,
+            moveOnMouseWheel: false,
+          },
+          {
+            type: "slider",
+            xAxisIndex: [0, 1],
+            height: 22,
+            bottom: 6,
+            start: startPct,
+            end: 100,
+            borderColor: "#334155",
+            fillerColor: "rgba(56,189,248,0.15)",
+            handleStyle: { color: "#38BDF8" },
+            textStyle: { color: MUTED },
+            dataBackground: { lineStyle: { color: "#64748B" }, areaStyle: { color: "#1b2433" } },
+          },
+        ];
+      }
+      chart.setOption(opt, resetZoom);
     }
+
+    let lastKey = "";
+    const VISIBLE = {
+      "3m": 80, "5m": 80, "10m": 80, "15m": 80,
+      "30m": 80, "1h": 80, "4h": 80, "1d": 180,
+    };
+    const LOOKBACK = {
+      "3m": "5d", "5m": "5d", "10m": "10d", "15m": "5d",
+      "30m": "20d", "1h": "60d", "4h": "1y", "1d": "1y",
+    };
 
     async function poll() {
       try {
         const res = await fetch("/api/state");
         if (!res.ok) return;
-        render(await res.json());
+        const state = await res.json();
+        render(state);
+        if (state.ticker) document.getElementById("ticker").value = state.ticker;
+        if (state.interval) document.getElementById("interval").value = state.interval;
       } catch (_err) {
         /* keep last frame */
       }
     }
+
+    async function loadSymbol() {
+      const btn = document.getElementById("apply");
+      const ticker = document.getElementById("ticker").value.trim().toUpperCase();
+      const interval = document.getElementById("interval").value;
+      if (!ticker) return;
+      btn.disabled = true;
+      try {
+        const sw = await fetch("/api/symbol", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker: ticker, interval: interval }),
+        });
+        if (!sw.ok) {
+          document.getElementById("stamp").textContent = "bad ticker/interval";
+          return;
+        }
+        const lookback = LOOKBACK[interval] || "5d";
+        await fetch("/api/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lookback: lookback }),
+        });
+        await poll();
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById("apply").addEventListener("click", loadSymbol);
+    document.getElementById("ticker").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") loadSymbol();
+    });
+    document.getElementById("interval").addEventListener("change", loadSymbol);
 
     poll();
     setInterval(poll, 5000);

@@ -1,61 +1,49 @@
-# Native chart app (phase 1)
+# Native chart app
 
-Standalone local chart window on **127.0.0.1:8791**. Not the dashboard (`:8787`).
-One ticker, cached OHLCV, local price scores. No per-bar PotatoHedge fan-out.
+Standalone window **http://127.0.0.1:8791/**. Not TradingView, not Hermes preview, not dashboard `:8787`.
+
+Jason sees pixels. Agent reads `GET /api/state`. Same numbers.
 
 ## Launch
 
-From repo root (clean interpreter — do not inherit `PYTHONPATH` / `VIRTUAL_ENV`):
-
 ```bash
+cd C:/Users/bottl/FinancialDevelopment
 env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m uvicorn chart_app.server:app --host 127.0.0.1 --port 8791
 ```
 
-Then open http://127.0.0.1:8791/
+Windows: `chart_app.bat`. Agent: load skill `native-chart-app` (Edge `--new-window`, not `cmd start`).
 
-Windows: `chart_app.bat`. POSIX: `chart_app.sh`.
+## What is on the glass (parked 2026-08-19)
 
-## Surfaces
+- Ticker box + interval select + Load. Default **SPY 15m / 5d**.
+- Wheel zoom + bottom slider (lookback). 1d caches **1y**, opens last ~180 bars.
+- Overlays: EMA20 / EMA50 / VWAP / Bollinger (legend toggles).
+- Direction **legs always visible**: W3 SQ TR WH LQ pills (last bar) + amber whale dots on stamped bars.
+- Buy/sell/hold/add still **position-gated** (`apply_position_gate`). Window starts flat.
 
-| Who | How |
-|---|---|
-| Human | Browser window (vendored ECharts, no CDN) |
-| Agent | `GET /api/state` — same bars / scores / markers / overlays. Do not OCR. |
+## Whale (WH)
 
-```text
+- **Not** per-bar `scanner_trades_in_time_range` (times out on multi-hour windows).
+- Production: `flow.scanner_trades` **once per session date**, cap **5 days**, stamp prints ≥ $25k onto closed bars. Cached until symbol/refresh changes.
+- Row time key is `datetime`. Payload is header-first tuples (`chart_app/flow_stamp.py`).
+- LQ still off. Sampled dealer / S/R lines next.
+
+## API
+
+```
 GET  /api/state
 POST /api/symbol   {"ticker":"SPY","interval":"15m"}
-POST /api/refresh  {"lookback":"30d"}
-POST /api/rh       {"position": {"qty": <float>, "avg_price": <float>} | null, "fills": [...]}
+POST /api/refresh  {"lookback":"5d"}   # 1d lookback "1y" from the UI
+POST /api/rh       {"position": {...} | null, "fills": [...]}
 ```
 
-There is **no** `/api/order`. Place only via `mcp__robinhood__place_equity_order`
-when Jason says so in chat, then `POST /api/rh` to display the snapshot.
+No `/api/order`. RH live only when Jason says so in chat (`mcp__robinhood__place_equity_order`), then POST `/api/rh`.
 
-## What is computed (phase 1)
+Daily EOD fetch ends at **last complete weekday** (`shared.spot_history._complete_eod_date`) so today's empty session does not 500.
 
-- ThetaData / PH v2 **spot OHLCV** into `artifacts/chart_app_bars.db` (`1d` or
-  supported intraday). Never yfinance.
-- Direction **price legs** on cached bars: wave3, squeeze, trend.
-- Classic overlays: EMA20, EMA50, VWAP, Bollinger mid/upper/lower.
-- Position-gated markers (`apply_position_gate`). Window starts flat.
-- Live stamp uses the same HIGH/MEDIUM/NONE rule as `signal_generator.generate`.
-  Whale is False, so HIGH/MEDIUM from whale **will not fire**. Expect
-  `NONE (n/5)` until a later sampled-PH phase.
+## Next (do not auto-start)
 
-## What is not computed
-
-| Off / later | Why |
-|---|---|
-| Whale / liquidity | Not fetched. Stay `False`. Do not fabricate. |
-| Per-bar flow / dealer | Forbidden. Cost and honesty. |
-| Sampled PH stamps | Later phase — not wired. |
-| Orders | Server never calls Robinhood. Display-only. |
-| Replay, watchlist, dealer overlays | Out of scope for phase 1. |
-| Dashboard merge | Do not bind `:8787` or add routes to `dashboard/app.py`. |
-
-## Bounded smoke
-
-30 trading-calendar days of **daily** SPY is the live check — not a 1y job.
-If today's EOD chunk returns `v2 payload is None`, fetch through the last
-weekday only.
+1. LQ: one `dealer.weighted_greeks_summary` + `support_resistance.snapshot` lines.
+2. Per-scale indicator knobs.
+3. Paint W3/SQ/TR on the tape (not just last-bar pills).
+4. `flow.recent(window=15)` for the live last bar between daily stamps.

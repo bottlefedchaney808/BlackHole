@@ -137,9 +137,17 @@ def _latest_source_timestamp(rows: Iterable[Mapping[str, Any]]) -> datetime | No
     return latest
 
 
+def _complete_eod_date() -> date:
+    """Last weekday that can have a finished daily bar (never today)."""
+    end = date.today() - timedelta(days=1)
+    while end.weekday() >= 5:
+        end -= timedelta(days=1)
+    return end
+
+
 def _default_provider(ticker: str, lookback: Any) -> RawRows:
     """Fetch daily OHLCV through the existing stable shared ThetaData method."""
-    start_date, end_date = _lookback_start_end(lookback)
+    start_date, end_date = _lookback_start_end(lookback, end=_complete_eod_date())
     rows = ThetaDataController().hist_stock_eod(ticker, start_date, end_date)
     return _adapt_thetadata_rows(rows)
 

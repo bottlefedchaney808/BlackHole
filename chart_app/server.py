@@ -2,8 +2,8 @@
 
 Phase 1 semantics (honest):
 - Scores are **price-only** (wave3 / squeeze / trend from cached OHLCV).
-- Whale and liquidity legs stay False; they are not computed here.
-- No live PotatoHedge / flow / dealer call per bar. Sampled PH is later.
+- Whale is ONE `flow.scanner_trades_in_time_range` for the loaded window,
+  stamped onto bars. Never per-bar PH. Liquidity still off.
 - No order route. Robinhood is display-only via POST /api/rh.
 """
 
@@ -54,18 +54,25 @@ def create_app(
     default_interval: str = "15m",
     daily_fn=fetch_daily_candles,
     intrad_fn=fetch_intraday_candles,
+    flow_fn=None,
 ) -> FastAPI:
     app = FastAPI()
     session: dict[str, Any] = {
         "ticker": default_ticker,
         "interval": default_interval,
         "rh": None,
+        "flow_cache": {},
     }
 
     @app.get("/api/state")
     def get_state() -> dict[str, Any]:
         payload = build_state(
-            cache, session["ticker"], session["interval"], session["rh"]
+            cache,
+            session["ticker"],
+            session["interval"],
+            session["rh"],
+            flow_fn=flow_fn,
+            flow_cache=session["flow_cache"],
         )
         payload["ok"] = True
         return payload
@@ -80,6 +87,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="unsupported interval")
         session["ticker"] = ticker
         session["interval"] = body.interval
+        session["flow_cache"].clear()
         return {"ok": True}
 
     @app.post("/api/rh")
@@ -100,6 +108,7 @@ def create_app(
             daily_fn=daily_fn,
             intrad_fn=intrad_fn,
         )
+        session["flow_cache"].clear()
         return {"ok": True, "upserted": upserted}
 
     @app.get("/", response_class=HTMLResponse)
@@ -110,6 +119,51 @@ def create_app(
     return app
 
 
+def _production_flow_fn(root, start_dt, end_dt, min_premium):
+    """One scanner_trades call per session date — not per bar.
+
+    ``scanner_trades_in_time_range`` 400s/times out on multi-hour windows.
+    A single calendar day returns in-process (~500 rows). Cap at 5 days so
+    a 1y daily chart does not fan out.
+    """
+    from datetime import datetime, timedelta
+
+    from Direction.indicator import _thread_client
+    from chart_app.flow_stamp import rows_from_flow_payload
+
+    def _as_dt(value):
+        if isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value))
+
+    start = _as_dt(start_dt)
+    end = _as_dt(end_dt)
+    days = []
+    cursor = start.date()
+    last = end.date()
+    while cursor <= last:
+        if cursor.weekday() < 5:
+            days.append(cursor)
+        cursor += timedelta(days=1)
+    if not days or len(days) > 5:
+        return []
+    client = _thread_client()
+    rows: list = []
+    for day in days:
+        ymd = day.strftime("%Y%m%d")
+        try:
+            env = client.flow.scanner_trades(
+                root=root,
+                start_date=ymd,
+                end_date=ymd,
+                min_premium=min_premium,
+            )
+            rows.extend(rows_from_flow_payload(getattr(env, "data", None)))
+        except Exception:
+            continue
+    return rows
+
+
 _DEFAULT_CACHE = Path("artifacts/chart_app_bars.db")
 _DEFAULT_CACHE.parent.mkdir(parents=True, exist_ok=True)
-app = create_app(BarCache(_DEFAULT_CACHE))
+app = create_app(BarCache(_DEFAULT_CACHE), flow_fn=_production_flow_fn)

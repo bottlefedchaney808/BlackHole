@@ -26,6 +26,9 @@ def test_root_serves_chart_window(tmp_path):
     assert r.status_code == 200
     body = r.text
     assert 'id="chart"' in body
+    assert 'id="ticker"' in body
+    assert 'id="interval"' in body
+    assert 'id="legs"' in body
     assert "echarts" in body or "chart-app" in body
     assert "cdn" not in body.lower()
     vendor = c.get("/static/vendor/echarts.min.js")
