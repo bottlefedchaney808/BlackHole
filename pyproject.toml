@@ -25,7 +25,7 @@ include = ["shared*"]
 [tool.pytest.ini_options]
 # "tests" is the root-level suite: cross-suite concerns that belong to no single
 # child (orchestrator wiring, shared/ modules) rather than to Vol_Suite et al.
-testpaths = ["tests", "shared/tests", "Vol_Suite/tests", "Options_Suite/tests", "VaR_Tools_Simulations/tests", "sentiment-scanner/tests", "Tools/tests", "Direction/tests"]
+testpaths = ["tests", "shared/tests", "Vol_Suite/tests", "Options_Suite/tests", "VaR_Tools_Simulations/tests", "sentiment-scanner/tests", "Tools/tests", "Direction/tests", "chart_app/tests"]
 pythonpath = ["."]
 markers = [
     "unit: tests that require no network or credentials",

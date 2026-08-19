@@ -1,4 +1,11 @@
-"""Local FastAPI surface for the native chart window. No live PH, no orders."""
+"""Local FastAPI surface for the native chart window.
+
+Phase 1 semantics (honest):
+- Scores are **price-only** (wave3 / squeeze / trend from cached OHLCV).
+- Whale and liquidity legs stay False; they are not computed here.
+- No live PotatoHedge / flow / dealer call per bar. Sampled PH is later.
+- No order route. Robinhood is display-only via POST /api/rh.
+"""
 
 from __future__ import annotations
 
