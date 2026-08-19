@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 from chart_app.bar_cache import BarCache
 from chart_app.snapshot import build_state
@@ -72,6 +76,7 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def root() -> str:
-        return "chart-app"
+        return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     return app

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>chart-app</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0e1117;
+      color: #F4F7FF;
+      font: 13px/1.4 system-ui, sans-serif;
+    }
+    #meta {
+      height: 36px;
+      box-sizing: border-box;
+      padding: 8px 12px;
+      color: #A9B7D0;
+    }
+    #meta strong { color: #F4F7FF; letter-spacing: 0.04em; }
+    #chart { position: absolute; top: 36px; left: 0; right: 0; bottom: 0; }
+  </style>
+  <script src="/static/vendor/echarts.min.js"></script>
+</head>
+<body>
+  <div id="meta"><strong id="label">—</strong> <span id="stamp"></span></div>
+  <div id="chart"></div>
+  <script>
+    const UP = "#38BDF8";
+    const DOWN = "#C084FC";
+    const TEXT = "#F4F7FF";
+    const MUTED = "#A9B7D0";
+    const GRID = "#64748B";
+    const MARK = {
+      buy:  { color: "lime",   symbol: "triangle", rotate: 0 },
+      add:  { color: "gold",   symbol: "diamond",  rotate: 0 },
+      hold: { color: "gray",   symbol: "circle",   rotate: 0 },
+      sell: { color: "orchid", symbol: "triangle", rotate: 180 },
+    };
+
+    const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
+
+    function line(name, data, color, width, dash) {
+      return {
+        name: name,
+        type: "line",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: data,
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: { color: color, width: width || 1, type: dash || "solid" },
+        itemStyle: { color: color },
+      };
+    }
+
+    function markerSeries(bars, markers) {
+      const data = [];
+      for (let i = 0; i < markers.length; i++) {
+        const kind = markers[i];
+        if (!MARK[kind] || !bars[i]) continue;
+        const spec = MARK[kind];
+        data.push({
+          name: kind,
+          value: [bars[i].ts, bars[i].low],
+          symbol: spec.symbol,
+          symbolRotate: spec.rotate,
+          symbolSize: kind === "hold" ? 8 : 12,
+          itemStyle: { color: spec.color },
+        });
+      }
+      return {
+        name: "markers",
+        type: "scatter",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: data,
+        tooltip: { formatter: (p) => p.name },
+      };
+    }
+
+    function render(state) {
+      const ticker = state.ticker || "";
+      const interval = state.interval || "";
+      document.getElementById("label").textContent = ticker + "  " + interval;
+      const live = state.live || {};
+      const bits = [];
+      if (state.as_of) bits.push(state.as_of);
+      if (live.score != null) bits.push("score " + live.score);
+      if (live.conviction) bits.push(live.conviction);
+      document.getElementById("stamp").textContent = bits.join("  ·  ");
+
+      const bars = state.bars || [];
+      const overlays = state.overlays || {};
+      const markers = state.markers || [];
+      const cats = bars.map((b) => b.ts);
+      const ohlc = bars.map((b) => [b.open, b.close, b.low, b.high]);
+      const volumes = bars.map((b) => ({
+        value: b.volume,
+        itemStyle: { color: b.close >= b.open ? UP : DOWN },
+      }));
+
+      chart.setOption({
+        backgroundColor: "#0e1117",
+        animation: false,
+        tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+        axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+        grid: [
+          { left: 56, right: 16, top: 12, height: "68%" },
+          { left: 56, right: 16, top: "78%", height: "16%" },
+        ],
+        xAxis: [
+          { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+          { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+        ],
+        yAxis: [
+          { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
+          { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
+        ],
+        series: [
+          {
+            name: "ohlc",
+            type: "candlestick",
+            xAxisIndex: 0,
+            yAxisIndex: 0,
+            data: ohlc,
+            itemStyle: {
+              color: UP,
+              color0: DOWN,
+              borderColor: UP,
+              borderColor0: DOWN,
+            },
+          },
+          line("ema20", overlays.ema20 || [], "#fbbf24", 1.4),
+          line("ema50", overlays.ema50 || [], "#60a5fa", 1.4),
+          line("vwap", overlays.vwap || [], "#34d399", 1.2, "dashed"),
+          line("bb_upper", overlays.bb_upper || [], "#64748B", 1),
+          line("bb_mid", overlays.bb_mid || [], "#94a3b8", 1, "dotted"),
+          line("bb_lower", overlays.bb_lower || [], "#64748B", 1),
+          markerSeries(bars, markers),
+          {
+            name: "volume",
+            type: "bar",
+            xAxisIndex: 1,
+            yAxisIndex: 1,
+            data: volumes,
+          },
+        ],
+        textStyle: { color: TEXT },
+      }, true);
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/state");
+        if (!res.ok) return;
+        render(await res.json());
+      } catch (_err) {
+        /* keep last frame */
+      }
+    }
+
+    poll();
+    setInterval(poll, 5000);
+    window.addEventListener("resize", () => chart.resize());
+  </script>
+</body>
+</html>
