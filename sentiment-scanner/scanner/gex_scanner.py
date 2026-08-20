@@ -1,14 +1,14 @@
 """Gamma Exposure (GEX) Scanner — dealer positioning, gamma flip, zero gamma.
 
-Uses Vol_Suite's dealer_positioning.compute_dealer_positioning() which
-aggregates gamma across all active expiries from ThetaData and returns
-net gamma, gamma flip level, dollar gamma by strike, and the full record
-set.
+Uses Vol_Suite's expiry_book_production.fetch_production_result(), the live
+dealer-frame greeks engine (see expiry_book_exposure.py's module docstring
+for the 2026-08-17 promotion history). dealer_positioning.py's
+compute_dealer_positioning() is now locked to backtest/test callers only.
 
 Key outputs fed into the correlation engine:
-  - total_net_gamma -> GAMMA_SQUEEZE_RISK when negative + CNS > 50
-  - gamma_flip_level -> the strike where net gamma crosses zero
-  - gamma_by_strike / dollar_gamma_by_strike -> per-strike exposure
+  - total_net_dollar_gamma -> GAMMA_SQUEEZE_RISK when negative + CNS > 50
+  - gamma_flip_level -> the spot level where dealer gamma crosses zero
+    (execution_locus.local_gamma_boundary)
 """
 
 from typing import Optional, Dict
@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from scanner.options_scanner_base import get_td
 from expiry_book_production import ExpiryBookUnavailable, fetch_production_result
+from dealer_positioning import compute_forward_price, RISK_FREE_RATE
 import expiry_selector
 
 # How many calendar days of expiries to include (passed as max_days
@@ -68,8 +69,19 @@ def scan_gex(
     """
     td = get_td()
     try:
-        expiry, _ = expiry_selector.resolve_expiration(td, ticker, None, target_years)
+        expiry, actual_T = expiry_selector.resolve_expiration(td, ticker, None, target_years)
         result = fetch_production_result(td, ticker, expiry)
+        # expiry_book_production's ProductionDealerExposure has no `forward`
+        # field (its greeks are spot-based, not forward-based) -- computed
+        # here instead, same convention every other suite uses
+        # (compute_forward_price(spot, r, q, T)), so GexScan's forward field
+        # stays meaningful. Was previously `result.forward`, an attribute
+        # that doesn't exist -- crashed every successful scan (CARL review,
+        # 2026-08-17).
+        r_live = td.fetch_risk_free_rate(actual_T)
+        r_use = r_live if r_live is not None else RISK_FREE_RATE
+        dividend_yield = td.fetch_dividend_yield(ticker)
+        forward = compute_forward_price(result.spot, r_use, dividend_yield, actual_T)
     except (ValueError, RuntimeError, ExpiryBookUnavailable) as e:
         return GexScan(
             ticker=ticker, spot=0.0, forward=0.0,
@@ -83,11 +95,9 @@ def scan_gex(
     return GexScan(
         ticker=ticker,
         spot=result.spot,
-        # ProductionDealerExposure (expiry_book_production, the current
-        # dealer model as of 2026-08-17) has no forward-price concept --
-        # spot is the closest available anchor.
-        forward=result.spot,
-        total_net_gamma=result.snapshot.gex(),
+        forward=forward,
+        # net("gamma") = share-denominated signed gamma; gex() = dollar-gamma per 1%.
+        total_net_gamma=result.snapshot.net("gamma"),
         total_net_dollar_gamma=result.snapshot.gex(),
         gamma_flip_level=result.execution_locus.local_gamma_boundary,
         highest_gamma_strike=result.execution_locus.call_gamma_wall,

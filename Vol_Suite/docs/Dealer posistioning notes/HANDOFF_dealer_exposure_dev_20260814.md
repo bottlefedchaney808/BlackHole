@@ -1,5 +1,70 @@
 # HANDOFF — Dealer-Exposure-Dev improvement loop (continue in a fresh session)
 
+## SUPERSEDED 2026-08-17 — expiry_book_exposure is now the LIVE model
+
+Everything below this notice describes the state as of 2026-08-14, while the
+new model was still an unapproved, descriptive-only study running alongside
+the untouched legacy `dealer_positioning.py` live model, gated on an explicit
+Cem-arbiter APPROVED verdict before promotion.
+
+**That plan changed on 2026-08-17.** Jason made the call to promote
+`expiry_book_exposure.py` (via `expiry_book_production.py`) to the live path
+across `volatility_suite.py`, `options_chain_scanner.py`, and
+`sentiment-scanner/scanner/gex_scanner.py`, and to lock
+`dealer_positioning.py`'s legacy `compute_dealer_positioning`/
+`compute_accumulated_position` to backtest/test callers only
+(`_assert_legacy_backtest_access`). Reason, in his words: the old
+accumulation model was broken, and continuing to sink cost into fixing it
+again and again wasn't worth it when the new model looked more promising.
+This was **not** a claim that the Round-2 statistical validation below
+crossed Cem's acceptance bar — it was a pragmatic/cost call made in spite of
+the last recorded verdict being **NOT ACCEPTED** (see below). Do not read the
+"LOCKED LIVE MODEL" section below as still describing the live path — it
+describes the RETIRED model. `expiry_book_exposure.py`'s own module
+docstring carries the current, load-bearing description of what's live now.
+
+A 2026-08-17 CARL adversarial review of the swap found and the same session
+fixed, all confirmed as intentional fixes by Jason (not by Cem/the CARL loop
+below):
+- a guaranteed crash in `gex_scanner.py` on every successful scan, and a
+  latent `total_net_gamma`/`total_net_dollar_gamma` field-duplication bug
+  (commit `1020eac`)
+- a cross-greek vanna sign-composition bug: `dealer_frame_vanna` applied a
+  double negation, composing vanna as `+1*customer-raw` while delta composed
+  as `-1*customer-raw` (commit `bd30cd8`)
+- while wiring dividend yield `q` through the engine (previously always
+  implicit 0.0, F5 from the same review): `bs_charm` had no `right` param
+  (always computed call charm) and was missing a whole term, exact only at
+  q=0 by coincidence; fixing that surfaced the SAME double-negation bug in
+  charm that vanna had, undetected until charm's q=0 call==put coincidence
+  broke while adding the `right` param (commits `6f589e4`, `3a7d5fa`) — so as
+  of this fix, delta/vanna/charm all correctly compose as `-1*customer-raw`.
+
+The statistical-validation content below (Round-2 results, effective-n,
+Cem's required upgrade set) was run against the PRE-fix vanna/charm sign
+composition and was NOT re-litigated by the 2026-08-17 review — it remains
+exactly as accurate/inaccurate as it was on 2026-08-14. If vanna or charm
+sign entered those Round-2 numbers anywhere, they may need re-running against
+the fixed composition; nothing about the promotion decision retroactively
+validates or invalidates those
+numbers.
+
+## Lesson learned: don't resubmit "fail loudly" for a per-day backtest classification gap
+
+`7e4b739` ("dealer_exposure_model fails loudly instead of silent None fallback", 2026-08-16) changed
+`backtest_stage3.py::_build_day_records` so a day with no classifiable dealer chain rows raised
+`ValueError` instead of leaving that day's regime unclassified. It was reverted the same day (`6e3cfa4`),
+no rationale recorded in either commit message. Reading the diff: this was a fail-loud check inside a
+**multi-day backtest loop**, not the single-day live render — raising on any one bad/thin data day would
+abort an entire 90+-day backtest run rather than skip that one day, which is the likely reason it didn't
+stick (inferred from the diff's context, not a stated rationale — if you know the real reason, replace
+this paragraph with it). If "fail loudly instead of silent fallback" comes up again for this code path,
+distinguish the live-render case (fail loud is right — CLAUDE.md's whole "no silent fallbacks" theme)
+from the backtest-loop case (a single bad day should probably still skip-and-continue, not abort the
+whole run) before resubmitting the same change.
+
+---
+
 **Copy this as the first message in the new session.** Begin by anchoring to the worktree before any other tool use.
 
 ---
@@ -30,7 +95,7 @@ Do not work in C:/Users/bottl/FinancialDevelopment (master). The study belongs o
 
 Keep improving the **NEW expiry-book exposure model** in a CARL loop until **Cem Karsan says APPROVED/acceptable**. The new model remains descriptive/conditional until approval. The live model is the benchmark and must not be redesigned.
 
-## LOCKED LIVE MODEL (do not relitigate)
+## RETIRED LIVE MODEL (as of 2026-08-14; superseded 2026-08-17 — see notice above)
 
 - `sign_model = vol_surface_replication`
 - `VOL_SURFACE_FITTER = svi`
