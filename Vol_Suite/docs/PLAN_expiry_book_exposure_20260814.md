@@ -1,6 +1,6 @@
 # PLAN — Expiry Book Exposure: A Per-Strike, Per-Expiry, Per-Greek Net-Exposure Vector With an Explicit Hedging Expectation
 
-Status: **plan-only; NO production code changed**
+Status: **SUPERSEDED 2026-08-20.** Expiry-book is live. Historical v1 plan. Current: `PLAN_vanna_stock_flow_scalars_20260820.md`.
 Author: Hermes Agent (coder, Vol_Suite dealer-positioning build) — 2026-08-14
 Deliverable: `Vol_Suite/docs/PLAN_expiry_book_exposure_20260814.md`
 

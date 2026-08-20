@@ -467,7 +467,7 @@ def _run_production_dealer_positioning(ticker: str, target_years: float,
                                        output_dir: str, expiration: str,
                                        sign_model: str):
     """Run the authoritative expiry-book engine for the production suite."""
-    from expiry_book_production import fetch_production_result
+    from expiry_book_production import fetch_production_result, format_production_interp
     from thetadata_client import ThetaDataController
     from dealer_positioning import plot_expiry_book_greek_exposure, plot_expiry_book_heatmap
 
@@ -476,14 +476,7 @@ def _run_production_dealer_positioning(ticker: str, target_years: float,
         result = fetch_production_result(td, ticker, expiration)
     finally:
         td.close()
-    interp = (
-        f"Ticker: {ticker}\nSpot: ${result.spot:.2f}\n"
-        f"GEX (dollar gamma per 1%): ${result.snapshot.gex():,.0f}\n"
-        f"DEX (post-multiplier shares): {result.snapshot.dex():,.0f}\n"
-        f"Local gamma boundary: ${result.execution_locus.local_gamma_boundary:.2f}\n"
-        f"Call gamma wall: ${result.execution_locus.call_gamma_wall:.2f}\n"
-        f"Put gamma wall: ${result.execution_locus.put_gamma_wall:.2f}"
-    )
+    interp = format_production_interp(result)
     files = [
         plot_expiry_book_greek_exposure(result, output_dir=output_dir),
         plot_expiry_book_heatmap(result, output_dir=output_dir),
@@ -1448,6 +1441,10 @@ def _run_core_analysis(
                 "total_net_dollar_gamma": total_net_dollar_gamma,
                 "hedge_requirement": abs(total_net_dollar_gamma * 0.01),
                 "gamma_flip_level": dp_result.execution_locus.local_gamma_boundary,
+                "residual_vanna_inventory": dp_result.residual_vanna_inventory,
+                "vanna_flow_7d": dp_result.vanna_flow_live,
+                "vanna_flow_provenance": dp_result.vanna_flow_provenance,
+                "d_iv_used": dp_result.d_iv_used,
             }
             artifacts["gamma_records"] = []
             artifacts["gamma_records_total"] = 0

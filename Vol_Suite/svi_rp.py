@@ -127,17 +127,26 @@ class SviRpReference:
 
     def mark_chain(self, chain_iv: Dict[Tuple[float, str], float],
                    oi_by: Optional[Dict[Tuple[float, str], int]] = None,
+                   deadband: float = 0.0,
                    ) -> List[Tuple[float, str, float, float, float, str, int]]:
         """Per-strike cheap/rich marking.
 
         Returns rows (strike, right, market_iv, ref_iv, diff, mark, oi) with
-        mark='SHORT' (rich, market_iv > ref) or 'LONG' (cheap).
+        mark='SHORT' (rich, market_iv > ref), 'LONG' (cheap), or 'UNMARKED'
+        when |diff| <= deadband. deadband=0 keeps the historical always-mark
+        behaviour for existing unit tests; live book-sign passes 0.01.
         """
         rows: List[Tuple[float, str, float, float, float, str, int]] = []
+        band = float(deadband or 0.0)
         for (k, right), sig in chain_iv.items():
             ref = self.sigma_ref(k)
             diff = sig - ref
-            mark = "SHORT" if diff > 0 else "LONG"
+            if abs(diff) <= band:
+                mark = "UNMARKED"
+            elif diff > 0:
+                mark = "SHORT"
+            else:
+                mark = "LONG"
             oi = int((oi_by or {}).get((k, right), 0))
             rows.append((k, right, sig, ref, diff, mark, oi))
         rows.sort(key=lambda r_: r_[0])
@@ -308,23 +317,30 @@ def calibrate_svi(
 
     oi_by = oi_by or {}
     F0 = spot * math.exp((r - q) * T)
-    ks = np.array([math.log(k / F0) for (k, right) in chain_iv])
-    sigs = np.array([chain_iv[(k, right)] for (k, right) in chain_iv])
+    # Fit OTM only (calls K>=F, puts K<=F). ITM quotes are a different
+    # IV (WMT 20261120: ITM puts 0.79 vs OTM calls 0.27 at the same
+    # strike) and warp the smile if they enter the residual.
+    fit_iv = {
+        (k, right): iv for (k, right), iv in chain_iv.items()
+        if (right == "C" and k >= F0) or (right == "P" and k <= F0)
+    }
+    if len(fit_iv) < 8:
+        fit_iv = dict(chain_iv)
+    keys = list(fit_iv)
+    ks = np.array([math.log(k / F0) for (k, right) in keys])
+    sigs = np.array([fit_iv[(k, right)] for (k, right) in keys])
     # target total variance
     w_target = np.clip(sigs, 1e-6, None) ** 2 * T
-    # OI weights (illiquid wings downweighted). sqrt() compression, NOT raw
-    # OI: raw max(oi,1) lets a multi-thousand-lot ATM strike outweigh a
-    # 10-lot far-OTM wing by ~300x, which on real chains (measured UUUU
-    # 2026-08-17: far puts OI 0-31 vs ATM 4880) collapses the fitted smile
-    # flat by discarding the steep wing entirely. sqrt keeps the liquidity
-    # tilt without blindfolding the fit to the wings.
-    weights = np.array([math.sqrt(max(oi_by.get((k, right), 0), 1.0))
-                        for (k, right) in chain_iv])
+    # sqrt(OI) so ATM thousands-of-lots don't 300x-crush the wings
+    # (test_robust_svi_illiquid_far_wing_does_not_flatten).
+    weights = np.array([
+        math.sqrt(max(float(oi_by.get((k, right), 0)), 1.0)) for (k, right) in keys
+    ])
     weights = weights / max(weights.sum(), 1e-9)
 
-    # ATM anchor for a good init
-    near = sorted(chain_iv.keys(), key=lambda kv: abs(kv[0] - spot))[:6]
-    sigma_atm = float(np.mean([chain_iv[(k, right)] for (k, right) in near]))
+    # ATM anchor from the OTM fit set (ITM IVs must not set the level).
+    near = sorted(fit_iv.keys(), key=lambda kv: abs(kv[0] - spot))[:6]
+    sigma_atm = float(np.mean([fit_iv[(k, right)] for (k, right) in near]))
     theta_t = max(sigma_atm ** 2 * T, 0.0)
     k_min, k_max = float(ks.min()), float(ks.max())
     # decent SVI init

@@ -1,6 +1,6 @@
 # PLAN — Expiry Book Exposure v2 (Post-CARL-Consult Revision)
 
-Status: **plan-only; NO production code changed**
+Status: **SUPERSEDED 2026-08-20.** Expiry-book is the live production engine (`volatility_suite._run_production_dealer_positioning` → `fetch_production_result`). Keep this file as the CARL/v2 design record. Current live contract: `PLAN_vanna_stock_flow_scalars_20260820.md`.
 Author: Hermes Agent (default profile), 2026-08-14
 Supersedes: `Vol_Suite/docs/PLAN_expiry_book_exposure_20260814.md` (v1)
 Based on: CARL consult verdict (Karsan arbiter + 3 adversarial panelists), all recommendations ACCEPTED.

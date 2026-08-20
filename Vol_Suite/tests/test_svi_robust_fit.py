@@ -102,3 +102,34 @@ def test_robust_svi_illiquid_far_wing_does_not_flatten():
     assert far_put > market_far_put - 0.08, (
         f"far-put ref {far_put:.3f} too far below market {market_far_put:.3f}"
     )
+
+
+@pytest.mark.unit
+def test_svi_otm_fit_tracks_low_oi_call_wing_despite_itm_junk():
+    """Live WMT 20261120: ITM put IVs ran to 0.79 on the call wing while
+    OTM calls went 0.27→0.58. Raw-OI full-chain SVI stayed ~flat at 0.31
+    on the right. Fit OTM only with sqrt(OI) weights so the call wing
+    lifts off ATM and junk ITM puts cannot pin it to 0.80."""
+    spot, T = 100.0, 0.25
+    chain, oi = {}, {}
+    for k in range(70, 141, 2):
+        m = k / spot
+        if k <= spot:
+            chain[(float(k), "P")] = 0.22 + 0.30 * max(0.0, (1 - m))
+            oi[(float(k), "P")] = 2500 if k >= 90 else 25
+            chain[(float(k), "C")] = 0.11
+            oi[(float(k), "C")] = 40
+        if k >= spot:
+            chain[(float(k), "C")] = 0.22 + 0.45 * max(0.0, (m - 1))
+            oi[(float(k), "C")] = 3000 if k <= 110 else 18
+            chain[(float(k), "P")] = 0.80
+            oi[(float(k), "P")] = 4
+    ref = svi_rp.calibrate_svi(chain, spot, T, oi_by=oi)
+    atm = ref.sigma_atm
+    call_wing = ref.sigma_ref(130.0)
+    assert call_wing > atm + 0.025, (
+        f"call wing flattened: ref(130)={call_wing:.3f} atm={atm:.3f}"
+    )
+    assert call_wing < 0.60, (
+        f"ITM put junk pinned the call wing: ref(130)={call_wing:.3f}"
+    )

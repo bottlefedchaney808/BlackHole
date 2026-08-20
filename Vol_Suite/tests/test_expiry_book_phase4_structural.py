@@ -20,10 +20,14 @@ def _book(T, dte, sigma_atm, seed_gamma_sign=-1.0, spot=100.0):
         for right in ("C", "P"):
             if seed_gamma_sign < 0:
                 oi = 1000 if right == "P" else 10
+                iv = sigma_atm + (0.20 if right == "P" and k < spot else 0.0)
             else:
                 oi = 1000 if right == "C" else 10
+                iv = sigma_atm - (0.12 if right == "C" and k > spot else 0.0)
+            if iv <= 0.05:
+                iv = 0.05
             rows.append({"strike": k, "right": right, "oi": oi,
-                         "implied_vol": sigma_atm})
+                         "implied_vol": iv})
     return {"expiry": f"2026{T * 1000:.0f}", "spot": spot, "rows": rows,
             "T": T, "dte": dte, "sigma_atm": sigma_atm}
 

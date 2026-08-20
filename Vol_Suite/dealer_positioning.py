@@ -1247,10 +1247,26 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
     strikes = sorted({r.strike for r in rows})
     K = np.asarray(strikes, dtype=float)
 
+    use_book = any(getattr(r, "gamma_book", 0.0) for r in rows)
+    d_iv = getattr(result, "d_iv_used", None)
+    prov = str(getattr(result, "vanna_flow_provenance", "") or "")
+    deadbanded = "deadband" in prov
+
     def _by_strike(greek: str) -> np.ndarray:
         agg: Dict[float, float] = defaultdict(float)
         for r in rows:
-            agg[r.strike] += r.exposure_of(greek)
+            if greek == "gamma" and use_book:
+                # SVI cheap/rich book gamma (dealer position), NOT GEX.
+                agg[r.strike] += float(r.gamma_book)
+                continue
+            val = r.exposure_of(greek)
+            if greek == "vanna" and d_iv is not None:
+                # Keep the structural flip-wall vanna (OI-weighted, same for
+                # call/put at a strike -> + below ATM, - above, flips at spot)
+                # and make it a FLOW by scaling with the measured dIV. Do NOT
+                # re-sign by book_sign: that collapses the ATM flip wall.
+                val = 0.0 if deadbanded else val * (float(d_iv) / 0.01)
+            agg[r.strike] += val
         return np.asarray([agg.get(k, 0.0) for k in strikes], dtype=float)
 
     fig = plt.figure(figsize=(16, 11), facecolor=DARK_BG)
@@ -1263,15 +1279,20 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
 
     spot = result.spot
     have_data = len(K) > 0
+    gamma_ylabel = 'D-Gamma ($ / 1% move, SVI book)' if use_book else 'Gamma (shares/$1)'
+    if use_book and d_iv is not None:
+        vanna_ylabel = f'Vanna Flow 7d (shares, dIV={float(d_iv):+.4f})'
+    else:
+        vanna_ylabel = 'Vanna inventory (shares / 1pp IV)'
     ax1 = fig.add_subplot(gs[0, 0])
     _greek_panel(ax1, K, _by_strike('gamma'), 'Gamma Exposure',
-                 'Gamma (shares/$1)', spot, have_data)
+                 gamma_ylabel, spot, have_data)
     ax2 = fig.add_subplot(gs[0, 1])
     _greek_panel(ax2, K, _by_strike('delta'), 'Delta Exposure',
                  'Delta (shares)', spot, have_data)
     ax3 = fig.add_subplot(gs[1, 0])
     _greek_panel(ax3, K, _by_strike('vanna'), 'Vanna Exposure',
-                 'Vanna (shares / 1pp IV)', spot, have_data)
+                 vanna_ylabel, spot, have_data)
     ax4 = fig.add_subplot(gs[1, 1])
     _greek_panel(ax4, K, _by_strike('charm'), 'Charm Exposure',
                  'Charm (shares/day)', spot, have_data)

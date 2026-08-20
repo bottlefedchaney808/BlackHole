@@ -2,8 +2,8 @@
 
 **Date:** 2026-08-15
 **Supersedes:** `pre_registration_causal_arm_20260814.md` (R10.0) — rejected at design/power audit because it would power a confounded gamma/reflexivity proxy, not the causal vanna mechanism.
-**Status:** PRE-REGISTRATION v2 — to be re-audited by a read-only design/mechanism panel BEFORE any acquisition. Not yet executed.
-**Locked context (do NOT relitigate):** live model = `vol_surface_replication` + SVI + `IV_DEADBAND 0.01` + `DEALER_VANNA_FLOW=1` + accumulation ON; `rec.vanna = −1×BS`; real spot. New expiry-book model (`expiry_book_exposure.py`) stays **descriptive/conditional** throughout and does NOT get promoted by a positive result. Prior R3 rulings: NOT ACCEPTED (re-admitted to evidence only).
+**Status:** PRE-REGISTRATION v2 — historical. **LIVE 2026-08-20:** production engine is `expiry_book`, not `vol_surface_replication`. Causal arm remains unpromoted / descriptive.
+**Locked context (do NOT relitigate):** 2026-08-15 snapshot of the *then* live model (`vol_surface_replication` + SVI + deadband + vannaflow). That is no longer the production path.
 
 ## 1. Why this arm exists (Cem's lever)
 

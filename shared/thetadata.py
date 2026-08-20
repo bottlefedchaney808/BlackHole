@@ -156,6 +156,11 @@ _PATH_ALIASES = {
     # exact match first
     "/api/db/dealer_positioning": ("dealer", "positioning", {"use_csv": True}),
     "/api/db/yield_curve": ("market", "yield_curve", {}),
+    "/api/volatility/surface_change/{root}": (
+        "volatility",
+        "surface_change",
+        {},
+    ),
     "/api/theta/bulk_hist/option/eod_greeks/{root}/{exp}": (
         "options",
         "bulk_hist_option_eod_greeks",
@@ -426,6 +431,7 @@ def _rewrite_params(params: dict, defaults: dict) -> dict:
             "include_chart_data", "session_date", "tickers",
             "series_transform", "min_threshold", "method", "metric",
             "from_date", "lookback_hours", "category", "include_history",
+            "expiration",
             "min_strength", "greek_type", "history_contract_version",
             "level_type", "as_of_date", "price_range_pct", "horizon_min",
             "analysis_mode", "baseline_date", "asof_date", "min_history",
@@ -1643,6 +1649,37 @@ class ThetaDataController:
             'latest_only': latest_only,
             'use_csv': False,
         })
+        r.raise_for_status()
+        return r.json()
+
+    def get_iv_surface_change(
+        self, root: str, expiration: str,
+        baseline_date: str,
+        asof_date: Optional[str] = None,
+    ):
+        """PH v2 volatility.surface_change — vendor ΔIV, no local IV solve.
+
+        expiration/baseline/asof are YYYYMMDD or YYYY-MM-DD. Omit asof_date
+        to use the vendor EOD-safe prior trading day.
+        """
+        def _iso(d: str) -> str:
+            digits = "".join(ch for ch in str(d) if ch.isdigit())
+            if len(digits) == 8:
+                return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+            return str(d)
+
+        params = {
+            "expiration": _iso(expiration),
+            "baseline_date": _iso(baseline_date),
+            "interval_type": "DAY",
+        }
+        if asof_date:
+            params["asof_date"] = _iso(asof_date)
+        r = self._get_with_retry(
+            f"/api/volatility/surface_change/{root}", params=params,
+        )
+        if r.status_code == 404:
+            return None
         r.raise_for_status()
         return r.json()
 

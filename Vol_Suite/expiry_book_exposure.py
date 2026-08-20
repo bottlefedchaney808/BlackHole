@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
-"""expiry_book_exposure.py — a NEW, SEPARATE, TEST-ONLY "expiry book exposure"
-model.
+"""expiry_book_exposure.py — the LIVE dealer-frame greeks engine.
 
-Implements PLAN_expiry_book_exposure_v2_20260814.md Phases 0-6. This is a
-standalone module: it does NOT modify, import-lock, or re-wire the live
-dealer-positioning model. It reuses the shared scaling constants by reading
-them (never changing) from `dealer_positioning`.
+Implements PLAN_expiry_book_exposure_v2_20260814.md Phases 0-6. As of
+2026-08-17 this is the production dealer-positioning model: Jason decided to
+move forward with it in place of continuing to sink cost into the old
+`dealer_positioning.py` accumulation model, which was broken. See
+`docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md` for
+the full history and the explicit promotion decision (overriding the
+in-progress Cem-arbiter loop's "NOT ACCEPTED" verdict on cost/pragmatism
+grounds, not on a claim that the statistical validation completed). This file
+is consumed via `expiry_book_production.py` by `volatility_suite.py`,
+`options_chain_scanner.py`, and `sentiment-scanner/scanner/gex_scanner.py`.
+`dealer_positioning.py`'s `compute_dealer_positioning`/`compute_accumulated_position`
+are now locked (`_assert_legacy_backtest_access`) to backtest/test callers only.
 
 Global constraints honored (plan §4):
-  1. Live dealer-positioning model untouched — this file + its tests are the
-     only additions.
+  1. (Superseded 2026-08-17 — see above. This file is no longer a
+     read-only addition alongside an untouched live model; it IS the live
+     model.)
   2. All six greeks in DEALER-FRAME; sign each greek once, never stack a
      `right_dir`.
-  3. rec.vanna = -1 * BS_vanna is the vanna destination convention; raw BS
-     vanna is a magnitude reference only.
+  3. All five signed greeks (delta, vanna, charm, vega, volga) compose the
+     same way: dealer-frame = -1 * (customer-frame raw value). Fixed
+     2026-08-17 for vanna AND charm — both `bs_vanna` and `bs_charm` already
+     return that negated (Bloomberg-negative-style) quantity internally, but
+     `dealer_frame_greek` was applying a SECOND -1 on top for both of them,
+     so the two negations canceled and they composed as +1*customer-raw
+     instead — an unnoticed cross-greek sign inconsistency (delta was always
+     correct). See `dealer_frame_vanna`'s and `bs_charm`'s docstrings.
   4. Real spot, NOT median-strike.
   5. Charm scaled x(1/DEFAULT_A) if CHARM_ANNUALIZED; NEVER x(1/DTE).
   6. Vanna flow dIV unit is DECIMAL vol, ONE formula:
@@ -120,28 +134,48 @@ def bs_vega(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
 
 
 def bs_vanna(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
-    """Raw Black-Scholes vanna = d2Delta/dS dsigma (units: delta per vol).
-    Raw BS vanna has the SAME sign for call & put at the same OTM strike
-    (negative when d2 < 0). It is a MAGNITUDE reference only; the directional
-    object is rec.vanna = -1 * BS_vanna (dealer-frame)."""
+    """d(delta_call)/dsigma, ALREADY in the -1*customer-raw dealer-frame sign
+    (verified by calculus: d(d1)/dsigma = -d2/sigma, so this function's
+    phi(d1)*d2/sigma equals -1 * the textbook customer-frame d(delta_call)/dsigma).
+    Consumed directly by dealer_frame_vanna as a pass-through -- see that
+    function's docstring for the 2026-08-17 fix. Raw BS vanna has the SAME
+    sign for call & put at the same OTM strike (negative when d2 < 0)."""
     d1, d2 = _d1d2(S, K, T, sigma, r, q)
     if math.isnan(d1):
         return float("nan")
     return math.exp(-q * T) * _phi(d1) * (d2 / sigma)
 
 
-def bs_charm(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
-    """Raw charm = d(delta)/dT (time-to-maturity, years). Bloomberg-negative
-    convention: charm is the decay of delta toward its terminal value, so it
-    is reported here per the "decay toward +1 / 0" convention below."""
+def bs_charm(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0, right="C"):
+    """-1 * d(delta)/dT (Bloomberg-negative convention: charm is the decay of
+    delta toward its terminal value), ALREADY in that negated sign -- same
+    pattern as bs_vanna, see dealer_frame_vanna's docstring.
+
+    FIXED 2026-08-17 (CARL review, found while wiring dividend yield q
+    through): this formula was missing the q*disc*N(d1) term entirely (so it
+    silently returned a numerically wrong value the moment q != 0 -- exact at
+    q=0 only by coincidence), AND had no `right` parameter so it could never
+    distinguish call charm from put charm (harmless only because
+    charm_call == charm_put at q=0). Both are now fixed together and
+    verified against a finite-difference d(delta)/dT to 1e-4 relative error
+    for both rights at several (T, sigma, q) combinations.
+
+    Derivation: delta_call = disc*N(d1), so
+    d(delta_call)/dT = -q*disc*N(d1) + disc*phi(d1)*d(d1)/dT, and
+    d(d1)/dT = (r-q)/(sigma*sqrt(T)) - d2/(2T). Negating for the
+    Bloomberg-negative convention gives charm_call below. delta_put =
+    delta_call - disc, so charm_put = charm_call - q*disc (customer-frame),
+    i.e. -q*disc*N(-d1) + <same phi(d1) term> once negated (N(d1)-1 = -N(-d1)).
+    """
     d1, d2 = _d1d2(S, K, T, sigma, r, q)
     if math.isnan(d1):
         return float("nan")
     disc = math.exp(-q * T)
-    # d(delta_call)/dT = disc * phi(d1) * [ (d2)/(2T) - (r-q)/(sigma sqrt T) ]
-    charm_call = disc * _phi(d1) * (
+    phi_term = disc * _phi(d1) * (
         (d2 / (2.0 * T)) - (r - q) / (sigma * math.sqrt(T)))
-    return charm_call
+    if right == "C":
+        return q * disc * _N(d1) + phi_term
+    return -q * disc * _N(-d1) + phi_term
 
 
 def bs_volga(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
@@ -173,10 +207,23 @@ def _right_sign(right):
 
 
 def dealer_frame_vanna(raw_bs_vanna):
-    """rec.vanna = -1 * BS_vanna (the vanna destination convention). Raw BS
-    vanna is magnitude reference only. Magnitude |scale| ~ 1.04 (SPY -0.956,
-    QQQ -0.989 per Gate-0)."""
-    return -1.0 * raw_bs_vanna
+    """Dealer-frame vanna, composed the SAME way as dealer_frame_delta and
+    dealer_frame_charm: dealer-frame = -1 * (customer-frame raw value).
+
+    FIXED 2026-08-17 (CARL review): `bs_vanna(S,K,T,sigma)` = disc*phi(d1)*d2/sigma
+    already equals -1 * (customer-frame raw d(delta_call)/dsigma) -- verified
+    by direct calculus (d(d1)/dsigma = -d2/sigma, so
+    d(delta_call)/dsigma = phi(d1)*d(d1)/dsigma = -phi(d1)*d2/sigma, i.e. the
+    negative of bs_vanna's return value). Previously this function applied a
+    SECOND -1 on top of that, so the two negations canceled and
+    dealer_frame_vanna ended up equal to +1 * customer-frame raw -- the
+    opposite composition from delta/charm (both -1 * customer-frame raw),
+    with the flow-direction sign reversed for vanna alone. bs_vanna's own
+    return value already IS the correctly-composed dealer-frame quantity, so
+    this is now a pass-through -- do not re-add a negation here without
+    re-deriving both functions together.
+    """
+    return raw_bs_vanna
 
 
 def dealer_frame_greek(greek, raw_value, right):
@@ -197,14 +244,27 @@ def dealer_frame_greek(greek, raw_value, right):
         # -gamma, matching the standard GEX smile and the live sign model.
         return _right_sign(right) * raw_value
     if greek == "vanna":
-        # Vanna destination = rec.vanna = -1 * BS_vanna. Sign applied ONCE.
-        # The OTM call + / OTM put - pattern emerges from -1*BS automatically.
+        # Dealer-frame vanna, composed like delta/charm: -1 * customer-frame
+        # raw value. bs_vanna already returns that negated quantity (see its
+        # docstring), so dealer_frame_vanna is a pass-through, not a second
+        # negation -- fixed 2026-08-17, see dealer_frame_vanna's docstring.
         return dealer_frame_vanna(raw_value)
     if greek == "charm":
-        # Charm in Bloomberg-negative / decay convention. Signed once by
-        # long/short option: a dealer-short OTM call unwinds its stock hedge as
-        # time passes -> the charm flow is the decay toward the terminal delta.
-        return -1.0 * raw_value
+        # Dealer-frame charm, composed like delta/vanna: -1 * customer-frame
+        # raw value. bs_charm already returns that negated (Bloomberg-
+        # negative) quantity -- see its docstring -- so this is a
+        # pass-through, not a second negation.
+        #
+        # FIXED 2026-08-17 (CARL review, found while wiring q through):
+        # this branch used to apply ANOTHER -1 on top of bs_charm's already-
+        # negated output, the exact same double-negation bug dealer_frame_vanna
+        # had (fixed earlier the same day). That made dealer-frame charm
+        # compose as +1*customer-raw while delta (and now-fixed vanna) both
+        # compose as -1*customer-raw -- an unnoticed cross-greek sign
+        # inconsistency, undetected until bs_charm's q=0 coincidental
+        # call==put symmetry broke while adding a right parameter and
+        # verifying the whole formula against finite differences.
+        return raw_value
     if greek in ("vega", "volga"):
         # Options/vol channel. Dealer-frame: the portfolio vol-book sensitivity
         # is the opposite of the option-holder's. Signed once, no right_dir.
@@ -241,6 +301,8 @@ class NetExposureRow:
     exposure: Dict[str, float] = field(default_factory=dict)  # signed_greek * OI * CONTRACT_MULTIPLIER
     units: Dict[str, str] = field(default_factory=dict)
     measured: Dict[str, str] = field(default_factory=dict)    # per-greek MEASURED/ESTIMATED provenance
+    book_sign: float = 0.0   # SVI cheap/rich × OTM gate; 0 = unmarked/ITM
+    gamma_book: float = 0.0  # unsigned BS gamma × book_sign × OI × 100 × S² × 0.01
 
     def exposure_of(self, greek):
         return self.exposure.get(greek, 0.0)
@@ -261,9 +323,13 @@ class NetExposure:
         return {r.strike: r.exposure_of(greek) for r in self.rows}
 
     def gex(self):
-        """GEX pinned to dollar-gamma-per-1% = SUM Gamma*OI*100*spot^2*0.01."""
+        """Imported GEX reference: call+/put- dollar-gamma-per-1%."""
         return sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
                    * self.spot ** 2 * 0.01 for r in self.rows)
+
+    def book_gamma(self):
+        """Dealer-book dollar-gamma-per-1% (SVI-signed, OTM-gated)."""
+        return sum(r.gamma_book for r in self.rows)
 
     def dex(self):
         """DEX = post-multiplier shares = SUM signed_delta * OI * 100."""
@@ -277,13 +343,19 @@ class NetExposure:
 
 def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
                        expiry: str = "", T: Optional[float] = None,
-                       dte: Optional[int] = None) -> NetExposure:
+                       dte: Optional[int] = None, q: float = 0.0) -> NetExposure:
     """Build the per-strike, per-expiry, per-greek net-exposure snapshot vector.
 
     Each input row: {'strike', 'right', 'oi', 'implied_vol', [spot], [T]}.
     Greeks are derived from (real spot, strike, T, IV) via BS in the
     dealer frame. A NaN greek field degrades to a per-greek skip (record kept,
     exposure 0 for that greek), never raising.
+
+    `q`: continuous dividend yield, defaults to 0.0 (same default every
+    bs_* function already had). Added 2026-08-17 (CARL review) -- every
+    bs_* function always accepted q, but nothing upstream ever passed a
+    real one through. See expiry_book_production.py for where this now
+    comes from live.
     """
     if dte is None and T is not None:
         dte = max(int(round(T * DEFAULT_A)), 1)
@@ -304,17 +376,17 @@ def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
             strike=k, right=right, oi=oi, T=rT, dte=rr_dte, iv=iv)
         for greek in GREEKS:
             if greek == "charm":
-                raw = bs_charm(rspot, k, rT, iv)
+                raw = bs_charm(rspot, k, rT, iv, q=q, right=right)
             elif greek == "volga":
-                raw = bs_volga(rspot, k, rT, iv)
+                raw = bs_volga(rspot, k, rT, iv, q=q)
             elif greek == "vega":
-                raw = bs_vega(rspot, k, rT, iv)
+                raw = bs_vega(rspot, k, rT, iv, q=q)
             elif greek == "gamma":
-                raw = bs_gamma(rspot, k, rT, iv)
+                raw = bs_gamma(rspot, k, rT, iv, q=q)
             elif greek == "vanna":
-                raw = bs_vanna(rspot, k, rT, iv)
+                raw = bs_vanna(rspot, k, rT, iv, q=q)
             else:
-                raw = bs_delta(rspot, k, rT, iv, right=right)
+                raw = bs_delta(rspot, k, rT, iv, q=q, right=right)
             if math.isnan(raw):
                 ne_row.measured[greek] = "ESTIMATED-unavailable"
                 ne_row.exposure[greek] = 0.0
@@ -350,6 +422,70 @@ def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
                 ne_row.units[greek] = "shares"
             ne_row.measured[greek] = "MEASURED"
         ne.rows.append(ne_row)
+    return ne
+
+
+BOOK_SIGN_DEADBAND = 0.01  # 1 vol point; matches vol_surface IV_DEADBAND_VOL
+
+
+def atm_iv_otm(rows, spot: float) -> Optional[float]:
+    """OTM-side IV at the strike nearest spot (put if K<=spot, call if K>spot)."""
+    best = None
+    best_dist = None
+    for row in rows:
+        if isinstance(row, dict):
+            k = float(row.get("strike", 0) or 0)
+            right = str(row.get("right", "")).upper()[:1]
+            iv = row.get("implied_vol", row.get("iv"))
+        else:
+            k = float(row.strike)
+            right = str(row.right).upper()[:1]
+            iv = row.iv
+        try:
+            iv = float(iv)
+        except (TypeError, ValueError):
+            continue
+        if k <= 0 or iv <= 0 or iv != iv:
+            continue
+        want = "P" if k <= spot else "C"
+        if right != want:
+            continue
+        dist = abs(k - spot)
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best = iv
+    return best
+
+
+def apply_svi_book_signs(ne: NetExposure, overlay: "SviOverlay",
+                         spot: float, T: float) -> NetExposure:
+    """Stamp book_sign + gamma_book on every row. OTM-only, SVI deadbanded.
+
+    SHORT (rich) → dealer short that strike → gamma_book negative.
+    LONG (cheap) → dealer long → gamma_book positive.
+    UNMARKED / ITM → 0.
+    """
+    try:
+        from replication_reference import _otm_leg_weights
+        chain_iv = {(r.strike, r.right): r.iv for r in ne.rows
+                    if r.iv == r.iv and r.iv > 0}
+        otm = set(_otm_leg_weights(chain_iv, spot, T).keys())
+    except Exception:
+        otm = {(r.strike, r.right) for r in ne.rows}
+    mark_map = {(k, right): mark for (k, right, mark, _diff) in overlay.marks}
+    for r in ne.rows:
+        mark = mark_map.get((r.strike, r.right), "UNMARKED")
+        if (r.strike, r.right) not in otm:
+            sign = 0.0
+        elif mark == "SHORT":
+            sign = -1.0
+        elif mark == "LONG":
+            sign = 1.0
+        else:
+            sign = 0.0
+        raw_g = abs(float(r.greeks.get("gamma", 0.0) or 0.0))
+        r.book_sign = sign
+        r.gamma_book = sign * raw_g * r.oi * CONTRACT_MULTIPLIER * ne.spot ** 2 * 0.01
     return ne
 
 
@@ -567,7 +703,8 @@ class ExecutionLocus:
 
 
 def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
-                    tolerance_pct: float = 0.01) -> ExecutionLocus:
+                    tolerance_pct: float = 0.01, q: float = 0.0,
+                    ne: Optional[NetExposure] = None) -> ExecutionLocus:
     """Compute the execution-locus map from a chain (rows -> NetExposure).
 
     - zero_gamma level: the strike where cumulative signed dealer gamma (in
@@ -578,13 +715,18 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     - gex_slope: local slope of dollar-gamma-per-1% vs strike at zero-gamma.
     - residual_delta: the carry DEX (signed shares) not yet offset.
     """
-    ne = build_net_exposure(rows, spot, T=T)
+    ne = ne if ne is not None else build_net_exposure(rows, spot, T=T, q=q)
     strikes = sorted({r.strike for r in ne.rows})
-    # dollar-gamma-per-1% per strike (call+put combined at the strike)
+    # Prefer SVI-signed book gamma when stamped; else imported GEX smile
+    # (locus tests that never applied book signs keep working).
     dg_per_strike: Dict[float, float] = {}
+    use_book = any(r.gamma_book != 0.0 or r.book_sign != 0.0 for r in ne.rows)
     for k in strikes:
-        dg = sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                 * spot ** 2 * 0.01 for r in ne.rows if abs(r.strike - k) < 1e-9)
+        if use_book:
+            dg = sum(r.gamma_book for r in ne.rows if abs(r.strike - k) < 1e-9)
+        else:
+            dg = sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
+                     * spot ** 2 * 0.01 for r in ne.rows if abs(r.strike - k) < 1e-9)
         dg_per_strike[k] = dg
     ordered = sorted(strikes)
     # zero-gamma = the LOCAL (per-strike) signed dollar-gamma sign-change
@@ -621,12 +763,15 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     put_strikes = [k for k in strikes if k < spot]
     gex_by_right_strike: Dict[Tuple[str, float], float] = defaultdict(float)
     for r in ne.rows:
-        gex_by_right_strike[(r.right, r.strike)] += (
-            r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-            * spot ** 2 * 0.01
-        )
-    call_wall = max(call_strikes, key=lambda k: gex_by_right_strike.get(("C", k), 0.0)) if call_strikes else spot
-    put_wall = min(put_strikes, key=lambda k: gex_by_right_strike.get(("P", k), 0.0)) if put_strikes else spot
+        if use_book:
+            gex_by_right_strike[(r.right, r.strike)] += r.gamma_book
+        else:
+            gex_by_right_strike[(r.right, r.strike)] += (
+                r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
+                * spot ** 2 * 0.01
+            )
+    call_wall = max(call_strikes, key=lambda k: abs(gex_by_right_strike.get(("C", k), 0.0))) if call_strikes else spot
+    put_wall = max(put_strikes, key=lambda k: abs(gex_by_right_strike.get(("P", k), 0.0))) if put_strikes else spot
     band_lower = spot * (1 - tolerance_pct)
     band_upper = spot * (1 + tolerance_pct)
     # local GEX slope: net dollar-gamma-per-1% across the window from the
@@ -719,7 +864,9 @@ def _locus_activation(locus: ExecutionLocus, scenario: str, d_iv: float) -> floa
 
 def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
                         dte: Optional[int] = None, tolerance_pct: float = 0.01,
-                        d_iv: float = 0.01, ticker: str = "MOCK") -> ScenarioBudget:
+                        d_iv: float = 0.01, ticker: str = "MOCK",
+                        q: float = 0.0,
+                        ne: Optional[NetExposure] = None) -> ScenarioBudget:
     """Build the scenario x channel hedge-flow budget for a chain.
 
     For each named scenario, report the forced dealer hedge flow as one signed
@@ -727,15 +874,15 @@ def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
     forecast). Channel split is exhaustive and non-overlapping over the six
     greeks.
     """
-    ne = build_net_exposure(rows, spot, T=T, dte=dte, ticker=ticker)
-    locus = execution_locus(rows, spot, T=T, tolerance_pct=tolerance_pct)
+    ne = ne if ne is not None else build_net_exposure(rows, spot, T=T, dte=dte, ticker=ticker, q=q)
+    locus = execution_locus(rows, spot, T=T, tolerance_pct=tolerance_pct, q=q, ne=ne)
     budget: Dict[str, Dict[str, float]] = {s: {} for s in SCENARIOS}
 
     def _sum_exposure(greek):
         return sum(r.exposure_of(greek) for r in ne.rows)
 
-    # --- spot-move scenarios (GEX primary) ---
-    gex = ne.gex()  # dollar-gamma-per-1%
+    use_book = any(r.gamma_book != 0.0 or r.book_sign != 0.0 for r in ne.rows)
+    gex = ne.book_gamma() if use_book else ne.gex()
     for scen, sgn in (("up_1pct", +1.0), ("down_1pct", -1.0)):
         act = _locus_activation(locus, scen, d_iv)
         budget[scen]["gamma"] = -gex * sgn * act
@@ -805,12 +952,14 @@ def _book_sigma_atm(book_rows: List[dict], spot: float) -> Optional[float]:
 def build_structural_regime(expiry_books: List[dict],
                             term_weights: Optional[Dict[str, float]] = None,
                             opex_window_days: int = 5,
-                            gamma_tol: float = 1.0) -> StructuralRegime:
+                            gamma_tol: Optional[float] = None,
+                            q: float = 0.0) -> StructuralRegime:
     """Build the structural/regime arm from multiple expiry books.
 
     expiry_books: list of {'expiry', 'spot', 'rows', 'T'(years), ['dte']}.
-    Per-expiry directional carry = net dollar-gamma-per-1% (GEX, primary
-    channel). The persistent carry = sum over expiries of term-weight * gex,
+    Per-expiry directional carry = SVI-signed OTM book_gamma
+    (dollar-gamma-per-1%), NOT imported GEX. Persistent carry is the
+    term-weighted sum of those book gammas.
     term-weight favoring the near/medium tenor (w(T) = 1/(1+T) by default).
     term_structure_flag compares ATM IV at the near vs far tenor.
     """
@@ -829,8 +978,17 @@ def build_structural_regime(expiry_books: List[dict],
             per_carry[exp] = 0.0
             sig_atm[exp] = None
             continue
-        ne = build_net_exposure(rows, spot, T=float(b.get("T", 0.25)))
-        per_gamma[exp] = ne.gex()
+        ne = build_net_exposure(rows, spot, T=float(b.get("T", 0.25)), q=q)
+        chain_iv = {(r.strike, r.right): r.iv for r in ne.rows
+                    if r.iv == r.iv and r.iv > 0}
+        oi_by = {(r.strike, r.right): int(r.oi) for r in ne.rows}
+        if chain_iv:
+            ov = svi_rp_overlay(chain_iv, spot, float(b.get("T", 0.25)),
+                                oi_by=oi_by, q=q, r=RISK_FREE_RATE)
+            apply_svi_book_signs(ne, ov, spot, float(b.get("T", 0.25)))
+            per_gamma[exp] = ne.book_gamma()
+        else:
+            per_gamma[exp] = 0.0
         per_carry[exp] = ne.dex()
         sig_atm[exp] = _book_sigma_atm(rows, spot)
 
@@ -845,14 +1003,17 @@ def build_structural_regime(expiry_books: List[dict],
     carry = sum(max(term_weights.get(exp, 0.0), 0.0) * per_gamma[exp]
                 for exp in per_gamma) / wsum
 
-    # persistence = fraction of expiries sharing the weighted carry sign
+    # persistence = fraction of NONZERO expiries agreeing with weighted sign
     wsign = 1.0 if carry > 0 else (-1.0 if carry < 0 else 0.0)
-    agreeing = [exp for exp in per_gamma
-                if (per_gamma[exp] > 0) == (wsign > 0) or
-                (per_gamma[exp] < 0) == (wsign < 0)]
-    persistence = (len(agreeing) / len(per_gamma)) if per_gamma else 0.0
+    nonzero = [exp for exp in per_gamma if per_gamma[exp] != 0.0]
+    agreeing = [exp for exp in nonzero
+                if (per_gamma[exp] > 0) == (wsign > 0)]
+    persistence = (len(agreeing) / len(nonzero)) if nonzero else 0.0
 
-    if abs(carry) < gamma_tol:
+    if gamma_tol is None:
+        mag = [abs(v) for v in per_gamma.values()]
+        gamma_tol = 0.05 * (sum(mag) / len(mag)) if mag else 0.0
+    if abs(carry) < float(gamma_tol):
         regime = "neutral"
     elif carry < 0:
         regime = "persistent-short-gamma"
@@ -877,9 +1038,9 @@ def build_structural_regime(expiry_books: List[dict],
     # short-DTE anchor present.
     dtemap = {str(b.get("expiry", "?")): int(b.get("dte", 0) or 0) for b in books}
     event_clock = {
-        "opex_crescendo": any(0 < dtemap.get(exp, 0) <= opex_window_days for exp in dtemap),
-        "short_dte_anchor": any(0 < dtemap.get(exp, 0) <= opex_window_days for exp in dtemap),
-        "dated_vol_shock": False,
+        "opex_crescendo": any(0 < dtemap.get(exp, 0) <= opex_window_days
+                              and dtemap.get(exp, 0) <= 5 for exp in dtemap),
+        "short_dte_anchor": any(0 < dtemap.get(exp, 0) <= 3 for exp in dtemap),
     }
     return StructuralRegime(
         regime=regime, term_structure_flag=flag, carry=float(carry),
@@ -922,16 +1083,20 @@ def _term_structure_flag(tenor_vols: List[Tuple[float, float]]) -> str:
 def svi_rp_overlay(chain_iv: Dict[Tuple[float, str], float], spot: float, T: float,
                    oi_by: Optional[Dict[Tuple[float, str], int]] = None,
                    tenor_vols: Optional[List[Tuple[float, float]]] = None,
-                   ticker: str = "MOCK") -> SviOverlay:
+                   ticker: str = "MOCK",
+                   deadband: float = BOOK_SIGN_DEADBAND,
+                   r: float = RISK_FREE_RATE,
+                   q: float = 0.0) -> SviOverlay:
     """Fixed-strike cheap/rich overlay via svi_rp.calibrate_svi + term flag.
 
     Reuses `svi_rp` (read-only); does NOT modify vol_surface_reference.py.
     A strike whose market IV is BELOW the fitted reference smile is marked
     LONG/cheap (dealer long / mean-revert-prone); above -> SHORT/rich.
+    |diff| <= deadband -> UNMARKED (no book-sign).
     """
     import svi_rp
-    ref = svi_rp.calibrate_svi(chain_iv, spot, T, oi_by=oi_by)
-    marks_raw = ref.mark_chain(chain_iv, oi_by)
+    ref = svi_rp.calibrate_svi(chain_iv, spot, T, oi_by=oi_by, r=r, q=q)
+    marks_raw = ref.mark_chain(chain_iv, oi_by, deadband=deadband)
     marks: List[Tuple[float, str, str, float]] = [
         (float(k), right, mark, float(diff)) for (k, right, _, _, diff, mark, _) in marks_raw]
     cheap = sorted({float(k) for (k, _, mark, _) in marks if mark == "LONG"})
