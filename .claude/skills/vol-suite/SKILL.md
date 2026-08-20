@@ -26,7 +26,9 @@ FIX_PLAN items re-checked against current source (not trusted from the docs) —
 - `variance_swap_screener.py:163-164` — has the DDKZ `boundary_correction`, matching `variance_swap_live.py`.
 - `replication_reference.py` OI accumulation — distinguishes "strike absent" from "strike present, OI=0" before computing `delta_oi`.
 
-Still genuinely live: **no OI magnitude/outlier filtering in `dealer_positioning.py`'s gamma aggregation** (`oi > 0` only, line 449) — one large stale/illiquid strike can dominate the gamma/vanna read. Deliberately deferred (FIX_PLAN_20260725.md issue 4); confirmed still absent, no z-score/percentile/concentration logic exists in the file. If dealer-positioning output looks strike-dominated, this is why.
+**Live dealer engine (2026-08-17):** production sign/exposure is `expiry_book` via `expiry_book_production.fetch_production_result` / `expiry_book_exposure.py` (`volatility_suite.py` sets `sign_model=expiry_book`). `dealer_positioning.py` `compute_*` is backtest/test-only (`_assert_legacy_backtest_access`). Do not debug live whales/change-of-sign against the legacy file.
+
+Still genuinely live on the *legacy* path only: **no OI magnitude/outlier filtering in `dealer_positioning.py`'s gamma aggregation** (`oi > 0` only, line 449) — one large stale/illiquid strike can dominate the gamma/vanna read. Deliberately deferred (FIX_PLAN_20260725.md issue 4). If a *backtest* dealer-positioning output looks strike-dominated, this is why.
 
 Recurring bug classes (added 2026-08-17, from a fix-hotspot audit — vol-suite is one of the highest fix-ratio areas in the repo):
 - **`resolve_expiration`'s DTE math uses `datetime.now(timezone.utc).date()`, not local `date.today()`.** Any new code/test that computes "today" for an expiry/DTE comparison must match UTC, or it flakes at UTC-negative local offsets near midnight (`Vol_Suite/expiry_selector.py`; fixed for the test suite in `70fab50`, but the general rule applies to any new caller too).

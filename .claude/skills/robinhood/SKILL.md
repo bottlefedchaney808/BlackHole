@@ -104,6 +104,9 @@ but not modified; clone into a new scan via `create_scan` instead.
 - Buying-power questions always route through `get_portfolio`, never derive from `get_accounts`.
 - Before any `place_option_order`/`place_equity_order`, call the matching `review_*_order` first and
   surface the cost/risk preview to the user; wait for explicit go-ahead before placing.
+- Claude Code auto-mode classifier blocks `place_equity_order` / `place_option_order`. Do not retry
+  the same tool after "Blocked by classifier" / "Permission denied by Claude Code auto mode classifier".
+  Tell the user auto-mode cannot place live orders.
 - This account's options are multi-leg (spreads) in account A — `get_option_watchlist` and
   `get_option_positions` only show single-leg detail per contract; a spread shows as two separate
   long/short legs sharing a `chain_id`+near-identical `opened_at`, not as one strategy object. Group by

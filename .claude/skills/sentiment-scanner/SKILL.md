@@ -21,6 +21,8 @@ Confirmed: there is no `--context`/`--context-out` pair. sentiment-scanner is pr
 
 ## Debug / Common Mistakes
 
+**Max pain / OI snapshot 404:** pin `scan_max_pain(ticker, expiry=focus.expiration_date)` from the unified context — never invent an expiry. A ThetaData `bulk_snapshot` 404 (e.g. SMCI/20261112 OI) is expected; `orchestrator.py` falls back (~331–349). Do not treat that 404 string as a scanner crash.
+
 YouTube captions being silently thin or absent is not a bug — verified in `scanner/youtube.py`: `_check_pot_server_once()` does a cheap one-time `/ping` health check and just logs a warning if the bgutil server is unreachable; it does not raise or abort. The actual per-request PO-token failure is caught separately and also treated as non-fatal, falling back to no caption data for that fetch. So a missing PO-token server degrades gracefully all the way through — no launch error, no exception, just thinner sentiment data. If sentiment output looks unexpectedly sparse, check for the one-time "bgutil PO-token server not reachable" warning near the top of the log rather than assuming a code bug.
 
 Interactive prompts (`_prompt_yes_no` for Sector Rotation launch and PDF report generation) auto-skip when stdin isn't a TTY, so scheduled/cron runs never hang — but `--skip-sector-prompt`/`--skip-report-prompt` still make headless behavior explicit and are cheap to always pass in scripts.

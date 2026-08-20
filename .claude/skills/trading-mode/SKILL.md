@@ -82,9 +82,9 @@ Vol_Suite run"). Don't research everything — triage first.
 For each surviving candidate, work toward "what's the specific dislocation and what closes it":
 - **IV vs. realized/GARCH**: `Vol_Suite` variance-swap replication + VRP term structure, or GARCH
   conditional vol, for a real fair-vol estimate — don't trust IV rank alone.
-- **Dealer positioning**: gamma/vanna/charm exposure near spot (`Vol_Suite` dealer positioning /
-  `expiry_book_exposure` if on a branch that has it — check `.claude/skills/vol-suite/SKILL.md` for
-  which model is live on the current branch first).
+- **Dealer positioning**: gamma/vanna/charm exposure near spot via live `expiry_book_exposure`
+  (promoted 2026-08-17). Do not fall back to `vol_surface_replication`. See
+  `.claude/skills/vol-suite/SKILL.md`.
 - **Skew/term structure**: chain-level skew scan, `get_option_chains`/`get_option_historicals` from
   Robinhood, or Options_Suite's chain evaluation.
 - **Narrative/flow context**: sentiment-scanner's contested-narrative + unusual-OI/max-pain/GEX read —
