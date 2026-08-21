@@ -41,7 +41,7 @@ The migrated tree is best treated as a **selective source of research and candid
 
 - repo metadata and platformization: `.git`, `.gitattributes`, `.python-version`, `.dockerignore`;
 - deployment/ops surface: `docker-compose.yml`, `Dockerfile.dashboard`, `Dockerfile.scheduler`, `Procfile`;
-- live infrastructure and hardening docs: `CROSS_PLATFORM.md`, `CROSS_SOURCE_ANALYTICS.md`, `CROSS_SOURCE_UPI_GUIDE.md`, `DEPLOY.md`, `DOCKER_SETUP.md`, `GRACEFUL_SHUTDOWN.md`, `LOGGING_GUIDE.md`, `QUERY_MONITORING.md`;
+- live infrastructure and hardening docs: `docs/guides/CROSS_PLATFORM.md`, `docs/guides/CROSS_SOURCE_ANALYTICS.md`, `docs/guides/CROSS_SOURCE_UPI_GUIDE.md`, `docs/guides/DEPLOY.md`, `docs/guides/DOCKER_SETUP.md`, `docs/guides/GRACEFUL_SHUTDOWN.md`, `docs/guides/LOGGING_GUIDE.md`, `docs/guides/QUERY_MONITORING.md`;
 - runtime support code: `shutdown_signal.py`, `report_generator.py`, root tests for cross-source / schema / audit / validation paths;
 - source adapters under `adapters/`.
 
@@ -131,7 +131,7 @@ This aligns with the current repo’s recent dealer-positioning work and makes t
 
 - stronger archival hygiene in `docs/archive/`;
 - active design/plan trail for dashboard, quant console, whale backtest, market-signals fixes;
-- current high-level audit docs such as `PROJECT_AUDIT_AND_SPEC.md` and `GAP_VS_OTHER_BUILD_2026-08-07.md`.
+- current high-level audit docs such as `PROJECT_AUDIT_AND_SPEC.md` and `docs/archive/2026-08-21-root-docs-pass/GAP_VS_OTHER_BUILD_2026-08-07.md`.
 
 **Migrated docs**
 
@@ -198,7 +198,7 @@ The raw diff is dominated by exported ticker-pack artifacts on both sides. Ignor
 - changed scanner internals (`theta_integration.py`, `youtube.py`, `ticker_pack.py`, scanners, `main.py`);
 - current-only `README.md`.
 
-The already-written current-doc audit (`docs/GAP_VS_OTHER_BUILD_2026-08-07.md`) identifies one especially high-value migrated fix: **dead OI wiring in `scanner/theta_integration.py`**.
+The already-written current-doc audit (`docs/archive/2026-08-21-root-docs-pass/GAP_VS_OTHER_BUILD_2026-08-07.md`) identifies one especially high-value migrated fix: **dead OI wiring in `scanner/theta_integration.py`**.
 
 ### 3.10 shared / tests / Tools / scripts / adapters
 
@@ -246,7 +246,7 @@ This is current-only platform progress and should stay canonical.
 - shared infrastructure and adapter layer;
 - cross-source / shutdown / logging / validation work;
 - current `Tools/` registry shape;
-- current Windows launcher surface and current `START_HERE.md` operating model.
+- current Windows launcher surface and current `docs/guides/START_HERE.md` operating model.
 
 ### 4.2 Port from migrated
 

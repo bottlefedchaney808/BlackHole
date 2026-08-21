@@ -1,6 +1,6 @@
 [Unit]
 Description=FinancialDevelopment DTCC swaps ingestion scheduler
-Documentation=file:/opt/financialdevelopment/DEPLOY.md
+Documentation=file:/opt/financialdevelopment/docs/guides/DEPLOY.md
 # Needs DNS + routing up before it starts polling DTCC's slice feed.
 After=network-online.target
 Wants=network-online.target

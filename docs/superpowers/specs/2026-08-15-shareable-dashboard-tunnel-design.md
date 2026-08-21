@@ -19,7 +19,7 @@ no-password quick tunnel shared only with trusted people (Jason's explicit choic
   the file has **no** `uvicorn.run`, **no** lifespan/startup/shutdown hooks today.
 - `dashboard/auth.py` notes the API-key layer was deliberately removed and warns
   not to expose beyond localhost without adding auth back.
-- `START_HERE.md` §"Sharing the dashboard publicly" documents the manual command.
+- `docs/guides/START_HERE.md` §"Sharing the dashboard publicly" documents the manual command.
 - `cloudflared` is **installed and on PATH** (v2026.7.3, verified working).
 - The dashboard already uses `asyncio.create_task` (line 1665) — an async-precedent.
 
@@ -93,7 +93,7 @@ status and a toggle:
 
 | Situation | Behavior |
 |---|---|
-| `cloudflared` not on PATH | Start -> `409` JSON, clear message + pointer to `START_HERE.md`. |
+| `cloudflared` not on PATH | Start -> `409` JSON, clear message + pointer to `docs/guides/START_HERE.md`. |
 | Already sharing | Start -> `200` + existing URL (idempotent, no second tunnel). |
 | Already stopped | Stop -> `200` + `{running:false}` (idempotent). |
 | URL not yet parsed | Status -> `{running:true, url:null, state:"connecting"}`; UI shows "Connecting…". |
@@ -147,5 +147,5 @@ FastAPI `TestClient` with a dependency-injected fake `TunnelManager`:
 - `dashboard/app.py` — 3 routes, lifespan wiring, manager instantiation.
 - `dashboard/templates/base.html` — Share control block (+ small JS).
 - `dashboard/tests/test_tunnel.py` (new) — unit + route tests.
-- `START_HERE.md` — update the "Sharing the dashboard publicly" section to mention
+- `docs/guides/START_HERE.md` — update the "Sharing the dashboard publicly" section to mention
   the in-app Share control as the primary path (keep the manual command as fallback).

@@ -766,10 +766,10 @@ git commit -m "feat: add share quick-tunnel control to dashboard topbar"
 
 ---
 
-### Task 4: Update START_HERE.md + manual verification
+### Task 4: Update docs/guides/START_HERE.md + manual verification
 
 **Files:**
-- Modify: `START_HERE.md`
+- Modify: `docs/guides/START_HERE.md`
 - Test: manual (real cloudflared)
 
 **Interfaces:**
@@ -778,7 +778,7 @@ git commit -m "feat: add share quick-tunnel control to dashboard topbar"
 
 - [ ] **Step 1: Update the "Sharing the dashboard publicly" section**
 
-Replace the current section in `START_HERE.md` (lines ~67-78) with:
+Replace the current section in `docs/guides/START_HERE.md` (lines ~67-78) with:
 
 ```markdown
 ## Sharing the dashboard publicly
@@ -827,7 +827,7 @@ Expected: all PASS (new tests + an existing dashboard test, to confirm no regres
 
 ```bash
 cd /c/Users/bottl/FinancialDevelopment/.worktrees/feat-shareable-dashboard
-git add START_HERE.md
+git add docs/guides/START_HERE.md
 git commit -m "docs: document dashboard share quick-tunnel control"
 ```
 
@@ -835,7 +835,7 @@ git commit -m "docs: document dashboard share quick-tunnel control"
 
 ## Self-Review Notes
 
-- **Spec coverage:** TunnelManager + is_available (Task 1), 3 routes + idempotency + 409/500 (Task 2), lifespan cleanup (Task 2), Share control in base.html + confirmation (Task 3), START_HERE.md update (Task 4), unit + route + manual tests (Tasks 1, 2, 4). All spec sections mapped.
+- **Spec coverage:** TunnelManager + is_available (Task 1), 3 routes + idempotency + 409/500 (Task 2), lifespan cleanup (Task 2), Share control in base.html + confirmation (Task 3), docs/guides/START_HERE.md update (Task 4), unit + route + manual tests (Tasks 1, 2, 4). All spec sections mapped.
 - **No placeholders:** every code step carries complete, runnable content; every command includes expected output.
 - **Type consistency:** `TunnelManager.status()` returns the dict shape `{running, url, state, started_at, pid, last_error}` everywhere; `state` values are `idle|connecting|running|stopped`; routes return exactly what the manager methods return.
 - **Environment verified:** the shared venv at `C:\Users\bottl\FinancialDevelopment\.venv` has Python 3.12.10, `pytest` 9.1.1, `httpx` 0.28.1 (needed for TestClient), and `ruff` 0.16.0. `pytest-asyncio` is intentionally NOT required — tests use `asyncio.run(...)`. The worktree has no `.venv`; all commands use the primary-tree venv. `pyproject.toml`'s `testpaths` does not include `dashboard/tests/` (a pre-existing gap), so tests are run explicitly by path.

@@ -1,6 +1,6 @@
 [Unit]
 Description=FinancialDevelopment dashboard (FastAPI/uvicorn on :8000)
-Documentation=file:/opt/financialdevelopment/DEPLOY.md
+Documentation=file:/opt/financialdevelopment/docs/guides/DEPLOY.md
 After=network-online.target
 Wants=network-online.target
 # Ordering only. dashboard/app.py renders an empty state against a cold or

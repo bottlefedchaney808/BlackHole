@@ -10,7 +10,7 @@
 # the APScheduler loop and honours SIGTERM via shutdown_signal.create_shutdown_manager.
 #
 # NOTE on persistence: Heroku dynos have an ephemeral filesystem. swaps.db is
-# recreated empty on every dyno restart/deploy. See DEPLOY.md ("Heroku ->
+# recreated empty on every dyno restart/deploy. See docs/guides/DEPLOY.md ("Heroku ->
 # Persistence caveat") before running this anywhere that matters.
 
 web: uvicorn dashboard.app:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 65 --log-level ${LOG_LEVEL:-info}

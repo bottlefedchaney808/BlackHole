@@ -40,7 +40,7 @@ sys.path.insert(0, str(ROOT))
 import quant_bridge  # noqa: E402
 import worker_broker  # noqa: E402
 
-# The Windows repo owns the shared root venv (START_HERE.md).
+# The Windows repo owns the shared root venv (docs/guides/START_HERE.md).
 PROJECT_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 MAIN_TREE_ROOT = ROOT
 

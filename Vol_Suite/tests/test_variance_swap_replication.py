@@ -248,7 +248,7 @@ def test_corrugation_absolute_and_relative_directions_are_opposite(wide_sparse_s
 # ---------------------------------------------------------------------------
 # Trade sizing: vega notional is a flat term-sheet choice, not spot-derived.
 # Per Bossu/Strasser/Guichard "Just What You Need to Know About Variance
-# Swaps" (docs/bossu-strasser-guichard-varswap.pdf), Exhibit 1.1.1, "Vega
+# Swaps" (docs/references/bossu-strasser-guichard-varswap.pdf), Exhibit 1.1.1, "Vega
 # Amount: 100,000" is a fixed input the counterparties agree on -- the paper
 # gives no formula deriving it from spot. An earlier version of this function
 # scaled by spot, which made an index leg (e.g. SPY) and a focus-ticker leg

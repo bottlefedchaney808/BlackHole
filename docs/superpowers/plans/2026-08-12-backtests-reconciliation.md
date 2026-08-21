@@ -256,7 +256,7 @@ git commit -m "fix(backtests): align tournament harnesses with current contracts
 ### Task 4: Document and expose the transferred Backtests package
 
 **Files:**
-- Modify: `START_HERE.md`
+- Modify: `docs/guides/START_HERE.md`
 - Modify: `CLAUDE.md`
 - Modify: `docs\superpowers\specs\2026-08-12-folder-reconciliation-design.md`
 - Optional Modify: `Tools/tools/backtesting_tool.py`
@@ -295,7 +295,7 @@ Expected: PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add START_HERE.md CLAUDE.md docs/superpowers/specs/2026-08-12-folder-reconciliation-design.md Tools/tools/backtesting_tool.py
+git add docs/guides/START_HERE.md CLAUDE.md docs/superpowers/specs/2026-08-12-folder-reconciliation-design.md Tools/tools/backtesting_tool.py
 git commit -m "docs(backtests): document transferred tournament harness"
 ```
 
@@ -332,6 +332,6 @@ Expected: Valid JSON on stdout or a narrowly diagnosable provider/runtime failur
 - [ ] **Step 4: Commit**
 
 ```bash
-git add Backtests START_HERE.md CLAUDE.md docs/superpowers/specs/2026-08-12-folder-reconciliation-design.md
+git add Backtests docs/guides/START_HERE.md CLAUDE.md docs/superpowers/specs/2026-08-12-folder-reconciliation-design.md
 git commit -m "test(backtests): verify transferred tournament package"
 ```

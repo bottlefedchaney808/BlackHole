@@ -9,7 +9,7 @@
 # the repo root (WORKDIR /app, data volume at /app/data).
 #
 # Apply with:  kubectl apply -n financialdevelopment -f k8s/deployment.yaml
-# The referenced Secret is created out-of-band -- see DEPLOY.md.
+# The referenced Secret is created out-of-band -- see docs/guides/DEPLOY.md.
 #
 # ---------------------------------------------------------------------------
 # 1. WHY THE SYMLINK IN THE CONTAINER COMMAND

@@ -34,7 +34,7 @@ from worker_broker import hermes_home
 ROOT = Path(__file__).resolve().parent
 ORCHESTRATOR = ROOT / "orchestrator.py"
 # The shared root venv is the single project interpreter on this host
-# (START_HERE.md / SETUP_GUIDE.md). The WSL-era Financial_Dev_Env layout does
+# (docs/guides/START_HERE.md / docs/guides/SETUP_GUIDE.md). The WSL-era Financial_Dev_Env layout does
 # not exist here; keep the SHARED_* names as aliases of the same venv so
 # tests that exercise the fallback path still work.
 PROJECT_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"

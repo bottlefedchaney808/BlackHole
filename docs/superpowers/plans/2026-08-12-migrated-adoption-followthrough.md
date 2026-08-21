@@ -138,7 +138,7 @@ git commit -m "docs: archive migrated research corpus"
 - Create: `scripts\burst_checkpoint.sh`
 - Create: `scripts\hooks\commit-msg`
 - Create: `scripts\verify_tradingview_submodule.sh`
-- Modify: `START_HERE.md`
+- Modify: `docs/guides/START_HERE.md`
 - Modify: `CLAUDE.md`
 - Test: `scripts\burst_checkpoint.sh`
 - Test: `scripts\verify_tradingview_submodule.sh`
@@ -194,7 +194,7 @@ PY=".venv/Scripts/python.exe"
 
 - [ ] **Step 4: Document the new scripts in the operator docs**
 
-Add a short row or bullet to `START_HERE.md` and `CLAUDE.md` covering:
+Add a short row or bullet to `docs/guides/START_HERE.md` and `CLAUDE.md` covering:
 
 - what `scripts/burst_checkpoint.sh` is for,
 - how to install/use `scripts/hooks/commit-msg`,
@@ -224,7 +224,7 @@ Expected: `scripts-ok`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts START_HERE.md CLAUDE.md
+git add scripts docs/guides/START_HERE.md CLAUDE.md
 git commit -m "chore: adopt migrated workflow scripts"
 ```
 

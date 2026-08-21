@@ -370,7 +370,7 @@ Auth capabilities: `market.read/refresh`, `options.read`, `dealer.read/bulk.read
 
 ## What triggered this
 
-`C:\Users\bottl\FinancialDevelopment\zinko-beta-note-authed-url.md` — a note from the PotatoHedge
+`C:\Users\bottl\FinancialDevelopment\_trash\2026-08-21\zinko-beta-note-authed-url.md` — a note from the PotatoHedge
 vendor announcing PHClient 2.0.1 (beta), a rewrite of their Python API client. User asked to read it
 and start implementing "the new data client."
 
