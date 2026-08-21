@@ -185,10 +185,13 @@ summary.
   to cross-source UPIs via `shared.identifiers`. The screener's two historical failure modes (missing
   realized vol silently becoming `0.0`; a blanket `except` dropping tickers unmarked) are **fixed**
   (NaN + `data_quality` + `INSUFFICIENT DATA` signal + `skipped` reporting) — see README Phase 11.
-  **Live dealer model (merged 2026-08-20):** `volatility_suite._run_production_dealer_positioning`
+  **Live dealer model (merged 2026-08-20; charts 2026-08-21):** `volatility_suite._run_production_dealer_positioning`
   → `expiry_book_production.fetch_production_result`. Legacy `compute_dealer_positioning`
-  is backtest/test only. Gamma panel is SVI `gamma_book`; vanna inventory and 7d vendor-ΔIV
-  flow are adjacent (never summed). Contract: `Vol_Suite/docs/LIVE_expiry_book_20260820.md`.
+  is backtest/test only. 4-panel GEX/VEX/CEX = VannaCharm stock + today's `scanner_trades`
+  (not SVI `gamma_book`). Charm is per-right C+P, no extra dealer −1. Prior-close OI from
+  `option_bulk_hist_oi_by_day` (`eod_greeks` has no OI); `oi_sum>0` else keep live snapshot.
+  7d vendor-ΔIV vanna flow stays adjacent, never summed with inventory. Contracts:
+  `Vol_Suite/docs/LIVE_expiry_book_20260821.md` (charts), `LIVE_expiry_book_20260820.md` (scalars).
   Vanna convention: `expiry_book_exposure.py::dealer_frame_vanna`.
 - **VaR_Tools_Simulations** — a Python port of a legacy Excel VaR toolkit (`VaRtools Samples.xls` is
   the source spec), one `var_engine/` module per original sheet: `corr_sim.py` (correlated GBM Monte

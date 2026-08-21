@@ -1445,6 +1445,8 @@ def _run_core_analysis(
                 "vanna_flow_7d": dp_result.vanna_flow_live,
                 "vanna_flow_provenance": dp_result.vanna_flow_provenance,
                 "d_iv_used": dp_result.d_iv_used,
+                "flow_provenance": getattr(dp_result, "flow_provenance", None),
+                "flow_volume_rows": getattr(dp_result, "flow_volume_rows", 0),
             }
             artifacts["gamma_records"] = []
             artifacts["gamma_records_total"] = 0

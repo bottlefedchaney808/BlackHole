@@ -501,16 +501,17 @@ def compute_vanna_positioning(dealer_result) -> dict:
     DealerPositioningResult in here instead.
     """
     if hasattr(dealer_result, "snapshot"):
+        import expiry_book_exposure as ebe
         rows = dealer_result.snapshot.rows
+        spot = float(dealer_result.spot)
         by_strike = {}
         for row in rows:
-            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + row.exposure_of("vanna")
+            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + ebe.vannacharm_row(row, spot, "vanna")
         strikes = np.asarray(sorted(by_strike), dtype=float)
         values = np.asarray([by_strike[k] for k in strikes], dtype=float)
         has_vanna = bool(len(rows))
-        call_vanna = sum(r.exposure_of("vanna") for r in rows if r.right == "C")
-        put_vanna = sum(r.exposure_of("vanna") for r in rows if r.right == "P")
-        spot = float(dealer_result.spot)
+        call_vanna = sum(ebe.vannacharm_row(r, spot, "vanna") for r in rows if r.right == "C")
+        put_vanna = sum(ebe.vannacharm_row(r, spot, "vanna") for r in rows if r.right == "P")
     else:
         strikes = np.asarray(dealer_result.strike_grid, dtype=float)
         values = np.asarray(dealer_result.vanna_shares_by_strike, dtype=float)
@@ -801,10 +802,11 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
                          "compute_dealer_positioning) -- refusing to recompute vanna from "
                          "the single-expiry chain")
     if hasattr(dr, "snapshot"):
-        # Production expiry-book engine: per-strike vanna from the NetExposure.
+        import expiry_book_exposure as ebe
         by_strike: Dict[float, float] = {}
+        spot = float(result.spot)
         for row in dr.snapshot.rows:
-            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + row.exposure_of("vanna")
+            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + ebe.vannacharm_row(row, spot, "vanna")
         strikes = np.asarray(sorted(by_strike), dtype=float)
         values = np.asarray([by_strike[k] for k in strikes], dtype=float)
         if hasattr(dr, "sign_model"):
@@ -826,7 +828,7 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
         ax2.axvline(result.vanna_flip_strike, color=ACCENT_ORANGE, linestyle=':', linewidth=1.5, alpha=0.8)
     ax2.set_title(f'Net Dealer Vanna by Strike ({engine_label})', color=TEXT_COLOR, fontsize=13, fontweight='bold')
     ax2.set_xlabel('Strike', color=TEXT_COLOR)
-    ax2.set_ylabel('Vanna (shares / 1pp IV)', color=TEXT_COLOR)
+    ax2.set_ylabel('VEX (call+ put−, × S × σ)', color=TEXT_COLOR)
     ax2.tick_params(colors=TEXT_COLOR)
     ax2.grid(True, color=GRID_COLOR, alpha=0.4)
     for spine in ax2.spines.values():

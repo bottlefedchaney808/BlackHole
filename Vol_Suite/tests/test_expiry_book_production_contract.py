@@ -3,6 +3,7 @@ import pytest
 import expiry_book_exposure as ebe
 from expiry_book_production import (
     ExpiryBookUnavailable,
+    _merge_greeks_oi,
     normalize_snapshot_rows,
     production_result_from_rows,
 )
@@ -267,3 +268,63 @@ def test_fetch_without_surface_change_does_not_atm_subtract():
     assert result.vanna_flow_live is None
     assert "PRIOR_CLOSE_ATM" not in result.vanna_flow_provenance
     assert result.residual_vanna_inventory is not None
+
+def test_merge_then_normalize_does_not_double_scale_qqq_strikes():
+    raw = [{"strike": 1_085_000, "right": "C", "open_interest": 10, "implied_vol": 0.20}]
+    merged = _merge_greeks_oi(raw, raw)
+    rows = normalize_snapshot_rows(merged)
+    assert rows[0]["strike"] == 1085.0
+
+
+def test_net_contracts_bid_ask_split():
+    assert ebe.net_contracts_from_quote(100, 60, 40) == 20.0
+    assert ebe.net_contracts_from_quote(100, 0, 0) == 0.0  # 50/50 → bought-sold=0
+
+
+def test_prior_plus_flow_is_current():
+    prior = [
+        {"strike": 100_000, "right": "C", "open_interest": 500, "implied_vol": 0.20},
+        {"strike": 100_000, "right": "P", "open_interest": 400, "implied_vol": 0.22},
+    ]
+    quotes = [
+        {"strike": 100.0, "right": "C", "volume": 100, "bid_size": 60, "ask_size": 40},
+        {"strike": 100.0, "right": "P", "volume": 50, "bid_size": 10, "ask_size": 40},
+    ]
+    result = production_result_from_rows(
+        "MOCK", "20270115", 101.0, prior, dte=150,
+        quote_rows=quotes, prior_eod_rows=prior, prior_close=100.0, prior_asof="20260820",
+    )
+    assert result.prior_spot == 100.0
+    assert result.flow_volume_rows == 2
+    assert "prior_close" in result.flow_provenance
+    call = next(r for r in result.snapshot.rows if r.right == "C")
+    assert call.net_contracts == 20.0
+    base = ebe.vannacharm_row(call, 100.0, "gamma")
+    assert call.d_gex != 0.0
+    current = base + call.d_gex
+    assert current != base
+
+
+def test_prior_eod_without_oi_keeps_live_book():
+    live = [{"strike": 100_000, "right": "C", "open_interest": 500, "implied_vol": 0.20}]
+    prior = [{"strike": 100000, "right": "C", "implied_vol": 0.20}]  # no OI
+    result = production_result_from_rows(
+        "MOCK", "20270115", 100.0, live, dte=150,
+        prior_eod_rows=prior, prior_close=99.0, prior_asof="20260820",
+    )
+    assert result.prior_spot is None
+    assert result.snapshot.rows[0].oi == 500.0
+    assert result.snapshot.gex() != 0.0
+
+
+def test_trades_to_quotes_buy_at_ask():
+    from expiry_book_production import _trades_to_quote_rows
+    trades = [{
+        "expiration": "20261120", "strike_price": 345.0, "trade_right": "C",
+        "size": 10, "price": 12.0, "bid": 11.0, "ask": 12.0,
+    }]
+    rows = _trades_to_quote_rows(trades, "20261120")
+    assert len(rows) == 1
+    assert rows[0]["volume"] == 10
+    assert rows[0]["bid_size"] == 10  # bought
+    assert rows[0]["ask_size"] == 0

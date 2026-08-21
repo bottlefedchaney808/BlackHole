@@ -122,3 +122,13 @@ def test_residual_delta_carried():
     locus = ebe.execution_locus(rows, spot, T=T)
     assert isinstance(locus.residual_delta, float)
     assert math.isfinite(locus.residual_delta)
+
+
+def test_flip_ignores_far_wing_sign_change():
+    """TSLA-style: a $25 wing flip must not beat the ATM GEX flip."""
+    rows, spot, T = _canned_chain(spot=341.0)
+    rows.append({"strike": 25.0, "right": "P", "oi": 50_000, "implied_vol": 0.80})
+    rows.append({"strike": 30.0, "right": "C", "oi": 50_000, "implied_vol": 0.80})
+    locus = ebe.execution_locus(rows, spot, T=T)
+    assert abs(locus.zero_gamma - 25.0) > 50.0
+    assert spot * 0.5 <= locus.zero_gamma <= spot * 1.5

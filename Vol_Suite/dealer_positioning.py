@@ -1240,32 +1240,24 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
     """4-panel Gamma/Delta/Vanna/Charm dealer exposure-by-strike chart for a
     ProductionDealerExposure (expiry_book_production.fetch_production_result).
     Mirrors plot_greek_exposure_comparison's layout for the legacy engine,
-    built from NetExposure.rows (exposure_of(greek) is already
-    signed_greek * OI * CONTRACT_MULTIPLIER) instead of the legacy per-greek
-    arrays."""
+    built from NetExposure.rows using VannaCharm GEX/VEX/CEX (not SVI)."""
+    import expiry_book_exposure as ebe
     rows = result.snapshot.rows
     strikes = sorted({r.strike for r in rows})
     K = np.asarray(strikes, dtype=float)
-
-    use_book = any(getattr(r, "gamma_book", 0.0) for r in rows)
-    d_iv = getattr(result, "d_iv_used", None)
-    prov = str(getattr(result, "vanna_flow_provenance", "") or "")
-    deadbanded = "deadband" in prov
+    spot = result.spot
+    base_spot = float(getattr(result, "prior_spot", None) or spot)
+    d_attr = {"gamma": "d_gex", "vanna": "d_vex", "charm": "d_cex"}
 
     def _by_strike(greek: str) -> np.ndarray:
+        """Current = prior-close stock + intraday dGEX/dVEX/dCEX."""
         agg: Dict[float, float] = defaultdict(float)
         for r in rows:
-            if greek == "gamma" and use_book:
-                # SVI cheap/rich book gamma (dealer position), NOT GEX.
-                agg[r.strike] += float(r.gamma_book)
-                continue
-            val = r.exposure_of(greek)
-            if greek == "vanna" and d_iv is not None:
-                # Keep the structural flip-wall vanna (OI-weighted, same for
-                # call/put at a strike -> + below ATM, - above, flips at spot)
-                # and make it a FLOW by scaling with the measured dIV. Do NOT
-                # re-sign by book_sign: that collapses the ATM flip wall.
-                val = 0.0 if deadbanded else val * (float(d_iv) / 0.01)
+            if greek == "delta":
+                val = r.exposure_of(greek)
+            else:
+                val = ebe.vannacharm_row(r, base_spot, greek)
+                val = val + float(getattr(r, d_attr[greek], 0.0) or 0.0)
             agg[r.strike] += val
         return np.asarray([agg.get(k, 0.0) for k in strikes], dtype=float)
 
@@ -1274,16 +1266,12 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
                           left=0.07, right=0.96, top=0.90, bottom=0.07)
     fig.text(0.5, 0.96,
               f"{result.ticker} Dealer Greek Exposure Comparison (expiry {result.expiry}) "
-              f"— expiry-book engine",
+              f"— prior close + intraday flow",
               color=TEXT_COLOR, fontsize=18, fontweight='bold', ha='center')
 
-    spot = result.spot
     have_data = len(K) > 0
-    gamma_ylabel = 'D-Gamma ($ / 1% move, SVI book)' if use_book else 'Gamma (shares/$1)'
-    if use_book and d_iv is not None:
-        vanna_ylabel = f'Vanna Flow 7d (shares, dIV={float(d_iv):+.4f})'
-    else:
-        vanna_ylabel = 'Vanna inventory (shares / 1pp IV)'
+    gamma_ylabel = 'GEX prior+dGEX ($ / 1%)'
+    vanna_ylabel = 'VEX prior+dVEX'
     ax1 = fig.add_subplot(gs[0, 0])
     _greek_panel(ax1, K, _by_strike('gamma'), 'Gamma Exposure',
                  gamma_ylabel, spot, have_data)
@@ -1295,7 +1283,7 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
                  vanna_ylabel, spot, have_data)
     ax4 = fig.add_subplot(gs[1, 1])
     _greek_panel(ax4, K, _by_strike('charm'), 'Charm Exposure',
-                 'Charm (shares/day)', spot, have_data)
+                 'CEX prior+dCEX / day', spot, have_data)
 
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
@@ -1351,7 +1339,10 @@ def plot_expiry_book_heatmap(result, output_dir: Optional[str] = None) -> str:
     gamma_by_strike: Dict[float, float] = defaultdict(float)
     oi_by_strike: Dict[float, float] = defaultdict(float)
     for r in rows:
-        gamma_by_strike[r.strike] += r.exposure_of('gamma')
+        gamma_by_strike[r.strike] += (
+            float(r.greeks.get("gamma", 0.0)) * r.oi * CONTRACT_MULTIPLIER
+            * result.spot ** 2 * 0.01
+        )
         oi_by_strike[r.strike] += r.oi
     gamma_M = np.array([gamma_by_strike.get(k, 0.0) for k in strikes]) / 1e6
     oi_arr = np.array([oi_by_strike.get(k, 0.0) for k in strikes])

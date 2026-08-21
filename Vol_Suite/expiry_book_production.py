@@ -97,20 +97,62 @@ class ProductionDealerExposure:
     vendor_dealer: Optional[dict] = None
     d_iv_used: Optional[float] = None
     residual_vanna_inventory: Optional[float] = None
+    flow_volume_rows: int = 0
+    flow_provenance: str = "quotes_missing"
+    prior_spot: Optional[float] = None
+    prior_asof: Optional[str] = None
+
+
+def _trades_to_quote_rows(trades, expiry: str) -> list:
+    """scanner_trades prints → volume/bid_size/ask_size (bought vs sold)."""
+    want = "".join(ch for ch in str(expiry) if ch.isdigit())[:8]
+    agg = {}
+    for t in trades or []:
+        exp = "".join(ch for ch in str(t.get("expiration") or "") if ch.isdigit())[:8]
+        if want and exp and exp != want:
+            continue
+        try:
+            k = float(t.get("strike_price") or t.get("strike") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if k <= 0:
+            continue
+        if abs(k) >= 1000:
+            k = k / 1000.0
+        right = str(t.get("trade_right") or t.get("right") or "").upper()[:1]
+        if right not in {"C", "P"}:
+            continue
+        size = ebe._quote_num(t, "size", "volume", "contracts")
+        if size <= 0:
+            continue
+        price = ebe._quote_num(t, "price")
+        bid = ebe._quote_num(t, "bid")
+        ask = ebe._quote_num(t, "ask")
+        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
+        bought = size if (mid and price >= mid) else (0.0 if mid else size * 0.5)
+        key = (round(k, 4), right)
+        rec = agg.setdefault(key, {"strike": k, "right": right,
+                                   "volume": 0.0, "bid_size": 0.0, "ask_size": 0.0})
+        rec["volume"] += size
+        rec["bid_size"] += bought
+        rec["ask_size"] += size - bought
+    return list(agg.values())
 
 
 def _merge_greeks_oi(rows, oi_rows) -> list:
+    """Join greeks+OI on raw strike. Do NOT /1000 here — normalize_snapshot_rows
+    is the single scaler. Scaling twice squashed QQQ $1085 → $1.085."""
     oi_by_key = {}
     for row in oi_rows or []:
         try:
-            strike = _theta_strike_to_dollars(float(row.get("strike", 0.0)))
+            strike = float(row.get("strike", 0.0))
             right = str(row.get("right", "")).upper()[:1]
             oi_by_key[(round(strike, 8), right)] = row.get("open_interest", row.get("oi"))
         except (TypeError, ValueError):
             continue
     merged = []
     for row in rows or []:
-        strike = _theta_strike_to_dollars(float(row.get("strike", 0.0)))
+        strike = float(row.get("strike", 0.0))
         right = str(row.get("right", "")).upper()[:1]
         item = dict(row)
         item["strike"] = strike
@@ -152,6 +194,16 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
         ) from exc
     merged = _merge_greeks_oi(rows, oi_rows)
     dte = _dte_of(expiry)
+    quote_rows = []
+    trade_fn = getattr(td, "option_session_trades", None)
+    if callable(trade_fn):
+        try:
+            session = date.today().strftime("%Y%m%d")
+            trades = trade_fn(ticker, session) or []
+            quote_rows = _trades_to_quote_rows(trades, expiry)
+        except Exception as exc:
+            print(f"  [flow] scanner_trades failed: {type(exc).__name__}: {exc}")
+            quote_rows = []
 
     extra: list[dict] = []
     try:
@@ -182,6 +234,7 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
     prior_atm_iv = None
     prior_iv_asof = None
     prior_close = None
+    prior_eod_rows = None
     try:
         end = date.today() - timedelta(days=1)
         start = end - timedelta(days=10)
@@ -191,8 +244,6 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
             prior_close = float(last.get("close") or 0) or None
     except Exception:
         pass
-    # Dense whole-chain EOD greeks (1 req/expiry). Not hist_stock_eod, not
-    # the sparse option_bulk_hist_greeks fan-out. PH v2 WIKI + theta-data skill.
     hist_fn = getattr(td, "option_bulk_hist_eod_greeks", None)
     if callable(hist_fn):
         try:
@@ -207,11 +258,38 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
                     by_day.setdefault(digits, []).append(row)
             if by_day:
                 last_d = sorted(by_day)[-1]
-                prior_atm_iv = ebe.atm_iv_otm(by_day[last_d], spot)
+                prior_eod_rows = by_day[last_d]
+                prior_atm_iv = ebe.atm_iv_otm(by_day[last_d], prior_close or spot)
                 prior_iv_asof = last_d
+                oi_fn = getattr(td, "option_bulk_hist_oi_by_day", None)
+                if callable(oi_fn):
+                    try:
+                        oi_hist = oi_fn(ticker, expiry, last_d, last_d) or []
+                        oi_map = {}
+                        for o in oi_hist:
+                            try:
+                                k = float(o.get("strike", 0.0))
+                                rt = str(o.get("right", "")).upper()[:1]
+                                oi_map[(round(k, 8), rt)] = o.get(
+                                    "open_interest", o.get("oi"))
+                            except (TypeError, ValueError):
+                                continue
+                        for r in prior_eod_rows:
+                            try:
+                                k = float(r.get("strike", 0.0))
+                                rt = str(r.get("right", "")).upper()[:1]
+                            except (TypeError, ValueError):
+                                continue
+                            oi_v = oi_map.get((round(k, 8), rt))
+                            if oi_v is not None:
+                                r["open_interest"] = oi_v
+                                r["oi"] = oi_v
+                    except Exception:
+                        pass
         except Exception:
             prior_atm_iv = None
             prior_iv_asof = None
+            prior_eod_rows = None
 
     vendor_dealer = None
     vendor_fn = getattr(td, "get_dealer_weighted_greeks_summary", None)
@@ -259,10 +337,30 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
         vendor_dealer=vendor_dealer,
         d_iv_measured=d_iv_measured,
         d_iv_source=d_iv_source,
+        quote_rows=quote_rows,
+        prior_eod_rows=prior_eod_rows,
+        prior_asof=prior_iv_asof,
     )
     result.provenance["dividend_yield_q"] = f"{float(q):.6f}"
     result.provenance["q_source"] = q_source
     return result
+
+
+def _prior_eod_to_rows(eod_rows: list) -> list:
+    """Map EOD greeks rows into normalize_snapshot_rows input (theta strikes)."""
+    out = []
+    for r in eod_rows or []:
+        try:
+            iv = r.get("implied_vol", r.get("iv"))
+            oi = r.get("open_interest", r.get("oi", r.get("openInterest", r.get("Open Interest", 0))))
+            k = float(r.get("strike", 0.0))
+            right = str(r.get("right", "")).upper()[:1]
+            if right not in {"C", "P"} or k <= 0:
+                continue
+            out.append({"strike": k, "right": right, "open_interest": oi, "implied_vol": iv})
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def production_result_from_rows(ticker: str, expiry: str, spot: float,
@@ -275,6 +373,9 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
                                 vendor_dealer: Optional[dict] = None,
                                 d_iv_measured: Optional[float] = None,
                                 d_iv_source: Optional[str] = None,
+                                quote_rows: Optional[list] = None,
+                                prior_eod_rows: Optional[list] = None,
+                                prior_asof: Optional[str] = None,
                                 ) -> ProductionDealerExposure:
     if not isinstance(ticker, str) or not ticker.strip():
         raise ExpiryBookUnavailable("ticker is required")
@@ -286,12 +387,32 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
         raise ExpiryBookUnavailable("positive DTE is required")
     if not math.isfinite(float(q)):
         raise ExpiryBookUnavailable("dividend yield q must be finite")
-    rows = normalize_snapshot_rows(raw_rows)
+    book_spot = float(spot)
+    book_src = "live_snapshot"
+    rows = None
+    if prior_eod_rows:
+        try:
+            prow = normalize_snapshot_rows(_prior_eod_to_rows(prior_eod_rows))
+            oi_sum = sum(float(r.get("oi") or 0) for r in prow)
+            if prow and oi_sum > 0:
+                rows = prow
+                if prior_close and math.isfinite(float(prior_close)) and float(prior_close) > 0:
+                    book_spot = float(prior_close)
+                book_src = f"prior_close:{prior_asof or 'eod'}"
+        except ExpiryBookUnavailable:
+            rows = None
+    if rows is None:
+        rows = normalize_snapshot_rows(raw_rows)
     t = int(dte) / ebe.DEFAULT_A
-    snapshot = ebe.build_net_exposure(rows, float(spot), ticker=ticker,
+    snapshot = ebe.build_net_exposure(rows, book_spot, ticker=ticker,
                                       expiry=expiry, T=t, dte=int(dte), q=float(q))
     if not snapshot.rows:
         raise ExpiryBookUnavailable("snapshot has no usable option rows")
+    n_vol = ebe.apply_vannacharm_flow(snapshot, quote_rows or [], float(spot))
+    flow_prov = (
+        (f"{book_src}+flow_analysis" if n_vol else
+        (f"{book_src}+flow_empty" if not quote_rows else f"{book_src}+volume_zero"))
+    )
 
     chain_iv = {(r.strike, r.right): r.iv for r in snapshot.rows
                 if r.iv == r.iv and r.iv > 0}
@@ -366,6 +487,10 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
         vendor_dealer=vendor_dealer,
         d_iv_used=d_iv_used,
         residual_vanna_inventory=vanna_inv,
+        flow_volume_rows=int(n_vol),
+        flow_provenance=flow_prov,
+        prior_spot=book_spot if book_src.startswith("prior_close") else None,
+        prior_asof=prior_asof if book_src.startswith("prior_close") else None,
         units={"gex": "dollar_gamma_per_1pct_move_imported_call_put",
                "book_gamma": "dollar_gamma_per_1pct_svi_otm",
                "dex": "post_multiplier_shares",
@@ -378,7 +503,9 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
                     "book_sign": "svi_cheap_rich_otm_deadband_0.01",
                     "dividend_yield_q": f"{float(q):.6f}",
                     "vanna_flow": vprov,
-                    "vendor_dealer": (vendor_dealer or {}).get("endpoint", "not_fetched")},
+                    "vendor_dealer": (vendor_dealer or {}).get("endpoint", "not_fetched"),
+                    "book": book_src,
+                    "intraday_flow": flow_prov},
     )
 
 

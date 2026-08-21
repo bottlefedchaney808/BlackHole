@@ -36,7 +36,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Any
 
 import httpx
 import numpy as _np
@@ -184,6 +184,16 @@ _PATH_ALIASES = {
     "/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}": (
         "options",
         "bulk_snapshot_option_open_interest",
+        {},
+    ),
+    "/api/theta/bulk_snapshot/option/quote/{root}/{exp}": (
+        "options",
+        "bulk_snapshot_option_quote",
+        {},
+    ),
+    "/api/flow/analysis/{root}": (
+        "flow",
+        "analysis",
         {},
     ),
     "/api/theta/hist/option/all_greeks/{root}/{exp}/{strike}/{right}": (
@@ -915,6 +925,55 @@ class ThetaDataController:
         r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}")
         r.raise_for_status()
         return self._parse_rows(r)
+
+    def option_bulk_quote(self, root: str, exp: str):
+        """Snapshot NBBO + size + volume for all strikes/rights at one expiry."""
+        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/quote/{root}/{exp}")
+        r.raise_for_status()
+        return self._parse_rows(r)
+
+    def option_flow_analysis(self, root: str, date: Optional[str] = None,
+                             exp: Optional[str] = None,
+                             aggregate_by: str = "strike") -> List[Dict]:
+        """flow.analysis. Do NOT pass exp — v2 500s. Filter expiry client-side."""
+        params: Dict[str, Any] = {
+            "aggregate_by": aggregate_by,
+            "include_execution_metrics": True,
+            "use_csv": False,
+        }
+        if date:
+            params["date"] = date
+        r = self._get_with_retry(f"/api/flow/analysis/{root}", params=params)
+        r.raise_for_status()
+        rows = self._parse_rows(r)
+        out = []
+        for row in rows:
+            item = dict(row) if not isinstance(row, dict) else row
+            out.append(item)
+        return out
+
+    def option_session_trades(self, root: str, start_date: str,
+                              end_date: Optional[str] = None) -> List[Dict]:
+        """flow.scanner_trades — per-print size/bid/ask/right/expiry (wiki)."""
+        env = self._get_thread_client().flow.scanner_trades(
+            root=root, start_date=start_date,
+            end_date=end_date or start_date,
+        )
+        data = env.data
+        if not data:
+            return []
+        rows = list(data)
+        first = rows[0]
+        if isinstance(first, (tuple, list)) and first and isinstance(first[0], str):
+            headers = [str(h) for h in first]
+            return [dict(zip(headers, row)) for row in rows[1:]]
+        out = []
+        for row in rows:
+            if isinstance(row, dict):
+                out.append(row)
+            elif hasattr(row, "keys"):
+                out.append(dict(row))
+        return out
 
     def option_bulk_oi_latest(self, root: str, exp: str,
                                lookback_days: int = 7,

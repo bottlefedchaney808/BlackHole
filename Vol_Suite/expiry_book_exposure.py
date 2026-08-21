@@ -20,14 +20,11 @@ Global constraints honored (plan §4):
      model.)
   2. All six greeks in DEALER-FRAME; sign each greek once, never stack a
      `right_dir`.
-  3. All five signed greeks (delta, vanna, charm, vega, volga) compose the
-     same way: dealer-frame = -1 * (customer-frame raw value). Fixed
-     2026-08-17 for vanna AND charm — both `bs_vanna` and `bs_charm` already
-     return that negated (Bloomberg-negative-style) quantity internally, but
-     `dealer_frame_greek` was applying a SECOND -1 on top for both of them,
-     so the two negations canceled and they composed as +1*customer-raw
-     instead — an unnoticed cross-greek sign inconsistency (delta was always
-     correct). See `dealer_frame_vanna`'s and `bs_charm`'s docstrings.
+  3. Dealer-frame = -1 * customer-frame for delta/vega/volga.
+     `bs_vanna` already returns that negated quantity (pass-through).
+     Charm is customer per-right calendar dΔ/dt, net = CallCharm*callOI
+     + PutCharm*putOI (ITM call+/OTM put+, ITM put-/OTM call-). No extra
+     dealer -1 on charm.
   4. Real spot, NOT median-strike.
   5. Charm scaled x(1/DEFAULT_A) if CHARM_ANNUALIZED; NEVER x(1/DTE).
   6. Vanna flow dIV unit is DECIMAL vol, ONE formula:
@@ -69,6 +66,85 @@ CHARM_ANNUALIZED = True
 RISK_FREE_RATE = 0.05
 
 GREEKS = ("delta", "gamma", "vega", "vanna", "charm", "volga")
+
+
+def vannacharm_row(r, spot, greek: str, oi=None) -> float:
+    """VannaCharm stock exposure for one contract (not SVI).
+    GEX = γ*OI*100*S²*0.01 with γ already call+/put−.
+    VEX = call+|ν|*S*σ − put+|ν|*S*σ.
+    CEX = χ*OI*100*S/365 with χ already per-right.
+    Pass oi=net_contracts for dGEX/dVEX/dCEX (bought−sold).
+    """
+    if oi is None:
+        oi = float(getattr(r, "oi", 0.0) or 0.0)
+    iv = float(getattr(r, "iv", 0.0) or 0.0)
+    if iv != iv:
+        iv = 0.0
+    greeks = getattr(r, "greeks", {}) or {}
+    rs = 1.0 if str(getattr(r, "right", "C")).upper()[:1] == "C" else -1.0
+    if greek == "gamma":
+        return float(greeks.get("gamma", 0.0) or 0.0) * oi * CONTRACT_MULTIPLIER * spot ** 2 * 0.01
+    if greek == "vanna":
+        return rs * abs(float(greeks.get("vanna", 0.0) or 0.0)) * oi * CONTRACT_MULTIPLIER * spot * iv
+    if greek == "charm":
+        return float(greeks.get("charm", 0.0) or 0.0) * oi * CONTRACT_MULTIPLIER * spot / 365.0
+    return 0.0
+
+
+def _quote_num(row, *names) -> float:
+    for name in names:
+        if isinstance(row, dict) and name in row and row[name] not in (None, ""):
+            try:
+                v = float(row[name])
+            except (TypeError, ValueError):
+                continue
+            if v == v:
+                return v
+    return 0.0
+
+
+def net_contracts_from_quote(volume, bid_size, ask_size) -> float:
+    """bought − sold. Article: volume=100, bid/ask ratio=0.6 → 60 bought, 40 sold.
+    buy_frac = bid_size / (bid_size + ask_size), else 0.5 if no sizes.
+    """
+    vol = float(volume or 0.0)
+    if vol <= 0:
+        return 0.0
+    b = max(float(bid_size or 0.0), 0.0)
+    a = max(float(ask_size or 0.0), 0.0)
+    denom = b + a
+    buy_frac = (b / denom) if denom > 0 else 0.5
+    bought = vol * buy_frac
+    sold = vol - bought
+    return bought - sold
+
+
+def apply_vannacharm_flow(ne: "NetExposure", quote_rows, spot: float) -> int:
+    """Stamp net_contracts / d_gex / d_vex / d_cex from quote volume+size.
+    quote strikes must already be dollars. Returns number of rows with volume."""
+    by_key = {}
+    for q in quote_rows or []:
+        try:
+            k = float(q.get("strike", 0.0))
+            right = str(q.get("right", "")).upper()[:1]
+        except (TypeError, ValueError):
+            continue
+        by_key[(round(k, 8), right)] = q
+    n_vol = 0
+    for r in ne.rows:
+        q = by_key.get((round(r.strike, 8), r.right), {})
+        vol = _quote_num(q, "volume", "Volume")
+        bid_sz = _quote_num(q, "bid_size", "bidSize", "bid_sz", "bidsize")
+        ask_sz = _quote_num(q, "ask_size", "askSize", "ask_sz", "asksize")
+        net = net_contracts_from_quote(vol, bid_sz, ask_sz)
+        r.net_contracts = net
+        r.d_gex = vannacharm_row(r, spot, "gamma", oi=net)
+        r.d_vex = vannacharm_row(r, spot, "vanna", oi=net)
+        r.d_cex = vannacharm_row(r, spot, "charm", oi=net)
+        if vol > 0:
+            n_vol += 1
+    return n_vol
+
 # Stock/futures hedging channel vs options/vol hedging channel (plan §3 table).
 STOCK_CHANNEL = ("delta", "gamma", "vanna", "charm")
 VOL_CHANNEL = ("vega", "volga")
@@ -147,25 +223,14 @@ def bs_vanna(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
 
 
 def bs_charm(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0, right="C"):
-    """-1 * d(delta)/dT (Bloomberg-negative convention: charm is the decay of
-    delta toward its terminal value), ALREADY in that negated sign -- same
-    pattern as bs_vanna, see dealer_frame_vanna's docstring.
+    """Customer-frame calendar charm ≈ d(delta)/dt as expiry approaches
+    (T falling). NOT dealer-signed — unlike bs_vanna.
 
-    FIXED 2026-08-17 (CARL review, found while wiring dividend yield q
-    through): this formula was missing the q*disc*N(d1) term entirely (so it
-    silently returned a numerically wrong value the moment q != 0 -- exact at
-    q=0 only by coincidence), AND had no `right` parameter so it could never
-    distinguish call charm from put charm (harmless only because
-    charm_call == charm_put at q=0). Both are now fixed together and
-    verified against a finite-difference d(delta)/dT to 1e-4 relative error
-    for both rights at several (T, sigma, q) combinations.
+    Sign vs strike (spot fixed): ITM call / OTM put → positive; OTM call /
+    ITM put → negative. Net CEX = CallCharm*callOI + PutCharm*putOI.
+    dealer_frame_greek("charm") is a pass-through (no extra -1).
 
-    Derivation: delta_call = disc*N(d1), so
-    d(delta_call)/dT = -q*disc*N(d1) + disc*phi(d1)*d(d1)/dT, and
-    d(d1)/dT = (r-q)/(sigma*sqrt(T)) - d2/(2T). Negating for the
-    Bloomberg-negative convention gives charm_call below. delta_put =
-    delta_call - disc, so charm_put = charm_call - q*disc (customer-frame),
-    i.e. -q*disc*N(-d1) + <same phi(d1) term> once negated (N(d1)-1 = -N(-d1)).
+    q term: calls +q*disc*N(d1), puts -q*disc*N(-d1). phi_term is shared.
     """
     d1, d2 = _d1d2(S, K, T, sigma, r, q)
     if math.isnan(d1):
@@ -250,20 +315,8 @@ def dealer_frame_greek(greek, raw_value, right):
         # negation -- fixed 2026-08-17, see dealer_frame_vanna's docstring.
         return dealer_frame_vanna(raw_value)
     if greek == "charm":
-        # Dealer-frame charm, composed like delta/vanna: -1 * customer-frame
-        # raw value. bs_charm already returns that negated (Bloomberg-
-        # negative) quantity -- see its docstring -- so this is a
-        # pass-through, not a second negation.
-        #
-        # FIXED 2026-08-17 (CARL review, found while wiring q through):
-        # this branch used to apply ANOTHER -1 on top of bs_charm's already-
-        # negated output, the exact same double-negation bug dealer_frame_vanna
-        # had (fixed earlier the same day). That made dealer-frame charm
-        # compose as +1*customer-raw while delta (and now-fixed vanna) both
-        # compose as -1*customer-raw -- an unnoticed cross-greek sign
-        # inconsistency, undetected until bs_charm's q=0 coincidental
-        # call==put symmetry broke while adding a right parameter and
-        # verifying the whole formula against finite differences.
+        # Customer per-right charm. Net = C*OI + P*OI. Do not apply a
+        # second dealer -1 — that inverted CEX vs VannaCharm/daytrading.
         return raw_value
     if greek in ("vega", "volga"):
         # Options/vol channel. Dealer-frame: the portfolio vol-book sensitivity
@@ -303,6 +356,10 @@ class NetExposureRow:
     measured: Dict[str, str] = field(default_factory=dict)    # per-greek MEASURED/ESTIMATED provenance
     book_sign: float = 0.0   # SVI cheap/rich × OTM gate; 0 = unmarked/ITM
     gamma_book: float = 0.0  # unsigned BS gamma × book_sign × OI × 100 × S² × 0.01
+    net_contracts: float = 0.0  # bought − sold from volume × bid/ask split
+    d_gex: float = 0.0
+    d_vex: float = 0.0
+    d_cex: float = 0.0
 
     def exposure_of(self, greek):
         return self.exposure.get(greek, 0.0)
@@ -717,16 +774,12 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     """
     ne = ne if ne is not None else build_net_exposure(rows, spot, T=T, q=q)
     strikes = sorted({r.strike for r in ne.rows})
-    # Prefer SVI-signed book gamma when stamped; else imported GEX smile
-    # (locus tests that never applied book signs keep working).
+    # VannaCharm GEX (call+/put-), not SVI book — wing SVI marks were
+    # putting TSLA's flip at $25 with spot $341.
     dg_per_strike: Dict[float, float] = {}
-    use_book = any(r.gamma_book != 0.0 or r.book_sign != 0.0 for r in ne.rows)
     for k in strikes:
-        if use_book:
-            dg = sum(r.gamma_book for r in ne.rows if abs(r.strike - k) < 1e-9)
-        else:
-            dg = sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                     * spot ** 2 * 0.01 for r in ne.rows if abs(r.strike - k) < 1e-9)
+        dg = sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
+                 * spot ** 2 * 0.01 for r in ne.rows if abs(r.strike - k) < 1e-9)
         dg_per_strike[k] = dg
     ordered = sorted(strikes)
     # zero-gamma = the LOCAL (per-strike) signed dollar-gamma sign-change
@@ -739,8 +792,12 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
                            if _signflip(dg_per_strike.get(ordered[i - 1], 0.0),
                                         dg_per_strike.get(ordered[i], 0.0))
                            for k in (ordered[i - 1], ordered[i])})
-    if flip_strikes:
-        zero_gamma = min(flip_strikes, key=lambda k: (abs(k - spot), -k))
+    # Ignore far-wing noise (TSLA $25 flip with spot $341). Keep flips
+    # inside ±50% of spot; if none, fall back to all flips then cumulative.
+    near = [k for k in flip_strikes if spot > 0 and abs(k - spot) / spot <= 0.50]
+    pick_from = near or flip_strikes
+    if pick_from:
+        zero_gamma = min(pick_from, key=lambda k: (abs(k - spot), -k))
     else:
         # fallback: cumulative crossing (no local sign change found)
         cum = 0.0
@@ -763,13 +820,10 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     put_strikes = [k for k in strikes if k < spot]
     gex_by_right_strike: Dict[Tuple[str, float], float] = defaultdict(float)
     for r in ne.rows:
-        if use_book:
-            gex_by_right_strike[(r.right, r.strike)] += r.gamma_book
-        else:
-            gex_by_right_strike[(r.right, r.strike)] += (
-                r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                * spot ** 2 * 0.01
-            )
+        gex_by_right_strike[(r.right, r.strike)] += (
+            r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
+            * spot ** 2 * 0.01
+        )
     call_wall = max(call_strikes, key=lambda k: abs(gex_by_right_strike.get(("C", k), 0.0))) if call_strikes else spot
     put_wall = max(put_strikes, key=lambda k: abs(gex_by_right_strike.get(("P", k), 0.0))) if put_strikes else spot
     band_lower = spot * (1 - tolerance_pct)
@@ -1233,8 +1287,8 @@ def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
     for g in hist_greek_rows:
         d = _date_of(g)
         k = _extract(g, "strike")
-        if not math.isnan(k) and k > 10000:
-            k = k / 1000.0  # theta-style x1000 seed scale (SPY 150000 -> 150.0)
+        if not math.isnan(k) and abs(k) >= 1000:
+            k = k / 1000.0  # theta thousandths (SPY 150000 -> 150; SLS 4000 -> 4)
         iv = _extract(g, "implied_vol")
         if not math.isnan(k) and not math.isnan(iv) and iv > 0:
             greeks_by_date[d].append(
@@ -1244,7 +1298,7 @@ def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
     for o in hist_oi_rows:
         d = _date_of(o)
         k = _extract(o, "strike")
-        if not math.isnan(k) and k > 10000:
+        if not math.isnan(k) and abs(k) >= 1000:
             k = k / 1000.0
         oi_by_date[d][(k, str(o.get("right", "C")).upper()[:1])] = \
             int(_extract(o, "open_interest", 0.0))

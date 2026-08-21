@@ -189,20 +189,13 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
         S = market_data.fetch_spot_price(ticker)
         r = market_data.fetch_risk_free_rate()
         q = market_data.fetch_dividend_yield(ticker)
-        if fields["strike"] is not None:
-            K = fields["strike"]
-        else:
-            # ATM default must land on an actually-listed strike, same as the
-            # interactive path's validate_strike -- round(spot, 2) almost never
-            # matches a real strike (listed in $0.50/$1 increments), which made
-            # every unset-strike context-mode run fail IV solve with "no usable
-            # market price" even though a nearby listed strike had one.
-            val_res = market_data.validate_strike(
-                ticker, round(float(S), 2),
-                target_years=target_years,
-                expiration_date=fields.get("expiration_date"),
-            )
-            K = val_res["closest"]
+        raw_k = fields["strike"] if fields["strike"] is not None else round(float(S), 2)
+        val_res = market_data.validate_strike(
+            ticker, float(raw_k),
+            target_years=target_years,
+            expiration_date=fields.get("expiration_date"),
+        )
+        K = val_res["closest"]
 
         vol_manager = VolManager()
         sigma = float(vol_manager.get_sigma(ticker, K, target_years, method="LeisenReimer", option_type=option_type))

@@ -29,6 +29,19 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _dollar_strikes(strikes):
+    out = []
+    for s in strikes or []:
+        try:
+            v = float(s)
+        except (TypeError, ValueError):
+            continue
+        if abs(v) >= 1000:
+            v = v / 1000.0
+        out.append(v)
+    return out
+
 try:
     from thetadata_controller import ThetaDataController
     _THETADATA_AVAILABLE = True
@@ -178,10 +191,11 @@ class MarketDataController:
             if not exps:
                 return {'valid': True, 'closest': strike}
             nearest_exp = self._resolve_target_expiry(exps, target_years, expiration_date)
-            strikes = td.list_strikes(ticker, nearest_exp)
+            nearest_exp = "".join(ch for ch in str(nearest_exp or "") if ch.isdigit())[:8]
+            strikes = _dollar_strikes(td.list_strikes(ticker, nearest_exp))
             if not strikes:
                 return {'valid': True, 'closest': strike}
-            if strike in strikes:
+            if any(abs(s - strike) < 1e-6 for s in strikes):
                 return {'valid': True, 'closest': strike}
             return {'valid': False, 'closest': min(strikes, key=lambda x: abs(x - strike))}
         except Exception:
@@ -198,7 +212,11 @@ class MarketDataController:
         strike validation and the IV solve agree on one expiry). Falls back to
         the nearest-to-today expiry when no target is given."""
         def _days_from(target_dt):
-            return lambda e: abs((datetime.strptime(str(e), "%Y%m%d") - target_dt).days)
+            def _key(e):
+                raw = e.get("expiration") if isinstance(e, dict) else e
+                digits = "".join(ch for ch in str(raw) if ch.isdigit())[:8]
+                return abs((datetime.strptime(digits, "%Y%m%d") - target_dt).days)
+            return _key
         if expiration_date:
             digits = ''.join(ch for ch in str(expiration_date) if ch.isdigit())
             try:

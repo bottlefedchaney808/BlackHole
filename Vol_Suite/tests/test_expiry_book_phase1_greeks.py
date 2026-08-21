@@ -171,6 +171,19 @@ def test_charm_scaled_by_1_over_365_not_1_over_dte():
         assert abs(r.exposure["charm"]) < abs(wrong) or abs(wrong) < 1e-12
 
 
+def test_dealer_charm_is_customer_per_right_net():
+    """ITM call + / OTM call −. Net CEX = C*OI + P*OI, no extra dealer -1."""
+    S, T, sig = 100.0, 0.25, 0.20
+    raw_itm = ebe.bs_charm(S, 90.0, T, sig, right="C")
+    raw_otm = ebe.bs_charm(S, 110.0, T, sig, right="C")
+    raw_otm_put = ebe.bs_charm(S, 90.0, T, sig, right="P")
+    assert raw_itm > 0
+    assert raw_otm < 0
+    assert raw_otm_put > 0
+    assert ebe.dealer_frame_greek("charm", raw_itm, "C") == pytest.approx(raw_itm)
+    assert ebe.dealer_frame_greek("charm", raw_otm_put, "P") == pytest.approx(raw_otm_put)
+
+
 def test_vanna_flow_31_equals_34():
     """Constraint 6/Phase-1 test: the two spec forms (plan §3.1 and §3.4) must
     produce identical values for the vanna flow, both with decimal-vol dIV."""
