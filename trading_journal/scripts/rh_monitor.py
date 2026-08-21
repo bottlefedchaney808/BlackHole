@@ -16,12 +16,19 @@ LLM/user confirmation needed. Everything else here never places, modifies, or
 cancels an order.
 
 POSITIONS (qty, avg, mental stop, scale-out trigger):
-  UUUU 3 @14.17 stop 14.00 (real GTC stop live, order 6a845c49-...) scale>=15.30
-  TGB  8 @8.86  stop 7.50 (mental only — no live GTC stop as of 2026-08-18) scale>=9.60
-  KOS  3 @2.57  stop 2.20 (mental only — no live GTC stop as of 2026-08-18) scale>=3.00
-  PTEN 12 @12.47 stop n/a (discretionary signal-gated exit, see journal)   scale n/a
+  TGB  8 @8.86  stop 8.20 (real GTC stop live, order 6a85b91b-...) scale>=9.60
+  KOS  3 @2.57  stop 2.50 (real GTC stop live, order 6a85b8f4-...) scale>=3.00
+  PTEN 18 @12.34 stop 11.40 (real GTC stop live, order 6a85b967-...) scale>=13.33
 
+UUUU was stopped out 2026-08-18 (filled @14.00) — removed from tracking.
 SOUN was stopped out 2026-08-14 (filled @7.45) — removed from tracking.
+
+NOTE 2026-08-19: baselines above (qty/avg/stop) must be updated by hand whenever
+a scale-in/scale-out/stop fill changes the actual position — this script does
+NOT diff against its own prior run, it diffs live qty against the hardcoded
+exp_qty here. A stale baseline reprints the same "qty changed X->Y" alert on
+every tick forever (this is what happened to PTEN 12->18 through 2026-08-19
+late morning) instead of firing once.
 """
 import asyncio, datetime as dt, json, os, sys, time
 
@@ -39,10 +46,9 @@ UUUU_STOP_ORDER_ID = "6a845c49-f8d4-4dbf-9934-8f0cc1414e7e"
 SPY_800C_OPTION_ID = "43bd34ee-5bc3-4397-80c6-3bc47b43fd7a"
 
 POSITIONS = [  # sym, qty, avg, stop, scale
-    ("UUUU", 3, 14.17, 14.00, 15.30),
-    ("TGB", 8, 8.86, 7.50, 9.60),
-    ("KOS", 3, 2.57, 2.20, 3.00),
-    ("PTEN", 12, 12.47, None, None),  # discretionary exit only, no mental stop
+    ("TGB", 8, 8.86, 8.20, 9.60),
+    ("KOS", 3, 2.57, 2.50, 3.00),
+    ("PTEN", 18, 12.34, 11.40, 13.33),
 ]
 
 def _load(p): return json.load(open(p, encoding="utf-8"))
