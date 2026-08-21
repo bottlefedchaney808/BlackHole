@@ -317,30 +317,46 @@ def _forward_realized_vol(closes_from_today: List[float], window: int) -> Option
 
 
 # ---------------------------------------------------------------------------
-# dealer_exposure_model -- the dealer-frame greeks engine lives on the
-# Dealer-Exposure-Dev worktree (expiry_book_exposure.py). It is NOT merged
-# into master; this study imports it from the worktree path at runtime and
-# fails gracefully (clear error) when that worktree is absent.
+# dealer_exposure_model -- the dealer-frame greeks engine. As of 2026-08-20 it
+# is MERGED into the main tree (Vol_Suite/expiry_book_exposure.py); the
+# Dealer-Exposure-Dev worktree is where it was developed before promotion.
+# This study prefers the in-tree copy (the live model) and only falls back to
+# the dev worktree if the in-tree file is absent (a tree where the merge has
+# not landed yet). Failing that, a clear error -- never a silent skip.
 # ---------------------------------------------------------------------------
+_IN_TREE_EXPIRY_EXPOSURE = Path(__file__).resolve().parent / "expiry_book_exposure.py"
 _DEV_WORKTREE_EXPIRY_EXPOSURE = (
     Path(__file__).resolve().parent.parent
     / ".worktrees" / "dealer-exposure-dev" / "Vol_Suite" / "expiry_book_exposure.py"
 )
 
 
+def _dealer_exposure_engine_path() -> Optional[Path]:
+    if _IN_TREE_EXPIRY_EXPOSURE.is_file():
+        return _IN_TREE_EXPIRY_EXPOSURE
+    if _DEV_WORKTREE_EXPIRY_EXPOSURE.is_file():
+        return _DEV_WORKTREE_EXPIRY_EXPOSURE
+    return None
+
+
 def _dealer_exposure_engine_available() -> bool:
-    return _DEV_WORKTREE_EXPIRY_EXPOSURE.is_file()
+    return _dealer_exposure_engine_path() is not None
 
 
 def _load_dealer_exposure_engine():
-    """Load expiry_book_exposure.py from the Dealer-Exposure-Dev worktree."""
-    if not _dealer_exposure_engine_available():
+    """Load expiry_book_exposure.py -- in-tree (merged) first, dev worktree
+    as a fallback."""
+    path = _dealer_exposure_engine_path()
+    if path is None:
         raise FileNotFoundError(
-            "dealer_exposure_model requires the Dealer-Exposure-Dev worktree "
-            f"(expected {_DEV_WORKTREE_EXPIRY_EXPOSURE}); it is not merged "
-            "into master.")
+            "dealer_exposure_model requires expiry_book_exposure.py (the live "
+            "dealer-frame greeks engine); it is not in the main tree "
+            f"({_IN_TREE_EXPIRY_EXPOSURE}) nor the Dealer-Exposure-Dev worktree "
+            f"({_DEV_WORKTREE_EXPIRY_EXPOSURE}).")
+    if path.name in sys.modules and "expiry_book_exposure" in sys.modules:
+        return sys.modules["expiry_book_exposure"]
     spec = importlib.util.spec_from_file_location(
-        "expiry_book_exposure", str(_DEV_WORKTREE_EXPIRY_EXPOSURE))
+        "expiry_book_exposure", str(path))
     mod = importlib.util.module_from_spec(spec)
     sys.modules["expiry_book_exposure"] = mod
     spec.loader.exec_module(mod)
@@ -731,11 +747,12 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
     # The study's default ('all') now runs all THREE of Jason's live models
     # together: v1 (oi_heuristic), v2_live (accumulated, via `accumulate`), and
     # dealer_exposure (dealer-frame engine). There is no per-model selector.
-    use_dealer_exposure = sign_model in ('all', 'dealer_exposure')
+    use_dealer_exposure = sign_model in ('all', 'dealer_exposure', 'live')
     if use_dealer_exposure and not _dealer_exposure_engine_available():
         raise ValueError(
-            "dealer_exposure_model requires the Dealer-Exposure-Dev worktree "
-            "(expiry_book_exposure.py); it is not merged into master.")
+            "dealer_exposure_model requires the merged expiry_book_exposure.py "
+            "in the main tree (Vol_Suite/expiry_book_exposure.py); it was not "
+            "found in the in-tree location or the dev worktree.")
 
     return _run_backtest_from_history(ticker, expiry, hist_greek_rows, hist_oi_rows,
                                        hist_price_rows, forward_window_days,
@@ -760,9 +777,10 @@ def format_backtest_report(result: BacktestResult) -> str:
         "Hypothesis: short-gamma days should show HIGHER forward realized vol "
         "(dealers trade with the tape) -- a positive, statistically significant "
         "diff supports the model. v1 is the conventional GEX (oi_heuristic) sign; "
-        "v2_live is the live model's accumulated dealer book (vol_surface_replication "
-        "with multi-day accumulation); dealer_exposure is the dealer-frame greeks "
-        "engine (expiry_book_exposure, from the Dealer-Exposure-Dev worktree).",
+        "v2_live is the accumulated dealer book (vol_surface_replication with "
+        "multi-day accumulation); dealer_exposure is the LIVE dealer-frame "
+        "greeks engine (expiry_book_exposure, merged into the main tree) -- "
+        "v1/v2_live are retained as legacy comparison arms only.",
     ]
     return "\n".join(lines)
 

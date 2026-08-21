@@ -1888,12 +1888,19 @@ def tools_backtest_form(request: Request):
         'strategy_map_json': _strategy_map(contexts),
         'selected_path': '',
         'selected_mode': 'dealer_gamma_study',
-        'selected_sign_model': 'all',
+        'selected_sign_model': 'live',
         'entry_date': '',
         'exit_date': '',
         'expiry': '',
         'strategy_index': 0,
         'contract_multiplier': '100',
+        'start_date': '',
+        'end_date': '',
+        'fast_window': '',
+        'slow_window': '',
+        'momentum_lookback': '',
+        'strike': '',
+        'otm': '',
         'result': None,
         'result_json': None,
         'error': None,
@@ -1912,7 +1919,18 @@ async def tools_backtest_run(request: Request):
     expiry = str(body.get('expiry') or '').strip()
     contract_multiplier = str(body.get('contract_multiplier') or '100').strip()
     strategy_index_raw = str(body.get('strategy_index') or '0').strip()
-    sign_model = str(body.get('sign_model') or 'all').strip().lower()
+    sign_model = str(body.get('sign_model') or 'live').strip().lower()
+
+    # New-mode fields
+    stock_strategy = str(body.get('strategy') or '').strip().lower()
+    option_strategy = str(body.get('strategy_type') or '').strip().lower()
+    start_date = str(body.get('start_date') or '').strip()
+    end_date = str(body.get('end_date') or '').strip()
+    fast_window = str(body.get('fast_window') or '').strip()
+    slow_window = str(body.get('slow_window') or '').strip()
+    momentum_lookback = str(body.get('momentum_lookback') or '').strip()
+    strike = str(body.get('strike') or '').strip()
+    otm = str(body.get('otm') or '').strip()
 
     context, error = _load_selected_context(context_path)
     result = None
@@ -1920,15 +1938,18 @@ async def tools_backtest_run(request: Request):
 
     if context is not None:
         context['mode'] = mode
-        if mode == 'dealer_gamma_study':
-            context['sign_model'] = sign_model
+
+        # Fields shared across modes
         if expiry:
             context['expiry'] = expiry
-        if contract_multiplier:
+        if contract_multiplier and mode in ('dealer_gamma_study', 'strategy_pnl', 'option_strategy_backtest'):
             try:
                 context['contract_multiplier'] = float(contract_multiplier)
             except ValueError:
                 error = f'contract_multiplier must be numeric, got {contract_multiplier!r}'
+
+        if mode == 'dealer_gamma_study' and error is None:
+            context['sign_model'] = sign_model
 
         if mode == 'strategy_pnl' and error is None:
             if not entry_date:
@@ -1942,6 +1963,39 @@ async def tools_backtest_run(request: Request):
                 except ValueError:
                     strategy_index = 0
                 context['strategy_index'] = strategy_index
+
+        if mode == 'stock_strategy_backtest' and error is None:
+            if stock_strategy:
+                context['strategy'] = stock_strategy
+            if start_date:
+                context['start_date'] = start_date
+            if end_date:
+                context['end_date'] = end_date
+            for k, v in (('fast_window', fast_window), ('slow_window', slow_window),
+                         ('momentum_lookback', momentum_lookback)):
+                if v:
+                    try:
+                        context[k] = int(v)
+                    except ValueError:
+                        error = f'{k} must be an integer, got {v!r}'
+
+        if mode == 'option_strategy_backtest' and error is None:
+            if option_strategy:
+                context['strategy_type'] = option_strategy
+            if entry_date:
+                context['entry_date'] = entry_date
+            if exit_date:
+                context['exit_date'] = exit_date
+            if strike:
+                try:
+                    context['strike'] = float(strike)
+                except ValueError:
+                    error = f'strike must be numeric, got {strike!r}'
+            if otm:
+                try:
+                    context['otm'] = float(otm)
+                except ValueError:
+                    error = f'otm must be numeric, got {otm!r}'
 
         if error is None:
             result, run_error = _run_tool_safe('backtesting', context)
@@ -1962,6 +2016,13 @@ async def tools_backtest_run(request: Request):
         'expiry': expiry,
         'strategy_index': strategy_index,
         'contract_multiplier': contract_multiplier,
+        'start_date': start_date,
+        'end_date': end_date,
+        'fast_window': fast_window,
+        'slow_window': slow_window,
+        'momentum_lookback': momentum_lookback,
+        'strike': strike,
+        'otm': otm,
         'result': result,
         'result_json': result_json,
         'error': error,
@@ -2059,13 +2120,110 @@ async def tools_directional_run(request: Request):
     })
 
 
+# --------------------------------------------------------------------------
+# Hedge Optimizer -- bespoke form because mode='options_hedge' takes
+# structured inputs (ticker, expiry, position) and can run WITHOUT a suite
+# context (it fetches its own live spot + chain), unlike the other generic
+# tools. mode='min_var' still requires a context, exactly as before.
+# --------------------------------------------------------------------------
+def _parse_hedge_position(raw: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Parse the optional position JSON from the hedge-optimizer form.
+
+    Accepts either a full ``{stocks: [...], options: [...]}`` object or a bare
+    array of stock positions ``[{shares, price?}, ...]``. Empty -> (None, None)
+    meaning "use the default long-100-shares position".
+    """
+    raw = (raw or '').strip()
+    if not raw:
+        return None, None
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        return None, f'position JSON is not valid JSON: {e}'
+    if isinstance(data, list):
+        return {'stocks': data, 'options': []}, None
+    if isinstance(data, dict):
+        return data, None
+    return None, 'position JSON must be an object or an array of stock positions'
+
+
+@app.get('/tools/hedge-optimizer', response_class=HTMLResponse)
+def tools_hedge_optimizer_form(request: Request):
+    contexts, contexts_error = _tools_contexts()
+    return TEMPLATES.TemplateResponse(request, 'tools_hedge_optimizer.html', {
+        'active': 'tools', 'tool': get_tool('hedge-optimizer'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': '', 'selected_mode': 'options_hedge',
+        'ticker': '', 'expiry': '', 'position_json': '',
+        'result': None, 'result_json': None, 'error': None,
+    })
+
+
+@app.post('/tools/hedge-optimizer', response_class=HTMLResponse)
+async def tools_hedge_optimizer_run(request: Request):
+    body = await _parse_body(request)
+    contexts, contexts_error = _tools_contexts()
+
+    mode = str(body.get('mode') or 'min_var').strip().lower()
+    context_path = str(body.get('context_path') or '').strip()
+    ticker = str(body.get('ticker') or '').strip()
+    expiry = str(body.get('expiry') or '').strip()
+    position_raw = str(body.get('position_json') or '').strip()
+
+    context = None
+    error = None
+    position_parsed = None
+
+    if mode in ('options_hedge', 'options', 'option_hedge'):
+        # options_hedge may run with no suite context at all
+        if context_path:
+            context, error = _load_selected_context(context_path)
+        if error is None:
+            if context is None:
+                context = {}
+            context['mode'] = 'options_hedge'
+            if ticker:
+                context['ticker'] = ticker
+            if expiry:
+                context['expiry'] = expiry
+            position_parsed, perr = _parse_hedge_position(position_raw)
+            if perr:
+                error = perr
+            elif position_parsed is not None:
+                context['position'] = position_parsed
+        if context is not None and error is None:
+            result, run_error = _run_tool_safe('hedge-optimizer', context)
+            if run_error:
+                error = run_error
+    else:
+        # min_var: requires a context, exactly as the generic tool did
+        result = None
+        context, error = _load_selected_context(context_path)
+        if context is not None:
+            context['mode'] = 'min_var'
+            result, run_error = _run_tool_safe('hedge-optimizer', context)
+            if run_error:
+                error = run_error
+
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_hedge_optimizer.html', {
+        'active': 'tools', 'tool': get_tool('hedge-optimizer'),
+        'contexts': contexts, 'contexts_error': contexts_error,
+        'selected_path': context_path, 'selected_mode': mode,
+        'ticker': ticker, 'expiry': expiry,
+        'position_json': position_raw,
+        'result': result, 'result_json': result_json, 'error': error,
+    })
+
+
 # Tools whose UI is just "pick a context, run" -- everything registered in
-# Tools.registry except options-strategy and backtesting, which have bespoke
-# forms above because their run() takes extra required/structured inputs.
+# Tools.registry except options-strategy, backtesting, and hedge-optimizer,
+# which have bespoke forms above because their run() takes extra
+# required/structured inputs.
 # whale-flow / elliott-wave / bollinger / trend-engine / liquidity-map are NOT
 # listed: they moved inside Directional Engine as per-module modes.
 GENERIC_TOOL_SLUGS = {
-    'directional-engine', 'hedge-optimizer',
+    'directional-engine',
     'vrp-term-structure', 'simulations',
 }
 

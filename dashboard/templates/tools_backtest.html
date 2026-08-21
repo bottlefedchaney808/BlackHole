@@ -4,7 +4,8 @@
 {% block content %}
 <h1>Backtesting Tool</h1>
 <p class="sub">
-  Two backtests in one tool: a dealer-gamma-sign realized-vol study, or a multi-leg strategy P&amp;L simulation.
+  Five backtests in one tool: a dealer-exposure (live model) realized-vol study, a multi-leg strategy P&amp;L
+  simulation, a stock strategy backtest, an option strategy backtest, or broker-book accuracy.
   <a href="/tools">&larr; back to Tools</a>
 </p>
 
@@ -17,11 +18,18 @@
       list of recommended strategies. Pick the context for the run you care about below.
     </p>
     <p class="small">
-      <strong>dealer_gamma_study</strong> tests whether dealer gamma sign (long vs. short) predicted subsequent
-      realized volatility over that context's ticker/expiration/lookback window -- no strategy selection needed.
+      <strong>dealer_gamma_study</strong> tests whether the <em>live</em> dealer-exposure engine's gamma sign
+      predicted subsequent realized volatility over that context's ticker/expiration/lookback window -- no strategy
+      selection needed. The model selector only distinguishes the live model from the legacy sign models, which are
+      retained for comparison only.
       <strong>strategy_pnl</strong> simulates one specific multi-leg strategy's profit/loss from an entry date to an
-      exit (or expiration) date; pick the strategy from the context's own recommended list (populated by the
-      Options Strategy Tool during that run) and give it an entry date (YYYYMMDD).
+      exit (or expiration) date; pick the strategy from the context's own recommended list and give it an entry date.
+    </p>
+    <p class="small">
+      <strong>stock_strategy_backtest</strong> runs a standard equity strategy (buy &amp; hold, SMA cross, or momentum)
+      over a date window and reports Sharpe / max drawdown / CAGR against a buy-and-hold benchmark.
+      <strong>option_strategy_backtest</strong> runs a standard option strategy (long call/put, covered call,
+      protective put, straddle, strangle) over a date window to expiry.
     </p>
   </div>
 </div>
@@ -47,22 +55,70 @@
       <div class="field">
         <label for="mode">Mode</label>
         <select id="mode" name="mode" onchange="onModeChange()">
-          <option value="dealer_gamma_study" {{ 'selected' if selected_mode == 'dealer_gamma_study' else '' }}>dealer_gamma_study</option>
+          <option value="dealer_gamma_study" {{ 'selected' if selected_mode == 'dealer_gamma_study' else '' }}>dealer_gamma_study (live)</option>
           <option value="strategy_pnl" {{ 'selected' if selected_mode == 'strategy_pnl' else '' }}>strategy_pnl</option>
+          <option value="stock_strategy_backtest" {{ 'selected' if selected_mode == 'stock_strategy_backtest' else '' }}>stock_strategy_backtest</option>
+          <option value="option_strategy_backtest" {{ 'selected' if selected_mode == 'option_strategy_backtest' else '' }}>option_strategy_backtest</option>
+          <option value="broker_book_accuracy" {{ 'selected' if selected_mode == 'broker_book_accuracy' else '' }}>broker_book_accuracy</option>
         </select>
       </div>
       <div class="field" id="sign_model_field">
         <label for="sign_model">Model</label>
         <select id="sign_model" name="sign_model">
-          <option value="all" {{ 'selected' if selected_sign_model == 'all' else '' }}>all (v1 + v2.1 + v3 + whale)</option>
-          <option value="v1" {{ 'selected' if selected_sign_model == 'v1' else '' }}>v1 (oi_heuristic / conventional GEX)</option>
-          <option value="v2_live" {{ 'selected' if selected_sign_model == 'v2_live' else '' }}>v2.1 vol-surface + accumulation (live)</option>
-          <option value="dealer_exposure" {{ 'selected' if selected_sign_model == 'dealer_exposure' else '' }}>dealer_exposure (dev engine)</option>
+          <option value="live" {{ 'selected' if selected_sign_model == 'live' else '' }}>live (dealer-exposure engine)</option>
+          <option value="legacy" {{ 'selected' if selected_sign_model == 'legacy' else '' }}>legacy (v1+v2 sign models, comparison only)</option>
         </select>
       </div>
       <div class="field" id="strategy_field" style="display:none; min-width:320px;">
         <label for="strategy_index">Strategy</label>
         <select id="strategy_index" name="strategy_index"></select>
+      </div>
+      <div class="field" id="stock_strategy_field" style="display:none; min-width:240px;">
+        <label for="stock_strategy">Stock strategy</label>
+        <select id="stock_strategy" name="strategy">
+          <option value="sma_cross">sma_cross</option>
+          <option value="buy_hold">buy_hold</option>
+          <option value="momentum">momentum</option>
+        </select>
+      </div>
+      <div class="field" id="opt_strategy_field" style="display:none; min-width:240px;">
+        <label for="opt_strategy_type">Option strategy</label>
+        <select id="opt_strategy_type" name="strategy_type">
+          <option value="long_call">long_call</option>
+          <option value="long_put">long_put</option>
+          <option value="covered_call">covered_call</option>
+          <option value="protective_put">protective_put</option>
+          <option value="long_straddle">long_straddle</option>
+          <option value="long_strangle">long_strangle</option>
+        </select>
+      </div>
+      <div class="field" id="start_date_field" style="display:none;">
+        <label for="start_date">Start date (YYYYMMDD)</label>
+        <input id="start_date" name="start_date" value="{{ start_date }}" placeholder="20260102" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="end_date_field" style="display:none;">
+        <label for="end_date">End date (YYYYMMDD)</label>
+        <input id="end_date" name="end_date" value="{{ end_date }}" placeholder="20260820" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="fast_window_field" style="display:none;">
+        <label for="fast_window">SMA fast window</label>
+        <input id="fast_window" name="fast_window" value="{{ fast_window }}" placeholder="20" size="8" autocomplete="off">
+      </div>
+      <div class="field" id="slow_window_field" style="display:none;">
+        <label for="slow_window">SMA slow window</label>
+        <input id="slow_window" name="slow_window" value="{{ slow_window }}" placeholder="50" size="8" autocomplete="off">
+      </div>
+      <div class="field" id="momentum_lookback_field" style="display:none;">
+        <label for="momentum_lookback">Momentum lookback</label>
+        <input id="momentum_lookback" name="momentum_lookback" value="{{ momentum_lookback }}" placeholder="20" size="8" autocomplete="off">
+      </div>
+      <div class="field" id="strike_field" style="display:none;">
+        <label for="strike">Strike (optional)</label>
+        <input id="strike" name="strike" value="{{ strike }}" placeholder="ATM if blank" size="10" autocomplete="off">
+      </div>
+      <div class="field" id="otm_field" style="display:none;">
+        <label for="otm">OTM width (optional)</label>
+        <input id="otm" name="otm" value="{{ otm }}" placeholder="auto" size="10" autocomplete="off">
       </div>
       <div class="field" id="entry_date_field" style="display:none;">
         <label for="entry_date">Entry date (YYYYMMDD)</label>
@@ -109,12 +165,38 @@ var INITIAL_STRATEGY_INDEX = {{ strategy_index }};
 
 function onModeChange() {
   var mode = document.getElementById('mode').value;
-  var isStrategyPnl = mode === 'strategy_pnl';
-  document.getElementById('sign_model_field').style.display = isStrategyPnl ? 'none' : 'flex';
-  document.getElementById('strategy_field').style.display = isStrategyPnl ? 'flex' : 'none';
-  document.getElementById('entry_date_field').style.display = isStrategyPnl ? 'flex' : 'none';
-  document.getElementById('exit_date_field').style.display = isStrategyPnl ? 'flex' : 'none';
-  document.getElementById('contract_multiplier_field').style.display = isStrategyPnl ? 'flex' : 'none';
+  var show = function (id, on) { document.getElementById(id).style.display = on ? 'flex' : 'none'; };
+  var FIELDS = ['sign_model_field', 'strategy_field', 'stock_strategy_field', 'opt_strategy_field',
+                'start_date_field', 'end_date_field', 'fast_window_field', 'slow_window_field',
+                'momentum_lookback_field', 'strike_field', 'otm_field',
+                'entry_date_field', 'exit_date_field', 'contract_multiplier_field'];
+  FIELDS.forEach(function (id) { show(id, false); });
+
+  if (mode === 'dealer_gamma_study') {
+    show('sign_model_field', true);
+    show('contract_multiplier_field', true);
+  } else if (mode === 'strategy_pnl') {
+    show('strategy_field', true);
+    show('entry_date_field', true);
+    show('exit_date_field', true);
+    show('contract_multiplier_field', true);
+  } else if (mode === 'stock_strategy_backtest') {
+    show('stock_strategy_field', true);
+    show('start_date_field', true);
+    show('end_date_field', true);
+    show('fast_window_field', true);
+    show('slow_window_field', true);
+    show('momentum_lookback_field', true);
+  } else if (mode === 'option_strategy_backtest') {
+    show('opt_strategy_field', true);
+    show('entry_date_field', true);
+    show('exit_date_field', true);
+    show('strike_field', true);
+    show('otm_field', true);
+    show('contract_multiplier_field', true);
+  } else if (mode === 'broker_book_accuracy') {
+    show('sign_model_field', true);
+  }
 }
 
 function onContextChange() {

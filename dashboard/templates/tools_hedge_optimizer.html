@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Hedge Optimizer -- FinancialDevelopment Dashboard{% endblock %}
+{% block content %}
+<h1>Hedge Optimizer</h1>
+<p class="sub">
+  Two hedging modes: <strong>options_hedge</strong> (default) makes a position delta- and vega-neutral using
+  stocks plus an option from the live ThetaData chain (stock + ATM call, or ATM call + ATM put);
+  <strong>min_var</strong> wraps the VaR-engine minimum-variance stock hedge and requires a suite context.
+  <a href="/tools">&larr; back to Tools</a>
+</p>
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Run</h2></header>
+  <div class="body">
+    <form class="runform" method="post" action="/tools/hedge-optimizer">
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode" onchange="onHedgeModeChange()">
+          <option value="options_hedge" {{ 'selected' if selected_mode in ['options_hedge','options','option_hedge'] else '' }}>options_hedge (delta+vega neutral)</option>
+          <option value="min_var" {{ 'selected' if selected_mode == 'min_var' else '' }}>min_var (min-variance stock hedge)</option>
+        </select>
+      </div>
+      <div class="field" style="min-width:340px;">
+        <label for="context_path">Context</label>
+        <select id="context_path" name="context_path">
+          <option value="" {{ 'selected' if not selected_path else '' }}>-- choose a context (required for min_var; optional for options_hedge) --</option>
+          {% for c in contexts if c.valid %}
+          <option value="{{ c.path }}" {{ 'selected' if c.path == selected_path else '' }}>
+            {{ c.ticker or '?' }} &middot; {{ c.suite }} &middot; {{ c.run_id }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" id="oh-ticker-field">
+        <label for="ticker">Ticker</label>
+        <input id="ticker" name="ticker" value="{{ ticker }}" placeholder="SPY" size="10" autocomplete="off">
+      </div>
+      <div class="field" id="oh-expiry-field">
+        <label for="expiry">Expiry (YYYYMMDD)</label>
+        <input id="expiry" name="expiry" value="{{ expiry }}" placeholder="20260918" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="oh-position-field" style="min-width:360px;">
+        <label for="position_json">Position (JSON, optional)</label>
+        <textarea id="position_json" name="position_json" rows="3" cols="44" autocomplete="off"
+          placeholder='{"stocks":[{"shares":100}],"options":[{"side":"long","contracts":1,"right":"C","strike":500,"delta":0.5,"vega":10}]}
+&#10;or a bare array of stock positions:
+&#10;[{"shares":200}]'>{{ position_json }}</textarea>
+        <span class="small">Default: long 100 shares. Option legs read live greeks from the chain, so delta/vega are optional on them.</span>
+      </div>
+      <button type="submit">Run</button>
+    </form>
+    <script>
+      var modeSel = document.getElementById('mode');
+      var isOptionsHedge = function () { return modeSel && ['options_hedge','options','option_hedge'].indexOf(modeSel.value) >= 0; };
+      function toggleHedgeFields() {
+        var show = function (id, on) {
+          var el = document.getElementById(id);
+          if (el) el.style.display = on ? '' : 'none';
+        };
+        show('oh-ticker-field', isOptionsHedge());
+        show('oh-expiry-field', isOptionsHedge());
+        show('oh-position-field', isOptionsHedge());
+      }
+      function onHedgeModeChange() { toggleHedgeFields(); }
+      if (modeSel) { modeSel.addEventListener('change', onHedgeModeChange); toggleHedgeFields(); }
+    </script>
+  </div>
+</div>
+
+{% if result %}
+<div class="panel">
+  <header><h2>Result</h2></header>
+  <div class="body"><pre class="json">{{ result_json }}</pre></div>
+</div>
+{% endif %}
+{% endblock %}
