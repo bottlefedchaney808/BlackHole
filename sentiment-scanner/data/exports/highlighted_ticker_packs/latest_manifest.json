@@ -1,7 +1,228 @@
 {
   "version": 1,
-  "updated_at": "2026-08-18T05:38:53.504286+00:00",
+  "updated_at": "2026-08-20T14:29:07.697817+00:00",
   "packs": [
+    {
+      "group_id": "cns-threshold-alerts-148cc7b9ea1a",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "148cc7b9ea1a",
+      "created_at": "2026-08-20T14:29:07.688776+00:00",
+      "last_updated_at": "2026-08-20T14:29:07.688776+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260820T141018Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "MRNA",
+        "DASH",
+        "RARE"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-148cc7b9ea1a.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-148cc7b9ea1a.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-18a039312f6e",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "18a039312f6e",
+      "created_at": "2026-08-20T13:55:15.538643+00:00",
+      "last_updated_at": "2026-08-20T13:55:15.538643+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260820T133956Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "TLT",
+        "MRNA",
+        "RARE"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-18a039312f6e.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-18a039312f6e.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-51b7898cd18c",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "51b7898cd18c",
+      "created_at": "2026-08-20T13:24:48.647208+00:00",
+      "last_updated_at": "2026-08-20T13:24:48.647208+00:00",
+      "ticker_count": 6,
+      "priority": "high",
+      "source_run_id": "20260820T130929Z",
+      "thesis_summary": "6 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "TLT",
+        "MRNA",
+        "XRP.X",
+        "SPY",
+        "BMNR",
+        "RARE"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-51b7898cd18c.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-51b7898cd18c.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-5f250b68fcdc",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "5f250b68fcdc",
+      "created_at": "2026-08-20T12:54:10.905181+00:00",
+      "last_updated_at": "2026-08-20T12:54:10.905181+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260820T122418Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "BTC.X",
+        "DJT",
+        "WMT"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-5f250b68fcdc.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260820\\cns-threshold-alerts-5f250b68fcdc.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-6b17d415a4b8",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "6b17d415a4b8",
+      "created_at": "2026-08-19T21:28:37.512230+00:00",
+      "last_updated_at": "2026-08-19T21:28:37.512230+00:00",
+      "ticker_count": 1,
+      "priority": "high",
+      "source_run_id": "20260819T211056Z",
+      "thesis_summary": "1 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "MRK"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-6b17d415a4b8.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-6b17d415a4b8.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-1d442ec22fd9",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "1d442ec22fd9",
+      "created_at": "2026-08-19T20:55:48.521073+00:00",
+      "last_updated_at": "2026-08-19T20:55:48.521073+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260819T204644Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "SLS",
+        "MRNA",
+        "MRK"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-1d442ec22fd9.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-1d442ec22fd9.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-28a945159f28",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "28a945159f28",
+      "created_at": "2026-08-19T20:31:36.741404+00:00",
+      "last_updated_at": "2026-08-19T20:31:36.741404+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260819T201539Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "SLS",
+        "TEM",
+        "MRK"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-28a945159f28.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-28a945159f28.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-25fee432ed55",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "25fee432ed55",
+      "created_at": "2026-08-19T20:00:36.659685+00:00",
+      "last_updated_at": "2026-08-19T20:00:36.659685+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260819T195012Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "TEM",
+        "WMT",
+        "MRK"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-25fee432ed55.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-25fee432ed55.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-9442965b47c7",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "9442965b47c7",
+      "created_at": "2026-08-19T19:35:08.792873+00:00",
+      "last_updated_at": "2026-08-19T19:35:08.792873+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260819T191850Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "BMNR",
+        "TEM",
+        "MRK"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-9442965b47c7.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-9442965b47c7.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-13b68e4f8c1f",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "13b68e4f8c1f",
+      "created_at": "2026-08-19T19:03:41.706307+00:00",
+      "last_updated_at": "2026-08-19T19:03:41.706307+00:00",
+      "ticker_count": 5,
+      "priority": "high",
+      "source_run_id": "20260819T184949Z",
+      "thesis_summary": "5 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "MSTR",
+        "BTC.X",
+        "BMNR",
+        "MRK",
+        "MRVL"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-13b68e4f8c1f.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-13b68e4f8c1f.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-05fc2074684f",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "05fc2074684f",
+      "created_at": "2026-08-19T18:34:45.771368+00:00",
+      "last_updated_at": "2026-08-19T18:34:45.771368+00:00",
+      "ticker_count": 5,
+      "priority": "high",
+      "source_run_id": "20260819T181530Z",
+      "thesis_summary": "5 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "COIN",
+        "MSTR",
+        "HOOD",
+        "MRK",
+        "MRVL"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-05fc2074684f.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-05fc2074684f.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-a55066bd825b",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "a55066bd825b",
+      "created_at": "2026-08-19T18:00:26.861888+00:00",
+      "last_updated_at": "2026-08-19T18:00:26.861888+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260819T171508Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "COIN",
+        "MRK",
+        "OMER"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-a55066bd825b.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260819\\cns-threshold-alerts-a55066bd825b.csv"
+    },
     {
       "group_id": "cns-threshold-alerts-7eeca7736750",
       "group_name": "cns-threshold-alerts",
