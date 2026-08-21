@@ -1,0 +1,28 @@
+fancy that is full of assumptions and, you know, that isn't worth time. I think it's
+complete bullshit. Like everyone, everyone asked about this, like it prints numbers. Like,
+why can someone not come up with like a systematic way to provide some type of backtesting
+indicator on what it is like, and the other thing too, with Gex is it's like, I agree with
+people. Like it'll show like 7,500 as a strike and oftentimes Gex comes to it. Pauses and
+then comes back. But like, if you're using a stop loss that don't help you with zero DT,
+you just get stopped out at 7,500 and then it goes back. Um, I do think if people are
+trading futures or like they're able to, like, I know one guy that trades futures and
+we've looked at it where it's like net Delta, but it's like, how are people positioned
+like long or short for Delta's in the futures market? And that's like a pretty good proxy
+of like breakout. So we've been able to test things that I think are down the line of Gex,
+but. We took vol and signals and tried to reverse engineer them and it was a null
+hypothesis. So I think it's very difficult to tell things or another thing we were talking
+about earlier is it's like, that's like, you know, hedge funds are long VIX calls more
+than ever in history. Well, they could be in a relative value trade and simultaneously be,
+you know, shorter puts than they ever have in history. So like, that doesn't really
+necessarily mean anything for the complex. And then the other thing that gets me too, is
+it's like the day before NVIDIA earnings, like if it is 8% of the index, like that could
+be what's wagging the gamma and it's not going to be reflected and SPX and it could all be
+cues and stuff. So I think all of those things make it extremely difficult. Determine what
+it is. I'm open to it. And someone actually pulls numbers. That's just like not looking at
+a chart and making discretionary decisions on how to trade. I'd be open to it, but I, I
+don't, that's a, that's a signal like spot price, I think is better than that. And then
+like volatility, what the option chain is doing, I think is another level, clearly better
+than that. Just instead of open interest on some rounded number strike. Mark, it's been a
+pleasure chatting to you and I really appreciate you sharing your insights on this one.
+Yeah, of course. Thanks for having me on. Speak to you again soon. Thanks a lot. Take
+care.

@@ -1,0 +1,58 @@
+turns over time. But we also have seen that like the, I want to say zero DT is decayed,
+but the risk premium of zero DT, which is how profitable selling every entry for every
+half hour, people call it MEIC or mechanical injury iron condor routinely fluctuates
+between three to four standard deviations up and down in profitability. So like for
+example, this last nine months stretch has been the worst in the data set since 2018. But
+if you were to take like four to eight chunks and reshuffle them, it's called a
+permutation, we're only in the 11th percentile. So you just need to understand about how
+volatile that risk premium is over time. And it's not really broken. It just ebbs and
+flows a lot. Whereas if you have signals or ways to vet the marketplace on top of that,
+you can obviously avoid a lot of those drawdowns. But when the risk premium is at three
+standard deviations down, you basically just break even, even if you have the best alpha
+signals out there, basically. So then when it's, so then are there times where you're just
+going to dial down that strategy and not do it then basically and allocate to other
+strategies? No, not really, because you don't know when the risk premium of the market is
+going to ebb and flow. So like, that's very difficult to tell. We would just continue to
+trade. And also like, another crazy thing with selling zero DT options is like, depending
+on your strategy, it's actually very, it's called leptokurtic. So like a huge amount of
+your returns will come on a few days. I think it's like 9% of our P&L comes on the top 2%
+of days, like 30% of our P&L comes on the top 5% of days. Whereas risk premiums poor,
+you'll probably just break even. So we would generally say like stay in the market. And
+how we track it is there's what selling every entry is, and then there's our profitability
+of basically our filters above that. And if the selling zero DT options goes down to like
+negative 20 per occurrence, and we're generally about $15 better per occurrence for our
+filter or 15% expected value. So if we're at negative 20 bucks expected value, we expect
+to be at negative 5. And we don't view that as a bug. We're just saying, hey, the risk
+premiums, you know, overshot here, and it's being sold off a lot. And we think it will
+basically come back. Okay, that's interesting. It's interesting that you don't react to
+it, though, when you see that risk premium decayed so much. Because my gut instinct would
+like think, okay, that means I need to lean a bit longer vol now, because the vol is just
+too cheap. My expectation of selling is negative now. Surely, that means I should lean the
+book a bit longer vol, right? Well, yeah, I mean, you'll always have long vol because of
+the wings. So, you know, the, like, for example, put wings below a VIX of 20 are like
+extremely profitable. They have like a 40% expected value, but they still only win like
+one in every 200 days. So like, you know, so like, and the other thing too, is like, as
+people that run a fund, like we charge two and 20. So if we're holding people's money in
+treasuries, they're like guaranteed to lose money to inflation. You know what I'm saying?
+So yeah, that's definitely how we're trying to put it out. But I mean, I don't, if you're
+systematic, you should be, you know, out there and trading like there are certain
+functions. So as the VIX gets lower, you can't really make money selling straddles because
+there's no skew. So at the money implied volatility is the best future statement of all.
+Usually, if you're selling a 15 delta at the money vol is 15, you may be selling 18 or 19.
+So as volatility gets lower, you know, we may stop selling an hour and a half before the
+market closes or two hours before the market closes just because the expected move goes
+down. So we will be, you know, selling less premium on those types of days. Since vol
+isn't rich, we have some volatility based on those. So, you know, the system will dampen
+down what it does a little bit. And then also, like, we look at the VIX, it's like, I hate
+when people say high VIX or low VIX, because it's like a VIX of 30 is like a historic
+trade for vol traders, like trade it. But it's like a VIX of 30 in 2008 and 2020 was like
+a terrible time to trade. And a VIX of 30 every time outside of that was like the best
+trade ever. So like the VIX is just a statement of what volatility is doing now. It's not
+a notional number, like high VIX or low VIX, not like a Cape P or whatever. It's like, oh,
+companies are overvalued. It's just like, if the VIX is high, it's got an equal chance
+that it's overpriced or underpriced. It just so happens that when people sell it at that
+level, it's generally overpriced until it isn't, because we don't really know what that
+uncertainty is. Sure. Okay. I want to talk a little bit now about these vol factors,
+because I saw you on a video talking about these and I was somewhat intrigued, which is
+why I wanted to quiz you about it a bit more in a bit more detail. So you mentioned how
+like in equities trading, investors...

@@ -88,3 +88,13 @@ sentiment-scanner/data/oi_baseline.json
 # see docs/phclient_v2/WIKI.md; re-download rather than commit the binary)
 potatohedge-*.whl
 .whl-inspect/
+
+# Triage 2026-08-21: generated cron artifacts stay out of git
+trading_journal/alerts/
+trading_journal/x_buzz/raw/
+
+# Ruff cache
+.ruff_cache/
+
+# Trash staging (files awaiting deletion decisions; moved here, not deleted)
+_trash/

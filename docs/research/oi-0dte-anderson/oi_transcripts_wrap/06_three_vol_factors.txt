@@ -1,0 +1,48 @@
+that it's overpriced or underpriced. It just so happens that when people sell it at that
+level, it's generally overpriced until it isn't, because we don't really know what that
+uncertainty is. Okay. I want to talk a little bit now about these vol factors, because I
+saw you on a video talking about these and I was somewhat intrigued, which is why I wanted
+to quiz you about it a bit more in a bit more detail. You mentioned how like in equities
+trading, investors kind of break equities into factors like quality or growth, momentum,
+whatever it is, right? But you have kind of come up with a framework to break your zero
+DTE trading or option trading into vol factors, like variance risk premium being the
+implied versus realized spread being the most obvious one that everyone looks at. But
+there were some other factors that I was intrigued by. So do you want to tell us a bit
+more about those? Yeah. So basically, to give people a little background about factors,
+obviously, you know, I stole this from AQR and Pond and French, everything. People used to
+say risk equals reward, because it's an efficient marketplace, yada, yada, and that was
+basically disproven. So they proved that companies with strong balance sheets or whatever
+tended to explain some of the returns over just the risk you took. So with options,
+everyone always says, hey, the market didn't move. Why didn't you make money? Volatility
+is over-understated. Why didn't you make money? People look at it as there's one binary
+thing. In zero DTE, there are very specific things. So one of the factors is obviously
+variance risk premium. So for example, if volatility is significantly understated, that
+means you exceeded the expected move. So obviously, if you're selling a strangle, you
+really can't make money when that occurs. But if you were to trade trend, which in zero
+DTE, I would basically consider like, you're just like, CTA, your commodity futures trend
+following, but you're using an option that has decay on it. Like you could make money when
+volatility is understated, because if the market precipitously goes in one direction, and
+you're able to choose the other side, you can obviously make money even if the option that
+you sold was mispriced, because you're on the opposite side of direction, you're only
+taking it out to play, you're not really short volatility. And then the other flip side of
+that would be what I call path. So if the market went up to standard deviations, you got
+stopped out, and then it came back to standard deviations, the volatility risk premium
+would be significantly understated, which means you should have made money. But since the
+path was so hostile to standard deviations up, you get stopped out to standard deviations
+down, you get stopped out again, that also kind of a funny factor that you can make money
+on that as well. So basically, we kind of split it up into three types of trades, is that
+we're looking at what can we trade that predicts direction, and we don't really care about
+the volatility. So if we think the market's going up, we'll sell a put that's terribly
+mispriced, like the skews all messed up, whatever, but we just think the spot is going to
+go up. Then we'll trade something that's based on volatility, where it's saying, hey, we
+don't really want to use much of a stop here, or you'll trade a tight spread, five wide,
+20 wide, whatever, because we think the market's going to basically come back. And then
+we'll trade something that we'll call like a path, like we're able to forecast future
+basically jumping as a price, and that in which case we would sell one X stops each time.
+So those are kind of different factors that you could use to trade. So you're not only
+shorting volatility in one way, in one way to make money. And then we have a couple other
+factors like we talked about with the wings. So just for example, is we roughly spend 10%
+of our P&L, 10 to 15% of our P&L on commissions and fees. We roughly spend 25% of our P&L
+on wings, and we roughly spend 55% of our P&L on slippage. So another huge factor is it's
+like, how are you managing your wing costs to keep commissions and fees down in your
+wings? And then the one that we can't really control.
