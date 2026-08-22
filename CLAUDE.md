@@ -30,6 +30,7 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt   # Windows
 .venv/bin/python -m pip install -r requirements.txt           # Linux/Mac
 python setup_db.py
+git config core.hooksPath scripts/hooks   # enables the commit-msg subject-convention hook
 ```
 
 Every entrypoint ships as a matched `.bat` (Windows) / `.sh` (Linux/Mac) pair that do the same thing —
@@ -255,6 +256,12 @@ localhost without adding real auth back first.
   `PYTHONHOME` inherited from a Hermes session can pull Hermes' site-packages (e.g. PIL lacking the
   `_imaging` C extension, or a pydantic_core mismatch). Clear both with `env -u PYTHONPATH -u PYTHONHOME`
   before invoking the project `.venv`.
+- **Don't resubmit a fail-loudly-on-missing-data change for dealer-exposure/backtest code without
+  reading the lesson first.** The same "fail loud instead of silent fallback" change was proposed and
+  reverted twice in dealer-exposure code (same day) — a live-render fail-loud check is correct, but the
+  identical check inside `backtest_stage3.py`'s multi-day loop aborts the whole run on one bad day.
+  Read `Vol_Suite/docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md` and
+  distinguish the live-render case from the backtest-loop case before resubmitting this pattern.
 
 ## Notable env vars
 

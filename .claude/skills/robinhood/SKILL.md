@@ -111,3 +111,10 @@ but not modified; clone into a new scan via `create_scan` instead.
   `get_option_positions` only show single-leg detail per contract; a spread shows as two separate
   long/short legs sharing a `chain_id`+near-identical `opened_at`, not as one strategy object. Group by
   `chain_symbol` + `opened_at` proximity when presenting a "position" to the user.
+- `get_equity_quotes`/`get_option_quotes`'s `symbols` param is a JSON array, not a comma-joined
+  string — pass `["KOS","TGB"]`, never `"KOS,TGB"` (the latter 400s: "has type \"string\", want one of
+  \"null, array\"").
+- `place_option_order` rejects any top-level property outside its schema — e.g. `underlying_type`,
+  `chain_symbol` — with "unexpected additional properties"; only pass the fields the schema defines.
+  Multi-leg/spread orders are **not supported at all** for the agentic account (B) — single-leg only,
+  even though account A already holds spread positions opened outside this agent.
