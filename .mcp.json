@@ -7,6 +7,14 @@
     "robinhood": {
       "type": "http",
       "url": "https://agent.robinhood.com/mcp/trading"
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "swaps-db": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:\\Users\\bottl\\FinancialDevelopment\\swaps.db"]
     }
   }
 }

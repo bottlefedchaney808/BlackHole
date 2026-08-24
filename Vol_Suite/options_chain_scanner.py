@@ -41,34 +41,42 @@ If neither read turns up anything, the scanner says so explicitly rather
 than manufacturing a signal, and still reports the vol-regime read (rich /
 cheap / fair vs. realized, skew direction) as the fallback "insight."
 """
+
+import json
 import math
 import os
-import json
 import warnings
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from datetime import UTC, datetime
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe
 
-from thetadata_client import ThetaDataController, strike_from_theta
+matplotlib.use("Agg")
 import expiry_selector
-from variance_swap_screener import compute_realized_vol
+import matplotlib.pyplot as plt
 from correlation_engine import fetch_price_history
-from vs_utils import timestamped_output_dir
 from dealer_positioning import (
-    DARK_BG, PANEL_BG, GRID_COLOR, TEXT_COLOR, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED,
-    ACCENT_GOLD, ACCENT_PURPLE, ACCENT_CYAN, ACCENT_ORANGE,
+    ACCENT_BLUE,
+    ACCENT_CYAN,
+    ACCENT_GOLD,
+    ACCENT_GREEN,
+    ACCENT_ORANGE,
+    ACCENT_PURPLE,
+    ACCENT_RED,
+    DARK_BG,
+    GRID_COLOR,
+    PANEL_BG,
+    TEXT_COLOR,
     sign_model_render_label,
 )
 from expiry_book_production import fetch_production_result
 from strategy_recommender import StrategyRecommender, format_strategies_artifact
+from thetadata_client import ThetaDataController, strike_from_theta
+from variance_swap_screener import compute_realized_vol
+from vs_utils import timestamped_output_dir
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
@@ -86,23 +94,23 @@ MIN_RESIDUAL_VOL_PTS = 1.5
 # in this environment -- same "best effort, NaN if missing" posture as
 # dealer_positioning._extract_greek_field / _GREEK_FIELD_CANDIDATES). ----------
 FIRST_ORDER_CANDIDATES = {
-    'delta': ['delta', 'Delta', 'DELTA'],
-    'gamma': ['gamma', 'Gamma', 'GAMMA'],
-    'theta': ['theta', 'Theta', 'THETA'],
-    'vega': ['vega', 'Vega', 'VEGA'],
-    'rho': ['rho', 'Rho', 'RHO'],
-    'iv': ['implied_vol', 'impliedVol', 'iv', 'IV'],
-    'bid': ['bid', 'Bid', 'BID'],
-    'ask': ['ask', 'Ask', 'ASK'],
+    "delta": ["delta", "Delta", "DELTA"],
+    "gamma": ["gamma", "Gamma", "GAMMA"],
+    "theta": ["theta", "Theta", "THETA"],
+    "vega": ["vega", "Vega", "VEGA"],
+    "rho": ["rho", "Rho", "RHO"],
+    "iv": ["implied_vol", "impliedVol", "iv", "IV"],
+    "bid": ["bid", "Bid", "BID"],
+    "ask": ["ask", "Ask", "ASK"],
 }
 SECOND_ORDER_CANDIDATES = {
-    'vanna': ['vanna', 'Vanna', 'VANNA'],
-    'charm': ['charm', 'Charm', 'CHARM', 'delta_decay', 'deltaDecay'],
-    'vomma': ['vomma', 'Vomma', 'VOMMA', 'volga', 'Volga', 'VOLGA'],
-    'veta': ['veta', 'Veta', 'VETA', 'vega_decay', 'vegaDecay'],
-    'speed': ['speed', 'Speed', 'SPEED'],
-    'zomma': ['zomma', 'Zomma', 'ZOMMA'],
-    'color': ['color', 'Color', 'COLOR', 'gamma_decay', 'gammaDecay'],
+    "vanna": ["vanna", "Vanna", "VANNA"],
+    "charm": ["charm", "Charm", "CHARM", "delta_decay", "deltaDecay"],
+    "vomma": ["vomma", "Vomma", "VOMMA", "volga", "Volga", "VOLGA"],
+    "veta": ["veta", "Veta", "VETA", "vega_decay", "vegaDecay"],
+    "speed": ["speed", "Speed", "SPEED"],
+    "zomma": ["zomma", "Zomma", "ZOMMA"],
+    "color": ["color", "Color", "COLOR", "gamma_decay", "gammaDecay"],
 }
 
 
@@ -111,16 +119,16 @@ def _to_float(x):
         v = float(x)
         return v
     except (TypeError, ValueError):
-        return float('nan')
+        return float("nan")
 
 
-def _extract(row: dict, candidates: List[str]) -> float:
+def _extract(row: dict, candidates: list[str]) -> float:
     for key in candidates:
-        if key in row and row[key] not in (None, ''):
+        if key in row and row[key] not in (None, ""):
             v = _to_float(row[key])
             if not math.isnan(v):
                 return v
-    return float('nan')
+    return float("nan")
 
 
 def compute_forward_price(S0: float, r: float, q: float, T: float) -> float:
@@ -144,7 +152,7 @@ def _json_safe(obj):
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
-    elif hasattr(obj, '__dict__'):
+    elif hasattr(obj, "__dict__"):
         return obj.__dict__
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
@@ -165,7 +173,9 @@ def _sanitize_for_json(obj):
     return obj
 
 
-def _extract_chain_data_from_df(scan_result_df: pd.DataFrame, option_type: str = 'call') -> Dict[str, List[float]]:
+def _extract_chain_data_from_df(
+    scan_result_df: pd.DataFrame, option_type: str = "call"
+) -> dict[str, list[float]]:
     """
     Extract chain_data dict from options_chain_scanner DataFrame.
 
@@ -180,28 +190,32 @@ def _extract_chain_data_from_df(scan_result_df: pd.DataFrame, option_type: str =
     Returns:
         Dict with keys: strikes, delta, gamma, theta, vega, vanna, bid_ask_spread, open_interest
     """
-    right_code = 'C' if option_type.lower() == 'call' else 'P'
-    filtered = scan_result_df[scan_result_df['right'] == right_code].sort_values('strike').reset_index(drop=True)
+    right_code = "C" if option_type.lower() == "call" else "P"
+    filtered = (
+        scan_result_df[scan_result_df["right"] == right_code]
+        .sort_values("strike")
+        .reset_index(drop=True)
+    )
 
     if len(filtered) == 0:
         raise ValueError(f"No {option_type} options found in scan result")
 
     # Calculate bid-ask spread from bid and ask columns
-    bid_ask_spread = (filtered['ask'] - filtered['bid']).fillna(0.0).tolist()
+    bid_ask_spread = (filtered["ask"] - filtered["bid"]).fillna(0.0).tolist()
 
     return {
-        'strikes': filtered['strike'].tolist(),
-        'delta': filtered['delta'].tolist(),
-        'gamma': filtered['gamma'].tolist(),
-        'theta': filtered['theta'].tolist(),
-        'vega': filtered['vega'].tolist(),
-        'vanna': filtered['vanna'].tolist(),
-        'bid_ask_spread': bid_ask_spread,
-        'open_interest': filtered['oi'].tolist(),
+        "strikes": filtered["strike"].tolist(),
+        "delta": filtered["delta"].tolist(),
+        "gamma": filtered["gamma"].tolist(),
+        "theta": filtered["theta"].tolist(),
+        "vega": filtered["vega"].tolist(),
+        "vanna": filtered["vanna"].tolist(),
+        "bid_ask_spread": bid_ask_spread,
+        "open_interest": filtered["oi"].tolist(),
     }
 
 
-def _transform_edge_strikes(edge_candidates: List[dict]) -> List[dict]:
+def _transform_edge_strikes(edge_candidates: list[dict]) -> list[dict]:
     """
     Transform edge_candidates from chain scanner to strategy recommender format.
 
@@ -216,13 +230,15 @@ def _transform_edge_strikes(edge_candidates: List[dict]) -> List[dict]:
     """
     transformed = []
     for candidate in edge_candidates:
-        edge_type = 'SELL' if candidate['edge_kind'] == 'rich' else 'BUY'
-        transformed.append({
-            'strike': candidate['strike'],
-            'edge_type': edge_type,
-            'iv_deviation': candidate['iv_residual_pts'],  # in basis points
-            'oi': candidate['oi'],
-        })
+        edge_type = "SELL" if candidate["edge_kind"] == "rich" else "BUY"
+        transformed.append(
+            {
+                "strike": candidate["strike"],
+                "edge_type": edge_type,
+                "iv_deviation": candidate["iv_residual_pts"],  # in basis points
+                "oi": candidate["oi"],
+            }
+        )
     return transformed
 
 
@@ -240,20 +256,22 @@ class ScanResult:
     rv_60_pct: float
     rv_90_pct: float
     rv_match_pct: float
-    smile_a: float          # quadratic curvature coefficient (convexity of the smile)
-    smile_b: float          # linear coefficient (skew slope in log-moneyness)
+    smile_a: float  # quadratic curvature coefficient (convexity of the smile)
+    smile_b: float  # linear coefficient (skew slope in log-moneyness)
     net_vanna_shares: float
     call_vanna_shares: float
     put_vanna_shares: float
-    vanna_flip_strike: Optional[float]
-    top_vanna_strikes: List[Tuple[float, float]]
-    edge_candidates: List[dict]
+    vanna_flip_strike: float | None
+    top_vanna_strikes: list[tuple[float, float]]
+    edge_candidates: list[dict]
     regime: str
     verdict: str
     insight: str
-    strategies: List[dict] = field(default_factory=list)  # Recommended strategies from chain scan
-    svi_params: Optional[dict] = None  # fitter + SVI observables when SVI smile fit ran
-    dealer_result: Optional[object] = None  # the shared dealer engine result
+    strategies: list[dict] = field(
+        default_factory=list
+    )  # Recommended strategies from chain scan
+    svi_params: dict | None = None  # fitter + SVI observables when SVI smile fit ran
+    dealer_result: object | None = None  # the shared dealer engine result
     # (set by scan_chain; plot_scanner_charts renders vanna from it -- the
     #  "two-vanna" fix: the chart must draw the SAME series the dealer
     #  engine's exposure charts draw, never a second independent recomputation)
@@ -272,7 +290,9 @@ def build_chain_dataframe(td, ticker: str, expiration: str) -> pd.DataFrame:
     try:
         second_rows = td.option_bulk_greeks_second_order(ticker, expiration)
     except Exception as e:
-        print(f"  [warn] 2nd-order greeks fetch failed ({e}); vanna/charm/vomma/veta will be N/A.")
+        print(
+            f"  [warn] 2nd-order greeks fetch failed ({e}); vanna/charm/vomma/veta will be N/A."
+        )
         second_rows = []
     try:
         oi_rows = td.option_bulk_oi(ticker, expiration)
@@ -282,23 +302,26 @@ def build_chain_dataframe(td, ticker: str, expiration: str) -> pd.DataFrame:
 
     def _key(row):
         try:
-            return (int(float(row['strike'])), str(row.get('right', '')).strip().upper()[:1])
+            return (
+                int(float(row["strike"])),
+                str(row.get("right", "")).strip().upper()[:1],
+            )
         except (KeyError, ValueError, TypeError):
             return None
 
-    second_map: Dict[tuple, dict] = {}
+    second_map: dict[tuple, dict] = {}
     for row in second_rows:
         k = _key(row)
         if k:
             second_map[k] = row
 
-    oi_map: Dict[tuple, int] = {}
+    oi_map: dict[tuple, int] = {}
     for row in oi_rows:
         k = _key(row)
         if not k:
             continue
         try:
-            oi_map[k] = int(float(row.get('open_interest', 0)))
+            oi_map[k] = int(float(row.get("open_interest", 0)))
         except (ValueError, TypeError):
             pass
 
@@ -309,89 +332,112 @@ def build_chain_dataframe(td, ticker: str, expiration: str) -> pd.DataFrame:
             continue
         strike_theta, right = k
         strike = strike_from_theta(strike_theta)
-        bid = _extract(row, FIRST_ORDER_CANDIDATES['bid'])
-        ask = _extract(row, FIRST_ORDER_CANDIDATES['ask'])
-        mid = (bid + ask) / 2.0 if (not math.isnan(bid) and not math.isnan(ask) and bid > 0 and ask > 0) else float('nan')
-        iv = _extract(row, FIRST_ORDER_CANDIDATES['iv'])
+        bid = _extract(row, FIRST_ORDER_CANDIDATES["bid"])
+        ask = _extract(row, FIRST_ORDER_CANDIDATES["ask"])
+        mid = (
+            (bid + ask) / 2.0
+            if (not math.isnan(bid) and not math.isnan(ask) and bid > 0 and ask > 0)
+            else float("nan")
+        )
+        iv = _extract(row, FIRST_ORDER_CANDIDATES["iv"])
         second_row = second_map.get(k, {})
-        records.append({
-            'strike': strike, 'right': right,
-            'bid': bid, 'ask': ask, 'mid': mid, 'iv': iv,
-            'delta': _extract(row, FIRST_ORDER_CANDIDATES['delta']),
-            'gamma': _extract(row, FIRST_ORDER_CANDIDATES['gamma']),
-            'theta': _extract(row, FIRST_ORDER_CANDIDATES['theta']),
-            'vega': _extract(row, FIRST_ORDER_CANDIDATES['vega']),
-            'rho': _extract(row, FIRST_ORDER_CANDIDATES['rho']),
-            'vanna': _extract(second_row, SECOND_ORDER_CANDIDATES['vanna']),
-            'charm': _extract(second_row, SECOND_ORDER_CANDIDATES['charm']),
-            'vomma': _extract(second_row, SECOND_ORDER_CANDIDATES['vomma']),
-            'veta': _extract(second_row, SECOND_ORDER_CANDIDATES['veta']),
-            'speed': _extract(second_row, SECOND_ORDER_CANDIDATES['speed']),
-            'zomma': _extract(second_row, SECOND_ORDER_CANDIDATES['zomma']),
-            'color': _extract(second_row, SECOND_ORDER_CANDIDATES['color']),
-            'oi': oi_map.get(k, 0),
-        })
+        records.append(
+            {
+                "strike": strike,
+                "right": right,
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+                "iv": iv,
+                "delta": _extract(row, FIRST_ORDER_CANDIDATES["delta"]),
+                "gamma": _extract(row, FIRST_ORDER_CANDIDATES["gamma"]),
+                "theta": _extract(row, FIRST_ORDER_CANDIDATES["theta"]),
+                "vega": _extract(row, FIRST_ORDER_CANDIDATES["vega"]),
+                "rho": _extract(row, FIRST_ORDER_CANDIDATES["rho"]),
+                "vanna": _extract(second_row, SECOND_ORDER_CANDIDATES["vanna"]),
+                "charm": _extract(second_row, SECOND_ORDER_CANDIDATES["charm"]),
+                "vomma": _extract(second_row, SECOND_ORDER_CANDIDATES["vomma"]),
+                "veta": _extract(second_row, SECOND_ORDER_CANDIDATES["veta"]),
+                "speed": _extract(second_row, SECOND_ORDER_CANDIDATES["speed"]),
+                "zomma": _extract(second_row, SECOND_ORDER_CANDIDATES["zomma"]),
+                "color": _extract(second_row, SECOND_ORDER_CANDIDATES["color"]),
+                "oi": oi_map.get(k, 0),
+            }
+        )
 
     df = pd.DataFrame.from_records(records)
     if df.empty:
         raise ValueError(f"No usable rows for {ticker} {expiration}")
-    df = df.sort_values(['strike', 'right']).reset_index(drop=True)
+    df = df.sort_values(["strike", "right"]).reset_index(drop=True)
     return df
 
 
 # ---------- Smile fit / edge scan ----------
-def fit_smile_and_flag_edges(df: pd.DataFrame, forward: float) -> Tuple[pd.DataFrame, float, float]:
+def fit_smile_and_flag_edges(
+    df: pd.DataFrame, forward: float
+) -> tuple[pd.DataFrame, float, float]:
     """Fit a quadratic to OTM IV vs. log-moneyness (put IV for K<=F, call IV
     for K>F -- same OTM convention variance_swap_screener/variance_swap_live
     already use for the fair-variance replication) and flag strikes whose
     live IV deviates meaningfully from that fit. Returns (df with fit_iv /
     iv_residual_pts / is_edge columns added, smile_a, smile_b)."""
     df = df.copy()
-    df['moneyness'] = np.log(df['strike'] / forward)
-    df['is_otm'] = np.where(df['strike'] <= forward, df['right'] == 'P', df['right'] == 'C')
+    df["moneyness"] = np.log(df["strike"] / forward)
+    df["is_otm"] = np.where(
+        df["strike"] <= forward, df["right"] == "P", df["right"] == "C"
+    )
 
-    otm = df[df['is_otm'] & df['iv'].notna() & (df['iv'] > 0)]
-    df['fit_iv'] = np.nan
-    df['iv_residual_pts'] = np.nan
-    df['is_edge'] = False
-    df['edge_kind'] = ''
+    otm = df[df["is_otm"] & df["iv"].notna() & (df["iv"] > 0)]
+    df["fit_iv"] = np.nan
+    df["iv_residual_pts"] = np.nan
+    df["is_edge"] = False
+    df["edge_kind"] = ""
 
     if len(otm) < 5:
-        return df, float('nan'), float('nan')
+        return df, float("nan"), float("nan")
 
-    x = otm['moneyness'].values
-    y = otm['iv'].values
+    x = otm["moneyness"].values
+    y = otm["iv"].values
     coeffs = np.polyfit(x, y, 2)
     a, b, c = coeffs
-    fit_all = np.polyval(coeffs, df['moneyness'].values)
-    df['fit_iv'] = fit_all
-    df.loc[df['is_otm'] & df['iv'].notna(), 'iv_residual_pts'] = (
-        (df.loc[df['is_otm'] & df['iv'].notna(), 'iv'] - df.loc[df['is_otm'] & df['iv'].notna(), 'fit_iv']) * 100.0
-    )
+    fit_all = np.polyval(coeffs, df["moneyness"].values)
+    df["fit_iv"] = fit_all
+    df.loc[df["is_otm"] & df["iv"].notna(), "iv_residual_pts"] = (
+        df.loc[df["is_otm"] & df["iv"].notna(), "iv"]
+        - df.loc[df["is_otm"] & df["iv"].notna(), "fit_iv"]
+    ) * 100.0
 
     # Robust dispersion of residuals (median absolute deviation, scaled) so the
     # threshold adapts to how noisy this particular chain's smile is instead
     # of a single hardcoded vol-point cutoff being too tight or too loose
     # across very different tickers.
-    otm_resid = df.loc[df['is_otm'] & df['iv_residual_pts'].notna(), 'iv_residual_pts']
+    otm_resid = df.loc[df["is_otm"] & df["iv_residual_pts"].notna(), "iv_residual_pts"]
     if len(otm_resid) >= 5:
         mad = float(np.median(np.abs(otm_resid - np.median(otm_resid)))) * 1.4826
         threshold = max(MIN_RESIDUAL_VOL_PTS, 1.5 * mad)
     else:
         threshold = MIN_RESIDUAL_VOL_PTS
 
-    edge_mask = df['is_otm'] & (df['iv_residual_pts'].abs() >= threshold) & (df['oi'] >= MIN_OI_FOR_EDGE)
-    df.loc[edge_mask, 'is_edge'] = True
-    df.loc[edge_mask & (df['iv_residual_pts'] > 0), 'edge_kind'] = 'rich'
-    df.loc[edge_mask & (df['iv_residual_pts'] < 0), 'edge_kind'] = 'cheap'
+    edge_mask = (
+        df["is_otm"]
+        & (df["iv_residual_pts"].abs() >= threshold)
+        & (df["oi"] >= MIN_OI_FOR_EDGE)
+    )
+    df.loc[edge_mask, "is_edge"] = True
+    df.loc[edge_mask & (df["iv_residual_pts"] > 0), "edge_kind"] = "rich"
+    df.loc[edge_mask & (df["iv_residual_pts"] < 0), "edge_kind"] = "cheap"
     return df, float(a), float(b)
 
 
 # ---------- SVI smile fit (reuses the reusable svi_rp module) ----------
-def fit_svi_smile(df: pd.DataFrame, forward: float, T_years: float,
-                  oi_by=None, use_svi: bool = True,
-                  spot: Optional[float] = None,
-                  ) -> Tuple[pd.DataFrame, float, float, Optional[dict]]:
+def fit_svi_smile(
+    df: pd.DataFrame,
+    forward: float,
+    T_years: float,
+    oi_by=None,
+    use_svi: bool = True,
+    spot: float | None = None,
+) -> tuple[pd.DataFrame, float, float, dict | None]:
     """Fit the reference smile (SVI via the reusable svi_rp module) and flag
     cheap/rich edges. Keeps the SAME contract as fit_smile_and_flag_edges
     (fit_iv / iv_residual_pts / is_edge / edge_kind) so existing consumers are
@@ -410,78 +456,103 @@ def fit_svi_smile(df: pd.DataFrame, forward: float, T_years: float,
     (back-compat), but scan_chain passes the real spot.
     """
     df = df.copy()
-    df['moneyness'] = np.log(df['strike'] / forward)
-    df['is_otm'] = np.where(df['strike'] <= forward, df['right'] == 'P', df['right'] == 'C')
-    otm = df[df['is_otm'] & df['iv'].notna() & (df['iv'] > 0)]
-    df['fit_iv'] = np.nan
-    df['iv_residual_pts'] = np.nan
-    df['is_edge'] = False
-    df['edge_kind'] = ''
+    df["moneyness"] = np.log(df["strike"] / forward)
+    df["is_otm"] = np.where(
+        df["strike"] <= forward, df["right"] == "P", df["right"] == "C"
+    )
+    otm = df[df["is_otm"] & df["iv"].notna() & (df["iv"] > 0)]
+    df["fit_iv"] = np.nan
+    df["iv_residual_pts"] = np.nan
+    df["is_edge"] = False
+    df["edge_kind"] = ""
 
     svi_params = None
     if use_svi and len(otm) >= 5 and forward > 0 and T_years > 0:
         try:
             import svi_rp
+
             chain_iv = {}
             oi_map = {}
             for _, r in otm.iterrows():
-                k = float(r['strike'])
-                rt = str(r['right']).strip().upper()[:1]
-                chain_iv[(k, rt)] = float(r['iv'])
-                oi_map[(k, rt)] = int(r.get('oi', 0) or 0)
+                k = float(r["strike"])
+                rt = str(r["right"]).strip().upper()[:1]
+                chain_iv[(k, rt)] = float(r["iv"])
+                oi_map[(k, rt)] = int(r.get("oi", 0) or 0)
             anchor = spot if spot is not None else forward
-            ref = svi_rp.calibrate_svi(chain_iv, float(anchor), float(T_years),
-                                       oi_by=oi_map)
+            ref = svi_rp.calibrate_svi(
+                chain_iv, float(anchor), float(T_years), oi_by=oi_map
+            )
             for idx in df.index:
-                k = float(df.at[idx, 'strike'])
-                df.at[idx, 'fit_iv'] = ref.sigma_ref(k)
-            df.loc[df['is_otm'] & df['iv'].notna(), 'iv_residual_pts'] = (
-                (df.loc[df['is_otm'] & df['iv'].notna(), 'iv'] -
-                 df.loc[df['is_otm'] & df['iv'].notna(), 'fit_iv']) * 100.0)
-            otm_resid = df.loc[df['is_otm'] & df['iv_residual_pts'].notna(), 'iv_residual_pts']
+                k = float(df.at[idx, "strike"])
+                df.at[idx, "fit_iv"] = ref.sigma_ref(k)
+            df.loc[df["is_otm"] & df["iv"].notna(), "iv_residual_pts"] = (
+                df.loc[df["is_otm"] & df["iv"].notna(), "iv"]
+                - df.loc[df["is_otm"] & df["iv"].notna(), "fit_iv"]
+            ) * 100.0
+            otm_resid = df.loc[
+                df["is_otm"] & df["iv_residual_pts"].notna(), "iv_residual_pts"
+            ]
             if len(otm_resid) >= 5:
-                mad = float(np.median(np.abs(otm_resid - np.median(otm_resid)))) * 1.4826
+                mad = (
+                    float(np.median(np.abs(otm_resid - np.median(otm_resid)))) * 1.4826
+                )
                 threshold = max(MIN_RESIDUAL_VOL_PTS, 1.5 * mad)
             else:
                 threshold = MIN_RESIDUAL_VOL_PTS
-            edge_mask = df['is_otm'] & (df['iv_residual_pts'].abs() >= threshold) & (df['oi'] >= MIN_OI_FOR_EDGE)
-            df.loc[edge_mask, 'is_edge'] = True
-            df.loc[edge_mask & (df['iv_residual_pts'] > 0), 'edge_kind'] = 'rich'
-            df.loc[edge_mask & (df['iv_residual_pts'] < 0), 'edge_kind'] = 'cheap'
+            edge_mask = (
+                df["is_otm"]
+                & (df["iv_residual_pts"].abs() >= threshold)
+                & (df["oi"] >= MIN_OI_FOR_EDGE)
+            )
+            df.loc[edge_mask, "is_edge"] = True
+            df.loc[edge_mask & (df["iv_residual_pts"] > 0), "edge_kind"] = "rich"
+            df.loc[edge_mask & (df["iv_residual_pts"] < 0), "edge_kind"] = "cheap"
             svi_params = {
-                'theta_t': ref.theta_t, 'sigma_atm': ref.sigma_atm,
-                'psi_t': ref.psi_t, 'p_t': ref.p_t,
-                'phi': ref.phi, 'rho': ref.rho,
-                'sigma_swap': ref.sigma_swap, 'K_var': ref.K_var,
+                "theta_t": ref.theta_t,
+                "sigma_atm": ref.sigma_atm,
+                "psi_t": ref.psi_t,
+                "p_t": ref.p_t,
+                "phi": ref.phi,
+                "rho": ref.rho,
+                "sigma_swap": ref.sigma_swap,
+                "K_var": ref.K_var,
             }
         except Exception:
             svi_params = None  # fall through to quadratic below
 
     if svi_params is not None:
-        # SVI reference produced the fit; expose fitter + cheap/rich proxies.
-        return df, float(ref.phi), float(ref.rho), svi_params
+        # SVI reference produced the fit. SVI's phi/rho are not quadratic
+        # smile coefficients -- returning them as smile_a/smile_b would
+        # silently corrupt downstream skew classification (_build_insight),
+        # so report NaN here; the real fitted SVI params are in svi_params.
+        return df, float("nan"), float("nan"), svi_params
 
     # SVI off / failed -> quadratic fallback (same as fit_smile_and_flag_edges).
     if len(otm) < 5:
-        return df, float('nan'), float('nan'), None
-    x = otm['moneyness'].values
-    y = otm['iv'].values
+        return df, float("nan"), float("nan"), None
+    x = otm["moneyness"].values
+    y = otm["iv"].values
     coeffs = np.polyfit(x, y, 2)
     a, b, c = coeffs
-    df['fit_iv'] = np.polyval(coeffs, df['moneyness'].values)
-    df.loc[df['is_otm'] & df['iv'].notna(), 'iv_residual_pts'] = (
-        (df.loc[df['is_otm'] & df['iv'].notna(), 'iv'] -
-         df.loc[df['is_otm'] & df['iv'].notna(), 'fit_iv']) * 100.0)
-    otm_resid = df.loc[df['is_otm'] & df['iv_residual_pts'].notna(), 'iv_residual_pts']
+    df["fit_iv"] = np.polyval(coeffs, df["moneyness"].values)
+    df.loc[df["is_otm"] & df["iv"].notna(), "iv_residual_pts"] = (
+        df.loc[df["is_otm"] & df["iv"].notna(), "iv"]
+        - df.loc[df["is_otm"] & df["iv"].notna(), "fit_iv"]
+    ) * 100.0
+    otm_resid = df.loc[df["is_otm"] & df["iv_residual_pts"].notna(), "iv_residual_pts"]
     if len(otm_resid) >= 5:
         mad = float(np.median(np.abs(otm_resid - np.median(otm_resid)))) * 1.4826
         threshold = max(MIN_RESIDUAL_VOL_PTS, 1.5 * mad)
     else:
         threshold = MIN_RESIDUAL_VOL_PTS
-    edge_mask = df['is_otm'] & (df['iv_residual_pts'].abs() >= threshold) & (df['oi'] >= MIN_OI_FOR_EDGE)
-    df.loc[edge_mask, 'is_edge'] = True
-    df.loc[edge_mask & (df['iv_residual_pts'] > 0), 'edge_kind'] = 'rich'
-    df.loc[edge_mask & (df['iv_residual_pts'] < 0), 'edge_kind'] = 'cheap'
+    edge_mask = (
+        df["is_otm"]
+        & (df["iv_residual_pts"].abs() >= threshold)
+        & (df["oi"] >= MIN_OI_FOR_EDGE)
+    )
+    df.loc[edge_mask, "is_edge"] = True
+    df.loc[edge_mask & (df["iv_residual_pts"] > 0), "edge_kind"] = "rich"
+    df.loc[edge_mask & (df["iv_residual_pts"] < 0), "edge_kind"] = "cheap"
     return df, float(a), float(b), None
 
 
@@ -502,16 +573,23 @@ def compute_vanna_positioning(dealer_result) -> dict:
     """
     if hasattr(dealer_result, "snapshot"):
         import expiry_book_exposure as ebe
+
         rows = dealer_result.snapshot.rows
         spot = float(dealer_result.spot)
         by_strike = {}
         for row in rows:
-            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + ebe.vannacharm_row(row, spot, "vanna")
+            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + ebe.vannacharm_row(
+                row, spot, "vanna"
+            )
         strikes = np.asarray(sorted(by_strike), dtype=float)
         values = np.asarray([by_strike[k] for k in strikes], dtype=float)
         has_vanna = bool(len(rows))
-        call_vanna = sum(ebe.vannacharm_row(r, spot, "vanna") for r in rows if r.right == "C")
-        put_vanna = sum(ebe.vannacharm_row(r, spot, "vanna") for r in rows if r.right == "P")
+        call_vanna = sum(
+            ebe.vannacharm_row(r, spot, "vanna") for r in rows if r.right == "C"
+        )
+        put_vanna = sum(
+            ebe.vannacharm_row(r, spot, "vanna") for r in rows if r.right == "P"
+        )
     else:
         strikes = np.asarray(dealer_result.strike_grid, dtype=float)
         values = np.asarray(dealer_result.vanna_shares_by_strike, dtype=float)
@@ -534,21 +612,24 @@ def compute_vanna_positioning(dealer_result) -> dict:
             nearest = crossings[np.argmin(np.abs(crossings - spot_idx))]
             flip_strike = float((strikes[nearest] + strikes[nearest + 1]) / 2.0)
 
-    top_vanna = sorted(zip(strikes.tolist(), values.tolist()), key=lambda t: abs(t[1]), reverse=True)[:5]
+    top_vanna = sorted(
+        zip(strikes.tolist(), values.tolist()), key=lambda t: abs(t[1]), reverse=True
+    )[:5]
 
     return {
-        'net_vanna_shares': net_vanna,
-        'call_vanna_shares': call_vanna,
-        'put_vanna_shares': put_vanna,
-        'vanna_flip_strike': flip_strike,
-        'top_vanna_strikes': top_vanna,
-        'has_vanna_data': has_vanna,
+        "net_vanna_shares": net_vanna,
+        "call_vanna_shares": call_vanna,
+        "put_vanna_shares": put_vanna,
+        "vanna_flip_strike": flip_strike,
+        "top_vanna_strikes": top_vanna,
+        "has_vanna_data": has_vanna,
     }
 
 
 # ---------- Main scan ----------
-def scan_chain(ticker: str, expiration: str, target_years: float, td,
-               dealer_result=None) -> ScanResult:
+def scan_chain(
+    ticker: str, expiration: str, target_years: float, td, dealer_result=None
+) -> ScanResult:
     """`dealer_result`: an already-computed dealer_positioning.DealerPositioningResult
     (e.g. from volatility_suite.py's earlier compute_dealer_positioning call)
     to share vanna numbers with, instead of this scan computing its own. If
@@ -562,7 +643,7 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
     dividend_yield = td.fetch_dividend_yield(ticker)
 
     exp_date = datetime.strptime(expiration, "%Y%m%d").date()
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     actual_T = max((exp_date - today).days, 0) / DEFAULT_A
     r_live = td.fetch_risk_free_rate(actual_T)
     r_use = r_live if r_live is not None else RISK_FREE_RATE
@@ -578,12 +659,12 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
     # ATM IV via the OTM-side convention (put IV below forward, call IV above --
     # same convention variance_swap_screener/variance_swap_live use), taking
     # whichever listed strike sits closest to the forward.
-    otm_df = df[df['is_otm'] & df['iv'].notna() & (df['iv'] > 0)]
+    otm_df = df[df["is_otm"] & df["iv"].notna() & (df["iv"] > 0)]
     if len(otm_df):
-        atm_idx = (otm_df['strike'] - forward).abs().idxmin()
-        atm_iv_pct = float(otm_df.loc[atm_idx, 'iv'] * 100.0)
+        atm_idx = (otm_df["strike"] - forward).abs().idxmin()
+        atm_iv_pct = float(otm_df.loc[atm_idx, "iv"] * 100.0)
     else:
-        atm_iv_pct = float('nan')
+        atm_iv_pct = float("nan")
 
     try:
         hist_df = fetch_price_history([ticker], period="2y")
@@ -594,13 +675,19 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
         rv_30 = compute_realized_vol(prices, min(30, len(prices)))
         rv_60 = compute_realized_vol(prices, min(60, len(prices)))
         rv_90 = compute_realized_vol(prices, min(90, len(prices)))
-        match_lookback = max(int(actual_T * 252), 5)  # trading-day price points ~ option life
+        match_lookback = max(
+            int(actual_T * 252), 5
+        )  # trading-day price points ~ option life
         rv_match = compute_realized_vol(prices, min(match_lookback, len(prices)))
     else:
-        rv_30 = rv_60 = rv_90 = rv_match = float('nan')
+        rv_30 = rv_60 = rv_90 = rv_match = float("nan")
 
-    rv_match_pct = rv_match * 100 if not math.isnan(rv_match) else float('nan')
-    vrp_pts = (atm_iv_pct - rv_match_pct) if (not math.isnan(atm_iv_pct) and not math.isnan(rv_match_pct)) else float('nan')
+    rv_match_pct = rv_match * 100 if not math.isnan(rv_match) else float("nan")
+    vrp_pts = (
+        (atm_iv_pct - rv_match_pct)
+        if (not math.isnan(atm_iv_pct) and not math.isnan(rv_match_pct))
+        else float("nan")
+    )
 
     if not math.isnan(vrp_pts):
         if vrp_pts >= 4.0:
@@ -612,102 +699,172 @@ def scan_chain(ticker: str, expiration: str, target_years: float, td,
     else:
         regime = "UNKNOWN"
 
-    edge_rows = df[df['is_edge']].sort_values('iv_residual_pts', key=lambda s: s.abs(), ascending=False)
-    edge_candidates = edge_rows[['strike', 'right', 'iv', 'fit_iv', 'iv_residual_pts', 'oi', 'edge_kind']].to_dict('records')
+    edge_rows = df[df["is_edge"]].sort_values(
+        "iv_residual_pts", key=lambda s: s.abs(), ascending=False
+    )
+    edge_candidates = edge_rows[
+        ["strike", "right", "iv", "fit_iv", "iv_residual_pts", "oi", "edge_kind"]
+    ].to_dict("records")
 
     verdict, insight = _build_insight(
-        ticker, expiration, actual_T, spot, forward, atm_iv_pct,
-        rv_30, rv_60, rv_90, rv_match_pct, vrp_pts, regime,
-        smile_a, smile_b, vanna_info, edge_candidates,
+        ticker,
+        expiration,
+        actual_T,
+        spot,
+        forward,
+        atm_iv_pct,
+        rv_30,
+        rv_60,
+        rv_90,
+        rv_match_pct,
+        vrp_pts,
+        regime,
+        smile_a,
+        smile_b,
+        vanna_info,
+        edge_candidates,
     )
 
     return ScanResult(
-        ticker=ticker, expiry=expiration, T_years=actual_T, spot=spot, forward=forward,
-        dividend_yield=dividend_yield, df=df, atm_iv_pct=atm_iv_pct,
-        rv_30_pct=rv_30 * 100 if not math.isnan(rv_30) else float('nan'),
-        rv_60_pct=rv_60 * 100 if not math.isnan(rv_60) else float('nan'),
-        rv_90_pct=rv_90 * 100 if not math.isnan(rv_90) else float('nan'),
-        rv_match_pct=rv_match_pct, smile_a=smile_a, smile_b=smile_b,
-        net_vanna_shares=vanna_info['net_vanna_shares'],
-        call_vanna_shares=vanna_info['call_vanna_shares'],
-        put_vanna_shares=vanna_info['put_vanna_shares'],
-        vanna_flip_strike=vanna_info['vanna_flip_strike'],
-        top_vanna_strikes=vanna_info['top_vanna_strikes'],
-        edge_candidates=edge_candidates, regime=regime, verdict=verdict, insight=insight,
+        ticker=ticker,
+        expiry=expiration,
+        T_years=actual_T,
+        spot=spot,
+        forward=forward,
+        dividend_yield=dividend_yield,
+        df=df,
+        atm_iv_pct=atm_iv_pct,
+        rv_30_pct=rv_30 * 100 if not math.isnan(rv_30) else float("nan"),
+        rv_60_pct=rv_60 * 100 if not math.isnan(rv_60) else float("nan"),
+        rv_90_pct=rv_90 * 100 if not math.isnan(rv_90) else float("nan"),
+        rv_match_pct=rv_match_pct,
+        smile_a=smile_a,
+        smile_b=smile_b,
+        net_vanna_shares=vanna_info["net_vanna_shares"],
+        call_vanna_shares=vanna_info["call_vanna_shares"],
+        put_vanna_shares=vanna_info["put_vanna_shares"],
+        vanna_flip_strike=vanna_info["vanna_flip_strike"],
+        top_vanna_strikes=vanna_info["top_vanna_strikes"],
+        edge_candidates=edge_candidates,
+        regime=regime,
+        verdict=verdict,
+        insight=insight,
         svi_params=svi_params,
         dealer_result=dealer_result,
     )
 
 
-def _build_insight(ticker, expiration, T, spot, forward, atm_iv_pct, rv_30, rv_60, rv_90,
-                   rv_match_pct, vrp_pts, regime, smile_a, smile_b, vanna_info, edge_candidates) -> Tuple[str, str]:
+def _build_insight(
+    ticker,
+    expiration,
+    T,
+    spot,
+    forward,
+    atm_iv_pct,
+    rv_30,
+    rv_60,
+    rv_90,
+    rv_match_pct,
+    vrp_pts,
+    regime,
+    smile_a,
+    smile_b,
+    vanna_info,
+    edge_candidates,
+) -> tuple[str, str]:
     lines = []
     has_edge = len(edge_candidates) > 0
-    has_vanna = vanna_info['has_vanna_data']
+    has_vanna = vanna_info["has_vanna_data"]
 
     if has_edge:
         verdict = "EDGE DETECTED"
-        lines.append(f"{len(edge_candidates)} strike(s) sit off the fitted smile with real OI behind them:")
+        lines.append(
+            f"{len(edge_candidates)} strike(s) sit off the fitted smile with real OI behind them:"
+        )
         for c in edge_candidates[:8]:
-            tag = "RICH (sell candidate)" if c['edge_kind'] == 'rich' else "CHEAP (buy candidate)"
+            tag = (
+                "RICH (sell candidate)"
+                if c["edge_kind"] == "rich"
+                else "CHEAP (buy candidate)"
+            )
             lines.append(
-                f"  {c['strike']:.2f}{c['right']}: IV {c['iv']*100:.2f}% vs fit {c['fit_iv']*100:.2f}% "
+                f"  {c['strike']:.2f}{c['right']}: IV {c['iv'] * 100:.2f}% vs fit {c['fit_iv'] * 100:.2f}% "
                 f"({c['iv_residual_pts']:+.2f} vol pts, OI={c['oi']:.0f}) -> {tag}"
             )
     else:
         verdict = "NO CLEAR EDGE"
-        lines.append("No strike deviates meaningfully from its own fitted smile once OI is filtered for -- "
-                     "this chain is internally consistent; there's no local mispricing to trade on relative "
-                     "to its own neighbors at this expiry.")
+        lines.append(
+            "No strike deviates meaningfully from its own fitted smile once OI is filtered for -- "
+            "this chain is internally consistent; there's no local mispricing to trade on relative "
+            "to its own neighbors at this expiry."
+        )
 
     lines.append("")
     if has_vanna:
-        net = vanna_info['net_vanna_shares']
-        call_v = vanna_info['call_vanna_shares']
-        put_v = vanna_info['put_vanna_shares']
-        flip = vanna_info['vanna_flip_strike']
-        lines.append(f"Vanna positioning (dealer convention, calls=+/puts=-; net = {net:+,.0f} shares/1pp IV):")
+        net = vanna_info["net_vanna_shares"]
+        call_v = vanna_info["call_vanna_shares"]
+        put_v = vanna_info["put_vanna_shares"]
+        flip = vanna_info["vanna_flip_strike"]
+        lines.append(
+            f"Vanna positioning (dealer convention, calls=+/puts=-; net = {net:+,.0f} shares/1pp IV):"
+        )
         if abs(call_v) > abs(put_v) * 1.3:
-            lines.append(f"  Call side dominates vanna ({call_v:+,.0f} vs put {put_v:+,.0f}). "
-                         "A vol pop pushes dealers toward MORE positive delta on this side -- "
-                         "if spot is also rallying when vol rises here, expect vanna-driven dealer "
-                         "buying to amplify the move; if vol rises on a selloff instead, this side's "
-                         "vanna works against the selloff (dealers buying into weakness).")
+            lines.append(
+                f"  Call side dominates vanna ({call_v:+,.0f} vs put {put_v:+,.0f}). "
+                "A vol pop pushes dealers toward MORE positive delta on this side -- "
+                "if spot is also rallying when vol rises here, expect vanna-driven dealer "
+                "buying to amplify the move; if vol rises on a selloff instead, this side's "
+                "vanna works against the selloff (dealers buying into weakness)."
+            )
         elif abs(put_v) > abs(call_v) * 1.3:
-            lines.append(f"  Put side dominates vanna ({put_v:+,.0f} vs call {call_v:+,.0f}). "
-                         "Classic negative spot/vol correlation setup: as spot falls and IV rises, "
-                         "dealer vanna hedging on the put side tends to add SELLING pressure into "
-                         "the move -- the textbook 'vanna feeds the selloff' dynamic.")
+            lines.append(
+                f"  Put side dominates vanna ({put_v:+,.0f} vs call {call_v:+,.0f}). "
+                "Classic negative spot/vol correlation setup: as spot falls and IV rises, "
+                "dealer vanna hedging on the put side tends to add SELLING pressure into "
+                "the move -- the textbook 'vanna feeds the selloff' dynamic."
+            )
         else:
-            lines.append(f"  Call ({call_v:+,.0f}) and put ({put_v:+,.0f}) vanna are roughly balanced -- "
-                         "no strong directional vanna-hedging bias either way from this expiry alone.")
+            lines.append(
+                f"  Call ({call_v:+,.0f}) and put ({put_v:+,.0f}) vanna are roughly balanced -- "
+                "no strong directional vanna-hedging bias either way from this expiry alone."
+            )
         if flip is not None:
             side = "above" if flip > spot else "below"
-            lines.append(f"  Net vanna flips sign near strike {flip:.2f} ({side} spot ${spot:.2f}) -- "
-                         "that's the level where the vanna-hedging flow direction itself would reverse.")
-        top = vanna_info['top_vanna_strikes'][:3]
+            lines.append(
+                f"  Net vanna flips sign near strike {flip:.2f} ({side} spot ${spot:.2f}) -- "
+                "that's the level where the vanna-hedging flow direction itself would reverse."
+            )
+        top = vanna_info["top_vanna_strikes"][:3]
         if top:
             desc = ", ".join(f"{k:.2f} ({v:+,.0f})" for k, v in top)
             lines.append(f"  Largest vanna concentrations: {desc}")
     else:
-        lines.append("Vanna/2nd-order data wasn't available in ThetaData's response for this chain "
-                     "(bulk_snapshot/option/greeks_second_order returned nothing usable) -- "
-                     "positioning read above is skipped rather than guessed.")
+        lines.append(
+            "Vanna/2nd-order data wasn't available in ThetaData's response for this chain "
+            "(bulk_snapshot/option/greeks_second_order returned nothing usable) -- "
+            "positioning read above is skipped rather than guessed."
+        )
 
     lines.append("")
     regime_txt = {
         "RICH": f"Vol looks RICH here: ATM IV {atm_iv_pct:.2f}% vs matched-tenor RV {rv_match_pct:.2f}% "
-                f"({vrp_pts:+.2f} vol pts). Favors premium selling if the vanna/edge picture above doesn't argue otherwise.",
+        f"({vrp_pts:+.2f} vol pts). Favors premium selling if the vanna/edge picture above doesn't argue otherwise.",
         "CHEAP": f"Vol looks CHEAP here: ATM IV {atm_iv_pct:.2f}% vs matched-tenor RV {rv_match_pct:.2f}% "
-                f"({vrp_pts:+.2f} vol pts). Favors buying premium / owning gamma over selling it.",
+        f"({vrp_pts:+.2f} vol pts). Favors buying premium / owning gamma over selling it.",
         "FAIR": f"Vol looks FAIRLY PRICED: ATM IV {atm_iv_pct:.2f}% vs matched-tenor RV {rv_match_pct:.2f}% "
-                f"({vrp_pts:+.2f} vol pts) is inside a normal range -- no strong environment-level edge either way.",
+        f"({vrp_pts:+.2f} vol pts) is inside a normal range -- no strong environment-level edge either way.",
         "UNKNOWN": "Couldn't compare IV to realized vol (insufficient price history) -- no environment read available.",
     }[regime]
     lines.append(regime_txt)
     if not math.isnan(smile_b):
-        skew_txt = "put-skewed (downside richer)" if smile_b < -0.02 else ("call-skewed (upside richer)" if smile_b > 0.02 else "roughly flat")
-        lines.append(f"Smile skew slope is {skew_txt} (b={smile_b:.4f}); curvature a={smile_a:.4f}.")
+        skew_txt = (
+            "put-skewed (downside richer)"
+            if smile_b < -0.02
+            else ("call-skewed (upside richer)" if smile_b > 0.02 else "roughly flat")
+        )
+        lines.append(
+            f"Smile skew slope is {skew_txt} (b={smile_b:.4f}); curvature a={smile_a:.4f}."
+        )
 
     insight = "\n".join(lines)
     return verdict, insight
@@ -717,41 +874,53 @@ def _build_insight(ticker, expiration, T, spot, forward, atm_iv_pct, rv_30, rv_6
 def print_report(result: ScanResult):
     df = result.df
     print("\n" + "=" * 130)
-    print(f"OPTIONS CHAIN SCANNER -- {result.ticker}  Expiry {result.expiry}  "
-          f"(T={result.T_years:.4f}yr, DTE={int(round(result.T_years*DEFAULT_A))})")
+    print(
+        f"OPTIONS CHAIN SCANNER -- {result.ticker}  Expiry {result.expiry}  "
+        f"(T={result.T_years:.4f}yr, DTE={int(round(result.T_years * DEFAULT_A))})"
+    )
     print("=" * 130)
-    print(f"Spot: ${result.spot:.2f}   Forward: ${result.forward:.2f}   "
-          f"ATM IV: {result.atm_iv_pct:.2f}%   Regime: {result.regime}")
+    print(
+        f"Spot: ${result.spot:.2f}   Forward: ${result.forward:.2f}   "
+        f"ATM IV: {result.atm_iv_pct:.2f}%   Regime: {result.regime}"
+    )
     print("-" * 130)
-    header = (f"{'Strike':>9} {'R':>1} {'Bid':>8} {'Ask':>8} {'IV%':>7} {'Delta':>8} {'Gamma':>9} "
-              f"{'Vega':>8} {'Theta':>8} {'Vanna':>10} {'Charm':>10} {'Vomma':>10} {'Veta':>10} {'OI':>8} {'Edge':>6}")
+    header = (
+        f"{'Strike':>9} {'R':>1} {'Bid':>8} {'Ask':>8} {'IV%':>7} {'Delta':>8} {'Gamma':>9} "
+        f"{'Vega':>8} {'Theta':>8} {'Vanna':>10} {'Charm':>10} {'Vomma':>10} {'Veta':>10} {'OI':>8} {'Edge':>6}"
+    )
     print(header)
     print("-" * 130)
     for _, row in df.iterrows():
+
         def f(v, fmt="{:.4f}"):
             return "n/a" if pd.isna(v) else fmt.format(v)
-        edge_tag = row['edge_kind'].upper() if row.get('is_edge') else ""
-        print(f"{row['strike']:9.2f} {row['right']:>1} {f(row['bid'],'{:.2f}'):>8} {f(row['ask'],'{:.2f}'):>8} "
-              f"{f(row['iv']*100 if not pd.isna(row['iv']) else float('nan'),'{:.2f}'):>7} "
-              f"{f(row['delta']):>8} {f(row['gamma'],'{:.5f}'):>9} {f(row['vega']):>8} {f(row['theta']):>8} "
-              f"{f(row['vanna']):>10} {f(row['charm']):>10} {f(row['vomma']):>10} {f(row['veta']):>10} "
-              f"{int(row['oi']) if not pd.isna(row['oi']) else 0:>8} {edge_tag:>6}")
+
+        edge_tag = row["edge_kind"].upper() if row.get("is_edge") else ""
+        print(
+            f"{row['strike']:9.2f} {row['right']:>1} {f(row['bid'], '{:.2f}'):>8} {f(row['ask'], '{:.2f}'):>8} "
+            f"{f(row['iv'] * 100 if not pd.isna(row['iv']) else float('nan'), '{:.2f}'):>7} "
+            f"{f(row['delta']):>8} {f(row['gamma'], '{:.5f}'):>9} {f(row['vega']):>8} {f(row['theta']):>8} "
+            f"{f(row['vanna']):>10} {f(row['charm']):>10} {f(row['vomma']):>10} {f(row['veta']):>10} "
+            f"{int(row['oi']) if not pd.isna(row['oi']) else 0:>8} {edge_tag:>6}"
+        )
     print("-" * 130)
     print(f"\nVERDICT: {result.verdict}\n")
     print(result.insight)
     print("=" * 130)
 
 
-def export_csv(result: ScanResult, output_dir: Optional[str] = None) -> str:
+def export_csv(result: ScanResult, output_dir: str | None = None) -> str:
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(out_dir, f"{result.ticker}_{result.expiry}_chain_scan_{timestamp}.csv")
+    filename = os.path.join(
+        out_dir, f"{result.ticker}_{result.expiry}_chain_scan_{timestamp}.csv"
+    )
     result.df.to_csv(filename, index=False)
     return filename
 
 
-def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) -> str:
+def plot_scanner_charts(result: ScanResult, output_dir: str | None = None) -> str:
     df = result.df
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
@@ -760,28 +929,73 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
 
     # ---- Panel 1: IV smile with fit + edge flags ----
     ax1.set_facecolor(PANEL_BG)
-    otm = df[df['is_otm'] & df['iv'].notna()]
-    ax1.scatter(otm['strike'], otm['iv'] * 100, s=28, color=ACCENT_BLUE, alpha=0.85, label='Market IV (OTM)', zorder=3)
-    fit_sorted = df.sort_values('strike')
-    ax1.plot(fit_sorted['strike'], fit_sorted['fit_iv'] * 100, color=ACCENT_GOLD, linewidth=2, alpha=0.9, label='Fitted smile', zorder=2)
-    edges = df[df['is_edge']]
+    otm = df[df["is_otm"] & df["iv"].notna()]
+    ax1.scatter(
+        otm["strike"],
+        otm["iv"] * 100,
+        s=28,
+        color=ACCENT_BLUE,
+        alpha=0.85,
+        label="Market IV (OTM)",
+        zorder=3,
+    )
+    fit_sorted = df.sort_values("strike")
+    ax1.plot(
+        fit_sorted["strike"],
+        fit_sorted["fit_iv"] * 100,
+        color=ACCENT_GOLD,
+        linewidth=2,
+        alpha=0.9,
+        label="Fitted smile",
+        zorder=2,
+    )
+    edges = df[df["is_edge"]]
     if len(edges):
-        rich = edges[edges['edge_kind'] == 'rich']
-        cheap = edges[edges['edge_kind'] == 'cheap']
+        rich = edges[edges["edge_kind"] == "rich"]
+        cheap = edges[edges["edge_kind"] == "cheap"]
         if len(rich):
-            ax1.scatter(rich['strike'], rich['iv'] * 100, s=90, facecolors='none', edgecolors=ACCENT_RED, linewidths=2, label='Rich (edge)', zorder=4)
+            ax1.scatter(
+                rich["strike"],
+                rich["iv"] * 100,
+                s=90,
+                facecolors="none",
+                edgecolors=ACCENT_RED,
+                linewidths=2,
+                label="Rich (edge)",
+                zorder=4,
+            )
         if len(cheap):
-            ax1.scatter(cheap['strike'], cheap['iv'] * 100, s=90, facecolors='none', edgecolors=ACCENT_GREEN, linewidths=2, label='Cheap (edge)', zorder=4)
-    ax1.axvline(result.spot, color=ACCENT_CYAN, linestyle='--', linewidth=1.5, alpha=0.8)
-    ax1.axvline(result.forward, color=ACCENT_PURPLE, linestyle=':', linewidth=1.5, alpha=0.8)
-    ax1.set_title(f"{result.ticker} {result.expiry} -- IV Smile vs. Fit", color=TEXT_COLOR, fontsize=13, fontweight='bold')
-    ax1.set_xlabel('Strike', color=TEXT_COLOR)
-    ax1.set_ylabel('Implied Vol (%)', color=TEXT_COLOR)
+            ax1.scatter(
+                cheap["strike"],
+                cheap["iv"] * 100,
+                s=90,
+                facecolors="none",
+                edgecolors=ACCENT_GREEN,
+                linewidths=2,
+                label="Cheap (edge)",
+                zorder=4,
+            )
+    ax1.axvline(
+        result.spot, color=ACCENT_CYAN, linestyle="--", linewidth=1.5, alpha=0.8
+    )
+    ax1.axvline(
+        result.forward, color=ACCENT_PURPLE, linestyle=":", linewidth=1.5, alpha=0.8
+    )
+    ax1.set_title(
+        f"{result.ticker} {result.expiry} -- IV Smile vs. Fit",
+        color=TEXT_COLOR,
+        fontsize=13,
+        fontweight="bold",
+    )
+    ax1.set_xlabel("Strike", color=TEXT_COLOR)
+    ax1.set_ylabel("Implied Vol (%)", color=TEXT_COLOR)
     ax1.tick_params(colors=TEXT_COLOR)
     ax1.grid(True, color=GRID_COLOR, alpha=0.4)
     for spine in ax1.spines.values():
         spine.set_color(GRID_COLOR)
-    ax1.legend(facecolor=PANEL_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, fontsize=8)
+    ax1.legend(
+        facecolor=PANEL_BG, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, fontsize=8
+    )
 
     # ---- Panel 2: net vanna by strike ----
     # Rendered from the SHARED dealer engine result -- the same series the
@@ -797,16 +1011,21 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
     ax2.set_facecolor(PANEL_BG)
     dr = result.dealer_result
     if dr is None:
-        raise ValueError("plot_scanner_charts requires the shared dealer engine "
-                         "result (scan_chain attaches it via fetch_production_result / "
-                         "compute_dealer_positioning) -- refusing to recompute vanna from "
-                         "the single-expiry chain")
+        raise ValueError(
+            "plot_scanner_charts requires the shared dealer engine "
+            "result (scan_chain attaches it via fetch_production_result / "
+            "compute_dealer_positioning) -- refusing to recompute vanna from "
+            "the single-expiry chain"
+        )
     if hasattr(dr, "snapshot"):
         import expiry_book_exposure as ebe
-        by_strike: Dict[float, float] = {}
+
+        by_strike: dict[float, float] = {}
         spot = float(result.spot)
         for row in dr.snapshot.rows:
-            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + ebe.vannacharm_row(row, spot, "vanna")
+            by_strike[row.strike] = by_strike.get(row.strike, 0.0) + ebe.vannacharm_row(
+                row, spot, "vanna"
+            )
         strikes = np.asarray(sorted(by_strike), dtype=float)
         values = np.asarray([by_strike[k] for k in strikes], dtype=float)
         if hasattr(dr, "sign_model"):
@@ -822,13 +1041,26 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
         diffs = np.diff(strikes)
         bar_width = (float(np.median(diffs)) if len(diffs) else 1.0) * 0.7
         ax2.bar(strikes, values, width=bar_width, color=colors, alpha=0.9)
-    ax2.axhline(0, color='#8b949e', linewidth=0.8, alpha=0.6)
-    ax2.axvline(result.spot, color=ACCENT_CYAN, linestyle='--', linewidth=1.5, alpha=0.8)
+    ax2.axhline(0, color="#8b949e", linewidth=0.8, alpha=0.6)
+    ax2.axvline(
+        result.spot, color=ACCENT_CYAN, linestyle="--", linewidth=1.5, alpha=0.8
+    )
     if result.vanna_flip_strike is not None:
-        ax2.axvline(result.vanna_flip_strike, color=ACCENT_ORANGE, linestyle=':', linewidth=1.5, alpha=0.8)
-    ax2.set_title(f'Net Dealer Vanna by Strike ({engine_label})', color=TEXT_COLOR, fontsize=13, fontweight='bold')
-    ax2.set_xlabel('Strike', color=TEXT_COLOR)
-    ax2.set_ylabel('VEX (call+ put−, × S × σ)', color=TEXT_COLOR)
+        ax2.axvline(
+            result.vanna_flip_strike,
+            color=ACCENT_ORANGE,
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.8,
+        )
+    ax2.set_title(
+        f"Net Dealer Vanna by Strike ({engine_label})",
+        color=TEXT_COLOR,
+        fontsize=13,
+        fontweight="bold",
+    )
+    ax2.set_xlabel("Strike", color=TEXT_COLOR)
+    ax2.set_ylabel("VEX (call+ put−, × S × σ)", color=TEXT_COLOR)
     ax2.tick_params(colors=TEXT_COLOR)
     ax2.grid(True, color=GRID_COLOR, alpha=0.4)
     for spine in ax2.spines.values():
@@ -836,15 +1068,24 @@ def plot_scanner_charts(result: ScanResult, output_dir: Optional[str] = None) ->
 
     plt.tight_layout()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(out_dir, f"{result.ticker}_{result.expiry}_chain_scan_{timestamp}.png")
-    plt.savefig(filename, dpi=180, bbox_inches='tight', facecolor=DARK_BG, edgecolor='none')
+    filename = os.path.join(
+        out_dir, f"{result.ticker}_{result.expiry}_chain_scan_{timestamp}.png"
+    )
+    plt.savefig(
+        filename, dpi=180, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none"
+    )
     plt.close(fig)
     return filename
 
 
 # ---------- Suite-integration entry point ----------
-def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optional[str] = None,
-                      output_dir: Optional[str] = None, dealer_result=None) -> tuple:
+def run_chain_scanner(
+    ticker: str,
+    target_years: float = 0.25,
+    expiration: str | None = None,
+    output_dir: str | None = None,
+    dealer_result=None,
+) -> tuple:
     """Programmatic, non-interactive runner (mirrors run_variance_swap_live /
     screen_ticker / run_dealer_positioning conventions) for volatility_suite.py.
     `expiration`, if given, pins this to the exact date the suite resolved
@@ -861,7 +1102,9 @@ def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optio
     files = []
     td = ThetaDataController()
     try:
-        exp, actual_T = expiry_selector.resolve_expiration(td, ticker, expiration, target_years)
+        exp, actual_T = expiry_selector.resolve_expiration(
+            td, ticker, expiration, target_years
+        )
         result = scan_chain(ticker, exp, actual_T, td, dealer_result=dealer_result)
     finally:
         td.close()
@@ -883,7 +1126,7 @@ def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optio
         try:
             # Extract chain_data from DataFrame (call-only for now, can be parameterized later)
             # Addresses R1: Complete DataFrame extraction logic
-            chain_data = _extract_chain_data_from_df(result.df, option_type='call')
+            chain_data = _extract_chain_data_from_df(result.df, option_type="call")
 
             # Transform edge_candidates to strategy recommender format
             # Addresses R2: Maps edge_kind ('rich'/'cheap') → edge_type ('SELL'/'BUY')
@@ -896,7 +1139,10 @@ def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optio
                 edge_strikes=edge_strikes,
                 vol_regime=result.regime,
                 current_price=result.spot,
-                expiry_days=(np.datetime64(result.expiry) - np.datetime64('today')).astype('timedelta64[D]').astype(float),
+                expiry_days=(
+                    datetime.strptime(result.expiry, "%Y%m%d").date()
+                    - datetime.now(UTC).date()
+                ).days,
             )
 
             strategies = recommender.recommend()
@@ -909,35 +1155,58 @@ def run_chain_scanner(ticker: str, target_years: float = 0.25, expiration: Optio
             )
 
             # Export strategies JSON to output directory
-            strategies_file = Path(out_dir) / 'chain_strategies.json'
-            with open(strategies_file, 'w') as f:
-                json.dump(_sanitize_for_json(strategies_artifact), f, default=_json_safe, indent=2)
+            strategies_file = Path(out_dir) / "chain_strategies.json"
+            with open(strategies_file, "w") as f:
+                json.dump(
+                    _sanitize_for_json(strategies_artifact),
+                    f,
+                    default=_json_safe,
+                    indent=2,
+                )
 
             # Store strategies in result for return to volatility_suite
-            result.strategies = strategies_artifact.get('strategies', [])
+            result.strategies = strategies_artifact.get("strategies", [])
 
         except Exception as e:
             # Log error but don't fail entire scan if strategies fail
             print(f"[Warning] Strategy recommendation failed: {e}")
-            strategies_artifact = {'strategies': [], 'error': str(e)}
+            strategies_artifact = {"strategies": [], "error": str(e)}
             result.strategies = []
+
+            # Still write the fallback artifact so downstream consumers
+            # always find chain_strategies.json (matches the "no edges"
+            # branch below, which always writes).
+            strategies_file = Path(out_dir) / "chain_strategies.json"
+            with open(strategies_file, "w") as f:
+                json.dump(
+                    _sanitize_for_json(strategies_artifact),
+                    f,
+                    default=_json_safe,
+                    indent=2,
+                )
     else:
         # No edges detected, write empty strategies artifact (Addresses R6: Always write)
         strategies_artifact = {
-            'version': '1.0',
-            'timestamp': pd.Timestamp.utcnow().isoformat(),
-            'chain_verdict': result.verdict,
-            'vol_regime': result.regime,
-            'current_price': float(result.spot),
-            'expiration_date': result.expiry,
-            'strategies': [],
-            'summary': {'total_recommendations': 0, 'by_type': {}, 'by_regime': result.regime}
+            "version": "1.0",
+            "timestamp": pd.Timestamp.utcnow().isoformat(),
+            "chain_verdict": result.verdict,
+            "vol_regime": result.regime,
+            "current_price": float(result.spot),
+            "expiration_date": result.expiry,
+            "strategies": [],
+            "summary": {
+                "total_recommendations": 0,
+                "by_type": {},
+                "by_regime": result.regime,
+            },
         }
 
         # Write empty artifact for consistency (R6 fix - always write)
-        strategies_file = Path(out_dir) / 'chain_strategies.json'
-        with open(strategies_file, 'w') as f:
-            json.dump(_sanitize_for_json(strategies_artifact), f, default=_json_safe, indent=2)
+        strategies_file = Path(out_dir) / "chain_strategies.json"
+        with open(strategies_file, "w") as f:
+            json.dump(
+                _sanitize_for_json(strategies_artifact), f, default=_json_safe, indent=2
+            )
 
         result.strategies = []
 

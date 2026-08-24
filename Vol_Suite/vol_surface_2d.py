@@ -37,7 +37,6 @@ import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -47,18 +46,19 @@ import numpy as np
 
 EXPIRY_DATE_FMT = "%Y%m%d"
 DAYS_PER_YEAR = 365.0
-NEAR_ATM_BAND = 0.15        # log-moneyness band for quadratic fit (±15 %)
-MIN_FIT_POINTS = 5          # min near-ATM points to trust a per-expiry fit
-MIN_TENORS = 2              # need at least 2 tenors for any interp
-MAX_EXPIRIES = 48           # safety cap on how many expiries we fetch
+NEAR_ATM_BAND = 0.15  # log-moneyness band for quadratic fit (±15 %)
+MIN_FIT_POINTS = 5  # min near-ATM points to trust a per-expiry fit
+MIN_TENORS = 2  # need at least 2 tenors for any interp
+MAX_EXPIRIES = 48  # safety cap on how many expiries we fetch
 
 
 @dataclass
 class VolSurfacePoint:
     """A single point on the 2D vol surface."""
+
     strike: float
-    tenor: float            # years
-    iv: float               # annualised implied volatility (decimal)
+    tenor: float  # years
+    iv: float  # annualised implied volatility (decimal)
 
 
 @dataclass
@@ -91,12 +91,12 @@ class VolSurface:
 
     ticker: str
     timestamp: datetime
-    points: List[VolSurfacePoint] = field(default_factory=list)
+    points: list[VolSurfacePoint] = field(default_factory=list)
     fitted_params: dict = field(default_factory=dict)
 
     # ---- cached interpolation helpers (populated lazily) ----
-    _tenor_array: Optional[np.ndarray] = field(default=None, repr=False)
-    _coeff_array: Optional[np.ndarray] = field(default=None, repr=False)  # shape (N, 3)
+    _tenor_array: np.ndarray | None = field(default=None, repr=False)
+    _coeff_array: np.ndarray | None = field(default=None, repr=False)  # shape (N, 3)
 
     def _ensure_cache(self) -> None:
         if self._tenor_array is not None:
@@ -176,11 +176,12 @@ class VolSurface:
 # Fitting helpers
 # ---------------------------------------------------------------------------
 
+
 def _log_moneyness(strike: float, spot: float) -> float:
     return math.log(strike / spot)
 
 
-def _expiry_to_tenor(exp_str: str, ref_date: Optional[datetime] = None) -> float:
+def _expiry_to_tenor(exp_str: str, ref_date: datetime | None = None) -> float:
     """Convert a YYYYMMDD expiry string to years from *ref_date* (default now)."""
     exp_date = datetime.strptime(exp_str, EXPIRY_DATE_FMT)
     ref = ref_date if ref_date is not None else datetime.now()
@@ -189,8 +190,10 @@ def _expiry_to_tenor(exp_str: str, ref_date: Optional[datetime] = None) -> float
 
 
 def _fit_quadratic_smile(
-    strikes: List[float], ivs: List[float], spot: float,
-) -> Optional[Tuple[float, float, float]]:
+    strikes: list[float],
+    ivs: list[float],
+    spot: float,
+) -> tuple[float, float, float] | None:
     """Fit ``iv = a*x² + b*x + c``, ``x = ln(K/spot)``, using only near-ATM
     points (within ±NEAR_ATM_BAND in log-moneyness).
 
@@ -214,12 +217,13 @@ def _fit_quadratic_smile(
 # Surface builder
 # ---------------------------------------------------------------------------
 
+
 def build_surface(
     ticker: str,
     td: "ThetaDataController",  # noqa: F821  (quoted for forward compat)
-    ref_date: Optional[datetime] = None,
-    spot_override: Optional[float] = None,
-) -> Optional[VolSurface]:
+    ref_date: datetime | None = None,
+    spot_override: float | None = None,
+) -> VolSurface | None:
     """Build a 2D implied-vol surface for *ticker* by fetching every available
     expiry from ThetaData, fitting a quadratic smile per expiry, and storing
     the calibrated parameters for strike × tenor interpolation.
@@ -256,13 +260,19 @@ def build_surface(
     all_exps = td.list_expirations(ticker)
     if not all_exps:
         return None
+    # Drop expired/past dates BEFORE sorting + truncating, so a stale
+    # expiry never occupies one of the MAX_EXPIRIES slots ahead of a
+    # valid future one.
+    all_exps = [e for e in all_exps if _expiry_to_tenor(e, ref) > 0]
+    if not all_exps:
+        return None
     # Keep the nearest N (cap to avoid excessive network calls)
     all_exps = sorted(all_exps)[:MAX_EXPIRIES]
 
     # --- collect per-expiry smiles ---
-    all_points: List[VolSurfacePoint] = []
-    tenors: List[float] = []
-    coeffs_list: List[Tuple[float, float, float]] = []
+    all_points: list[VolSurfacePoint] = []
+    tenors: list[float] = []
+    coeffs_list: list[tuple[float, float, float]] = []
 
     for exp_str in all_exps:
         tenor = _expiry_to_tenor(exp_str, ref)
@@ -275,8 +285,8 @@ def build_surface(
         except Exception:
             continue  # skip expiries that fail
 
-        strikes: List[float] = []
-        ivs: List[float] = []
+        strikes: list[float] = []
+        ivs: list[float] = []
         for row in greeks:
             try:
                 k = float(row.get("strike", 0)) / 1000.0  # theta int → dollar
@@ -328,6 +338,7 @@ def build_surface(
 # Plotting
 # ---------------------------------------------------------------------------
 
+
 def plot(surface: VolSurface, path: str) -> str:
     """Generate a 3D surface plot of implied volatility across strike × tenor.
 
@@ -347,6 +358,7 @@ def plot(surface: VolSurface, path: str) -> str:
         The *path* the plot was saved to (same as input, for call-chaining).
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers 3D projection)
@@ -359,7 +371,7 @@ def plot(surface: VolSurface, path: str) -> str:
         return path
 
     min_ten = max(0.0, min(tenors_arr))
-    max_ten = max(tenors_arr) * 1.15      + 1e-6
+    max_ten = max(tenors_arr) * 1.15 + 1e-6
 
     # Strike range: ±40 % of spot (generous)
     min_strike = spot * 0.60
@@ -383,8 +395,12 @@ def plot(surface: VolSurface, path: str) -> str:
     ax = fig.add_subplot(111, projection="3d")
 
     surf_plot = ax.plot_surface(
-        KK, TT, IVV,
-        cmap="viridis", edgecolor="none", alpha=0.92,
+        KK,
+        TT,
+        IVV,
+        cmap="viridis",
+        edgecolor="none",
+        alpha=0.92,
     )
 
     # Overlay raw data points

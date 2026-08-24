@@ -46,6 +46,7 @@ Design note (Phases 0-6 live here as one cohesive, test-only model):
            event-gated vanna lead arm, event-window + short-DTE arms,
            per-underline handling, SPY/QQQ sign-consistency + FDR).
 """
+
 from __future__ import annotations
 
 import json
@@ -53,7 +54,6 @@ import math
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -83,11 +83,30 @@ def vannacharm_row(r, spot, greek: str, oi=None) -> float:
     greeks = getattr(r, "greeks", {}) or {}
     rs = 1.0 if str(getattr(r, "right", "C")).upper()[:1] == "C" else -1.0
     if greek == "gamma":
-        return float(greeks.get("gamma", 0.0) or 0.0) * oi * CONTRACT_MULTIPLIER * spot ** 2 * 0.01
+        return (
+            float(greeks.get("gamma", 0.0) or 0.0)
+            * oi
+            * CONTRACT_MULTIPLIER
+            * spot**2
+            * 0.01
+        )
     if greek == "vanna":
-        return rs * abs(float(greeks.get("vanna", 0.0) or 0.0)) * oi * CONTRACT_MULTIPLIER * spot * iv
+        return (
+            rs
+            * abs(float(greeks.get("vanna", 0.0) or 0.0))
+            * oi
+            * CONTRACT_MULTIPLIER
+            * spot
+            * iv
+        )
     if greek == "charm":
-        return float(greeks.get("charm", 0.0) or 0.0) * oi * CONTRACT_MULTIPLIER * spot / 365.0
+        return (
+            float(greeks.get("charm", 0.0) or 0.0)
+            * oi
+            * CONTRACT_MULTIPLIER
+            * spot
+            / 365.0
+        )
     return 0.0
 
 
@@ -119,7 +138,7 @@ def net_contracts_from_quote(volume, bid_size, ask_size) -> float:
     return bought - sold
 
 
-def apply_vannacharm_flow(ne: "NetExposure", quote_rows, spot: float) -> int:
+def apply_vannacharm_flow(ne: NetExposure, quote_rows, spot: float) -> int:
     """Stamp net_contracts / d_gex / d_vex / d_cex from quote volume+size.
     quote strikes must already be dollars. Returns number of rows with volume."""
     by_key = {}
@@ -144,6 +163,7 @@ def apply_vannacharm_flow(ne: "NetExposure", quote_rows, spot: float) -> int:
         if vol > 0:
             n_vol += 1
     return n_vol
+
 
 # Stock/futures hedging channel vs options/vol hedging channel (plan §3 table).
 STOCK_CHANNEL = ("delta", "gamma", "vanna", "charm")
@@ -236,8 +256,7 @@ def bs_charm(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0, right="C"):
     if math.isnan(d1):
         return float("nan")
     disc = math.exp(-q * T)
-    phi_term = disc * _phi(d1) * (
-        (d2 / (2.0 * T)) - (r - q) / (sigma * math.sqrt(T)))
+    phi_term = disc * _phi(d1) * ((d2 / (2.0 * T)) - (r - q) / (sigma * math.sqrt(T)))
     if right == "C":
         return q * disc * _N(d1) + phi_term
     return -q * disc * _N(-d1) + phi_term
@@ -253,8 +272,12 @@ def bs_volga(S, K, T, sigma, r=RISK_FREE_RATE, q=0.0):
 
 
 _BS_GREEK_FNS = {
-    "delta": bs_delta, "gamma": bs_gamma, "vega": bs_vega,
-    "vanna": bs_vanna, "charm": bs_charm, "volga": bs_volga,
+    "delta": bs_delta,
+    "gamma": bs_gamma,
+    "vega": bs_vega,
+    "vanna": bs_vanna,
+    "charm": bs_charm,
+    "volga": bs_volga,
 }
 
 
@@ -344,17 +367,24 @@ def _extract(row, key, default=float("nan")):
 class NetExposureRow:
     """One strike's net dealer-frame exposure for all six greeks, at real
     spot/IV/DTE, multiplier applied exactly once, explicit units."""
+
     strike: float
     right: str
     oi: float
     T: float
     dte: int
     iv: float = float("nan")
-    greeks: Dict[str, float] = field(default_factory=dict)   # raw dealer-frame signed value per greek (pre-scalar)
-    exposure: Dict[str, float] = field(default_factory=dict)  # signed_greek * OI * CONTRACT_MULTIPLIER
-    units: Dict[str, str] = field(default_factory=dict)
-    measured: Dict[str, str] = field(default_factory=dict)    # per-greek MEASURED/ESTIMATED provenance
-    book_sign: float = 0.0   # SVI cheap/rich × OTM gate; 0 = unmarked/ITM
+    greeks: dict[str, float] = field(
+        default_factory=dict
+    )  # raw dealer-frame signed value per greek (pre-scalar)
+    exposure: dict[str, float] = field(
+        default_factory=dict
+    )  # signed_greek * OI * CONTRACT_MULTIPLIER
+    units: dict[str, str] = field(default_factory=dict)
+    measured: dict[str, str] = field(
+        default_factory=dict
+    )  # per-greek MEASURED/ESTIMATED provenance
+    book_sign: float = 0.0  # SVI cheap/rich × OTM gate; 0 = unmarked/ITM
     gamma_book: float = 0.0  # unsigned BS gamma × book_sign × OI × 100 × S² × 0.01
     net_contracts: float = 0.0  # bought − sold from volume × bid/ask split
     d_gex: float = 0.0
@@ -368,9 +398,10 @@ class NetExposureRow:
 @dataclass
 class NetExposure:
     """Per-expiry net exposure snapshot vector."""
+
     ticker: str
     spot: float
-    rows: List[NetExposureRow] = field(default_factory=list)
+    rows: list[NetExposureRow] = field(default_factory=list)
     expiry: str = ""
 
     def net(self, greek):
@@ -381,8 +412,14 @@ class NetExposure:
 
     def gex(self):
         """Imported GEX reference: call+/put- dollar-gamma-per-1%."""
-        return sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                   * self.spot ** 2 * 0.01 for r in self.rows)
+        return sum(
+            r.greeks.get("gamma", 0.0)
+            * r.oi
+            * CONTRACT_MULTIPLIER
+            * self.spot**2
+            * 0.01
+            for r in self.rows
+        )
 
     def book_gamma(self):
         """Dealer-book dollar-gamma-per-1% (SVI-signed, OTM-gated)."""
@@ -390,17 +427,26 @@ class NetExposure:
 
     def dex(self):
         """DEX = post-multiplier shares = SUM signed_delta * OI * 100."""
-        return sum(r.greeks.get("delta", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                   for r in self.rows)
+        return sum(
+            r.greeks.get("delta", 0.0) * r.oi * CONTRACT_MULTIPLIER for r in self.rows
+        )
 
     def dex_by_strike(self):
-        return {r.strike: r.greeks.get("delta", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                for r in self.rows}
+        return {
+            r.strike: r.greeks.get("delta", 0.0) * r.oi * CONTRACT_MULTIPLIER
+            for r in self.rows
+        }
 
 
-def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
-                       expiry: str = "", T: Optional[float] = None,
-                       dte: Optional[int] = None, q: float = 0.0) -> NetExposure:
+def build_net_exposure(
+    rows: list[dict],
+    spot: float,
+    ticker: str = "MOCK",
+    expiry: str = "",
+    T: float | None = None,
+    dte: int | None = None,
+    q: float = 0.0,
+) -> NetExposure:
     """Build the per-strike, per-expiry, per-greek net-exposure snapshot vector.
 
     Each input row: {'strike', 'right', 'oi', 'implied_vol', [spot], [T]}.
@@ -429,8 +475,7 @@ def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
         if math.isnan(rspot) or rspot <= 0:
             continue
         rr_dte = dte if dte is not None else max(int(round(rT * DEFAULT_A)), 1)
-        ne_row = NetExposureRow(
-            strike=k, right=right, oi=oi, T=rT, dte=rr_dte, iv=iv)
+        ne_row = NetExposureRow(strike=k, right=right, oi=oi, T=rT, dte=rr_dte, iv=iv)
         for greek in GREEKS:
             if greek == "charm":
                 raw = bs_charm(rspot, k, rT, iv, q=q, right=right)
@@ -467,7 +512,9 @@ def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
                 # analog). volga = vega-$ per vol-point^2.
                 scalar = VANNA_PP_SCALE
                 ne_row.exposure[greek] = signed * scalar * oi * CONTRACT_MULTIPLIER
-                ne_row.units[greek] = "vega-$/vol-pt" if greek == "vega" else "vega-$/vol-pt^2"
+                ne_row.units[greek] = (
+                    "vega-$/vol-pt" if greek == "vega" else "vega-$/vol-pt^2"
+                )
             elif greek == "vanna":
                 # shares per vol-point (x dIV decimal); VANNA_PP_SCALE is the
                 # per-vol-point factor; the flow formula applies dIV separately.
@@ -485,7 +532,7 @@ def build_net_exposure(rows: List[dict], spot: float, ticker: str = "MOCK",
 BOOK_SIGN_DEADBAND = 0.01  # 1 vol point; matches vol_surface IV_DEADBAND_VOL
 
 
-def atm_iv_otm(rows, spot: float) -> Optional[float]:
+def atm_iv_otm(rows, spot: float) -> float | None:
     """OTM-side IV at the strike nearest spot (put if K<=spot, call if K>spot)."""
     best = None
     best_dist = None
@@ -514,8 +561,9 @@ def atm_iv_otm(rows, spot: float) -> Optional[float]:
     return best
 
 
-def apply_svi_book_signs(ne: NetExposure, overlay: "SviOverlay",
-                         spot: float, T: float) -> NetExposure:
+def apply_svi_book_signs(
+    ne: NetExposure, overlay: SviOverlay, spot: float, T: float
+) -> NetExposure:
     """Stamp book_sign + gamma_book on every row. OTM-only, SVI deadbanded.
 
     SHORT (rich) → dealer short that strike → gamma_book negative.
@@ -524,8 +572,10 @@ def apply_svi_book_signs(ne: NetExposure, overlay: "SviOverlay",
     """
     try:
         from replication_reference import _otm_leg_weights
-        chain_iv = {(r.strike, r.right): r.iv for r in ne.rows
-                    if r.iv == r.iv and r.iv > 0}
+
+        chain_iv = {
+            (r.strike, r.right): r.iv for r in ne.rows if r.iv == r.iv and r.iv > 0
+        }
         otm = set(_otm_leg_weights(chain_iv, spot, T).keys())
     except Exception:
         otm = {(r.strike, r.right) for r in ne.rows}
@@ -542,7 +592,7 @@ def apply_svi_book_signs(ne: NetExposure, overlay: "SviOverlay",
             sign = 0.0
         raw_g = abs(float(r.greeks.get("gamma", 0.0) or 0.0))
         r.book_sign = sign
-        r.gamma_book = sign * raw_g * r.oi * CONTRACT_MULTIPLIER * ne.spot ** 2 * 0.01
+        r.gamma_book = sign * raw_g * r.oi * CONTRACT_MULTIPLIER * ne.spot**2 * 0.01
     return ne
 
 
@@ -558,8 +608,10 @@ def vanna_flow_31(ne: NetExposure, d_iv: float) -> float:
 def vanna_flow_34(ne: NetExposure, d_iv: float) -> float:
     """PLAN §3.4 form: SUM signed_vanna * OI * 100 * VANNA_PP_SCALE * (dIV/0.01)
     with dIV in DECIMAL vol. This is the canonical constraint-6 form."""
-    return sum(r.greeks["vanna"] * r.oi * CONTRACT_MULTIPLIER
-               * VANNA_PP_SCALE * (d_iv / 0.01) for r in ne.rows)
+    return sum(
+        r.greeks["vanna"] * r.oi * CONTRACT_MULTIPLIER * VANNA_PP_SCALE * (d_iv / 0.01)
+        for r in ne.rows
+    )
 
 
 def vanna_flow(ne: NetExposure, d_iv: float) -> float:
@@ -576,8 +628,8 @@ class ClosureResult:
     closure_r2: float
     max_per_greek_error: float
     bump_match_max: float
-    per_greek_error: Dict[str, float] = field(default_factory=dict)
-    per_greek_provenance: Dict[str, str] = field(default_factory=dict)
+    per_greek_error: dict[str, float] = field(default_factory=dict)
+    per_greek_provenance: dict[str, str] = field(default_factory=dict)
     n_options: int = 0
 
 
@@ -586,22 +638,34 @@ def _fd_greek(greek, S, K, T, sigma, right="C", h_s=None, h_v=VOL_POINT):
     h_s = h_s or max(S * 0.005, 1e-6)
     fns = _BS_GREEK_FNS
     if greek == "delta":
-        return (bs_price(S + h_s, K, T, sigma, right=right)
-                - bs_price(S - h_s, K, T, sigma, right=right)) / (2 * h_s)
+        return (
+            bs_price(S + h_s, K, T, sigma, right=right)
+            - bs_price(S - h_s, K, T, sigma, right=right)
+        ) / (2 * h_s)
     if greek == "gamma":
-        d_up = (bs_price(S + h_s, K, T, sigma, right=right)
-                - bs_price(S, K, T, sigma, right=right)) / h_s
-        d_dn = (bs_price(S, K, T, sigma, right=right)
-                - bs_price(S - h_s, K, T, sigma, right=right)) / h_s
+        d_up = (
+            bs_price(S + h_s, K, T, sigma, right=right)
+            - bs_price(S, K, T, sigma, right=right)
+        ) / h_s
+        d_dn = (
+            bs_price(S, K, T, sigma, right=right)
+            - bs_price(S - h_s, K, T, sigma, right=right)
+        ) / h_s
         return (d_up - d_dn) / h_s
     if greek == "vega":
-        return (bs_price(S, K, T, sigma + h_v, right=right)
-                - bs_price(S, K, T, sigma - h_v, right=right)) / (2 * h_v)
+        return (
+            bs_price(S, K, T, sigma + h_v, right=right)
+            - bs_price(S, K, T, sigma - h_v, right=right)
+        ) / (2 * h_v)
     if greek == "volga":
-        v_up = (bs_price(S, K, T, sigma + h_v, right=right)
-                - bs_price(S, K, T, sigma, right=right)) / h_v
-        v_dn = (bs_price(S, K, T, sigma, right=right)
-                - bs_price(S, K, T, sigma - h_v, right=right)) / h_v
+        v_up = (
+            bs_price(S, K, T, sigma + h_v, right=right)
+            - bs_price(S, K, T, sigma, right=right)
+        ) / h_v
+        v_dn = (
+            bs_price(S, K, T, sigma, right=right)
+            - bs_price(S, K, T, sigma - h_v, right=right)
+        ) / h_v
         return (v_up - v_dn) / h_v
     if greek == "vanna":
         # Vanna convention matches the analytic bs_vanna = phi(d1)*d2/sigma
@@ -609,15 +673,25 @@ def _fd_greek(greek, S, K, T, sigma, right="C", h_s=None, h_v=VOL_POINT):
         # defined against; note this is the NEGATIVE of the textbook d(delta)/d
         # sigma). So the bump must reproduce that same signed quantity:
         # bump_vanna = -(d(delta)/dsigma central diff).
-        return -((bs_delta(S, K, T, sigma + h_v, right=right)
-                  - bs_delta(S, K, T, sigma - h_v, right=right)) / (2 * h_v))
+        return -(
+            (
+                bs_delta(S, K, T, sigma + h_v, right=right)
+                - bs_delta(S, K, T, sigma - h_v, right=right)
+            )
+            / (2 * h_v)
+        )
     if greek == "charm":
         # Charm convention matches the analytic bs_charm below (delta-decay
         # toward terminal, reported negative for OTM). The analytic form is the
         # NEGATIVE of textbook d(delta)/dT; bump mirrors that sign.
         dt = max(T * 0.01, 1e-5)
-        return -((bs_delta(S, K, T + dt, sigma, right=right)
-                  - bs_delta(S, K, T - dt, sigma, right=right)) / (2 * dt))
+        return -(
+            (
+                bs_delta(S, K, T + dt, sigma, right=right)
+                - bs_delta(S, K, T - dt, sigma, right=right)
+            )
+            / (2 * dt)
+        )
     raise ValueError(greek)
 
 
@@ -636,10 +710,14 @@ def _taylor_terms(S, K, T, sigma, right, d_s, d_sigma, dt, greeks):
     return sum(terms.values()), terms
 
 
-def el_karoui_closure_gate(rows: List[dict], spot: float, T: float = 0.25,
-                           charm_scale: str = "annualized",
-                           d_s_frac: float = 0.005,
-                           d_sigma_vol: float = 0.005) -> ClosureResult:
+def el_karoui_closure_gate(
+    rows: list[dict],
+    spot: float,
+    T: float = 0.25,
+    charm_scale: str = "annualized",
+    d_s_frac: float = 0.005,
+    d_sigma_vol: float = 0.005,
+) -> ClosureResult:
     """Phase 0 blocking gate.
 
     Computes the Taylor P&L identity TWICE — once with feed-provided (analytic
@@ -652,7 +730,7 @@ def el_karoui_closure_gate(rows: List[dict], spot: float, T: float = 0.25,
     max_per_greek_error <= tolerance. Charm scale: 'annualized' x(1/DEFAULT_A);
     'over_dte' x(1/DTE) — the probe that MUST break closure.
     """
-    per_greek_error: Dict[str, float] = {}
+    per_greek_error: dict[str, float] = {}
     total_pred_feed, total_pred_bump = [], []
     n_ok = 0
     for row in rows:
@@ -669,16 +747,24 @@ def el_karoui_closure_gate(rows: List[dict], spot: float, T: float = 0.25,
             dt = 1.0 / dte
         else:
             dt = 1.0 / DEFAULT_A
-        feed = {g: fns(spot, k, rT, iv, right=right) if g == "delta"
-                else fns(spot, k, rT, iv) for g, fns in _BS_GREEK_FNS.items()}
+        feed = {
+            g: fns(spot, k, rT, iv, right=right)
+            if g in ("delta", "charm")
+            else fns(spot, k, rT, iv)
+            for g, fns in _BS_GREEK_FNS.items()
+        }
         bump = {g: _fd_greek(g, spot, k, rT, iv, right=right) for g in GREEKS}
         # dealer-frame both sides, charm scaled per scale
         feed_df = {g: dealer_frame_greek(g, feed[g], right) for g in GREEKS}
         bump_df = {g: dealer_frame_greek(g, bump[g], right) for g in GREEKS}
         feed_df["charm"] = feed_df["charm"] * (dt / (1.0 / DEFAULT_A))
         bump_df["charm"] = bump_df["charm"] * (dt / (1.0 / DEFAULT_A))
-        p_feed, terms_feed = _taylor_terms(spot, k, rT, iv, right, d_s, d_sigma, dt, feed_df)
-        p_bump, terms_bump = _taylor_terms(spot, k, rT, iv, right, d_s, d_sigma, dt, bump_df)
+        p_feed, terms_feed = _taylor_terms(
+            spot, k, rT, iv, right, d_s, d_sigma, dt, feed_df
+        )
+        p_bump, terms_bump = _taylor_terms(
+            spot, k, rT, iv, right, d_s, d_sigma, dt, bump_df
+        )
         total_pred_feed.append(p_feed)
         total_pred_bump.append(p_bump)
         for g in GREEKS:
@@ -706,8 +792,11 @@ def el_karoui_closure_gate(rows: List[dict], spot: float, T: float = 0.25,
             continue
         rT = _extract(row, "T", T) or T
         for g in GREEKS:
-            fv = _BS_GREEK_FNS[g](spot, k, rT, iv, right=right) if g == "delta" \
+            fv = (
+                _BS_GREEK_FNS[g](spot, k, rT, iv, right=right)
+                if g == "delta"
                 else _BS_GREEK_FNS[g](spot, k, rT, iv)
+            )
             bv = _fd_greek(g, spot, k, rT, iv, right=right)
             if not math.isnan(fv) and not math.isnan(bv):
                 feed_vals[g].append(fv)
@@ -719,9 +808,13 @@ def el_karoui_closure_gate(rows: List[dict], spot: float, T: float = 0.25,
             bump_match_max = max(bump_match_max, abs(fv - bv) / scale)
     provenance = {g: "MEASURED" for g in GREEKS}
     return ClosureResult(
-        closure_r2=float(closure_r2), max_per_greek_error=float(max_per_greek_error),
-        bump_match_max=float(bump_match_max), per_greek_error=per_greek_error,
-        per_greek_provenance=provenance, n_options=n_ok)
+        closure_r2=float(closure_r2),
+        max_per_greek_error=float(max_per_greek_error),
+        bump_match_max=float(bump_match_max),
+        per_greek_error=per_greek_error,
+        per_greek_provenance=provenance,
+        n_options=n_ok,
+    )
 
 
 def _r2(y, yhat):
@@ -745,6 +838,7 @@ def _signflip(a: float, b: float) -> bool:
 @dataclass
 class ExecutionLocus:
     """Collapse of the per-strike vector to execution LEVELS."""
+
     spot: float
     zero_gamma: float
     call_wall: float
@@ -759,9 +853,14 @@ class ExecutionLocus:
     put_gamma_wall: float = 0.0
 
 
-def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
-                    tolerance_pct: float = 0.01, q: float = 0.0,
-                    ne: Optional[NetExposure] = None) -> ExecutionLocus:
+def execution_locus(
+    rows: list[dict],
+    spot: float,
+    T: float = 0.25,
+    tolerance_pct: float = 0.01,
+    q: float = 0.0,
+    ne: NetExposure | None = None,
+) -> ExecutionLocus:
     """Compute the execution-locus map from a chain (rows -> NetExposure).
 
     - zero_gamma level: the strike where cumulative signed dealer gamma (in
@@ -776,10 +875,13 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     strikes = sorted({r.strike for r in ne.rows})
     # VannaCharm GEX (call+/put-), not SVI book — wing SVI marks were
     # putting TSLA's flip at $25 with spot $341.
-    dg_per_strike: Dict[float, float] = {}
+    dg_per_strike: dict[float, float] = {}
     for k in strikes:
-        dg = sum(r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-                 * spot ** 2 * 0.01 for r in ne.rows if abs(r.strike - k) < 1e-9)
+        dg = sum(
+            r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER * spot**2 * 0.01
+            for r in ne.rows
+            if abs(r.strike - k) < 1e-9
+        )
         dg_per_strike[k] = dg
     ordered = sorted(strikes)
     # zero-gamma = the LOCAL (per-strike) signed dollar-gamma sign-change
@@ -788,10 +890,17 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     # negative the whole way up (see test_expiry_book_phase2_locus). The local
     # boundary is where dealer gamma actually flips from net-short (put-heavy,
     # -gamma) to net-long (call-heavy, +gamma), and it excludes the wall spur.
-    flip_strikes = sorted({k for i in range(1, len(ordered))
-                           if _signflip(dg_per_strike.get(ordered[i - 1], 0.0),
-                                        dg_per_strike.get(ordered[i], 0.0))
-                           for k in (ordered[i - 1], ordered[i])})
+    flip_strikes = sorted(
+        {
+            k
+            for i in range(1, len(ordered))
+            if _signflip(
+                dg_per_strike.get(ordered[i - 1], 0.0),
+                dg_per_strike.get(ordered[i], 0.0),
+            )
+            for k in (ordered[i - 1], ordered[i])
+        }
+    )
     # Ignore far-wing noise (TSLA $25 flip with spot $341). Keep flips
     # inside ±50% of spot; if none, fall back to all flips then cumulative.
     near = [k for k in flip_strikes if spot > 0 and abs(k - spot) / spot <= 0.50]
@@ -813,19 +922,28 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
                 prev_sign = sign
             zero_gamma = k
     # OI concentration per strike per right
-    oi_by_right_strike: Dict[Tuple[str, float], float] = {}
+    oi_by_right_strike: dict[tuple[str, float], float] = {}
     for r in ne.rows:
-        oi_by_right_strike[(r.right, r.strike)] = oi_by_right_strike.get((r.right, r.strike), 0.0) + r.oi
+        oi_by_right_strike[(r.right, r.strike)] = (
+            oi_by_right_strike.get((r.right, r.strike), 0.0) + r.oi
+        )
     call_strikes = [k for k in strikes if k > spot]
     put_strikes = [k for k in strikes if k < spot]
-    gex_by_right_strike: Dict[Tuple[str, float], float] = defaultdict(float)
+    gex_by_right_strike: dict[tuple[str, float], float] = defaultdict(float)
     for r in ne.rows:
         gex_by_right_strike[(r.right, r.strike)] += (
-            r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER
-            * spot ** 2 * 0.01
+            r.greeks.get("gamma", 0.0) * r.oi * CONTRACT_MULTIPLIER * spot**2 * 0.01
         )
-    call_wall = max(call_strikes, key=lambda k: abs(gex_by_right_strike.get(("C", k), 0.0))) if call_strikes else spot
-    put_wall = max(put_strikes, key=lambda k: abs(gex_by_right_strike.get(("P", k), 0.0))) if put_strikes else spot
+    call_wall = (
+        max(call_strikes, key=lambda k: abs(gex_by_right_strike.get(("C", k), 0.0)))
+        if call_strikes
+        else spot
+    )
+    put_wall = (
+        max(put_strikes, key=lambda k: abs(gex_by_right_strike.get(("P", k), 0.0)))
+        if put_strikes
+        else spot
+    )
     band_lower = spot * (1 - tolerance_pct)
     band_upper = spot * (1 + tolerance_pct)
     # local GEX slope: net dollar-gamma-per-1% across the window from the
@@ -843,11 +961,19 @@ def execution_locus(rows: List[dict], spot: float, T: float = 0.25,
     gex_slope = window_dg / window_pct if window_pct > 0 else 0.0
     residual_delta = ne.dex()
     return ExecutionLocus(
-        spot=spot, zero_gamma=zero_gamma, call_wall=call_wall, put_wall=put_wall,
-        band_lower=band_lower, band_upper=band_upper, tolerance_pct=tolerance_pct,
-        residual_delta=residual_delta, gex_slope=gex_slope,
+        spot=spot,
+        zero_gamma=zero_gamma,
+        call_wall=call_wall,
+        put_wall=put_wall,
+        band_lower=band_lower,
+        band_upper=band_upper,
+        tolerance_pct=tolerance_pct,
+        residual_delta=residual_delta,
+        gex_slope=gex_slope,
         local_gamma_boundary=float(zero_gamma),
-        call_gamma_wall=float(call_wall), put_gamma_wall=float(put_wall))
+        call_gamma_wall=float(call_wall),
+        put_gamma_wall=float(put_wall),
+    )
 
 
 def hedge_flow_at(locus: ExecutionLocus, price: float) -> float:
@@ -855,8 +981,8 @@ def hedge_flow_at(locus: ExecutionLocus, price: float) -> float:
     tolerance band, sized by the local GEX slope, sign by side.
 
     - price inside band -> 0.0 (no flow).
-    - price above upper band -> +burst (buy pressure), proportional to gex_slope.
-    - price below lower band -> -burst (sell pressure), proportional to gex_slope.
+    - price above upper band -> -burst (sell pressure), proportional to gex_slope.
+    - price below lower band -> +burst (buy pressure), proportional to gex_slope.
     """
     if locus.band_lower <= price <= locus.band_upper:
         return 0.0
@@ -888,12 +1014,13 @@ CHANNEL_SPLIT = {
 @dataclass
 class ScenarioBudget:
     """Scenario x channel hedge-flow matrix (the actionable output)."""
+
     ticker: str
     spot: float
-    scenarios: Dict[str, Dict[str, float]]   # scenario -> channel -> signed flow
-    carry_descriptor: float                  # DEX (post-multiplier shares), carry only
-    activation: Dict[str, float]             # per-scenario Phase-2 locus activation
-    channel_split: Dict[str, Tuple[str, ...]]
+    scenarios: dict[str, dict[str, float]]  # scenario -> channel -> signed flow
+    carry_descriptor: float  # DEX (post-multiplier shares), carry only
+    activation: dict[str, float]  # per-scenario Phase-2 locus activation
+    channel_split: dict[str, tuple[str, ...]]
 
     def flow(self, scenario, channel):
         return self.scenarios.get(scenario, {}).get(channel, 0.0)
@@ -916,11 +1043,17 @@ def _locus_activation(locus: ExecutionLocus, scenario: str, d_iv: float) -> floa
     return 1.0  # dt_1d_opex
 
 
-def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
-                        dte: Optional[int] = None, tolerance_pct: float = 0.01,
-                        d_iv: float = 0.01, ticker: str = "MOCK",
-                        q: float = 0.0,
-                        ne: Optional[NetExposure] = None) -> ScenarioBudget:
+def scenario_hedge_flow(
+    rows: list[dict],
+    spot: float,
+    T: float = 0.25,
+    dte: int | None = None,
+    tolerance_pct: float = 0.01,
+    d_iv: float = 0.01,
+    ticker: str = "MOCK",
+    q: float = 0.0,
+    ne: NetExposure | None = None,
+) -> ScenarioBudget:
     """Build the scenario x channel hedge-flow budget for a chain.
 
     For each named scenario, report the forced dealer hedge flow as one signed
@@ -928,9 +1061,13 @@ def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
     forecast). Channel split is exhaustive and non-overlapping over the six
     greeks.
     """
-    ne = ne if ne is not None else build_net_exposure(rows, spot, T=T, dte=dte, ticker=ticker, q=q)
+    ne = (
+        ne
+        if ne is not None
+        else build_net_exposure(rows, spot, T=T, dte=dte, ticker=ticker, q=q)
+    )
     locus = execution_locus(rows, spot, T=T, tolerance_pct=tolerance_pct, q=q, ne=ne)
-    budget: Dict[str, Dict[str, float]] = {s: {} for s in SCENARIOS}
+    budget: dict[str, dict[str, float]] = {s: {} for s in SCENARIOS}
 
     def _sum_exposure(greek):
         return sum(r.exposure_of(greek) for r in ne.rows)
@@ -963,9 +1100,13 @@ def scenario_hedge_flow(rows: List[dict], spot: float, T: float = 0.25,
 
     activation = {s: _locus_activation(locus, s, d_iv) for s in SCENARIOS}
     return ScenarioBudget(
-        ticker=ticker, spot=spot, scenarios=budget,
-        carry_descriptor=ne.dex(), activation=activation,
-        channel_split=dict(CHANNEL_SPLIT))
+        ticker=ticker,
+        spot=spot,
+        scenarios=budget,
+        carry_descriptor=ne.dex(),
+        activation=activation,
+        channel_split=dict(CHANNEL_SPLIT),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -979,16 +1120,17 @@ class StructuralRegime:
     sets the DIRECTION of the carry at the regime level (the improved
     replacement for the old single-anchor accumulation), event-clocked.
     """
-    regime: str                       # persistent-short-gamma / persistent-long-gamma / neutral
-    term_structure_flag: str          # contango / backwardation / flat
-    carry: float                      # term-structure-weighted net dollar-gamma-per-1%
-    persistence: float                # fraction of expiries agreeing with the weighted sign
-    per_expiry_gamma: Dict[str, float]
-    per_expiry_carry: Dict[str, float]
-    event_clock: Dict[str, bool]
+
+    regime: str  # persistent-short-gamma / persistent-long-gamma / neutral
+    term_structure_flag: str  # contango / backwardation / flat
+    carry: float  # term-structure-weighted net dollar-gamma-per-1%
+    persistence: float  # fraction of expiries agreeing with the weighted sign
+    per_expiry_gamma: dict[str, float]
+    per_expiry_carry: dict[str, float]
+    event_clock: dict[str, bool]
 
 
-def _book_sigma_atm(book_rows: List[dict], spot: float) -> Optional[float]:
+def _book_sigma_atm(book_rows: list[dict], spot: float) -> float | None:
     """ATM implied vol for a book (mean IV over strikes within +-5% of spot)."""
     ivs = []
     for r in book_rows:
@@ -1003,11 +1145,13 @@ def _book_sigma_atm(book_rows: List[dict], spot: float) -> Optional[float]:
     return float(sum(ivs) / len(ivs))
 
 
-def build_structural_regime(expiry_books: List[dict],
-                            term_weights: Optional[Dict[str, float]] = None,
-                            opex_window_days: int = 5,
-                            gamma_tol: Optional[float] = None,
-                            q: float = 0.0) -> StructuralRegime:
+def build_structural_regime(
+    expiry_books: list[dict],
+    term_weights: dict[str, float] | None = None,
+    opex_window_days: int = 5,
+    gamma_tol: float | None = None,
+    q: float = 0.0,
+) -> StructuralRegime:
     """Build the structural/regime arm from multiple expiry books.
 
     expiry_books: list of {'expiry', 'spot', 'rows', 'T'(years), ['dte']}.
@@ -1020,9 +1164,9 @@ def build_structural_regime(expiry_books: List[dict],
     books = sorted(expiry_books, key=lambda b: float(b.get("T", 1.0)))
     if not books:
         raise ValueError("structural regime: no expiry books")
-    per_gamma: Dict[str, float] = {}
-    per_carry: Dict[str, float] = {}
-    sig_atm: Dict[str, Optional[float]] = {}
+    per_gamma: dict[str, float] = {}
+    per_carry: dict[str, float] = {}
+    sig_atm: dict[str, float | None] = {}
     for b in books:
         exp = str(b.get("expiry", "?"))
         spot = float(b.get("spot", 0.0))
@@ -1033,12 +1177,19 @@ def build_structural_regime(expiry_books: List[dict],
             sig_atm[exp] = None
             continue
         ne = build_net_exposure(rows, spot, T=float(b.get("T", 0.25)), q=q)
-        chain_iv = {(r.strike, r.right): r.iv for r in ne.rows
-                    if r.iv == r.iv and r.iv > 0}
+        chain_iv = {
+            (r.strike, r.right): r.iv for r in ne.rows if r.iv == r.iv and r.iv > 0
+        }
         oi_by = {(r.strike, r.right): int(r.oi) for r in ne.rows}
         if chain_iv:
-            ov = svi_rp_overlay(chain_iv, spot, float(b.get("T", 0.25)),
-                                oi_by=oi_by, q=q, r=RISK_FREE_RATE)
+            ov = svi_rp_overlay(
+                chain_iv,
+                spot,
+                float(b.get("T", 0.25)),
+                oi_by=oi_by,
+                q=q,
+                r=RISK_FREE_RATE,
+            )
             apply_svi_book_signs(ne, ov, spot, float(b.get("T", 0.25)))
             per_gamma[exp] = ne.book_gamma()
         else:
@@ -1054,14 +1205,15 @@ def build_structural_regime(expiry_books: List[dict],
             T = float(b.get("T", 1.0))
             term_weights[exp] = 1.0 / (1.0 + max(T, 1e-6))
     wsum = sum(max(term_weights.get(exp, 0.0), 0.0) for exp in per_gamma) or 1.0
-    carry = sum(max(term_weights.get(exp, 0.0), 0.0) * per_gamma[exp]
-                for exp in per_gamma) / wsum
+    carry = (
+        sum(max(term_weights.get(exp, 0.0), 0.0) * per_gamma[exp] for exp in per_gamma)
+        / wsum
+    )
 
     # persistence = fraction of NONZERO expiries agreeing with weighted sign
     wsign = 1.0 if carry > 0 else (-1.0 if carry < 0 else 0.0)
     nonzero = [exp for exp in per_gamma if per_gamma[exp] != 0.0]
-    agreeing = [exp for exp in nonzero
-                if (per_gamma[exp] > 0) == (wsign > 0)]
+    agreeing = [exp for exp in nonzero if (per_gamma[exp] > 0) == (wsign > 0)]
     persistence = (len(agreeing) / len(nonzero)) if nonzero else 0.0
 
     if gamma_tol is None:
@@ -1075,9 +1227,11 @@ def build_structural_regime(expiry_books: List[dict],
         regime = "persistent-long-gamma"
 
     # term-structure flag: ATM IV at near vs far tenor
-    nonnull = [(b, sig_atm.get(str(b.get("expiry", "?"))))
-               for b in books
-               if sig_atm.get(str(b.get("expiry", "?"))) is not None]
+    nonnull = [
+        (b, sig_atm.get(str(b.get("expiry", "?"))))
+        for b in books
+        if sig_atm.get(str(b.get("expiry", "?"))) is not None
+    ]
     flag = "flat"
     if len(nonnull) >= 2:
         T_near = min(nonnull, key=lambda t: float(t[0].get("T", 1e9)))
@@ -1092,14 +1246,21 @@ def build_structural_regime(expiry_books: List[dict],
     # short-DTE anchor present.
     dtemap = {str(b.get("expiry", "?")): int(b.get("dte", 0) or 0) for b in books}
     event_clock = {
-        "opex_crescendo": any(0 < dtemap.get(exp, 0) <= opex_window_days
-                              and dtemap.get(exp, 0) <= 5 for exp in dtemap),
+        "opex_crescendo": any(
+            0 < dtemap.get(exp, 0) <= opex_window_days and dtemap.get(exp, 0) <= 5
+            for exp in dtemap
+        ),
         "short_dte_anchor": any(0 < dtemap.get(exp, 0) <= 3 for exp in dtemap),
     }
     return StructuralRegime(
-        regime=regime, term_structure_flag=flag, carry=float(carry),
-        persistence=float(persistence), per_expiry_gamma=per_gamma,
-        per_expiry_carry=per_carry, event_clock=event_clock)
+        regime=regime,
+        term_structure_flag=flag,
+        carry=float(carry),
+        persistence=float(persistence),
+        per_expiry_gamma=per_gamma,
+        per_expiry_carry=per_carry,
+        event_clock=event_clock,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1109,16 +1270,16 @@ def build_structural_regime(expiry_books: List[dict],
 class SviOverlay:
     ticker: str
     sigma_atm: float
-    cheap_strikes: List[float]
-    rich_strikes: List[float]
-    marks: List[Tuple[float, str, str, float]]   # (strike, right, mark, diff)
+    cheap_strikes: list[float]
+    rich_strikes: list[float]
+    marks: list[tuple[float, str, str, float]]  # (strike, right, mark, diff)
     net_cheap_oi: float
     net_rich_oi: float
     term_structure_flag: str
     butterfly_clamped: bool
 
 
-def _term_structure_flag(tenor_vols: List[Tuple[float, float]]) -> str:
+def _term_structure_flag(tenor_vols: list[tuple[float, float]]) -> str:
     """contango if ATM vol increases with tenor, backwardation if it falls."""
     tv = [(float(t), float(v)) for (t, v) in tenor_vols if v and v > 0]
     if len(tv) < 2:
@@ -1134,13 +1295,17 @@ def _term_structure_flag(tenor_vols: List[Tuple[float, float]]) -> str:
     return "flat"
 
 
-def svi_rp_overlay(chain_iv: Dict[Tuple[float, str], float], spot: float, T: float,
-                   oi_by: Optional[Dict[Tuple[float, str], int]] = None,
-                   tenor_vols: Optional[List[Tuple[float, float]]] = None,
-                   ticker: str = "MOCK",
-                   deadband: float = BOOK_SIGN_DEADBAND,
-                   r: float = RISK_FREE_RATE,
-                   q: float = 0.0) -> SviOverlay:
+def svi_rp_overlay(
+    chain_iv: dict[tuple[float, str], float],
+    spot: float,
+    T: float,
+    oi_by: dict[tuple[float, str], int] | None = None,
+    tenor_vols: list[tuple[float, float]] | None = None,
+    ticker: str = "MOCK",
+    deadband: float = BOOK_SIGN_DEADBAND,
+    r: float = RISK_FREE_RATE,
+    q: float = 0.0,
+) -> SviOverlay:
     """Fixed-strike cheap/rich overlay via svi_rp.calibrate_svi + term flag.
 
     Reuses `svi_rp` (read-only); does NOT modify vol_surface_reference.py.
@@ -1149,31 +1314,47 @@ def svi_rp_overlay(chain_iv: Dict[Tuple[float, str], float], spot: float, T: flo
     |diff| <= deadband -> UNMARKED (no book-sign).
     """
     import svi_rp
+
     ref = svi_rp.calibrate_svi(chain_iv, spot, T, oi_by=oi_by, r=r, q=q)
     marks_raw = ref.mark_chain(chain_iv, oi_by, deadband=deadband)
-    marks: List[Tuple[float, str, str, float]] = [
-        (float(k), right, mark, float(diff)) for (k, right, _, _, diff, mark, _) in marks_raw]
+    marks: list[tuple[float, str, str, float]] = [
+        (float(k), right, mark, float(diff))
+        for (k, right, _, _, diff, mark, _) in marks_raw
+    ]
     cheap = sorted({float(k) for (k, _, mark, _) in marks if mark == "LONG"})
     rich = sorted({float(k) for (k, _, mark, _) in marks if mark == "SHORT"})
     oi_map = oi_by or {}
-    net_cheap = sum(int(oi_map.get((k, right), 0))
-                    for (k, right, mark, _) in marks if mark == "LONG")
-    net_rich = sum(int(oi_map.get((k, right), 0))
-                   for (k, right, mark, _) in marks if mark == "SHORT")
+    net_cheap = sum(
+        int(oi_map.get((k, right), 0))
+        for (k, right, mark, _) in marks
+        if mark == "LONG"
+    )
+    net_rich = sum(
+        int(oi_map.get((k, right), 0))
+        for (k, right, mark, _) in marks
+        if mark == "SHORT"
+    )
     flag = _term_structure_flag(tenor_vols) if tenor_vols else "flat"
     return SviOverlay(
-        ticker=ticker, sigma_atm=ref.sigma_atm, cheap_strikes=cheap,
-        rich_strikes=rich, marks=marks, net_cheap_oi=float(net_cheap),
-        net_rich_oi=float(net_rich), term_structure_flag=flag,
-        butterfly_clamped=ref.butterfly_clamped)
+        ticker=ticker,
+        sigma_atm=ref.sigma_atm,
+        cheap_strikes=cheap,
+        rich_strikes=rich,
+        marks=marks,
+        net_cheap_oi=float(net_cheap),
+        net_rich_oi=float(net_rich),
+        term_structure_flag=flag,
+        butterfly_clamped=ref.butterfly_clamped,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Phase 6 — Pre-registered falsifier (GEX flow -> forward returns, network-free)
 # ---------------------------------------------------------------------------
 FALSIFIER_FORCE = "FALSIFIER_FORCE"
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "_expiry_falsifier_cache")
+_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "_expiry_falsifier_cache"
+)
 _PERM_P_THRESHOLD = 0.05
 _BH_Q_THRESHOLD = 0.10
 _MIN_USABLE_DAYS = 100
@@ -1201,8 +1382,9 @@ def _safe_corr(a, b):
     return float(np.corrcoef(a[:n], b[:n])[0, 1])
 
 
-def _block_perm_p(signal, forward, n_perms=_N_PERMS, block_size=_BLOCK_SIZE,
-                  seed=0) -> float:
+def _block_perm_p(
+    signal, forward, n_perms=_N_PERMS, block_size=_BLOCK_SIZE, seed=0
+) -> float:
     """Two-sided block-permutation p-value on |corr(signal, forward)|.
     Shuffles contiguous blocks of the signal (preserves short-range
     autocorrelation) and counts how often a random permutation produces a
@@ -1217,26 +1399,26 @@ def _block_perm_p(signal, forward, n_perms=_N_PERMS, block_size=_BLOCK_SIZE,
     hits = 0
     for _ in range(n_perms):
         order = rng.permutation(nb)
-        pieces = [signal[b * bs:(b + 1) * bs] for b in order]
+        pieces = [signal[b * bs : (b + 1) * bs] for b in order]
         shuffled = np.concatenate(pieces)
         if len(shuffled) < n:
-            shuffled = np.concatenate([shuffled, signal[len(shuffled):n]])
+            shuffled = np.concatenate([shuffled, signal[len(shuffled) : n]])
         if abs(_safe_corr(shuffled[:n], forward)) >= corr:
             hits += 1
     return hits / n_perms
 
 
-def _bh_qvalues(pvalues: Dict[str, float]) -> Dict[str, float]:
+def _bh_qvalues(pvalues: dict[str, float]) -> dict[str, float]:
     """Benjamini-Hochberg q-values over the greek channel family."""
     items = sorted(pvalues.items(), key=lambda kv: kv[1])
     m = len(items)
-    q: Dict[str, float] = {}
+    q: dict[str, float] = {}
     if m == 0:
         return q
-    prev = 0.0
+    prev = 1.0
     for rank, (name, p) in enumerate(reversed(items), start=1):
         qval = p * m / (m - rank + 1)
-        qval = max(qval, prev)  # enforce monotonicity (BH adjusted)
+        qval = min(qval, prev)  # enforce monotonicity (BH step-up)
         prev = qval
         q[name] = qval
     # reverse map: above loop goes from largest p down, so q is monotone
@@ -1246,13 +1428,13 @@ def _bh_qvalues(pvalues: Dict[str, float]) -> Dict[str, float]:
 @dataclass
 class DailySignals:
     ticker: str
-    dates: List[str]
-    gex_flow: List[float]
-    vanna_flow: List[float]
-    charm: List[float]
-    fwd_ret: List[float]
-    fwd_ret_sign: List[float]
-    iv_shock: List[float]
+    dates: list[str]
+    gex_flow: list[float]
+    vanna_flow: list[float]
+    charm: list[float]
+    fwd_ret: list[float]
+    fwd_ret_sign: list[float]
+    iv_shock: list[float]
 
     def n_days(self):
         return len(self.dates)
@@ -1265,25 +1447,31 @@ def _date_of(row, key="date"):
     return str(d)[:8].replace("-", "")
 
 
-def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
-                        hist_spot_rows: List[dict], expiry: str,
-                        ticker: str = "MOCK", iv_shock_vol: float = 0.01) -> DailySignals:
+def build_daily_signals(
+    hist_greek_rows: list[dict],
+    hist_oi_rows: list[dict],
+    hist_spot_rows: list[dict],
+    expiry: str,
+    ticker: str = "MOCK",
+    iv_shock_vol: float = 0.01,
+) -> DailySignals:
     """Build per-day greek-flow signals + forward 1-day returns from
     historical rows (network-free). GEX flow = day-over-day change in net
     dollar-gamma-per-1%; vanna flow = daily VEX; charm = daily ChaEX. The
     forward return is the NEXT day's signed return."""
     from datetime import datetime
+
     try:
         exp_dt = datetime.strptime(str(expiry), "%Y%m%d")
     except Exception:
         exp_dt = None
-    spot_by_date: Dict[str, float] = {}
+    spot_by_date: dict[str, float] = {}
     for r in hist_spot_rows:
         d = _date_of(r)
         v = _extract(r, "close")
         if not math.isnan(v):
             spot_by_date[d] = v
-    greeks_by_date: Dict[str, List[dict]] = defaultdict(list)
+    greeks_by_date: dict[str, list[dict]] = defaultdict(list)
     for g in hist_greek_rows:
         d = _date_of(g)
         k = _extract(g, "strike")
@@ -1292,16 +1480,21 @@ def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
         iv = _extract(g, "implied_vol")
         if not math.isnan(k) and not math.isnan(iv) and iv > 0:
             greeks_by_date[d].append(
-                {"strike": k, "right": str(g.get("right", "C")).upper()[:1],
-                 "implied_vol": iv})
-    oi_by_date: Dict[str, Dict[Tuple[float, str], int]] = defaultdict(dict)
+                {
+                    "strike": k,
+                    "right": str(g.get("right", "C")).upper()[:1],
+                    "implied_vol": iv,
+                }
+            )
+    oi_by_date: dict[str, dict[tuple[float, str], int]] = defaultdict(dict)
     for o in hist_oi_rows:
         d = _date_of(o)
         k = _extract(o, "strike")
         if not math.isnan(k) and abs(k) >= 1000:
             k = k / 1000.0
-        oi_by_date[d][(k, str(o.get("right", "C")).upper()[:1])] = \
-            int(_extract(o, "open_interest", 0.0))
+        oi_by_date[d][(k, str(o.get("right", "C")).upper()[:1])] = int(
+            _extract(o, "open_interest", 0.0)
+        )
     ordered = sorted(spot_by_date)
     gex = []
     vanna = []
@@ -1315,9 +1508,15 @@ def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
         if d not in greeks_by_date:
             continue
         spot = spot_by_date[d]
-        rows = [{"strike": g["strike"], "right": g["right"],
-                 "oi": oi_by_date[d].get((g["strike"], g["right"]), 0),
-                 "implied_vol": g["implied_vol"]} for g in greeks_by_date[d]]
+        rows = [
+            {
+                "strike": g["strike"],
+                "right": g["right"],
+                "oi": oi_by_date[d].get((g["strike"], g["right"]), 0),
+                "implied_vol": g["implied_vol"],
+            }
+            for g in greeks_by_date[d]
+        ]
         T = 0.25
         if exp_dt is not None:
             try:
@@ -1332,8 +1531,7 @@ def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
         vanna.append(vanna_flow(ne, 0.01))
         charm.append(sum(r.exposure_of("charm") for r in ne.rows))
         # exogenous |dIV| shock detector at ATM
-        ivs = [r["implied_vol"] for r in rows
-               if abs(r["strike"] - spot) <= 0.05 * spot]
+        ivs = [r["implied_vol"] for r in rows if abs(r["strike"] - spot) <= 0.05 * spot]
         atm = float(sum(ivs) / len(ivs)) if ivs else 0.0
         shock = 0.0
         if prev_ivs:
@@ -1351,24 +1549,36 @@ def build_daily_signals(hist_greek_rows: List[dict], hist_oi_rows: List[dict],
             r = (s_nxt - s_now) / s_now if s_now else 0.0
             fwd_ret.append(r)
         else:
-            fwd_ret.append(0.0)
-    # align lengths (drop trailing day with no forward return)
+            break
+    # align lengths (drop trailing day(s) with no forward return)
     minlen = min(len(dates), len(fwd_ret))
     return DailySignals(
-        ticker=ticker, dates=dates[:minlen], gex_flow=gex[:minlen],
-        vanna_flow=vanna[:minlen], charm=charm[:minlen],
+        ticker=ticker,
+        dates=dates[:minlen],
+        gex_flow=gex[:minlen],
+        vanna_flow=vanna[:minlen],
+        charm=charm[:minlen],
         fwd_ret=fwd_ret[:minlen],
-        fwd_ret_sign=[1.0 if r > 0 else (-1.0 if r < 0 else 0.0) for r in fwd_ret[:minlen]],
-        iv_shock=iv_shock[:minlen])
+        fwd_ret_sign=[
+            1.0 if r > 0 else (-1.0 if r < 0 else 0.0) for r in fwd_ret[:minlen]
+        ],
+        iv_shock=iv_shock[:minlen],
+    )
 
 
-_SEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "docs", "Dealer posistioning notes", "_extracted",
-                         "handoff_20260812", "seed_data")
+_SEED_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "docs",
+    "Dealer posistioning notes",
+    "_extracted",
+    "handoff_20260812",
+    "seed_data",
+)
 
 
 def _load_seed(ticker: str) -> dict:
     import glob
+
     pat = os.path.join(_SEED_DIR, f"seed_data_{ticker.upper()}_*.json")
     files = glob.glob(pat)
     if not files:
@@ -1382,16 +1592,21 @@ def build_daily_signals_from_seed(ticker: str) -> DailySignals:
     seed = _load_seed(ticker)
     expiry = str(seed.get("manifest", {}).get("expiry", ""))
     return build_daily_signals(
-        seed.get("greeks", []), seed.get("oi", []), seed.get("spot", []),
-        expiry, ticker=ticker)
+        seed.get("greeks", []),
+        seed.get("oi", []),
+        seed.get("spot", []),
+        expiry,
+        ticker=ticker,
+    )
 
 
-def seed_corpus_tickers() -> List[str]:
+def seed_corpus_tickers() -> list[str]:
     import glob
+
     tickers = []
     for f in glob.glob(os.path.join(_SEED_DIR, "seed_data_*.json")):
         base = os.path.basename(f)
-        tickers.append(base[len("seed_data_"):].split("_")[0].upper())
+        tickers.append(base[len("seed_data_") :].split("_")[0].upper())
     return sorted(tickers)
 
 
@@ -1408,13 +1623,13 @@ class ChannelVerdict:
 
 @dataclass
 class ExpiryFalsifierRun:
-    tickers: List[str]
+    tickers: list[str]
     overall: str
-    primary_gex: Dict[str, ChannelVerdict]
-    channels: Dict[str, ChannelVerdict]
+    primary_gex: dict[str, ChannelVerdict]
+    channels: dict[str, ChannelVerdict]
     spy_qqq_sign_consistent: bool
-    arms: Dict[str, object] = field(default_factory=dict)
-    notes: List[str] = field(default_factory=list)
+    arms: dict[str, object] = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
 
 
 def _channel_verdict(ticker, channel, signals: DailySignals, n_perms, corr_threshold):
@@ -1434,14 +1649,23 @@ def _channel_verdict(ticker, channel, signals: DailySignals, n_perms, corr_thres
         verdict = "SUPPORTED"
     else:
         verdict = "NOT_SUPPORTED"
-    return ChannelVerdict(ticker=ticker, channel=channel, n_days=n, corr=corr,
-                          block_perm_p=p, q_value=1.0, verdict=verdict)
+    return ChannelVerdict(
+        ticker=ticker,
+        channel=channel,
+        n_days=n,
+        corr=corr,
+        block_perm_p=p,
+        q_value=1.0,
+        verdict=verdict,
+    )
 
 
-def run_expiry_falsifier(tickers_data: Dict[str, DailySignals],
-                         n_perms: int = _N_PERMS,
-                         corr_threshold: float = _CORR_THRESHOLD_DEFAULT,
-                         min_tickers: int = _MIN_TICKERS) -> ExpiryFalsifierRun:
+def run_expiry_falsifier(
+    tickers_data: dict[str, DailySignals],
+    n_perms: int = _N_PERMS,
+    corr_threshold: float = _CORR_THRESHOLD_DEFAULT,
+    min_tickers: int = _MIN_TICKERS,
+) -> ExpiryFalsifierRun:
     """Pre-registered primary falsifier: GEX flow -> forward 1-day return sign.
 
     Rules (pre-registered): n_tickers >= min_tickers, n_days >= 100/ticker,
@@ -1463,8 +1687,7 @@ def run_expiry_falsifier(tickers_data: Dict[str, DailySignals],
             channels[(tk, ch)].q_value = qvals[ch]
 
     # primary GEX per-ticker verdicts
-    primary = {tk: channels[(tk, ch)] for tk in tickers_data
-               for ch in ("gex",)}
+    primary = {tk: channels[(tk, ch)] for tk in tickers_data for ch in ("gex",)}
     # SPY/QQQ sign-consistency on the PRIMARY construct
     sign_consistent = True
     spy_c = qqq_c = None
@@ -1481,13 +1704,17 @@ def run_expiry_falsifier(tickers_data: Dict[str, DailySignals],
 
     notes = []
     if len(tickers_data) < min_tickers:
-        notes.append(f"below pre-registered n_tickers floor ({len(tickers_data)}<{min_tickers})")
+        notes.append(
+            f"below pre-registered n_tickers floor ({len(tickers_data)}<{min_tickers})"
+        )
     if not sign_consistent:
         notes.append("SPY/QQQ sign flip on primary GEX construct -> INCONCLUSIVE/FAIL")
 
     # overall: require primary GEX supported, sign-consistent, q<0.10
-    supported = all(v.verdict == "SUPPORTED" and v.q_value < _BH_Q_THRESHOLD
-                    for v in primary.values())
+    supported = all(
+        v.verdict == "SUPPORTED" and v.q_value < _BH_Q_THRESHOLD
+        for v in primary.values()
+    )
     if not sign_consistent:
         overall = "SIGN_FLIP"
     elif len(tickers_data) < min_tickers:
@@ -1497,22 +1724,33 @@ def run_expiry_falsifier(tickers_data: Dict[str, DailySignals],
     else:
         overall = "NOT_SUPPORTED"
     return ExpiryFalsifierRun(
-        tickers=list(tickers_data), overall=overall, primary_gex=primary,
-        channels=channels, spy_qqq_sign_consistent=sign_consistent,
-        notes=notes)
+        tickers=list(tickers_data),
+        overall=overall,
+        primary_gex=primary,
+        channels=channels,
+        spy_qqq_sign_consistent=sign_consistent,
+        notes=notes,
+    )
 
 
 # --- Phase 6 arms ----------------------------------------------------------
-def vanna_lead_arm(signals: DailySignals, iv_shock_threshold: float = 0.005,
-                   k: int = 1, n_perms: int = _N_PERMS) -> ChannelVerdict:
+def vanna_lead_arm(
+    signals: DailySignals,
+    iv_shock_threshold: float = 0.005,
+    k: int = 1,
+    n_perms: int = _N_PERMS,
+) -> ChannelVerdict:
     """Event-gated vanna lead arm: test vanna flow(t) -> forward return(t+k)
     ONLY on days with a dated exogenous |dIV| shock >= threshold. On days with
     no shock, the channel is silent (vanna is never a standalone daily lead)."""
-    idx = [i for i in range(signals.n_days())
-           if signals.iv_shock[i] >= iv_shock_threshold]
+    idx = [
+        i for i in range(signals.n_days()) if signals.iv_shock[i] >= iv_shock_threshold
+    ]
     sig = np.array([signals.vanna_flow[i] for i in idx], dtype=float)
-    fwd = np.array([signals.fwd_ret_sign[min(i + k, signals.n_days() - 1)]
-                    for i in idx], dtype=float)
+    fwd = np.array(
+        [signals.fwd_ret_sign[min(i + k, signals.n_days() - 1)] for i in idx],
+        dtype=float,
+    )
     n = len(idx)
     corr = _safe_corr(sig, fwd)
     p = _block_perm_p(sig, fwd, n_perms=n_perms)
@@ -1522,19 +1760,28 @@ def vanna_lead_arm(signals: DailySignals, iv_shock_threshold: float = 0.005,
         verdict = "SUPPORTED"
     else:
         verdict = "NOT_SUPPORTED"
-    return ChannelVerdict(ticker=signals.ticker, channel="vanna_lead",
-                          n_days=n, corr=corr, block_perm_p=p,
-                          q_value=1.0, verdict=verdict)
+    return ChannelVerdict(
+        ticker=signals.ticker,
+        channel="vanna_lead",
+        n_days=n,
+        corr=corr,
+        block_perm_p=p,
+        q_value=1.0,
+        verdict=verdict,
+    )
 
 
-def opex_event_window_arm(signals: DailySignals, opex_dates: List[str],
-                          k: int = 1) -> ChannelVerdict:
+def opex_event_window_arm(
+    signals: DailySignals, opex_dates: list[str], k: int = 1
+) -> ChannelVerdict:
     """Event-window arm: GEX flow -> forward return measured on OpEx Thu->Fri.
     Each channel is falsified at the horizon it actually acts on."""
     idx = [i for i, d in enumerate(signals.dates) if d in set(opex_dates)]
     sig = np.array([signals.gex_flow[i] for i in idx], dtype=float)
-    fwd = np.array([signals.fwd_ret_sign[min(i + k, signals.n_days() - 1)]
-                    for i in idx], dtype=float)
+    fwd = np.array(
+        [signals.fwd_ret_sign[min(i + k, signals.n_days() - 1)] for i in idx],
+        dtype=float,
+    )
     n = len(idx)
     corr = _safe_corr(sig, fwd)
     p = _block_perm_p(sig, fwd, n_perms=200)
@@ -1544,23 +1791,33 @@ def opex_event_window_arm(signals: DailySignals, opex_dates: List[str],
         verdict = "SUPPORTED"
     else:
         verdict = "NOT_SUPPORTED"
-    return ChannelVerdict(ticker=signals.ticker, channel="opex_window",
-                          n_days=n, corr=corr, block_perm_p=p,
-                          q_value=1.0, verdict=verdict)
+    return ChannelVerdict(
+        ticker=signals.ticker,
+        channel="opex_window",
+        n_days=n,
+        corr=corr,
+        block_perm_p=p,
+        q_value=1.0,
+        verdict=verdict,
+    )
 
 
 def accumulated_overlay_retest(signals: DailySignals) -> dict:
     """Retained accumulated-book overlay re-test: does a multi-day accumulated
     GEX read add R2 over the same-day snapshot for forward returns?"""
     import numpy as _np
+
     snap = _np.asarray(signals.gex_flow, dtype=float)
     fwd = _np.asarray(signals.fwd_ret_sign, dtype=float)
     acc = _np.convolve(snap, _np.ones(3) / 3.0, mode="same")
     r2_snap = _r2(fwd, snap)
     r2_both = _r2(fwd, snap + 0.5 * acc)
-    return {"snapshot_r2": float(r2_snap), "both_r2": float(r2_both),
-            "delta_r2": float(r2_both - r2_snap),
-            "redundant": bool(r2_both - r2_snap < 0.01)}
+    return {
+        "snapshot_r2": float(r2_snap),
+        "both_r2": float(r2_both),
+        "delta_r2": float(r2_both - r2_snap),
+        "redundant": bool(r2_both - r2_snap < 0.01),
+    }
 
 
 # --- Phase 6 cache wrapper (FALSIFIER_FORCE bypass) ------------------------
@@ -1568,40 +1825,56 @@ def _cache_path(kind: str, key: dict) -> str:
     if not os.path.isdir(_CACHE_DIR):
         os.makedirs(_CACHE_DIR, exist_ok=True)
     name = kind + "_" + "_".join(f"{k}={v}" for k, v in sorted(key.items()))
-    return os.path.join(_CACHE_DIR, name.replace(" ", "_").replace(os.sep, "_") + ".json")
+    return os.path.join(
+        _CACHE_DIR, name.replace(" ", "_").replace(os.sep, "_") + ".json"
+    )
 
 
-def run_expiry_falsifier_cached(tickers_data: Dict[str, DailySignals],
-                                n_perms: int = _N_PERMS,
-                                corr_threshold: float = _CORR_THRESHOLD_DEFAULT,
-                                force_recompute: Optional[bool] = None) -> ExpiryFalsifierRun:
+def run_expiry_falsifier_cached(
+    tickers_data: dict[str, DailySignals],
+    n_perms: int = _N_PERMS,
+    corr_threshold: float = _CORR_THRESHOLD_DEFAULT,
+    force_recompute: bool | None = None,
+) -> ExpiryFalsifierRun:
     """Cache wrapper honoring FALSIFIER_FORCE=1 to bypass the cache."""
     if force_recompute is None:
         force = os.environ.get(FALSIFIER_FORCE, "0") == "1"
     else:
         force = bool(force_recompute)
-    key = {"n_perms": n_perms, "corr_threshold": corr_threshold,
-           "tickers": ",".join(sorted(tickers_data))}
+    key = {
+        "n_perms": n_perms,
+        "corr_threshold": corr_threshold,
+        "tickers": ",".join(sorted(tickers_data)),
+    }
     path = _cache_path("expiry_falsifier", key)
     if not force and os.path.exists(path):
         try:
             with open(path) as fh:
                 raw = json.load(fh)
             return ExpiryFalsifierRun(
-                tickers=raw["tickers"], overall=raw["overall"],
-                primary_gex={}, channels={},
+                tickers=raw["tickers"],
+                overall=raw["overall"],
+                primary_gex={},
+                channels={},
                 spy_qqq_sign_consistent=raw["spy_qqq_sign_consistent"],
-                notes=raw.get("notes", []) + ["CACHE_HIT"])
+                notes=raw.get("notes", []) + ["CACHE_HIT"],
+            )
         except Exception:
             pass
-    result = run_expiry_falsifier(tickers_data, n_perms=n_perms,
-                                  corr_threshold=corr_threshold)
+    result = run_expiry_falsifier(
+        tickers_data, n_perms=n_perms, corr_threshold=corr_threshold
+    )
     try:
         with open(path, "w") as fh:
-            json.dump({"tickers": result.tickers, "overall": result.overall,
-                       "spy_qqq_sign_consistent": result.spy_qqq_sign_consistent,
-                       "notes": result.notes}, fh)
+            json.dump(
+                {
+                    "tickers": result.tickers,
+                    "overall": result.overall,
+                    "spy_qqq_sign_consistent": result.spy_qqq_sign_consistent,
+                    "notes": result.notes,
+                },
+                fh,
+            )
     except Exception:
         pass
     return result
-

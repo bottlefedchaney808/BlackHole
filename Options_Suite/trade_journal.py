@@ -15,17 +15,16 @@ import json
 import math
 import os
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
-
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "trade_journal.json")
+_DEFAULT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "trade_journal.json"
+)
 
 _DIRECTION_CHOICES = ("long", "short")
 _INSTRUMENT_CHOICES = ("call", "put", "vertical", "vs", "spread", "stock")
@@ -35,6 +34,7 @@ _STATUS_CHOICES = ("open", "closed")
 # ---------------------------------------------------------------------------
 # TradeEntry
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class TradeEntry:
@@ -54,6 +54,7 @@ class TradeEntry:
         predicted_correct: Whether direction matched outcome (None if open).
         status: 'open' or 'closed'.
     """
+
     timestamp: str
     ticker: str
     direction: str
@@ -61,10 +62,10 @@ class TradeEntry:
     entry_price: float
     quantity: int
     thesis: str = ""
-    exit_price: Optional[float] = None
-    predicted_outcome: Optional[float] = None
-    actual_pnl: Optional[float] = None
-    predicted_correct: Optional[bool] = None
+    exit_price: float | None = None
+    predicted_outcome: float | None = None
+    actual_pnl: float | None = None
+    predicted_correct: bool | None = None
     status: str = "open"
 
 
@@ -72,12 +73,13 @@ class TradeEntry:
 # TradeJournal
 # ---------------------------------------------------------------------------
 
+
 class TradeJournal:
     """In-memory journal backed by a JSON file for persistence."""
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: str | None = None):
         self._path = path or _DEFAULT_PATH
-        self._entries: List[TradeEntry] = []
+        self._entries: list[TradeEntry] = []
         self._load()
 
     # ---- public API -------------------------------------------------------
@@ -107,26 +109,30 @@ class TradeJournal:
 
                 # Determine predicted correctness
                 if entry.predicted_outcome is not None:
-                    entry.predicted_correct = (
-                        entry.actual_pnl > 0
-                    ) == (entry.predicted_outcome > 0)
+                    entry.predicted_correct = (entry.actual_pnl > 0) == (
+                        entry.predicted_outcome > 0
+                    )
 
                 self._save()
                 return True
         return False
 
-    def list_open(self) -> List[TradeEntry]:
+    def list_open(self) -> list[TradeEntry]:
         """Return all trades with status 'open'."""
         return [e for e in self._entries if e.status == "open"]
 
-    def get_stats(self) -> Dict[str, float]:
+    def get_stats(self) -> dict[str, float]:
         """Compute summary performance statistics.
 
         Returns a dict with:
             trade_count, win_rate, total_pnl, avg_win, avg_loss,
             max_drawdown, sharpe_approx
         """
-        closed = [e for e in self._entries if e.status == "closed" and e.actual_pnl is not None]
+        closed = [
+            e
+            for e in self._entries
+            if e.status == "closed" and e.actual_pnl is not None
+        ]
         total = len(closed)
 
         if total == 0:
@@ -140,7 +146,7 @@ class TradeJournal:
                 "sharpe_approx": 0.0,
             }
 
-        pnls: List[float] = [e.actual_pnl for e in closed]  # type: ignore — all non-None by filter above
+        pnls: list[float] = [e.actual_pnl for e in closed]  # type: ignore — all non-None by filter above
         total_pnl = sum(pnls)
         winners = [p for p in pnls if p > 0]
         losers = [p for p in pnls if p <= 0]
@@ -156,11 +162,9 @@ class TradeJournal:
         max_dd = 0.0
         for p in pnls:
             cum += p
-            if cum > peak:
-                peak = cum
+            peak = max(peak, cum)
             dd = peak - cum
-            if dd > max_dd:
-                max_dd = dd
+            max_dd = max(max_dd, dd)
 
         # Approximate Sharpe (annualised, risk-free ≈ 0)
         if total >= 2 and max(pnls) != min(pnls):
@@ -216,6 +220,7 @@ class TradeJournal:
 # CLI helpers
 # ---------------------------------------------------------------------------
 
+
 def _prompt_str(prompt: str, default: str = "") -> str:
     val = input(f"{prompt} [{default}]: ").strip()
     return val if val else default
@@ -245,7 +250,7 @@ def _prompt_choice(prompt: str, choices: tuple) -> str:
         print(f"  Please choose one of: {'/'.join(choices)}")
 
 
-def _prompt_optional_float(prompt: str) -> Optional[float]:
+def _prompt_optional_float(prompt: str) -> float | None:
     val = input(f"{prompt} (press Enter to skip): ").strip()
     return float(val) if val else None
 
@@ -253,8 +258,9 @@ def _prompt_optional_float(prompt: str) -> Optional[float]:
 def _format_entry(e: TradeEntry, idx: int = 0) -> str:
     pnl_str = f"${e.actual_pnl:+.2f}" if e.actual_pnl is not None else "—"
     exit_str = f"${e.exit_price:.2f}" if e.exit_price is not None else "—"
-    correct_str = ("✓" if e.predicted_correct else
-                   "✗" if e.predicted_correct is False else "—")
+    correct_str = (
+        "✓" if e.predicted_correct else "✗" if e.predicted_correct is False else "—"
+    )
     return (
         f"  [{idx}] {e.ticker:6s} | {e.direction:5s} | {e.instrument:8s} | "
         f"Entry ${e.entry_price:<8.2f} | Exit {exit_str:>8s} | "
@@ -263,7 +269,7 @@ def _format_entry(e: TradeEntry, idx: int = 0) -> str:
     )
 
 
-def _format_stats(stats: Dict[str, float]) -> str:
+def _format_stats(stats: dict[str, float]) -> str:
     return (
         f"\n{'=' * 52}\n"
         f"  Performance Summary\n"
@@ -282,6 +288,7 @@ def _format_stats(stats: Dict[str, float]) -> str:
 # ---------------------------------------------------------------------------
 # CLI entry points
 # ---------------------------------------------------------------------------
+
 
 def cmd_add(journal: TradeJournal) -> None:
     """Interactively add a new trade entry."""
@@ -351,20 +358,29 @@ def cmd_stats(journal: TradeJournal) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="CLI-based trade journal with persistence and stats.",
     )
-    parser.add_argument("--add", action="store_true", help="Add a new trade (interactive)")
+    parser.add_argument(
+        "--add", action="store_true", help="Add a new trade (interactive)"
+    )
     parser.add_argument("--list", action="store_true", help="List open positions")
     parser.add_argument("--all", action="store_true", help="List all trades")
-    parser.add_argument("--close", type=str, metavar="TICKER",
-                        help="Close the first open trade matching TICKER")
-    parser.add_argument("--price", type=float, default=0.0,
-                        help="Exit price (required with --close)")
+    parser.add_argument(
+        "--close",
+        type=str,
+        metavar="TICKER",
+        help="Close the first open trade matching TICKER",
+    )
+    parser.add_argument(
+        "--price", type=float, default=None, help="Exit price (required with --close)"
+    )
     parser.add_argument("--stats", action="store_true", help="Show performance stats")
-    parser.add_argument("--path", type=str, default=None,
-                        help="Path to the JSON journal file")
+    parser.add_argument(
+        "--path", type=str, default=None, help="Path to the JSON journal file"
+    )
 
     args = parser.parse_args()
 
@@ -383,7 +399,7 @@ def main() -> None:
     elif args.all:
         cmd_all(journal)
     elif args.close:
-        if args.price == 0.0:
+        if args.price is None:
             print("Error: --close requires --price <exit price>")
             sys.exit(1)
         cmd_close(journal, args.close, args.price)

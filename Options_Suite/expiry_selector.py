@@ -26,10 +26,11 @@ WHAT IT IMPROVES over the sibling Variance_Swap_Module/expiry_selector.py:
 Self-contained (stdlib only); `td` just needs a `.list_expirations(ticker)` method
 returning YYYYMMDD strings, which ThetaDataController provides.
 """
+
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, date as _date
-from typing import List, Optional, Tuple
+from datetime import UTC, datetime, timedelta
+from datetime import date as _date
 
 DAYS_PER_YEAR = 365.0
 EXPIRY_FMT = "%Y%m%d"
@@ -37,18 +38,21 @@ EXPIRY_FMT = "%Y%m%d"
 
 @dataclass
 class ExpiryCandidate:
-    exp_str: str        # "20261016"
+    exp_str: str  # "20261016"
     exp_date: _date
-    dte: int            # calendar days from today (UTC)
-    T_years: float      # dte / 365  -- the T pricing MUST use for this contract
-    kind: str           # "monthly" | "weekly" | "other"
-    diff_days: int      # |dte - target_dte|
+    dte: int  # calendar days from today (UTC)
+    T_years: float  # dte / 365  -- the T pricing MUST use for this contract
+    kind: str  # "monthly" | "weekly" | "other"
+    diff_days: int  # |dte - target_dte|
 
 
 def third_friday(year: int, month: int) -> _date:
     """The standard monthly-OPEX date: the third Friday of the month."""
-    fridays = [d for d in calendar.Calendar().itermonthdates(year, month)
-               if d.month == month and d.weekday() == calendar.FRIDAY]
+    fridays = [
+        d
+        for d in calendar.Calendar().itermonthdates(year, month)
+        if d.month == month and d.weekday() == calendar.FRIDAY
+    ]
     return fridays[2]
 
 
@@ -62,7 +66,9 @@ def classify_expiry(d: _date) -> str:
     return "other"
 
 
-def _future_expiries(avail: List[str], today: _date) -> List[Tuple[str, _date, int, str]]:
+def _future_expiries(
+    avail: list[str], today: _date
+) -> list[tuple[str, _date, int, str]]:
     out = []
     for exp_str in avail:
         s = str(exp_str).strip()
@@ -78,26 +84,37 @@ def _future_expiries(avail: List[str], today: _date) -> List[Tuple[str, _date, i
     return out
 
 
+_MIN_T_YEARS = 1e-6
+
+
 def _mk(entry, target_dte) -> ExpiryCandidate:
     s, d, dte, kind = entry
-    return ExpiryCandidate(exp_str=s, exp_date=d, dte=dte, T_years=dte / DAYS_PER_YEAR,
-                           kind=kind, diff_days=abs(dte - target_dte))
+    T_years = max(dte / DAYS_PER_YEAR, _MIN_T_YEARS)
+    return ExpiryCandidate(
+        exp_str=s,
+        exp_date=d,
+        dte=dte,
+        T_years=T_years,
+        kind=kind,
+        diff_days=abs(dte - target_dte),
+    )
 
 
-def target_date_from_years(target_years: float, today: Optional[_date] = None) -> _date:
-    today = today or datetime.now(timezone.utc).date()
+def target_date_from_years(target_years: float, today: _date | None = None) -> _date:
+    today = today or datetime.now(UTC).date()
     return today + timedelta(days=round(target_years * DAYS_PER_YEAR))
 
 
-def find_candidates(avail: List[str], target_years: float,
-                    today: Optional[_date] = None) -> List[ExpiryCandidate]:
+def find_candidates(
+    avail: list[str], target_years: float, today: _date | None = None
+) -> list[ExpiryCandidate]:
     """Return up to two candidates BOTH closest to the target date: the OPEX
     (third-Friday) nearest the target and the weekly (other-Friday) nearest the
     target, de-duplicated, closest-first. If a ticker lists no weeklies (or no
     monthlies), falls back to the nearest expiry of any kind so a candidate is
     always returned when expiries exist.
     """
-    today = today or datetime.now(timezone.utc).date()
+    today = today or datetime.now(UTC).date()
     parsed = _future_expiries(avail, today)
     if not parsed:
         return []
@@ -106,7 +123,7 @@ def find_candidates(avail: List[str], target_years: float,
     monthlies = [p for p in parsed if p[3] == "monthly"]
     weeklies = [p for p in parsed if p[3] == "weekly"]
 
-    picks: List[ExpiryCandidate] = []
+    picks: list[ExpiryCandidate] = []
     seen = set()
 
     def _add(pool):
@@ -117,17 +134,18 @@ def find_candidates(avail: List[str], target_years: float,
             seen.add(best[0])
             picks.append(_mk(best, target_dte))
 
-    _add(monthlies)   # OPEX nearest the target
-    _add(weeklies)    # weekly nearest the target
-    if not picks:     # neither Friday type listed -> nearest overall (e.g. Wed-only)
+    _add(monthlies)  # OPEX nearest the target
+    _add(weeklies)  # weekly nearest the target
+    if not picks:  # neither Friday type listed -> nearest overall (e.g. Wed-only)
         _add(parsed)
 
     picks.sort(key=lambda c: c.diff_days)
     return picks
 
 
-def nearest_expiry(td, ticker: str, target_years: float,
-                   today: Optional[_date] = None) -> Tuple[str, float]:
+def nearest_expiry(
+    td, ticker: str, target_years: float, today: _date | None = None
+) -> tuple[str, float]:
     """Programmatic (non-interactive) pick: the candidate closest to the target,
     returning (expiry_str, T_from_dates). Used by batch/background callers and as
     the default when a run isn't prompting a human."""
@@ -143,13 +161,19 @@ def nearest_expiry(td, ticker: str, target_years: float,
 
 def _describe(c: ExpiryCandidate) -> str:
     label = {"monthly": "MONTHLY/OPEX", "weekly": "WEEKLY", "other": "OTHER"}[c.kind]
-    return (f"{c.exp_date.isoformat()} ({c.exp_date.strftime('%a')}, {label})  "
-            f"DTE={c.dte}  T={c.T_years:.4f}yr")
+    return (
+        f"{c.exp_date.isoformat()} ({c.exp_date.strftime('%a')}, {label})  "
+        f"DTE={c.dte}  T={c.T_years:.4f}yr"
+    )
 
 
-def choose_expiry(td, ticker: str, target_years: float,
-                  interactive: bool = True,
-                  today: Optional[_date] = None) -> Tuple[str, float]:
+def choose_expiry(
+    td,
+    ticker: str,
+    target_years: float,
+    interactive: bool = True,
+    today: _date | None = None,
+) -> tuple[str, float]:
     """Resolve target_years to a concrete (expiry_str, T_from_dates).
 
     Interactive: shows the OPEX and weekly nearest the target (both bracketing the
@@ -167,13 +191,19 @@ def choose_expiry(td, ticker: str, target_years: float,
     tgt = target_date_from_years(target_years, today)
     if not interactive or len(cands) == 1:
         chosen = cands[0]
-        print(f"[Expiry] target T={target_years:.4f}yr (~{tgt.isoformat()}) -> {_describe(chosen)}")
+        print(
+            f"[Expiry] target T={target_years:.4f}yr (~{tgt.isoformat()}) -> {_describe(chosen)}"
+        )
         return chosen.exp_str, chosen.T_years
 
-    print(f"\n[Expiry] Target for T={target_years:.4f}yr is ~{tgt.isoformat()}. Closest listed expiries:")
+    print(
+        f"\n[Expiry] Target for T={target_years:.4f}yr is ~{tgt.isoformat()}. Closest listed expiries:"
+    )
     for i, c in enumerate(cands, 1):
         print(f"   {i}) {_describe(c)}")
-    choice = input(f"   Choose expiry by number (default 1 = closest, {cands[0].exp_date.isoformat()}): ").strip()
+    choice = input(
+        f"   Choose expiry by number (default 1 = closest, {cands[0].exp_date.isoformat()}): "
+    ).strip()
     if choice.isdigit() and 1 <= int(choice) <= len(cands):
         chosen = cands[int(choice) - 1]
     else:

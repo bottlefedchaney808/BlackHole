@@ -10,13 +10,11 @@ Tests cover:
 
 import math
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
-
 import vrp_term_structure as vts
-
 
 # ---------------------------------------------------------------------------
 # Dataclass construction
@@ -50,11 +48,11 @@ def test_vrp_term_point_nan_values():
     pt = vts.VrpTermPoint(
         expiry_label="6mo",
         expiry_date="",
-        T_years=float('nan'),
-        fair_vol_pct=float('nan'),
-        atm_iv_pct=float('nan'),
-        vrp_pct=float('nan'),
-        rv_30d_pct=float('nan'),
+        T_years=float("nan"),
+        fair_vol_pct=float("nan"),
+        atm_iv_pct=float("nan"),
+        vrp_pct=float("nan"),
+        rv_30d_pct=float("nan"),
     )
     assert math.isnan(pt.T_years)
     assert math.isnan(pt.fair_vol_pct)
@@ -103,10 +101,10 @@ def _point(vrp: float) -> vts.VrpTermPoint:
         expiry_label="x",
         expiry_date="20260717",
         T_years=0.25,
-        fair_vol_pct=float('nan'),
-        atm_iv_pct=float('nan'),
+        fair_vol_pct=float("nan"),
+        atm_iv_pct=float("nan"),
         vrp_pct=vrp,
-        rv_30d_pct=float('nan'),
+        rv_30d_pct=float("nan"),
     )
 
 
@@ -178,10 +176,10 @@ def test_shape_humped_inverse():
 def test_shape_ignores_nan_points():
     """NaN VRP points are filtered out before classification."""
     pts = [
-        _point(float('nan')),
+        _point(float("nan")),
         _point(-1.0),
         _point(1.0),
-        _point(float('nan')),
+        _point(float("nan")),
         _point(3.0),
     ]
     assert vts._classify_term_structure(pts) == "upward"
@@ -222,15 +220,18 @@ class FakeTD:
             T_approx = 0.25
             approx_premium = spot * iv * np.sqrt(T_approx) * 0.4
             mid = max(approx_premium * (1.0 - 0.3 * moneyness), 0.05)
-            for right in ('C', 'P'):
-                rows.append({
-                    'strike': k * 1000,  # cents
-                    'right': right,
-                    'bid': max(mid * 0.9, 0.01),
-                    'ask': mid * 1.1,
-                    'implied_vol': iv,
-                    'last': mid,
-                })
+            for right in ("C", "P"):
+                rows.append(
+                    {
+                        "strike": k
+                        * 1000,  # milli-dollars (ThetaData integer-scaled strike convention)
+                        "right": right,
+                        "bid": max(mid * 0.9, 0.01),
+                        "ask": mid * 1.1,
+                        "implied_vol": iv,
+                        "last": mid,
+                    }
+                )
         return rows
 
     def fetch_dividend_yield(self, ticker: str):
@@ -256,7 +257,11 @@ def test_compute_vrp_term_structure_with_fake_td():
         # 300 daily price points with roughly 20% annualized vol
         rng = np.random.default_rng(42)
         prices = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 300)))
-        mock_df = type("MockDF", (), {"__getitem__": lambda self, k: type("MockCol", (), {"values": prices})()})()
+        mock_df = type(
+            "MockDF",
+            (),
+            {"__getitem__": lambda self, k: type("MockCol", (), {"values": prices})()},
+        )()
         mock_fetch.return_value = mock_df
 
         result = vts.compute_vrp_term_structure("SPY", td, 100.0, 0.05, 0.0)
@@ -276,7 +281,9 @@ def test_compute_vrp_term_structure_with_fake_td():
         assert not math.isnan(pt.atm_iv_pct), f"{pt.expiry_label} atm_iv NaN"
         assert not math.isnan(pt.vrp_pct), f"{pt.expiry_label} vrp NaN"
         # Fair vol should be positive and reasonable (fits our ~20% skey)
-        assert 5.0 < pt.fair_vol_pct < 100.0, f"{pt.expiry_label} fair_vol={pt.fair_vol_pct}"
+        assert 5.0 < pt.fair_vol_pct < 100.0, (
+            f"{pt.expiry_label} fair_vol={pt.fair_vol_pct}"
+        )
         # ATM IV also
         assert 5.0 < pt.atm_iv_pct < 100.0, f"{pt.expiry_label} atm_iv={pt.atm_iv_pct}"
         # VRP should be the difference
@@ -330,7 +337,11 @@ def test_compute_vrp_term_structure_skips_missing_expiry():
     with patch.object(vts, "fetch_price_history") as mock_fetch:
         rng = np.random.default_rng(42)
         prices = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 300)))
-        mock_df = type("MockDF", (), {"__getitem__": lambda self, k: type("MockCol", (), {"values": prices})()})()
+        mock_df = type(
+            "MockDF",
+            (),
+            {"__getitem__": lambda self, k: type("MockCol", (), {"values": prices})()},
+        )()
         mock_fetch.return_value = mock_df
 
         result = vts.compute_vrp_term_structure("SPY", td, 100.0, 0.05, 0.0)
@@ -380,8 +391,16 @@ def test_plot_vrp_term_structure_with_nan(tmp_path):
     """Chart should handle NaN values gracefully (no crash)."""
     pts = [
         vts.VrpTermPoint("1mo", "20260710", 0.0833, 28.0, 26.0, 2.0, 24.0),
-        vts.VrpTermPoint("3mo", "", float('nan'), float('nan'), float('nan'), float('nan'), float('nan')),
-        vts.VrpTermPoint("6mo", "20270115", 0.5, 35.0, 31.0, 4.0, float('nan')),
+        vts.VrpTermPoint(
+            "3mo",
+            "",
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+        ),
+        vts.VrpTermPoint("6mo", "20270115", 0.5, 35.0, 31.0, 4.0, float("nan")),
         vts.VrpTermPoint("12mo", "20270716", 1.0, 38.0, 33.0, 5.0, 27.0),
     ]
     result = vts.VrpTermStructureResult(

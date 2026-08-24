@@ -5,16 +5,16 @@
 Nothing scoped right now. Candidates for a future session if something isn't
 matching Market on the run-all report:
 
-- **True Heston-native higher-order Greeks** (Vanna / Vomma / Speed / Color / Charm).
-  These currently fall back to closed-form BS at Heston's effective_sigma = sqrt(V0),
-  because 2nd/3rd finite differences on LSM (even with CRN) are noise-limited by the
-  discontinuous continuation-value regression shifts. The genuine Heston-native path
-  is analytical differentiation of the characteristic function (or Malliavin calculus
-  on the LSM paths). Same limitation applies to MC and CRR: MC because its LSM has
-  the same regression issue, CRR because its u/d/p triple is a step function of sigma
-  and 2nd sigma FD picks up tree-node-alignment noise as false signal. LR/NR are
-  the only tree models where FD 2nd-order sigma works cleanly, and SABR/VV use
-  closed-form BS at their smile-implied sigma at K.
+- **Heston higher-order Greeks (Vanna / Vomma / Speed / Color / Charm) are now
+  Heston-native**, computed via nested common-random-number (CRN) bump-and-revalue
+  on the Heston LSM (`MCHestonLSM.heston_all_greeks`, `_heston_lsm_price_crn`,
+  `run_heston_full`) rather than falling back to closed-form Black-Scholes. Same
+  limitation as before still applies to MC and CRR for their own higher-order
+  Greeks: MC because its LSM has the same regression issue, CRR because its
+  u/d/p triple is a step function of sigma and 2nd sigma FD picks up
+  tree-node-alignment noise as false signal. LR/NR are the only tree models
+  where FD 2nd-order sigma works cleanly, and SABR/VV use closed-form BS at
+  their smile-implied sigma at K.
 - **Extend BAW's IV solve to a smile fit** if it ever becomes useful to have a
   full BAW smile row on the chart (currently BAW only solves per-strike). Would
   parallel what the tree models already do via `smile_utils.fetch_market_smile`.
@@ -1024,7 +1024,6 @@ before assuming it's a pure quoting-convention gap.
 
 ## 🛠️ How to Run
 ```bash
-cd C:\Users\bottl\FinancialDevelopment\Monte-Carlo-American-Pricer-Greeks
-.venv\Scripts\Activate.ps1
-python main.py
+Options_Suite\options_suite.bat      # Windows
+Options_Suite/options_suite.sh       # Linux/Mac
 ```

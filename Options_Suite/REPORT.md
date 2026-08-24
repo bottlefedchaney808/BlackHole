@@ -3,9 +3,9 @@
 This document describes the recent changes and how to run the comparison/reporting features.
 
 Overview
-- Each model (Standard, SABR, Vanna-Volga, Heston) prints a standardized debug block when run. The block includes:
+- Each model (CRR, Leisen-Reimer, Newton-Raphson, SABR, Vanna-Volga, MC, BAW, Heston) prints a standardized debug block when run. The block includes:
   - timestamp, inputs (S, K, T, r, q), sigma/parameters, calibration summary (if any), price, greeks
-- Option 5 in the CLI runs all models and produces a comparison. You can save the comparison as CSV and/or PDF.
+- Option 9 in the CLI runs all models and produces a comparison. You can save the comparison as CSV and/or PDF.
 
 Running
 1. Ensure dependencies are installed (recommended):
@@ -15,7 +15,7 @@ Running
 2. Start the CLI:
    python main.py
 
-3. Choose option 5 (Run all models & compare) and follow prompts.
+3. Choose option 9 (Run all models & compare) and follow prompts.
 
 Notes
 - Heston calibration fits European IVs (for parameters) but pricing is American LSM.

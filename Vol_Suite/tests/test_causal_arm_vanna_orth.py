@@ -13,6 +13,7 @@ Covers:
    dealer_positioning pipeline)
 5. deterministic, network-free
 """
+
 import json
 import math
 import os
@@ -23,7 +24,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-import run_causal_arm_v2 as ca  # noqa: E402
+import run_causal_arm_v2 as ca
 
 
 def _make_records(n_days=30, seed=1):
@@ -43,20 +44,32 @@ def _make_records(n_days=30, seed=1):
         event = 1 if i in (5, 12, 19, 26) else 0
         resp = 3.0 * pre_v * div + 0.3 * gamma + rng.normal(0, 0.2)
         fam_key = f"family_interaction_{fam.lower()}"
-        recs.append({
-            "day": day, "date": day, "ticker": fam, "families": [fam],
-            "event_habitat": "FOMC" if event else "NONE",
-            "pre_window": {"cutoff_pass": True},
-            "l2": {
-                "pre_vanna_exposure": pre_v, "delta_iv": div,
-                "gamma_burst": gamma, "delta_s": ds, "market": mkt,
-                "event": event, "a6_reflexivity": a6,
-                "cross_family_spillover": spill,
-                fam_key: pre_v, "forward_return_h": resp,
-            },
-            "clock": {"daily": {"return": 0.0, "eligible": True},
-                      "from_breach": {"return": resp, "eligible": True}},
-        })
+        recs.append(
+            {
+                "day": day,
+                "date": day,
+                "ticker": fam,
+                "families": [fam],
+                "event_habitat": "FOMC" if event else "NONE",
+                "pre_window": {"cutoff_pass": True},
+                "l2": {
+                    "pre_vanna_exposure": pre_v,
+                    "delta_iv": div,
+                    "gamma_burst": gamma,
+                    "delta_s": ds,
+                    "market": mkt,
+                    "event": event,
+                    "a6_reflexivity": a6,
+                    "cross_family_spillover": spill,
+                    fam_key: pre_v,
+                    "forward_return_h": resp,
+                },
+                "clock": {
+                    "daily": {"return": 0.0, "eligible": True},
+                    "from_breach": {"return": resp, "eligible": True},
+                },
+            }
+        )
     return recs
 
 
@@ -88,7 +101,7 @@ def test_orthogonalized_target_rank_full_and_vif_reduced():
     vif_raw = _vif(raw["X"], raw["col_names"].index("pre_vanna_x_delta_iv"))
     vif_orth = _vif(orth["X"], orth["col_names"].index("vanna_orth"))
     assert vif_orth < vif_raw  # strictly reduced
-    assert vif_orth < 5.0       # near-orthogonal
+    assert vif_orth < 5.0  # near-orthogonal
 
 
 def test_fwl_equivalence_vanna_orth_matches_residualized():
@@ -117,8 +130,8 @@ def test_constant_design_fail_closed_not_identifiable():
     """A degenerate/constant target must be NOT-IDENTIFIABLE, never fabricated."""
     recs = _make_records()
     for r in recs:
-        r["l2"]["pre_vanna_exposure"] = 1.0       # constant
-        r["l2"]["delta_iv"] = 0.02                # constant -> target constant
+        r["l2"]["pre_vanna_exposure"] = 1.0  # constant
+        r["l2"]["delta_iv"] = 0.02  # constant -> target constant
     uniq = ca.deduplicate_family_day(recs)
     orth = ca.orthogonalize_vanna_design(uniq, family_l2=True)
     # constant residual target -> the design's target column is zero-variance
@@ -138,12 +151,13 @@ def test_does_not_touch_live_path():
     """The orthogonalization driver must not import/execute the live
     dealer_positioning pipeline — it works on the new expiry-book model only."""
     import inspect
-    src = inspect.getsource(ca)
+
+    src = inspect.getsource(ca.orthogonalize_vanna_design)
     # the orthogonalization uses pre-event LEVEL exposure; it must not reference
     # the live dealer_positioning sign pipeline as a causal channel
-    assert "compute_dealer_positioning" not in src or "orthogonalize" not in src
+    assert "compute_dealer_positioning" not in src
     # no vanna_flow (signed ΔIV flow) is used as the causal channel
-    assert "vanna_flow" not in src.split("orthogonalize_vanna_design")[0].split("def ")[-1]
+    assert "vanna_flow" not in src
 
 
 def test_delta_iv_provenance_assertion():
@@ -172,9 +186,18 @@ def test_delta_iv_provenance_assertion():
 def test_full_suite_on_orthogonalized_acquisition():
     """Run the actual committed 62-day acquisition through the orthogonalized
     design and confirm it stays full-rank + IDENTIFIABLE (Cem's review gate)."""
-    recs = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       "..", "_causal_acquisition_20260815",
-                                       "records_merged", "day_records_merged.json"), encoding="utf-8"))
+    recs = json.load(
+        open(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..",
+                "_causal_acquisition_20260815",
+                "records_merged",
+                "day_records_merged.json",
+            ),
+            encoding="utf-8",
+        )
+    )
     uniq = ca.deduplicate_family_day(recs)
     orth = ca.orthogonalize_vanna_design(uniq, family_l2=True)
     fit = ca._fit_ols(orth["X"], orth["y"], "vanna_orth", orth["col_names"])

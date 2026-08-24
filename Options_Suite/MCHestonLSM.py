@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Tuple
+
 try:
     from .market_data import MarketDataController
 except ImportError:
@@ -7,10 +7,11 @@ except ImportError:
 from scipy.integrate import quad
 from scipy.optimize import minimize
 from scipy.stats import norm
+
 try:
-    from .NewtonRaphsonIV import implied_volatility_nr, black_scholes_func
+    from .NewtonRaphsonIV import black_scholes_func, implied_volatility_nr
 except ImportError:
-    from NewtonRaphsonIV import implied_volatility_nr, black_scholes_func
+    pass
 # Reuse MC.py's GPU/CPU array-backend detection (xp = cupy if a real, working
 # CUDA device is present, else numpy -- see that module's docstring for the
 # "cheap real op, not just an import check" verification) rather than
@@ -18,17 +19,28 @@ except ImportError:
 # `np.`, so the Heston path simulation below never ran on GPU even when
 # cupy/CUDA were available and MC.py's own GBM simulation was using them.
 try:
-    from .MC import xp, GPU_ACTIVE, _to_scalar
+    from .MC import GPU_ACTIVE, _to_scalar, xp
 except ImportError:
-    from MC import xp, GPU_ACTIVE, _to_scalar
-import time
+    from MC import _to_scalar, xp
 
 
 # Heston LSM pricer adapted to be callable from main.py
-def _simulate_heston_paths(S0: float, V0: float, r: float, kappa: float, theta: float,
-                           vol_sigma: float, rho: float, T: float, steps: int, sims: int,
-                           seed: Optional[int] = None, q: float = 0.0,
-                           z1_pre=None, z_prime_pre=None):
+def _simulate_heston_paths(
+    S0: float,
+    V0: float,
+    r: float,
+    kappa: float,
+    theta: float,
+    vol_sigma: float,
+    rho: float,
+    T: float,
+    steps: int,
+    sims: int,
+    seed: int | None = None,
+    q: float = 0.0,
+    z1_pre=None,
+    z_prime_pre=None,
+):
     """Simulate Heston (S, V) paths via full-truncation Euler discretization.
 
     Unlike MC.py's plain-GBM path generation, this loop over `steps` is NOT a
@@ -65,15 +77,22 @@ def _simulate_heston_paths(S0: float, V0: float, r: float, kappa: float, theta: 
             xp.random.seed(seed)
         z1 = xp.random.standard_normal((steps, sims))
         z_prime = xp.random.standard_normal((steps, sims))
-    z2 = rho * z1 + xp.sqrt(1 - rho ** 2) * z_prime
+    z2 = rho * z1 + xp.sqrt(1 - rho**2) * z_prime
 
     for t in range(1, steps + 1):
         vol = xp.sqrt(xp.maximum(V[t - 1, :], 0))
         # risk-neutral log-diffusion drift: (r - q - 0.5*vol^2)*dt
-        drift = (r - q - 0.5 * vol ** 2) * dt
+        drift = (r - q - 0.5 * vol**2) * dt
         S[t, :] = S[t - 1, :] * xp.exp(drift + vol * xp.sqrt(dt) * z1[t - 1, :])
         # full-truncation Euler update for variance to improve stability
-        V_next = V[t - 1, :] + kappa * (theta - xp.maximum(V[t - 1, :], 0)) * dt + vol_sigma * xp.sqrt(xp.maximum(V[t - 1, :], 0)) * xp.sqrt(dt) * z2[t - 1, :]
+        V_next = (
+            V[t - 1, :]
+            + kappa * (theta - xp.maximum(V[t - 1, :], 0)) * dt
+            + vol_sigma
+            * xp.sqrt(xp.maximum(V[t - 1, :], 0))
+            * xp.sqrt(dt)
+            * z2[t - 1, :]
+        )
         V[t, :] = xp.maximum(1e-12, V_next)
 
     return S, V
@@ -90,39 +109,54 @@ def _heston_vander_lstsq(X, Y, degree):
         coeffs, *_ = xp.linalg.lstsq(A, Y, rcond=None)
         return A.dot(coeffs)
     except Exception:
-        X_cpu = X.get() if hasattr(X, 'get') else np.asarray(X)
-        Y_cpu = Y.get() if hasattr(Y, 'get') else np.asarray(Y)
+        X_cpu = X.get() if hasattr(X, "get") else np.asarray(X)
+        Y_cpu = Y.get() if hasattr(Y, "get") else np.asarray(Y)
         A_cpu = np.vander(X_cpu, N=degree + 1)
         coeffs, *_ = np.linalg.lstsq(A_cpu, Y_cpu, rcond=None)
         cont_cpu = A_cpu.dot(coeffs)
         return xp.asarray(cont_cpu) if xp is not np else cont_cpu
 
 
-def heston_lsm_price(S0: Optional[float] = None, K: Optional[float] = None, T: Optional[float] = None,
-                     r: Optional[float] = None, q: Optional[float] = None, V0: Optional[float] = None,
-                     kappa: float = 1.5, theta: float = 0.04, vol_sigma: float = 0.3, rho: float = -0.3,
-                     sims: int = 10000, steps: int = 200, option: str = 'call', ticker: Optional[str] = None,
-                     use_market_data: bool = True, seed: Optional[int] = 42) -> float:
+def heston_lsm_price(
+    S0: float | None = None,
+    K: float | None = None,
+    T: float | None = None,
+    r: float | None = None,
+    q: float | None = None,
+    V0: float | None = None,
+    kappa: float = 1.5,
+    theta: float = 0.04,
+    vol_sigma: float = 0.3,
+    rho: float = -0.3,
+    sims: int = 10000,
+    steps: int = 200,
+    option: str = "call",
+    ticker: str | None = None,
+    use_market_data: bool = True,
+    seed: int | None = 42,
+) -> float:
     """
     Price an American option using Heston dynamics + Longstaff-Schwartz.
     If ticker is provided and use_market_data is True, market parameters will be pulled from MarketDataController.get_pricing_parameters.
     Returns the discounted option price (float).
     """
     option = option.lower()
-    if option not in ['call', 'put']:
+    if option not in ["call", "put"]:
         raise ValueError("option must be 'call' or 'put'")
 
     if use_market_data and ticker is not None:
         md = MarketDataController()
-        params = md.get_pricing_parameters(ticker, K if K is not None else 0.0, T if T is not None else 0.25)
-        S0 = params.get('S', S0)
-        K = params.get('K', K)
-        T = params.get('T', T)
-        r = params.get('r', r)
-        q = params.get('q', q)
+        params = md.get_pricing_parameters(
+            ticker, K if K is not None else 0.0, T if T is not None else 0.25
+        )
+        S0 = params.get("S", S0)
+        K = params.get("K", K)
+        T = params.get("T", T)
+        r = params.get("r", r)
+        q = params.get("q", q)
         if V0 is None:
-            sigma_est = params.get('sigma', vol_sigma)
-            V0 = sigma_est ** 2
+            sigma_est = params.get("sigma", vol_sigma)
+            V0 = sigma_est**2
 
     # Validate inputs
     if any(v is None for v in [S0, K, T, r, V0]):
@@ -132,10 +166,12 @@ def heston_lsm_price(S0: Optional[float] = None, K: Optional[float] = None, T: O
 
     # simulate paths -- runs on GPU (xp = cupy) when a working CUDA device
     # was detected at import time (see MC.py), CPU numpy otherwise.
-    S_paths, V_paths = _simulate_heston_paths(S0, V0, r, kappa, theta, vol_sigma, rho, T, steps, sims, seed=seed, q=q)
+    S_paths, V_paths = _simulate_heston_paths(
+        S0, V0, r, kappa, theta, vol_sigma, rho, T, steps, sims, seed=seed, q=q
+    )
 
     # payoff at maturity
-    if option == 'call':
+    if option == "call":
         payoff = xp.maximum(S_paths[-1, :] - K, 0.0)
     else:
         payoff = xp.maximum(K - S_paths[-1, :], 0.0)
@@ -147,7 +183,7 @@ def heston_lsm_price(S0: Optional[float] = None, K: Optional[float] = None, T: O
     # but every op inside it now runs through xp so it executes on GPU too.
     discount = xp.exp(-r * (T / steps))
     for t in range(steps - 1, 0, -1):
-        if option == 'call':
+        if option == "call":
             immediate = xp.maximum(S_paths[t, :] - K, 0.0)
         else:
             immediate = xp.maximum(K - S_paths[t, :], 0.0)
@@ -180,8 +216,23 @@ def heston_lsm_price(S0: Optional[float] = None, K: Optional[float] = None, T: O
     return _to_scalar(option_price)
 
 
-def _heston_lsm_price_crn(S0, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
-                          sims, steps, option, z1_pre, z_prime_pre):
+def _heston_lsm_price_crn(
+    S0,
+    K,
+    T,
+    r,
+    q,
+    V0,
+    kappa,
+    theta,
+    vol_sigma,
+    rho,
+    sims,
+    steps,
+    option,
+    z1_pre,
+    z_prime_pre,
+):
     """Heston LSM price using PRE-GENERATED z1 / z_prime arrays (Common
     Random Numbers). Same math as heston_lsm_price but skips the fresh
     seed/draw step -- the caller controls the randomness so central-
@@ -194,22 +245,34 @@ def _heston_lsm_price_crn(S0, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     affected.
     """
     option = option.lower()
-    if option not in ('call', 'put'):
+    if option not in ("call", "put"):
         raise ValueError("option must be 'call' or 'put'")
 
     S_paths, _V_paths = _simulate_heston_paths(
-        S0, V0, r, kappa, theta, vol_sigma, rho, T, steps, sims,
-        seed=None, q=q, z1_pre=z1_pre, z_prime_pre=z_prime_pre,
+        S0,
+        V0,
+        r,
+        kappa,
+        theta,
+        vol_sigma,
+        rho,
+        T,
+        steps,
+        sims,
+        seed=None,
+        q=q,
+        z1_pre=z1_pre,
+        z_prime_pre=z_prime_pre,
     )
 
-    if option == 'call':
+    if option == "call":
         payoff = xp.maximum(S_paths[-1, :] - K, 0.0)
     else:
         payoff = xp.maximum(K - S_paths[-1, :], 0.0)
 
     discount = xp.exp(-r * (T / steps))
     for t in range(steps - 1, 0, -1):
-        if option == 'call':
+        if option == "call":
             immediate = xp.maximum(S_paths[t, :] - K, 0.0)
         else:
             immediate = xp.maximum(K - S_paths[t, :], 0.0)
@@ -238,8 +301,22 @@ def _heston_lsm_price_crn(S0, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     return _to_scalar(discount * xp.mean(payoff))
 
 
-def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
-                      sims=8000, steps=100, option='put', seed=42):
+def heston_all_greeks(
+    S,
+    K,
+    T,
+    r,
+    q,
+    V0,
+    kappa,
+    theta,
+    vol_sigma,
+    rho,
+    sims=8000,
+    steps=100,
+    option="put",
+    seed=42,
+):
     """Heston's OWN Greek engine: bump S / V0 / r / T on the Heston LSM
     pricer using COMMON RANDOM NUMBERS (CRN). ALL Greek values come from
     Heston-under-Heston-dynamics -- NOT the previous shortcut of feeding
@@ -321,13 +398,25 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     except ImportError:
         from american_binomial import _bs_rho
 
-    is_call = (option == 'call')
+    is_call = option == "call"
     sigma_eff = float(np.sqrt(max(V0, 1e-9)))
 
     if T <= 0 or sigma_eff <= 1e-6:
-        return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,
-                'vanna': 0.0, 'vomma': 0.0, 'vomma_xi': 0.0, 'speed': 0.0, 'charm': 0.0,
-                'color': 0.0, 'rho_euro': 0.0, 'rho_ee_premium': 0.0}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "vega": 0.0,
+            "rho": 0.0,
+            "theta": 0.0,
+            "vanna": 0.0,
+            "vomma": 0.0,
+            "vomma_xi": 0.0,
+            "speed": 0.0,
+            "charm": 0.0,
+            "color": 0.0,
+            "rho_euro": 0.0,
+            "rho_ee_premium": 0.0,
+        }
 
     # Pre-generate the CRN shocks once. Same seed => same shocks => noise
     # cancels between price(+bump) and price(-bump) in every central diff below.
@@ -336,15 +425,30 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     z_prime = xp.random.standard_normal((steps, sims))
 
     def p(S_=S, V0_=V0, r_=r, T_=T, xi_=vol_sigma):
-        return _heston_lsm_price_crn(S_, K, T_, r_, q, V0_, kappa, theta, xi_, rho,
-                                      sims, steps, option, z1, z_prime)
+        return _heston_lsm_price_crn(
+            S_,
+            K,
+            T_,
+            r_,
+            q,
+            V0_,
+            kappa,
+            theta,
+            xi_,
+            rho,
+            sims,
+            steps,
+            option,
+            z1,
+            z_prime,
+        )
 
     # Bump sizes: wider than tree defaults for the same reason MC's are wider
     # (Heston LSM inherits LSM regression's non-smoothness in the bumped
     # parameter -- CRN mitigates but doesn't eliminate). Empirical starting
     # point; can be tuned per-regime if any Greek looks unstable.
     dS = S * 0.03
-    dV = max(V0 * 0.05, 1e-4)   # variance bump
+    dV = min(max(V0 * 0.05, 1e-4), V0 * 0.90)  # variance bump
     dR = 0.02
     dT = max(T * 0.05, 1.0 / 730.0)
     T_dn = max(1e-6, T - dT)
@@ -372,8 +476,12 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     # fixed (it only depends on V0, which isn't bumped here) so the same
     # chain-rule constant applies at both S+dS_vanna and S-dS_vanna.
     dS_vanna = max(S * 0.03, 0.03)
-    dp_dV0_Sup = (p(S_=S + dS_vanna, V0_=V0 + dV) - p(S_=S + dS_vanna, V0_=V0 - dV)) / (2 * dV)
-    dp_dV0_Sdn = (p(S_=S - dS_vanna, V0_=V0 + dV) - p(S_=S - dS_vanna, V0_=V0 - dV)) / (2 * dV)
+    dp_dV0_Sup = (p(S_=S + dS_vanna, V0_=V0 + dV) - p(S_=S + dS_vanna, V0_=V0 - dV)) / (
+        2 * dV
+    )
+    dp_dV0_Sdn = (p(S_=S - dS_vanna, V0_=V0 + dV) - p(S_=S - dS_vanna, V0_=V0 - dV)) / (
+        2 * dV
+    )
     vega_up = 2.0 * sigma_eff * dp_dV0_Sup
     vega_down = 2.0 * sigma_eff * dp_dV0_Sdn
     vanna = (vega_up - vega_down) / (2 * dS_vanna)
@@ -441,8 +549,24 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
 
     def _vomma_one_seed(z1_, zp_):
         def pv(V0_):
-            return _heston_lsm_price_crn(S, K, T, r, q, V0_, kappa, theta, vol_sigma,
-                                         rho, sims, steps, option, z1_, zp_)
+            return _heston_lsm_price_crn(
+                S,
+                K,
+                T,
+                r,
+                q,
+                V0_,
+                kappa,
+                theta,
+                vol_sigma,
+                rho,
+                sims,
+                steps,
+                option,
+                z1_,
+                zp_,
+            )
+
         b0, bu, bd = pv(V0), pv(V0 + dV_vomma), pv(V0 - dV_vomma)
         # Use the WIDE-bump first derivative inside the chain rule (not
         # the narrow-bump dp_dV0 that Vega reports): both terms then
@@ -469,8 +593,12 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     # exactly why it is reported under its own key and is NOT the
     # 'vomma' column of the cross-model comparison.
     dxi = max(vol_sigma * 0.05, 0.01)
-    dp_dV0_xiup = (p(V0_=V0 + dV, xi_=vol_sigma + dxi) - p(V0_=V0 - dV, xi_=vol_sigma + dxi)) / (2 * dV)
-    dp_dV0_xidn = (p(V0_=V0 + dV, xi_=vol_sigma - dxi) - p(V0_=V0 - dV, xi_=vol_sigma - dxi)) / (2 * dV)
+    dp_dV0_xiup = (
+        p(V0_=V0 + dV, xi_=vol_sigma + dxi) - p(V0_=V0 - dV, xi_=vol_sigma + dxi)
+    ) / (2 * dV)
+    dp_dV0_xidn = (
+        p(V0_=V0 + dV, xi_=vol_sigma - dxi) - p(V0_=V0 - dV, xi_=vol_sigma - dxi)
+    ) / (2 * dV)
     vega_xi_up = 2.0 * sigma_eff * dp_dV0_xiup
     vega_xi_down = 2.0 * sigma_eff * dp_dV0_xidn
     vomma_xi = (vega_xi_up - vega_xi_down) / (2 * dxi)
@@ -479,8 +607,12 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     # the same central second-difference formula used for the reported
     # `gamma` above.
     dS_speed = max(S * 0.03, 0.03)
-    gamma_up = (p(S_=S + dS_speed + dS) - 2 * p(S_=S + dS_speed) + p(S_=S + dS_speed - dS)) / (dS * dS)
-    gamma_down = (p(S_=S - dS_speed + dS) - 2 * p(S_=S - dS_speed) + p(S_=S - dS_speed - dS)) / (dS * dS)
+    gamma_up = (
+        p(S_=S + dS_speed + dS) - 2 * p(S_=S + dS_speed) + p(S_=S + dS_speed - dS)
+    ) / (dS * dS)
+    gamma_down = (
+        p(S_=S - dS_speed + dS) - 2 * p(S_=S - dS_speed) + p(S_=S - dS_speed - dS)
+    ) / (dS * dS)
     speed = (gamma_up - gamma_down) / (2 * dS_speed)
 
     # Charm = -dDelta/dT and Color = dGamma/dT. Reuse the same T bump
@@ -490,25 +622,47 @@ def heston_all_greeks(S, K, T, r, q, V0, kappa, theta, vol_sigma, rho,
     delta_Tdn = (p(S_=S + dS, T_=T_dn) - p(S_=S - dS, T_=T_dn)) / (2 * dS)
     charm = -(delta_Tup - delta_Tdn) / T_span
 
-    gamma_Tup = (p(S_=S + dS, T_=T + dT) - 2 * p(T_=T + dT) + p(S_=S - dS, T_=T + dT)) / (dS * dS)
-    gamma_Tdn = (p(S_=S + dS, T_=T_dn) - 2 * p(T_=T_dn) + p(S_=S - dS, T_=T_dn)) / (dS * dS)
+    gamma_Tup = (
+        p(S_=S + dS, T_=T + dT) - 2 * p(T_=T + dT) + p(S_=S - dS, T_=T + dT)
+    ) / (dS * dS)
+    gamma_Tdn = (p(S_=S + dS, T_=T_dn) - 2 * p(T_=T_dn) + p(S_=S - dS, T_=T_dn)) / (
+        dS * dS
+    )
     color = (gamma_Tup - gamma_Tdn) / T_span
 
     rho_euro = _bs_rho(S, K, T, r, q, sigma_eff, is_call)
     rho_ee_premium = rho_am - rho_euro
 
-    return {'delta': delta, 'gamma': gamma, 'vega': vega, 'rho': rho_am, 'theta': theta_g,
-            'vanna': vanna, 'vomma': vomma, 'vomma_xi': vomma_xi, 'speed': speed,
-            'charm': charm, 'color': color,
-            'rho_euro': rho_euro, 'rho_ee_premium': rho_ee_premium}
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "vega": vega,
+        "rho": rho_am,
+        "theta": theta_g,
+        "vanna": vanna,
+        "vomma": vomma,
+        "vomma_xi": vomma_xi,
+        "speed": speed,
+        "charm": charm,
+        "color": color,
+        "rho_euro": rho_euro,
+        "rho_ee_premium": rho_ee_premium,
+    }
 
 
 class HestonCalibrator:
     """Calibrate Heston parameters to market implied vols (European) using numerical Heston pricer.
     Fits kappa, theta, vol_sigma (xi), rho while keeping V0 set from market or historical vol.
     """
-    def __init__(self, ticker: str, expiry_date: str, r: float = 0.01, q: float = 0.0,
-                 known_expiry: Optional[str] = None):
+
+    def __init__(
+        self,
+        ticker: str,
+        expiry_date: str,
+        r: float = 0.01,
+        q: float = 0.0,
+        known_expiry: str | None = None,
+    ):
         # known_expiry (YYYYMMDD): the REAL listed contract main.py already
         # resolved once via expiry_selector.choose_expiry() and threads into
         # every other model (CRR/LR/NR/SABR/VV/MC/BAW) and the Market row.
@@ -539,8 +693,15 @@ class HestonCalibrator:
         # fixed -- it was masking a real bug, not handling a rare degrade
         # path. Every failure now raises so it's visible and debuggable.
         from datetime import datetime
-        import data_source_config
-        from thetadata_controller import ThetaDataController
+
+        try:
+            from . import data_source_config
+        except ImportError:
+            import data_source_config
+        try:
+            from .thetadata_controller import ThetaDataController
+        except ImportError:
+            from thetadata_controller import ThetaDataController
 
         self.S = self.md.fetch_spot_price(self.ticker)
         # T comes from the REAL contract when one was handed to us, not from a
@@ -551,17 +712,23 @@ class HestonCalibrator:
             expiry = datetime.strptime(self.known_expiry, "%Y%m%d")
         else:
             expiry = datetime.strptime(self.expiry_date, "%Y-%m-%d")
-        self.T = max((expiry - datetime.now()).days / 365.0, 0.001)
+        self.T = max(
+            (expiry - datetime.now()).total_seconds() / (365.0 * 86400.0), 0.001
+        )
         self.forward = self.S * np.exp((self.r - self.q) * self.T)
 
-        if not getattr(data_source_config, 'PREFER_THETADATA', True):
-            raise RuntimeError("[HestonCalib] ThetaData disabled in data_source_config -- no other live smile source (yahoo removed). No fallback.")
+        if not getattr(data_source_config, "PREFER_THETADATA", True):
+            raise RuntimeError(
+                "[HestonCalib] ThetaData disabled in data_source_config -- no other live smile source (yahoo removed). No fallback."
+            )
 
         td = ThetaDataController()
         exps = td.list_expirations(self.ticker)
         td.close()
         if not exps:
-            raise RuntimeError(f"[HestonCalib] No listed expirations returned for {self.ticker}. No fallback.")
+            raise RuntimeError(
+                f"[HestonCalib] No listed expirations returned for {self.ticker}. No fallback."
+            )
 
         if self.known_expiry:
             # BUG FIX (expiry alignment): we ALREADY know the exact real listed
@@ -589,7 +756,9 @@ class HestonCalibrator:
                     f"No fallback -- fix the resolved expiry upstream rather than snapping to a nearby contract."
                 )
             nearest = self.known_expiry
-            print(f"[HestonCalib] Using caller-resolved listed expiry {nearest} (no re-derivation) for {self.ticker}.")
+            print(
+                f"[HestonCalib] Using caller-resolved listed expiry {nearest} (no re-derivation) for {self.ticker}."
+            )
         else:
             target = expiry
             # BUG FIX: list_expirations() returns YYYYMMDD (e.g. '20260727', no
@@ -598,7 +767,9 @@ class HestonCalibrator:
             # single candidate, every single call, silently swallowed -- this
             # had always fallen through to flat-vol regardless of real data
             # availability.
-            parsed = [(abs((datetime.strptime(d, "%Y%m%d") - target).days), d) for d in exps]
+            parsed = [
+                (abs((datetime.strptime(d, "%Y%m%d") - target).days), d) for d in exps
+            ]
             parsed.sort()
             nearest = parsed[0][1]
 
@@ -607,9 +778,18 @@ class HestonCalibrator:
         # strike's own bid/ask (same American Leisen-Reimer solver
         # "Leisen-Reimer" pricing uses) whenever that field is missing/null,
         # instead of just dropping the strike.
-        from smile_utils import fetch_market_smile
+        try:
+            from .smile_utils import fetch_market_smile
+        except ImportError:
+            from smile_utils import fetch_market_smile
+
         sarr, varr, sources, _fwd, _prices, _rights = fetch_market_smile(
-            self.ticker, nearest, self.S, self.T, self.r, self.q,
+            self.ticker,
+            nearest,
+            self.S,
+            self.T,
+            self.r,
+            self.q,
         )
         if len(sarr) < 3:
             raise RuntimeError(
@@ -617,15 +797,23 @@ class HestonCalibrator:
             )
         self.strikes = sarr
         self.market_vols = varr
-        n_solved = sum(1 for s in sources if s == 'solved')
-        print(f"[HestonCalib] Spot={self.S:.2f}, r={self.r:.4f}, q={self.q:.4f}, T={self.T:.4f}, Forward={self.forward:.2f}, data points={len(self.strikes)} ({len(self.strikes)-n_solved} vendor IV, {n_solved} solved from price)")
-        print(f"[HestonCalib] Strike range: {self.strikes[0]:.2f} - {self.strikes[-1]:.2f}")
-        print(f"[HestonCalib] IV range: {min(self.market_vols):.4f} - {max(self.market_vols):.4f}")
+        n_solved = sum(1 for s in sources if s == "solved")
+        print(
+            f"[HestonCalib] Spot={self.S:.2f}, r={self.r:.4f}, q={self.q:.4f}, T={self.T:.4f}, Forward={self.forward:.2f}, data points={len(self.strikes)} ({len(self.strikes) - n_solved} vendor IV, {n_solved} solved from price)"
+        )
+        print(
+            f"[HestonCalib] Strike range: {self.strikes[0]:.2f} - {self.strikes[-1]:.2f}"
+        )
+        print(
+            f"[HestonCalib] IV range: {min(self.market_vols):.4f} - {max(self.market_vols):.4f}"
+        )
 
     def _heston_cf_price(self, K, params) -> float:
         # params: kappa, theta, xi(vol_sigma), rho, v0
         kappa, theta, xi, rho, v0 = params
-        return heston_european_call_price(self.S, K, self.T, self.r, self.q, v0, kappa, theta, xi, rho)
+        return heston_european_call_price(
+            self.S, K, self.T, self.r, self.q, v0, kappa, theta, xi, rho
+        )
 
     def calibrate(self, initial=(1.5, 0.04, 0.3, -0.3), v0=None, maxiter=30):
         # initial: kappa, theta, xi, rho -- kept as one of the multi-start
@@ -681,8 +869,16 @@ class HestonCalibrator:
         # heston_call_prices_batch keeps each objective evaluation cheap,
         # but 30 iterations x 5D gradient probes x N restarts still adds up.
         return _fit_heston_multi_start(
-            self.S, self.strikes, self.market_vols, self.T, self.r, self.q,
-            initial=initial, v0=v0, maxiter=maxiter, verbose=True,
+            self.S,
+            self.strikes,
+            self.market_vols,
+            self.T,
+            self.r,
+            self.q,
+            initial=initial,
+            v0=v0,
+            maxiter=maxiter,
+            verbose=True,
         )
 
 
@@ -716,18 +912,24 @@ def heston_european_call_price(S, K, T, r, q, v0, kappa, theta, xi, rho):
         else:
             u = -0.5
             b = kappa
-        d = cmath.sqrt((rho * xi * phi * i - b) ** 2 - xi ** 2 * (2 * u * phi * i - phi ** 2))
+        d = cmath.sqrt(
+            (rho * xi * phi * i - b) ** 2 - xi**2 * (2 * u * phi * i - phi**2)
+        )
         # "Little Heston Trap" stable root: g uses (... - d)/(... + d) with exp(-d*T)
         g = (b - rho * xi * phi * i - d) / (b - rho * xi * phi * i + d)
         exp_dt = cmath.exp(-d * T)
-        C = (r - q) * phi * i * T + (a / xi ** 2) * ((b - rho * xi * phi * i - d) * T
-                                                     - 2.0 * cmath.log((1.0 - g * exp_dt) / (1.0 - g)))
-        D = (b - rho * xi * phi * i - d) / xi ** 2 * (1.0 - exp_dt) / (1.0 - g * exp_dt)
+        C = (r - q) * phi * i * T + (a / xi**2) * (
+            (b - rho * xi * phi * i - d) * T
+            - 2.0 * cmath.log((1.0 - g * exp_dt) / (1.0 - g))
+        )
+        D = (b - rho * xi * phi * i - d) / xi**2 * (1.0 - exp_dt) / (1.0 - g * exp_dt)
         return cmath.exp(C + D * v0 + i * phi * x0)
 
     def integrand_P(phi, Pnum):
         i = complex(0, 1)
-        return (cmath.exp(-i * phi * cmath.log(K)) * char_func(phi, Pnum) / (i * phi)).real
+        return (
+            cmath.exp(-i * phi * cmath.log(K)) * char_func(phi, Pnum) / (i * phi)
+        ).real
 
     # NO FALLBACK: this used to silently substitute a plain Black-Scholes
     # price (at vol=sqrt(v0)) if the quadrature failed -- i.e. a completely
@@ -760,17 +962,21 @@ def _heston_char_func_grid(phi, S, T, r, q, v0, kappa, theta, xi, rho):
     x0 = np.log(S)
     out = {}
     for Pnum, u, b in ((1, 0.5, kappa - rho * xi), (2, -0.5, kappa)):
-        d = np.sqrt((rho * xi * phi * i - b) ** 2 - xi ** 2 * (2 * u * phi * i - phi ** 2))
+        d = np.sqrt((rho * xi * phi * i - b) ** 2 - xi**2 * (2 * u * phi * i - phi**2))
         g = (b - rho * xi * phi * i - d) / (b - rho * xi * phi * i + d)
         exp_dt = np.exp(-d * T)
-        C = (r - q) * phi * i * T + (a / xi ** 2) * ((b - rho * xi * phi * i - d) * T
-                                                      - 2.0 * np.log((1.0 - g * exp_dt) / (1.0 - g)))
-        D = (b - rho * xi * phi * i - d) / xi ** 2 * (1.0 - exp_dt) / (1.0 - g * exp_dt)
+        C = (r - q) * phi * i * T + (a / xi**2) * (
+            (b - rho * xi * phi * i - d) * T
+            - 2.0 * np.log((1.0 - g * exp_dt) / (1.0 - g))
+        )
+        D = (b - rho * xi * phi * i - d) / xi**2 * (1.0 - exp_dt) / (1.0 - g * exp_dt)
         out[Pnum] = np.exp(C + D * v0 + i * phi * x0)
     return out
 
 
-def heston_call_prices_batch(S, strikes, T, r, q, v0, kappa, theta, xi, rho, n_nodes=64, phi_max=200.0):
+def heston_call_prices_batch(
+    S, strikes, T, r, q, v0, kappa, theta, xi, rho, n_nodes=64, phi_max=200.0
+):
     """Price MANY strikes at once via ONE shared Gauss-Legendre quadrature
     over phi, instead of re-running an independent adaptive `quad` integral
     per strike (what heston_european_call_price does, and what
@@ -834,13 +1040,12 @@ def _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols, tol=1e-4, max_iter=50):
     an optimizer objective, where occasional per-point imprecision on a hard
     strike washes out across the whole chain rather than needing to be exact).
     """
-    from scipy.stats import norm
     K = np.asarray(strikes, dtype=float)
     C = np.asarray(prices, dtype=float)
     sigma = np.clip(np.asarray(seed_vols, dtype=float).copy(), 0.01, 5.0)
     sqrtT = np.sqrt(T)
     for _ in range(max_iter):
-        d1 = (np.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * sqrtT)
+        d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrtT)
         d2 = d1 - sigma * sqrtT
         price = S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
         vega = S * np.exp(-q * T) * sqrtT * norm.pdf(d1)
@@ -852,7 +1057,9 @@ def _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols, tol=1e-4, max_iter=50):
     return sigma
 
 
-def heston_iv_smile_batch(S, strikes, T, r, q, v0, kappa, theta, xi, rho, seed_vols=None):
+def heston_iv_smile_batch(
+    S, strikes, T, r, q, v0, kappa, theta, xi, rho, seed_vols=None
+):
     """Public one-call replacement for "price every strike via
     heston_european_call_price (adaptive `quad`, twice per strike) then
     Newton-solve its IV one strike at a time" -- exactly the pattern
@@ -875,9 +1082,20 @@ def heston_iv_smile_batch(S, strikes, T, r, q, v0, kappa, theta, xi, rho, seed_v
     return _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols=seed_vols)
 
 
-def run_heston_full(ticker: str, S: float, K: float, T: float, r: float, q: float,
-                    initial_sigma: float, sims: int = 12000, steps: int = 200, option: str = 'call', seed: int = 42,
-                    exp: Optional[str] = None):
+def run_heston_full(
+    ticker: str,
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    q: float,
+    initial_sigma: float,
+    sims: int = 12000,
+    steps: int = 200,
+    option: str = "call",
+    seed: int = 42,
+    exp: str | None = None,
+):
     """Run full Heston workflow: calibrate to market IVs and price via Heston LSM.
     Returns dict with calibrated params and price.
 
@@ -902,18 +1120,23 @@ def run_heston_full(ticker: str, S: float, K: float, T: float, r: float, q: floa
     # model wearing Heston's name tag. If calibration is genuinely unstable,
     # that's real information the user needs to see and debug, not something
     # to paper over.
-    expiry_date = ( __import__('datetime').datetime.now() + __import__('datetime').timedelta(days=int(T*365)) ).strftime('%Y-%m-%d')
+    expiry_date = (
+        __import__("datetime").datetime.now()
+        + __import__("datetime").timedelta(days=int(T * 365))
+    ).strftime("%Y-%m-%d")
     calib_engine = HestonCalibrator(ticker, expiry_date, r=r, q=q, known_expiry=exp)
     # Seed long-run variance theta at v0 (= initial_sigma^2), not a hardcoded
     # 0.04. A fixed 0.04 (~20% vol) is a terrible start for a high-IV name --
     # it biases the optimizer toward a variance path that mean-reverts sharply
     # DOWN from v0, systematically underpricing. Starting theta at v0 lets the
     # fit move it wherever the smile actually implies.
-    v0_seed = initial_sigma ** 2
-    calib = calib_engine.calibrate(initial=(1.5, v0_seed, initial_sigma, -0.3), v0=v0_seed)
+    v0_seed = initial_sigma**2
+    calib = calib_engine.calibrate(
+        initial=(1.5, v0_seed, initial_sigma, -0.3), v0=v0_seed
+    )
 
-    xi = float(calib['xi'])
-    rmse = float(calib['rmse'])
+    xi = float(calib["xi"])
+    rmse = float(calib["rmse"])
     if xi >= 4.5 or rmse > 0.25:
         raise RuntimeError(
             f"[Heston Full] Calibration unstable (xi={xi:.3f}, rmse={rmse:.3f}) for {ticker}. "
@@ -921,7 +1144,22 @@ def run_heston_full(ticker: str, S: float, K: float, T: float, r: float, q: floa
         )
 
     # price via LSM under Heston
-    price = heston_lsm_price(S0=S, K=K, T=T, r=r, q=q, V0=calib['v0'], kappa=calib['kappa'], theta=calib['theta'], vol_sigma=calib['xi'], rho=calib['rho'], sims=sims, steps=steps, option=option, seed=seed)
+    price = heston_lsm_price(
+        S0=S,
+        K=K,
+        T=T,
+        r=r,
+        q=q,
+        V0=calib["v0"],
+        kappa=calib["kappa"],
+        theta=calib["theta"],
+        vol_sigma=calib["xi"],
+        rho=calib["rho"],
+        sims=sims,
+        steps=steps,
+        option=option,
+        seed=seed,
+    )
 
     # Greeks are deliberately NOT computed here. The old compute_greeks_heston
     # routed them through american_all_greeks at effective_sigma=sqrt(v0),
@@ -929,12 +1167,21 @@ def run_heston_full(ticker: str, S: float, K: float, T: float, r: float, q: floa
     # single flat vol, not Heston. Callers that want Heston Greeks call
     # heston_all_greeks() on the returned calib (CRN bump-and-revalue on the
     # actual Heston LSM); see main.py's Heston branches.
-    return {'calib': calib, 'price': price}
+    return {"calib": calib, "price": price}
 
 
-def _fit_heston_multi_start(S, strikes, market_vols, T, r, q,
-                            initial=(1.5, 0.04, 0.3, -0.3), v0=None,
-                            maxiter=30, verbose=False):
+def _fit_heston_multi_start(
+    S,
+    strikes,
+    market_vols,
+    T,
+    r,
+    q,
+    initial=(1.5, 0.04, 0.3, -0.3),
+    v0=None,
+    maxiter=30,
+    verbose=False,
+):
     """Shared pure multi-start Heston fit over a (strikes, market_vols) smile.
 
     The vega-weighted objective, multi-start seed grid, and minimize() sweep
@@ -948,8 +1195,6 @@ def _fit_heston_multi_start(S, strikes, market_vols, T, r, q,
     converged / no usable vega).
     """
     import numpy as np
-    from scipy.stats import norm
-    from scipy.optimize import minimize
 
     mv = np.asarray(market_vols, dtype=float)
     Karr = np.asarray(strikes, dtype=float)
@@ -958,23 +1203,31 @@ def _fit_heston_multi_start(S, strikes, market_vols, T, r, q,
     v0_seed = v0
 
     F = S * np.exp((r - q) * T)
-    d1 = (np.log(F / Karr) + 0.5 * mv ** 2 * T) / (mv * np.sqrt(T))
+    d1 = (np.log(F / Karr) + 0.5 * mv**2 * T) / (mv * np.sqrt(T))
     weights = F * np.sqrt(T) * norm.pdf(d1)
     w_mask = weights >= 1e-6
     if not np.any(w_mask):
         if verbose:
             raise RuntimeError(
-                "[HestonCalib] No strike has usable vega for weighting -- cannot calibrate. No fallback.")
+                "[HestonCalib] No strike has usable vega for weighting -- cannot calibrate. No fallback."
+            )
         return None
     w_sum = float(np.sum(weights[w_mask]))
 
     def obj(x):
         kappa, theta, xi, rho, vt = x
-        if not (0.01 <= kappa <= 10 and 1e-6 <= theta <= 2 and 0.001 <= xi <= 5
-                and -0.99 <= rho <= 0.99 and 1e-6 <= vt <= 4.0):
+        if not (
+            0.01 <= kappa <= 10
+            and 1e-6 <= theta <= 2
+            and 0.001 <= xi <= 5
+            and -0.99 <= rho <= 0.99
+            and 1e-6 <= vt <= 4.0
+        ):
             return 1e6
         try:
-            prices = heston_call_prices_batch(S, Karr, T, r, q, vt, kappa, theta, xi, rho)
+            prices = heston_call_prices_batch(
+                S, Karr, T, r, q, vt, kappa, theta, xi, rho
+            )
             ivs = _bs_iv_batch(prices, S, Karr, T, r, q, seed_vols=mv)
             err = float(np.sum(weights[w_mask] * (ivs[w_mask] - mv[w_mask]) ** 2))
             return err / w_sum
@@ -986,24 +1239,28 @@ def _fit_heston_multi_start(S, strikes, market_vols, T, r, q,
         for xi0 in (0.2, 0.5, 1.0):
             for rho0 in (-0.7, -0.3, 0.0, 0.3):
                 seed_grid.append((kappa0, v0_seed, xi0, rho0, v0_seed))
-    seen = set(); uniq = []
+    seen = set()
+    uniq = []
     for s in seed_grid:
         key = tuple(round(x, 4) for x in s)
         if key in seen:
             continue
-        seen.add(key); uniq.append(s)
+        seen.add(key)
+        uniq.append(s)
     seed_grid = uniq
 
     bounds = [(0.01, 10), (1e-6, 2), (0.001, 5), (-0.99, 0.99), (1e-6, 4.0)]
     if verbose:
-        print(f"[HestonCalib] Multi-start calibration: {len(seed_grid)} restarts, "
-              f"{len(Karr)} strikes ({int(np.sum(w_mask))} usable for vega-weighting)")
+        print(
+            f"[HestonCalib] Multi-start calibration: {len(seed_grid)} restarts, "
+            f"{len(Karr)} strikes ({int(np.sum(w_mask))} usable for vega-weighting)"
+        )
     best = None
-    best_fun = float('inf')
+    best_fun = float("inf")
     n_ok = 0
     for x0 in seed_grid:
         try:
-            res = minimize(obj, x0=x0, bounds=bounds, options={'maxiter': maxiter})
+            res = minimize(obj, x0=x0, bounds=bounds, options={"maxiter": maxiter})
         except Exception:
             continue
         if not res.success:
@@ -1016,20 +1273,38 @@ def _fit_heston_multi_start(S, strikes, market_vols, T, r, q,
         if verbose:
             raise RuntimeError(
                 f"[HestonCalib] Optimization failed on ALL {len(seed_grid)} multi-start restarts. "
-                f"No fallback -- inspect the market smile inputs (strike count, IV range, moneyness filter).")
+                f"No fallback -- inspect the market smile inputs (strike count, IV range, moneyness filter)."
+            )
         return None
     kappa, theta, xi, rho, vt = best.x
     rmse = float(np.sqrt(best_fun))
     if verbose:
-        print(f"[HestonCalib] Done ({n_ok}/{len(seed_grid)} restarts converged): "
-              f"kappa={kappa:.4f}, theta={theta:.4f}, xi={xi:.4f}, rho={rho:.4f}, "
-              f"v0={vt:.6f}, rmse={rmse:.4f}")
-    return {'v0': float(vt), 'kappa': float(kappa), 'theta': float(theta),
-            'xi': float(xi), 'rho': float(rho), 'rmse': rmse}
+        print(
+            f"[HestonCalib] Done ({n_ok}/{len(seed_grid)} restarts converged): "
+            f"kappa={kappa:.4f}, theta={theta:.4f}, xi={xi:.4f}, rho={rho:.4f}, "
+            f"v0={vt:.6f}, rmse={rmse:.4f}"
+        )
+    return {
+        "v0": float(vt),
+        "kappa": float(kappa),
+        "theta": float(theta),
+        "xi": float(xi),
+        "rho": float(rho),
+        "rmse": rmse,
+    }
 
 
-def calibrate_heston_chain(S, strikes, market_vols, T, r, q,
-                           initial=(1.5, 0.04, 0.3, -0.3), v0=None, maxiter=30):
+def calibrate_heston_chain(
+    S,
+    strikes,
+    market_vols,
+    T,
+    r,
+    q,
+    initial=(1.5, 0.04, 0.3, -0.3),
+    v0=None,
+    maxiter=30,
+):
     """Pure, network-free Heston calibration to a given (strikes, market_vols)
     smile. Same vega-weighted multi-start objective as HestonCalibrator.calibrate
     (see that method's docstring for the rationale), but takes the smile data as
@@ -1042,17 +1317,27 @@ def calibrate_heston_chain(S, strikes, market_vols, T, r, q,
     converges (caller should fall back to fixed-params rather than raise).
     """
     import numpy as np
+
     strikes = np.asarray(strikes, dtype=float)
     mv = np.asarray(market_vols, dtype=float)
     valid = (strikes > 0) & (mv > 0)
     if int(valid.sum()) < 3 or T <= 0 or S <= 0:
         return None
-    return _fit_heston_multi_start(S, strikes[valid], mv[valid], T, r, q,
-                                   initial=initial, v0=v0, maxiter=maxiter,
-                                   verbose=False)
+    return _fit_heston_multi_start(
+        S,
+        strikes[valid],
+        mv[valid],
+        T,
+        r,
+        q,
+        initial=initial,
+        v0=v0,
+        maxiter=maxiter,
+        verbose=False,
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # quick local run for debugging
     val = heston_lsm_price(S0=156.91, K=165.0, T=0.528, r=0.0023, V0=0.2994**2)
-    print('Heston LSM debug price:', val)
+    print("Heston LSM debug price:", val)

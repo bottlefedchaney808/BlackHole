@@ -3,16 +3,24 @@ Methods for extracting implied volatility from option prices
 
 """
 
+# NOTE: this module is not imported anywhere else in Options_Suite (verified via
+# grep for `import impliedvol` / `from impliedvol`) and `optionmodels` is not
+# declared in requirements.txt nor installed in .venv -- this file is dead code.
+# Left in place rather than deleted; do not add optionmodels to requirements.txt
+# on its account without confirming a real caller first.
 import numpy as np
 from optionmodels.analyticalmethods import AnalyticalMethods
 from optionmodels.utils import Utils
+
 # pylint: disable=invalid-name
 
-class ImpliedVol():
+
+class ImpliedVol:
     """
     Methods for extracting implied volatility from option prices
 
     """
+
     @staticmethod
     def implied_vol_newton_raphson(**kwargs):
         """
@@ -52,25 +60,26 @@ class ImpliedVol():
         """
 
         # Update pricing input parameters to default if not supplied
-        if 'refresh' in kwargs and kwargs['refresh']:
-            params = Utils.init_params(kwargs)
-            S = params['S']
-            K = params['K']
-            T = params['T']
-            r = params['r']
-            q = params['q']
-            cm = params['cm']
-            epsilon = params['epsilon']
-            option = params['option']
+        params = Utils.init_params(kwargs)
+        S = params["S"]
+        K = params["K"]
+        T = params["T"]
+        r = params["r"]
+        q = params["q"]
+        cm = params["cm"]
+        epsilon = params["epsilon"]
+        option = params["option"]
 
         # Manaster and Koehler seed value
         vi = np.sqrt(abs(np.log(S / K) + r * T) * (2 / T))
 
         ci = AnalyticalMethods.black_scholes_merton(
-            S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True)
+            S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+        )
 
         vegai = AnalyticalMethods.black_scholes_merton_vega(
-            S=S, K=K, T=T, r=r, q=q, sigma=vi, refresh=True)
+            S=S, K=K, T=T, r=r, q=q, sigma=vi, refresh=True
+        )
 
         mindiff = abs(cm - ci)
 
@@ -78,20 +87,21 @@ class ImpliedVol():
             vi = vi - (ci - cm) / vegai
 
             ci = AnalyticalMethods.black_scholes_merton(
-                S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True)
+                S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+            )
 
             vegai = AnalyticalMethods.black_scholes_merton_vega(
-                S=S, K=K, T=T, r=r, q=q, sigma=vi, refresh=True)
+                S=S, K=K, T=T, r=r, q=q, sigma=vi, refresh=True
+            )
 
             mindiff = abs(cm - ci)
 
         if abs(cm - ci) < epsilon:
             result = vi
         else:
-            result = 'NA'
+            result = "NA"
 
         return result
-
 
     @staticmethod
     def implied_vol_bisection(**kwargs):
@@ -130,59 +140,67 @@ class ImpliedVol():
         """
 
         # Update pricing input parameters to default if not supplied
-        if 'refresh' in kwargs and kwargs['refresh']:
-            params = Utils.init_params(kwargs)
-            S = params['S']
-            K = params['K']
-            T = params['T']
-            r = params['r']
-            q = params['q']
-            cm = params['cm']
-            epsilon = params['epsilon']
-            option = params['option']
+        params = Utils.init_params(kwargs)
+        S = params["S"]
+        K = params["K"]
+        T = params["T"]
+        r = params["r"]
+        q = params["q"]
+        cm = params["cm"]
+        epsilon = params["epsilon"]
+        option = params["option"]
 
         vLow = 0.005
         vHigh = 4
         cLow = AnalyticalMethods.black_scholes_merton(
-            S=S, K=K, T=T, r=r, q=q, sigma=vLow, option=option, refresh=True)
+            S=S, K=K, T=T, r=r, q=q, sigma=vLow, option=option, refresh=True
+        )
 
         cHigh = AnalyticalMethods.black_scholes_merton(
-            S=S, K=K, T=T, r=r, q=q, sigma=vHigh, option=option, refresh=True)
+            S=S, K=K, T=T, r=r, q=q, sigma=vHigh, option=option, refresh=True
+        )
 
         counter = 0
 
         vi = vLow + (cm - cLow) * (vHigh - vLow) / (cHigh - cLow)
 
-        while abs(cm - AnalyticalMethods.black_scholes_merton(
-                S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                refresh=True)) > epsilon:
-
+        while (
+            abs(
+                cm
+                - AnalyticalMethods.black_scholes_merton(
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
+            )
+            > epsilon
+        ):
             counter = counter + 1
-            if counter == 100:
-                result = 'NA'
+            if counter >= 100:
+                return "NA"
 
-            if AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True) < cm:
+            if (
+                AnalyticalMethods.black_scholes_merton(
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
+                < cm
+            ):
                 vLow = vi
 
             else:
                 vHigh = vi
 
             cLow = AnalyticalMethods.black_scholes_merton(
-                S=S, K=K, T=T, r=r, q=q, sigma=vLow, option=option,
-                refresh=True)
+                S=S, K=K, T=T, r=r, q=q, sigma=vLow, option=option, refresh=True
+            )
 
             cHigh = AnalyticalMethods.black_scholes_merton(
-                S=S, K=K, T=T, r=r, q=q, sigma=vHigh, option=option,
-                refresh=True)
+                S=S, K=K, T=T, r=r, q=q, sigma=vHigh, option=option, refresh=True
+            )
 
             vi = vLow + (cm - cLow) * (vHigh - vLow) / (cHigh - cLow)
 
         result = vi
 
         return result
-
 
     @staticmethod
     def implied_vol_naive(**kwargs):
@@ -222,23 +240,23 @@ class ImpliedVol():
         """
 
         # Update pricing input parameters to default if not supplied
-        if 'refresh' in kwargs and kwargs['refresh']:
-            params = Utils.init_params(kwargs)
-            S = params['S']
-            K = params['K']
-            T = params['T']
-            r = params['r']
-            q = params['q']
-            cm = params['cm']
-            epsilon = params['epsilon']
-            option = params['option']
+        params = Utils.init_params(kwargs)
+        S = params["S"]
+        K = params["K"]
+        T = params["T"]
+        r = params["r"]
+        q = params["q"]
+        cm = params["cm"]
+        epsilon = params["epsilon"]
+        option = params["option"]
 
         # Seed vol
         vi = 0.2
 
         # Calculate starting option price using this vol
         ci = AnalyticalMethods.black_scholes_merton(
-            S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True)
+            S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+        )
 
         # Initial price difference
         price_diff = cm - ci
@@ -254,7 +272,12 @@ class ImpliedVol():
 
         price_diff_start = price_diff
 
+        counter = 0
+
         while abs(price_diff) > epsilon:
+            counter = counter + 1
+            if counter >= 100:
+                return "NA"
 
             # If the price difference changes sign after the vol shift,
             # reduce the decimal by one and reverse the sign
@@ -262,14 +285,15 @@ class ImpliedVol():
                 shift = shift * -0.1
 
             # Calculate new vol
-            vi += (shift * flag)
+            vi += shift * flag
 
             # Set initial price difference
             price_diff_start = price_diff
 
             # Calculate the option price with new vol
             ci = AnalyticalMethods.black_scholes_merton(
-                S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True)
+                S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+            )
 
             # Price difference after shifting vol
             price_diff = cm - ci
@@ -281,7 +305,6 @@ class ImpliedVol():
         result = vi
 
         return result
-
 
     @staticmethod
     def implied_vol_naive_verbose(**kwargs):
@@ -321,74 +344,80 @@ class ImpliedVol():
         """
 
         # Update pricing input parameters to default if not supplied
-        if 'refresh' in kwargs and kwargs['refresh']:
-            params = Utils.init_params(kwargs)
-            S = params['S']
-            K = params['K']
-            T = params['T']
-            r = params['r']
-            q = params['q']
-            cm = params['cm']
-            epsilon = params['epsilon']
-            option = params['option']
+        params = Utils.init_params(kwargs)
+        S = params["S"]
+        K = params["K"]
+        T = params["T"]
+        r = params["r"]
+        q = params["q"]
+        cm = params["cm"]
+        epsilon = params["epsilon"]
+        option = params["option"]
 
         vi = 0.2
         ci = AnalyticalMethods.black_scholes_merton(
-            S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True)
+            S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+        )
 
         price_diff = cm - ci
         if price_diff > 0:
             flag = 1
         else:
             flag = -1
+
+        counter = 0
         while abs(price_diff) > epsilon:
-            while price_diff * flag > 0:
-                ci = AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True)
-
-                price_diff = cm - ci
-                vi += (0.01 * flag)
-
-            while price_diff * flag < 0:
-                ci = AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True)
-
-                price_diff = cm - ci
-                vi -= (0.001 * flag)
+            counter = counter + 1
+            if counter >= 100:
+                return "NA"
 
             while price_diff * flag > 0:
                 ci = AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True)
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
 
                 price_diff = cm - ci
-                vi += (0.0001 * flag)
+                vi += 0.01 * flag
 
             while price_diff * flag < 0:
                 ci = AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True)
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
 
                 price_diff = cm - ci
-                vi -= (0.00001 * flag)
+                vi -= 0.001 * flag
 
             while price_diff * flag > 0:
                 ci = AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True)
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
 
                 price_diff = cm - ci
-                vi += (0.000001 * flag)
+                vi += 0.0001 * flag
 
             while price_diff * flag < 0:
                 ci = AnalyticalMethods.black_scholes_merton(
-                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option,
-                    refresh=True)
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
 
                 price_diff = cm - ci
-                vi -= (0.0000001 * flag)
+                vi -= 0.00001 * flag
+
+            while price_diff * flag > 0:
+                ci = AnalyticalMethods.black_scholes_merton(
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
+
+                price_diff = cm - ci
+                vi += 0.000001 * flag
+
+            while price_diff * flag < 0:
+                ci = AnalyticalMethods.black_scholes_merton(
+                    S=S, K=K, T=T, r=r, q=q, sigma=vi, option=option, refresh=True
+                )
+
+                price_diff = cm - ci
+                vi -= 0.0000001 * flag
 
         result = vi
 

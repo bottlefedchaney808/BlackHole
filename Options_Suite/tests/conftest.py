@@ -17,11 +17,17 @@ from pathlib import Path
 # Keep the parent out to avoid shadow conflicts (sentiment-scanner/config.py).
 # ---------------------------------------------------------------------------
 _OPTIONS_SUITE = str(Path(__file__).resolve().parent.parent)
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)  # Financial_Development
+_PROJECT_ROOT = str(
+    Path(__file__).resolve().parent.parent.parent
+)  # Financial_Development
 
-for p in (_OPTIONS_SUITE, _PROJECT_ROOT):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _OPTIONS_SUITE not in sys.path:
+    sys.path.insert(0, _OPTIONS_SUITE)
+# _PROJECT_ROOT is needed for package-style imports like "import Options_Suite.MC",
+# but must be appended (never inserted at 0) so it can never shadow Options_Suite's
+# own flat modules (e.g. a project-root config.py shadowing Options_Suite/config.py).
+if _PROJECT_ROOT not in sys.path:
+    sys.path.append(_PROJECT_ROOT)
 
 # ---------------------------------------------------------------------------
 # Enforce CPU-only numpy path so tests don't try to import cupy (which is
@@ -87,6 +93,7 @@ def _suppress_cupy(monkeypatch):
     at test collection time.  The env-var set above already blocks it, but
     this guard is belt-and-suspenders."""
     import importlib
+
     # Force-reload either import style so the GPU_ACTIVE check re-runs with
     # FORCE_CPU set before tests import package-qualified modules.
     for name in ("MC", "Options_Suite.MC"):

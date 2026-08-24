@@ -1,81 +1,63 @@
-# X.com Fintwit Buzz — morning — 2026-08-21
-asof_et: 2026-08-21T09:55:00-04:00 | lookback: 2026-08-20T23:30:00-04:00 → 2026-08-21T07:30:00-04:00 | source: x_search | n_posts: 15 | quality: partial
+# X.com Fintwit Buzz — morning — 2026-08-24
+asof_et: 2026-08-24T07:30:01-04:00 | lookback: 2026-08-23T23:30:00-04:00 → 2026-08-24T07:30:00-04:00 | source: x_search | n_posts: 15 | quality: partial
 
 ## 1. Top buzz topics
 | rank | topic | n | sum_B | net_skew |
 |---:|---|---:|---:|---:|
-| 1 | untagged | 3 | 114439.5 | +0 |
-| 2 | $MU | 1 | 57132.0 | -100 |
-| 3 | $KO | 2 | 18171.0 | +0 |
-| 4 | $NVDA | 3 | 17928.0 | +0 |
-| 5 | $VIX | 3 | 16213.5 | -33 |
-| 6 | $SPY | 3 | 16011.0 | -67 |
+| 1 | $NVDA | 10 | 132448.5 | -10 |
+| 2 | untagged | 3 | 37206.0 | +0 |
+| 3 | $SPY | 1 | 8775.0 | +0 |
+| 4 | $QQQ | 1 | 3982.5 | +0 |
 
 ## 2. Notable posts (top 10 by B)
 | B | C | EV | @handle | created_et | L/R/RT | text (≤140) | url |
 |---:|---:|---:|---|---|---|---|---|
-| 57240.0 | 0.5 | 848.0 | SuperLuckeee | 09:55 | 3595/0/215 | 5 likes, ~215 reposts  
-   https://x.com/SuperLuckeee/status/2088327080140566790[[2]](https://x.com/SuperLuckeee/status/2088327080140566790) | https://x.com/SuperLuckeee/status/2088327080140566790 |
-| 57132.0 | 0.5 | 846.4 | RealJGBanks | 09:55 | 2795/0/479 | 95 likes, ~479 reposts  
-   https://x.com/RealJGBanks/status/2088720211172343917[[1]](https://x.com/RealJGBanks/status/2088720211172343917)
- | https://x.com/RealJGBanks/status/2088720211172343917 |
-| 57132.0 | 0.5 | 846.4 | Jake__Wujastyk | 09:55 | 2795/0/479 | ion back into semiconductors looks likely soon.  
-   $MU $SNDK $INTC $MRVL $NVDA $AMD  
-   ~781 likes, ~28 reposts  
-   https://x.com/Jake__ | https://x.com/Jake__Wujastyk/status/2090627343517937910 |
-| 9085.5 | 0.5 | 134.6 | Mr_Derivatives | 09:55 | 631/0/14 | ay at 7 straight days, it will be the longest daily losing streak since Oct-Nov 2016.  
-   ~631 likes, ~14 reposts  
-   https://x.com/Mr_Der | https://x.com/Mr_Derivatives/status/2090535611367391383 |
-| 9085.5 | 0.5 | 134.6 | DudeWhoInvests | 09:55 | 631/0/14 | ests**  
-   Coca-Cola $KO stock is outperforming Nvidia $NVDA in 2026… The age of AI.  
-   ~577 likes, ~27 reposts  
-   https://x.com/DudeWh | https://x.com/DudeWhoInvests/status/2090542828866711708 |
-| 6115.5 | 0.5 | 90.6 | Kalshi_Finance | 09:55 | 429/0/8 | stock declined for six or more consecutive trading days was in August-September 2022.  
-   ~429 likes, ~13 reposts  
-   https://x.com/Kalshi | https://x.com/Kalshi_Finance/status/2090576881988845606 |
-| 5953.5 | 0.5 | 88.2 | TraderJonesy | 09:55 | 348/0/31 | puts for the SAME expiration. ...  
-    $SPY $SPX $QQQ #SP500 #StockMarket #Trading  
-    ~348 likes, ~31 reposts  
-    https://x.com/Trader | https://x.com/TraderJonesy/status/2090449538397946186 |
-| 5926.5 | 0.5 | 87.8 | Mr_Derivatives | 09:55 | 421/0/6 | ckson Hole.  
-   All while the $VIX is calm and collective here at high 14’s low 15’s…  
-   ~421 likes, ~6 reposts  
-   https://x.com/Mr_Der | https://x.com/Mr_Derivatives/status/2090399896692207638 |
-| 5926.5 | 0.5 | 87.8 | vnkumarvnk | 09:55 | 421/0/6 | k**  
-   $SPY SOMEONE LOADED $26 MILLION WORTH OF 750 PUTS EXPIRING 11/20  
-   WOW! 😲  
-   ~354 likes, ~18 reposts  
-   https://x.com/vnkuma | https://x.com/vnkumarvnk/status/2090516212203577810 |
-| 5913.0 | 0.5 | 87.6 | pequityresearch | 09:55 | 312/0/42 | tting cheaper and spending is going up...  
-    $NVDA $AMD $GOOGL $AMZN $MSFT $META  
-    ~312 likes, ~42 reposts  
-    https://x.com/pequit | https://x.com/pequityresearch/status/2090516215135412278 |
+| 24624.0 | 0.5 | 364.8 | JPATrades | 07:30 | 1608/0/72 | ). Data from X searches; engagement is approximate at fetch time and can change.[[1]](https://x.com/JPATrades/status/2091246065722761357)[[2 | https://x.com/JPATrades/status/2091246065722761357 |
+| 24624.0 | 0.5 | 364.8 | antibearthesis | 07:30 | 1608/0/72 | ch time and can change.[[1]](https://x.com/JPATrades/status/2091246065722761357)[[2]](https://x.com/antibearthesis/status/209157669168442203 | https://x.com/antibearthesis/status/2091576691684422039 |
+| 24624.0 | 0.5 | 364.8 | Barchart | 07:30 | 1608/0/72 | ed red for 6 straight days, its longest losing streak in 4 years 📉 📉 (with chart).  
+   ~1336 likes, ~128 reposts.  
+   https://x.com/Barcha | https://x.com/Barchart/status/2090904604284178463 |
+| 20425.5 | 0.5 | 302.6 | Bitget_TradFi | 07:30 | 451/0/354 | rket tension, and an $NVDA earnings preview... Tune in to join the $1,000 giveaway!  
+   ~451 likes, ~354 reposts.  
+   https://x.com/Bitget | https://x.com/Bitget_TradFi/status/2090302813062762510 |
+| 20425.5 | 0.5 | 302.6 | JPATrades | 07:30 | 451/0/354 | 8. **@JPATrades**  
+   Post text: What is this a pump for ants?! $NVDA (with chart).  
+   ~406 likes, ~13 reposts.  
+   https://x.com/JPATra | https://x.com/JPATrades/status/2091680481771176061 |
+| 18535.5 | 0.5 | 274.6 | kevinxu | 07:30 | 1181/0/64 | hould I go all in all in $NVDA? (quoting bubbleboi on NVDA maybe a buy; with chart).  
+   ~867 likes, ~24 reposts.  
+   https://x.com/kevinx | https://x.com/kevinxu/status/2091007741620113427 |
+| 8775.0 | 0.5 | 130.0 | spylieu | 07:30 | 593/0/19 | ng 0DTEs and $SPY, leave a comment and I’ll add you. Let’s learn and trade together!  
+   ~593 likes, ~19 reposts.  
+   https://x.com/spylie | https://x.com/spylieu/status/2091222833942978609 |
+| 7465.5 | 0.5 | 110.6 | DanielTNiles | 07:30 | 478/0/25 | s, NVDA history of post-earnings dips, AI capex, VIX/seasonality risks for S&P/Nas].  
+   ~478 likes, ~25 reposts.  
+   https://x.com/Daniel | https://x.com/DanielTNiles/status/2091629918341750924 |
+| 6115.5 | 0.5 | 90.6 | vnkumarvnk | 07:30 | 375/0/26 | 961977
+
+10. **@vnkumarvnk**  
+    Post text: $NVDA STOCK TOMORROW! 📈 (with chart).  
+    ~322 likes, ~16 reposts.  
+    https://x.com/vnkuma | https://x.com/vnkumarvnk/status/2091522573171392745 |
+| 6007.5 | 0.5 | 89.0 | ZaStocks | 07:30 | 406/0/13 | mand accelerates. Nearly an entire year basing while earnings explode… (with chart).  
+   ~375 likes, ~26 reposts.  
+   https://x.com/ZaStoc | https://x.com/ZaStocks/status/2091528072314961977 |
 
 ## 3. Sentiment skew
-bull 0% | bear 27% | neutral 73% | net_skew -27
-Drivers: bearish: $MU, $VIX, $SPY
+bull 0% | bear 7% | neutral 93% | net_skew -7
+Drivers: bearish: $NVDA
 
 ## 4. Spikes vs baseline
-baseline warming (n=5/5), no spike test
+baseline warming (n=1/5), no spike test
 
 ## 5. Extracted cashtags (watchlist)
 | ticker | n | sum_B | skew |
 |---|---:|---:|---:|
-| $NVDA | 7 | 99184.5 | -29 |
-| $QQQ | 2 | 63085.5 | -100 |
-| $AMD | 2 | 63045.0 | -50 |
-| $MU | 1 | 57132.0 | -100 |
-| $SNDK | 1 | 57132.0 | -100 |
-| $INTC | 1 | 57132.0 | -100 |
-| $MRVL | 1 | 57132.0 | -100 |
-| $SPY | 5 | 27850.5 | -60 |
-| $KO | 2 | 18171.0 | +0 |
-| $VIX | 3 | 16213.5 | -33 |
-| $SPX | 2 | 10084.5 | -50 |
-| $GOOGL | 1 | 5913.0 | +0 |
-| $AMZN | 1 | 5913.0 | +0 |
-| $MSFT | 1 | 5913.0 | +0 |
-| $META | 1 | 5913.0 | +0 |
+| $NVDA | 10 | 132448.5 | -10 |
+| $SPY | 2 | 14890.5 | +0 |
+| $CRWD | 1 | 4495.5 | +0 |
+| $CRM | 1 | 4495.5 | +0 |
+| $QQQ | 1 | 3982.5 | +0 |
 
 ## 6. Data quality
 partial: true

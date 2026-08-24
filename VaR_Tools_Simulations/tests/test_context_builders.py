@@ -30,7 +30,8 @@ def _load_var_main():
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(
-        module_name, str(Path(__file__).resolve().parent.parent / "main.py"))
+        module_name, str(Path(__file__).resolve().parent.parent / "main.py")
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
@@ -41,9 +42,14 @@ var_main = _load_var_main()
 
 
 def _base_payload(garch_vol=None, basket=None, expected_return=None):
-    payload = {"focus": {"ticker": "AAPL", "garch_conditional_vol": garch_vol,
-                         "expected_return": expected_return},
-               "ticker": "AAPL"}
+    payload = {
+        "focus": {
+            "ticker": "AAPL",
+            "garch_conditional_vol": garch_vol,
+            "expected_return": expected_return,
+        },
+        "ticker": "AAPL",
+    }
     if basket is not None:
         payload["basket"] = basket
     return payload
@@ -60,6 +66,7 @@ def stub_market(monkeypatch):
 
 # ── mc_sim ────────────────────────────────────────────────────────────────
 
+
 def test_mc_sim_prefers_context_garch_vol(stub_market):
     # estimate_garch_vol returns 0.40 and must NOT be used
     result = var_main._build_mc_sim_from_context(_base_payload(garch_vol=0.22), "AAPL")
@@ -72,7 +79,8 @@ def test_mc_sim_prefers_context_expected_return(stub_market):
     # estimate_geometric_return returns 0.10 and must NOT be used when the
     # context carries a Vol_Suite-published focus.expected_return.
     result = var_main._build_mc_sim_from_context(
-        _base_payload(garch_vol=0.22, expected_return=0.07), "AAPL")
+        _base_payload(garch_vol=0.22, expected_return=0.07), "AAPL"
+    )
     assert result["expected_return"] == pytest.approx(0.07)
     assert result["data_quality"]["expected_return_source"] == "context"
 
@@ -104,6 +112,7 @@ def test_mc_sim_ignores_non_positive_context_vol(stub_market):
 
 # ── copula ────────────────────────────────────────────────────────────────
 
+
 def test_copula_prefers_context_garch_vol(stub_market):
     result = var_main._build_copula_from_context(_base_payload(garch_vol=0.22), "AAPL")
     assert result["vol"] == pytest.approx(0.22)
@@ -122,6 +131,7 @@ def test_copula_falls_back_to_default_when_both_missing(stub_market):
 
 # ── corr_sim (focus ticker only takes the context vol; peers refit) ───────
 
+
 @pytest.fixture
 def capture_corr_inputs(monkeypatch):
     """Record the CorrSimInputs the builder assembles, so the per-ticker vol
@@ -134,7 +144,7 @@ def capture_corr_inputs(monkeypatch):
     real_run = corr_sim.run
 
     def spy(inputs):
-        seen['inputs'] = inputs
+        seen["inputs"] = inputs
         return real_run(inputs)
 
     monkeypatch.setattr(corr_sim, "run", spy)
@@ -142,32 +152,44 @@ def capture_corr_inputs(monkeypatch):
 
 
 def test_corr_sim_uses_context_vol_for_focus_only(stub_market, capture_corr_inputs):
-    stub_market.setattr(data_loader, "estimate_garch_vol",
-                        lambda tk: {"AAPL": 0.40, "MSFT": 0.30}.get(tk))
-    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
-    stub_market.setattr(data_loader, "fetch_log_returns",
-                        lambda tk, s, e: np.zeros(5))  # too short -> identity corr
+    stub_market.setattr(
+        data_loader,
+        "estimate_garch_vol",
+        lambda tk: {"AAPL": 0.40, "MSFT": 0.30}.get(tk),
+    )
+    stub_market.setattr(
+        data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31")
+    )
+    stub_market.setattr(
+        data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5)
+    )  # too short -> identity corr
 
     payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
     result = var_main._build_corr_sim_peer_from_context(payload, "AAPL")
 
     assert result["tickers"] == ["AAPL", "MSFT"]
     # focus takes the context vol; the peer still refits its own GARCH
-    assert list(capture_corr_inputs['inputs'].volatilities) == pytest.approx([0.22, 0.30])
+    assert list(capture_corr_inputs["inputs"].volatilities) == pytest.approx(
+        [0.22, 0.30]
+    )
     assert result["data_quality"]["vol_source"] == "context"
 
 
 def test_corr_sim_peer_without_garch_fit_uses_default(stub_market, capture_corr_inputs):
-    stub_market.setattr(data_loader, "estimate_garch_vol",
-                        lambda tk: 0.35 if tk == "AAPL" else None)
-    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
-    stub_market.setattr(data_loader, "fetch_log_returns",
-                        lambda tk, s, e: np.zeros(5))
+    stub_market.setattr(
+        data_loader, "estimate_garch_vol", lambda tk: 0.35 if tk == "AAPL" else None
+    )
+    stub_market.setattr(
+        data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31")
+    )
+    stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
 
     payload = _base_payload(garch_vol=None, basket={"tickers": ["AAPL", "MSFT"]})
     result = var_main._build_corr_sim_peer_from_context(payload, "AAPL")
 
-    assert list(capture_corr_inputs['inputs'].volatilities) == pytest.approx([0.35, 0.25])
+    assert list(capture_corr_inputs["inputs"].volatilities) == pytest.approx(
+        [0.35, 0.25]
+    )
     assert result["data_quality"]["vol_source"] == "garch_fit"
 
 
@@ -176,6 +198,7 @@ def test_corr_sim_peer_without_garch_fit_uses_default(stub_market, capture_corr_
 # confidence level aborted the whole module. It now defaults to a 1-year
 # (252 trading day) horizon, matching the MC sim, and an explicit top-level
 # `corr_sim_days` overrides whatever `var.horizon_days` says.
+
 
 @pytest.fixture
 def stub_live_price(monkeypatch):
@@ -202,8 +225,9 @@ def test_corr_sim_uses_var_horizon_days_when_given(stub_live_price):
 
 
 def test_corr_sim_respects_explicit_corr_sim_days_override(stub_live_price):
-    payload = _corr_payload(var={"confidence": 0.99, "horizon_days": 10},
-                            corr_sim_days=30)
+    payload = _corr_payload(
+        var={"confidence": 0.99, "horizon_days": 10}, corr_sim_days=30
+    )
     result = var_main._build_corr_sim_from_context(payload)
     assert result["horizon_days"] == 30
 
@@ -222,6 +246,7 @@ def test_corr_sim_rejects_non_integer_horizon(stub_live_price):
 # were synthesized from weights -- previously only discoverable by grepping the
 # free-text `notes` string.
 
+
 def test_corr_sim_positions_source_derived_when_positions_omitted(stub_live_price):
     result = var_main._build_corr_sim_from_context(_corr_payload())
     assert result["positions_source"] == "derived"
@@ -239,8 +264,11 @@ def test_corr_sim_positions_source_provided_when_positions_given(stub_live_price
 # price_dist.py had no context-mode builder at all, so its lognormal table and
 # MC probability engine were unreachable outside the interactive menu.
 
+
 def test_price_dist_builder_returns_distribution_table_and_histogram(stub_market):
-    result = var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    result = var_main._build_price_dist_from_context(
+        _base_payload(garch_vol=0.30), "AAPL"
+    )
     assert result["status"] == "ok"
     assert result["module"] == "price_dist_1yr"
     assert result["ticker"] == "AAPL"
@@ -250,7 +278,9 @@ def test_price_dist_builder_returns_distribution_table_and_histogram(stub_market
     row = result["distribution_table"][0]
     assert set(row) == {"price", "prob_at", "prob_below", "prob_above"}
     assert len(result["terminal_price_histogram"]) > 0
-    assert sum(b["count"] for b in result["terminal_price_histogram"]) == result["n_sims"]
+    assert (
+        sum(b["count"] for b in result["terminal_price_histogram"]) == result["n_sims"]
+    )
     assert result["histogram_unit"] == "price"
     assert result["avg_end_price"] > 0
 
@@ -258,7 +288,9 @@ def test_price_dist_builder_returns_distribution_table_and_histogram(stub_market
 def test_price_dist_builder_reports_vol_and_drift_sources(stub_market):
     stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: None)
     stub_market.setattr(data_loader, "estimate_geometric_return", lambda tk: None)
-    result = var_main._build_price_dist_from_context(_base_payload(garch_vol=None), "AAPL")
+    result = var_main._build_price_dist_from_context(
+        _base_payload(garch_vol=None), "AAPL"
+    )
     assert result["vol"] == pytest.approx(0.25)
     assert result["data_quality"]["vol_source"] == "fallback"
     assert result["data_quality"]["expected_return_source"] == "unavailable"
@@ -272,13 +304,17 @@ def test_price_dist_builder_rejects_unfetchable_spot(stub_market):
 
 def test_price_dist_builder_is_json_serializable(stub_market):
     import json
-    raw = json.dumps(var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL"))
+
+    raw = json.dumps(
+        var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    )
     assert "NaN" not in raw and "Infinity" not in raw
 
 
 # ── terminal_price_histogram on every sim builder ─────────────────────────
 # Task 11's renderer draws the same histogram for all four builders, so each
 # one must expose the same field, with every simulated draw accounted for.
+
 
 def _assert_histogram(hist, n_sims):
     assert len(hist) == 20
@@ -311,9 +347,13 @@ def test_copula_exposes_terminal_price_histogram(stub_market):
     assert result["histogram_unit"] == "price"
 
 
-def test_corr_sim_peer_exposes_terminal_portfolio_histogram(stub_market, capture_corr_inputs):
+def test_corr_sim_peer_exposes_terminal_portfolio_histogram(
+    stub_market, capture_corr_inputs
+):
     stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: 0.30)
-    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
+    stub_market.setattr(
+        data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31")
+    )
     stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
 
     payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
@@ -334,23 +374,26 @@ def test_corr_sim_peer_exposes_terminal_portfolio_histogram(stub_market, capture
 # them per-call while every existing caller that omits them keeps the exact
 # old default behavior.
 
-def test_price_dist_builder_accepts_horizon_override(monkeypatch):
-    from var_engine import data_loader as _dl
-    monkeypatch.setattr(_dl, 'fetch_spot', lambda tk: 100.0)
-    payload = {'focus': {'ticker': 'SPY'}, 'var': {'seed': 7}}
+
+def test_price_dist_builder_accepts_horizon_override(stub_market):
+    stub_market.setattr(data_loader, "fetch_spot", lambda tk: 100.0)
+    payload = {"focus": {"ticker": "SPY"}, "var": {"seed": 7}}
     out = var_main._build_price_dist_from_context(payload, horizon_days=126)
-    assert out['horizon_days'] == 126
+    assert out["horizon_days"] == 126
 
 
 def test_price_dist_builder_defaults_unchanged_when_overrides_omitted(stub_market):
-    result = var_main._build_price_dist_from_context(_base_payload(garch_vol=0.30), "AAPL")
+    result = var_main._build_price_dist_from_context(
+        _base_payload(garch_vol=0.30), "AAPL"
+    )
     assert result["horizon_days"] == 252
     assert result["n_sims"] == 10_000
 
 
 def test_price_dist_builder_accepts_n_sims_and_seed_override(stub_market):
     result = var_main._build_price_dist_from_context(
-        _base_payload(garch_vol=0.30), "AAPL", n_sims=500, seed=99)
+        _base_payload(garch_vol=0.30), "AAPL", n_sims=500, seed=99
+    )
     assert result["n_sims"] == 500
     assert result["seed"] == 99
     assert sum(b["count"] for b in result["terminal_price_histogram"]) == 500
@@ -358,8 +401,13 @@ def test_price_dist_builder_accepts_n_sims_and_seed_override(stub_market):
 
 def test_mc_sim_builder_accepts_all_overrides(stub_market):
     result = var_main._build_mc_sim_from_context(
-        _base_payload(garch_vol=0.30), "AAPL",
-        horizon_days=63, n_sims=1000, seed=11, confidence=0.95)
+        _base_payload(garch_vol=0.30),
+        "AAPL",
+        horizon_days=63,
+        n_sims=1000,
+        seed=11,
+        confidence=0.95,
+    )
     assert result["horizon_days"] == 63
     assert result["n_sims"] == 1000
     assert result["seed"] == 11
@@ -373,8 +421,13 @@ def test_mc_sim_builder_defaults_unchanged_when_overrides_omitted(stub_market):
 
 def test_copula_builder_accepts_all_overrides(stub_market):
     result = var_main._build_copula_from_context(
-        _base_payload(garch_vol=0.30), "AAPL",
-        horizon_days=63, n_sims=2000, seed=11, confidence=0.95)
+        _base_payload(garch_vol=0.30),
+        "AAPL",
+        horizon_days=63,
+        n_sims=2000,
+        seed=11,
+        confidence=0.95,
+    )
     assert result["horizon_days"] == 63
     assert result["n_sims"] == 2000
     assert result["seed"] == 11
@@ -388,20 +441,27 @@ def test_copula_builder_defaults_unchanged_when_overrides_omitted(stub_market):
 
 def test_corr_sim_peer_builder_accepts_all_overrides(stub_market, capture_corr_inputs):
     stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: 0.30)
-    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
+    stub_market.setattr(
+        data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31")
+    )
     stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
 
     payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})
     result = var_main._build_corr_sim_peer_from_context(
-        payload, "AAPL", horizon_days=63, n_sims=500, seed=11, confidence=0.95)
+        payload, "AAPL", horizon_days=63, n_sims=500, seed=11, confidence=0.95
+    )
     assert result["horizon_days"] == 63
     assert result["n_sims"] == 500
     assert result["seed"] == 11
 
 
-def test_corr_sim_peer_builder_defaults_unchanged_when_overrides_omitted(stub_market, capture_corr_inputs):
+def test_corr_sim_peer_builder_defaults_unchanged_when_overrides_omitted(
+    stub_market, capture_corr_inputs
+):
     stub_market.setattr(data_loader, "estimate_garch_vol", lambda tk: 0.30)
-    stub_market.setattr(data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31"))
+    stub_market.setattr(
+        data_loader, "default_date_range", lambda: ("2024-01-01", "2024-12-31")
+    )
     stub_market.setattr(data_loader, "fetch_log_returns", lambda tk, s, e: np.zeros(5))
 
     payload = _base_payload(garch_vol=0.22, basket={"tickers": ["AAPL", "MSFT"]})

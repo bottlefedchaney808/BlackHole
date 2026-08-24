@@ -14,17 +14,18 @@ Run from Vol_Suite/ with the scrubbed venv:
   env -u PYTHONPATH -u VIRTUAL_ENV ../Financial_Dev_Env/bin/python3 \
     seed_flip_compare.py SPY 120
 """
+
 import datetime
-import json
 import math
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from shared.thetadata import ThetaDataController
 import expiry_selector
 import implied_vol as implied_vol_mod
 import replication_reference as rr
+
+from shared.thetadata import ThetaDataController
 
 _BT_R = 0.04
 _BT_Q = 0.012
@@ -67,13 +68,23 @@ def _build_payload(td, ticker, expiry):
             oi_rows = td.option_bulk_hist_oi_by_day(ticker, expiry, start_str, end_str)
             if len(oi_rows) > 0:
                 break
-            print(f"  [seed_flip] {ticker} OI fetch attempt {attempt}: 0 rows, retrying", flush=True)
+            print(
+                f"  [seed_flip] {ticker} OI fetch attempt {attempt}: 0 rows, retrying",
+                flush=True,
+            )
         except Exception as e:
-            print(f"  [seed_flip] {ticker} OI fetch attempt {attempt}: {type(e).__name__} {str(e)[:60]}, retrying", flush=True)
+            print(
+                f"  [seed_flip] {ticker} OI fetch attempt {attempt}: {type(e).__name__} {str(e)[:60]}, retrying",
+                flush=True,
+            )
         import time
+
         time.sleep(15 * attempt)
-    print(f"  [seed_flip] {ticker} EOD={len(price_rows)} oi={len(oi_rows)} "
-          f"spot={len(spot_rows)} {start_str}->{end_str}", flush=True)
+    print(
+        f"  [seed_flip] {ticker} EOD={len(price_rows)} oi={len(oi_rows)} "
+        f"spot={len(spot_rows)} {start_str}->{end_str}",
+        flush=True,
+    )
 
     close_by_date = {}
     for row in spot_rows:
@@ -93,15 +104,24 @@ def _build_payload(td, ticker, expiry):
         if not d or d not in close_by_date:
             continue
         try:
-            k = float(row["strike"]) / 1000.0 if float(row["strike"]) > 1000 else float(row["strike"])
-            right = "C" if str(row.get("right", ""))[:1] == "C" else ("P" if str(row.get("right", ""))[:1] == "P" else "?")
+            k = float(row["strike"]) / 1000.0
+            right = (
+                "C"
+                if str(row.get("right", ""))[:1] == "C"
+                else ("P" if str(row.get("right", ""))[:1] == "P" else "?")
+            )
         except (KeyError, TypeError, ValueError):
             continue
         if right not in ("C", "P"):
             continue
         spot = close_by_date[d]
-        T = max((exp_date - datetime.datetime.strptime(d, "%Y%m%d").date()).days, 1) / 365.0
-        mark = implied_vol_mod.mid_price(row.get("bid"), row.get("ask"), row.get("close"))
+        T = (
+            max((exp_date - datetime.datetime.strptime(d, "%Y%m%d").date()).days, 1)
+            / 365.0
+        )
+        mark = implied_vol_mod.mid_price(
+            row.get("bid"), row.get("ask"), row.get("close")
+        )
         if not mark or mark <= 0:
             continue
         solved = implied_vol_mod.implied_vol(mark, spot, k, T, _BT_R, _BT_Q, right)
@@ -110,8 +130,16 @@ def _build_payload(td, ticker, expiry):
         # Inject the MEASURED-convention vanna (rec.vanna = -1 * BS_vanna,
         # Gate-0 pin) so the 'vanna' seed_mode has per-strike vanna to sign by.
         vanna = -1.0 * _bs_vanna(spot, k, T, solved)
-        greeks.append({"date": d, "strike": str(int(round(k * 1000))), "right": right,
-                       "implied_vol": solved, "close": row.get("close"), "vanna": vanna})
+        greeks.append(
+            {
+                "date": d,
+                "strike": str(int(round(k * 1000))),
+                "right": right,
+                "implied_vol": solved,
+                "close": row.get("close"),
+                "vanna": vanna,
+            }
+        )
     return greeks, oi_rows, spot_rows
 
 
@@ -141,37 +169,63 @@ def main() -> int:
         os.environ["DEALER_VANNA_FLOW"] = vanna_flow_env
         try:
             acc = rr._accumulate_from_history(
-                ticker, expiry, lookback, seed_mode, greeks, oi, spot)
+                ticker, expiry, lookback, seed_mode, greeks, oi, spot
+            )
         finally:
             os.environ.pop("DEALER_SEED_SIGN", None)
             os.environ.pop("DEALER_VANNA_FLOW", None)
         book = acc.position_by_strike
         end_book = sum(book.values())
         seed_net = acc.daily_trace[0]["net_change"]
-        flow_sum = sum(t["net_change"] for t in acc.daily_trace[1:]) if len(acc.daily_trace) > 1 else 0.0
+        flow_sum = (
+            sum(t["net_change"] for t in acc.daily_trace[1:])
+            if len(acc.daily_trace) > 1
+            else 0.0
+        )
+        total_flow = abs(seed_net) + sum(
+            abs(t["net_change"]) for t in acc.daily_trace[1:]
+        )
         results[label] = {
-            "end_book": end_book, "seed_net": seed_net, "flow_sum": flow_sum,
-            "n_days": len(acc.daily_trace), "n_strikes": len(book),
+            "end_book": end_book,
+            "seed_net": seed_net,
+            "flow_sum": flow_sum,
+            "n_days": len(acc.daily_trace),
+            "n_strikes": len(book),
             "regime": "SHORT" if end_book < 0 else ("LONG" if end_book > 0 else "FLAT"),
-            "seed_share": abs(seed_net) / (abs(seed_net) + sum(abs(t["net_change"]) for t in acc.daily_trace[1:])) if len(acc.daily_trace) > 1 else 1.0,
+            "seed_share": (abs(seed_net) / total_flow) if total_flow else 1.0,
         }
-        print(f"[seed_flip] {ticker} {label}: end_book={end_book:,.0f} "
-              f"({results[label]['regime']}) seed={seed_net:,.0f} "
-              f"flow={flow_sum:,.0f} seed_share={results[label]['seed_share']:.3f} "
-              f"n_days={len(acc.daily_trace)}")
+        print(
+            f"[seed_flip] {ticker} {label}: end_book={end_book:,.0f} "
+            f"({results[label]['regime']}) seed={seed_net:,.0f} "
+            f"flow={flow_sum:,.0f} seed_share={results[label]['seed_share']:.3f} "
+            f"n_days={len(acc.daily_trace)}"
+        )
 
-    live, vanna_r, vf = results["live(repl)"], results["vanna_seed"], results["live+vannaflow"]
+    live, vanna_r, vf = (
+        results["live(repl)"],
+        results["vanna_seed"],
+        results["live+vannaflow"],
+    )
     svi = results["svi_rp_seed"]
-    print(f"\n[seed_flip] VERDICT {ticker} (live vs vanna-seed vs live+vannaflow vs svi_rp_seed):")
+    print(
+        f"\n[seed_flip] VERDICT {ticker} (live vs vanna-seed vs live+vannaflow vs svi_rp_seed):"
+    )
     for label in ("live(repl)", "vanna_seed", "live+vannaflow", "svi_rp_seed"):
         r = results[label]
-        print(f"  {label:<16} end_book={r['end_book']:,.0f} ({r['regime']}) "
-              f"seed_share={r['seed_share']:.3f} n_days={r['n_days']}")
-    regime_changed = (live["regime"] != vanna_r["regime"] or live["regime"] != vf["regime"]
-                      or live["regime"] != svi["regime"])
-    sign_changed = (math.copysign(1.0, live["end_book"]) != math.copysign(1.0, vanna_r["end_book"])
-                    or math.copysign(1.0, live["end_book"]) != math.copysign(1.0, vf["end_book"])
-                    or math.copysign(1.0, live["end_book"]) != math.copysign(1.0, svi["end_book"]))
+        print(
+            f"  {label:<16} end_book={r['end_book']:,.0f} ({r['regime']}) "
+            f"seed_share={r['seed_share']:.3f} n_days={r['n_days']}"
+        )
+    regime_changed = (
+        live["regime"] != vanna_r["regime"]
+        or live["regime"] != vf["regime"]
+        or live["regime"] != svi["regime"]
+    )
+    sign_changed = (
+        math.copysign(1.0, live["end_book"]) != math.copysign(1.0, vanna_r["end_book"])
+        or math.copysign(1.0, live["end_book"]) != math.copysign(1.0, vf["end_book"])
+        or math.copysign(1.0, live["end_book"]) != math.copysign(1.0, svi["end_book"])
+    )
     print(f"  any_regime_change={regime_changed} any_sign_change={sign_changed}")
     return 0
 

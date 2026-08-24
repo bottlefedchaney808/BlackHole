@@ -6,26 +6,35 @@ rec.vanna = -1*BS, "don't stack a right_dir", vanna §3.1 == §3.4, charm
 x(1/365), DEX post-multiplier property, GEX dollar-gamma-per-1%.
 Network-free: pure functions on synthetic chains + the real seed corpus.
 """
+
 import math
 
-import pytest
-
 import expiry_book_exposure as ebe
+import pytest
 
 
 def _chain(n=40, seed=3, spot=100.0, T=0.25):
     import random
+
     rng = random.Random(seed)
     rows = []
-    strikes = sorted(set(round(spot * (1 + 0.02 * i), 2) for i in range(-n // 2, n // 2 + 1)))
+    strikes = sorted(
+        set(round(spot * (1 + 0.02 * i), 2) for i in range(-n // 2, n // 2 + 1))
+    )
     for k in strikes:
         if k <= 0:
             continue
         m = k / spot
         iv = max(0.20 + 0.30 * max(0, 1 - m), 0.15)
         for right in ("C", "P"):
-            rows.append({"strike": k, "right": right, "oi": 100 + rng.randint(0, 50),
-                         "implied_vol": iv})
+            rows.append(
+                {
+                    "strike": k,
+                    "right": right,
+                    "oi": 100 + rng.randint(0, 50),
+                    "implied_vol": iv,
+                }
+            )
     return rows, spot, T
 
 
@@ -41,9 +50,10 @@ def test_net_exposure_vector_shape():
         # every greek present in exposure dict
         for g in ebe.GREEKS:
             assert g in r.exposure
-            assert r.exposure[g] == pytest.approx(r.greeks[g] * r.oi * ebe.CONTRACT_MULTIPLIER
-                                                  if g not in ("charm", "vega", "volga", "vanna")
-                                                  else r.exposure[g])
+            if g not in ("charm", "vega", "volga", "vanna"):
+                assert r.exposure[g] == pytest.approx(
+                    r.greeks[g] * r.oi * ebe.CONTRACT_MULTIPLIER
+                )
     assert set(ebe.GREEKS) <= set(ne.rows[0].exposure.keys())
 
 
@@ -53,7 +63,9 @@ def test_multiplier_applied_once():
     rows, spot, T = _chain()
     ne = ebe.build_net_exposure(rows, spot, T=T)
     for r in ne.rows:
-        assert r.exposure["delta"] == pytest.approx(r.greeks["delta"] * r.oi * ebe.CONTRACT_MULTIPLIER, rel=1e-9)
+        assert r.exposure["delta"] == pytest.approx(
+            r.greeks["delta"] * r.oi * ebe.CONTRACT_MULTIPLIER, rel=1e-9
+        )
 
 
 def test_dex_post_multiplier_shares_property():
@@ -72,8 +84,19 @@ def test_nan_greek_field_skips_not_raises():
     """A NaN greek field degrades to a per-greek skip (record kept, that greek
     exposure 0), never raising."""
     rows, spot, T = _chain()
-    ne = ebe.build_net_exposure(rows, spot, T=T)
-    assert len(ne.rows) > 0
+    # T=0 collapses every greek's d1 to NaN for this one row (per-row
+    # override, not the global implied_vol/strike check), which is the path
+    # that exercises the per-greek skip without dropping the whole row.
+    # (A NaN T would instead crash rr_dte's int(round(...)) before reaching
+    # the per-greek loop -- T=0 is finite so that computation stays valid.)
+    rows = list(rows) + [
+        {"strike": spot, "right": "C", "oi": 10, "implied_vol": 0.25, "T": 0.0}
+    ]
+    ne = ebe.build_net_exposure(rows, spot)
+    assert len(ne.rows) == len(rows)
+    nan_row = ne.rows[-1]
+    for g in ebe.GREEKS:
+        assert nan_row.exposure[g] == 0.0
     # no row should raise, all exposures finite
     for r in ne.rows:
         for g in ebe.GREEKS:
@@ -91,7 +114,8 @@ def test_rec_vanna_is_minus_one_times_bs():
     for r in ne.rows:
         # reconstruct the dealer-frame value from the row's own IV:
         assert r.greeks["vanna"] == pytest.approx(
-            ebe.dealer_frame_vanna(ebe.bs_vanna(spot, r.strike, r.T, r.iv)), rel=1e-9)
+            ebe.dealer_frame_vanna(ebe.bs_vanna(spot, r.strike, r.T, r.iv)), rel=1e-9
+        )
 
 
 def test_rec_vanna_scale_matches_gate0_spy_qqq():
@@ -99,12 +123,20 @@ def test_rec_vanna_scale_matches_gate0_spy_qqq():
     measured SPY -0.956 / QQQ -0.989. On real seed data the ratio must be
     ~ -1 with |scale| ~ 1.0-1.1."""
     import os
-    seed_dir = os.path.join(os.path.dirname(__file__), "..", "docs",
-                            "Dealer posistioning notes", "_extracted",
-                            "handoff_20260812", "seed_data")
+
+    seed_dir = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "docs",
+        "Dealer posistioning notes",
+        "_extracted",
+        "handoff_20260812",
+        "seed_data",
+    )
     if not os.path.isdir(seed_dir):
         pytest.skip("seed corpus not present")
     import seed_data_loader as sdl
+
     ratios = []
     for tk in ("SPY", "QQQ"):
         path = os.path.join(seed_dir, f"seed_data_{tk}_20261218_150d.json")
@@ -112,10 +144,17 @@ def test_rec_vanna_scale_matches_gate0_spy_qqq():
             continue
         g, oi, spot = sdl.load_seed_data(path)
         latest = sorted({r["date"] for r in g})[-1]
-        rows = [r for r in g if r["date"] == latest and r.get("vanna")
-                and r.get("implied_vol") and float(r["implied_vol"]) > 0]
+        rows = [
+            r
+            for r in g
+            if r["date"] == latest
+            and r.get("vanna")
+            and r.get("implied_vol")
+            and float(r["implied_vol"]) > 0
+        ]
         s = float([r["close"] for r in spot if r.get("close")][-1])
         import datetime
+
         exp = datetime.datetime.strptime("20261218", "%Y%m%d").date()
         today = datetime.datetime.strptime(latest, "%Y%m%d").date()
         T = (exp - today).days / 365.0
@@ -151,7 +190,9 @@ def test_gamma_sign_via_long_short_option_not_call_put():
     for r in ne.rows:
         # dealer_frame_greek('gamma', raw, right) == _right_sign(right)*raw
         raw = ebe.bs_gamma(spot, r.strike, r.T, r.iv)
-        assert r.greeks["gamma"] == pytest.approx(ebe._right_sign(r.right) * raw, rel=1e-9)
+        assert r.greeks["gamma"] == pytest.approx(
+            ebe._right_sign(r.right) * raw, rel=1e-9
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +203,9 @@ def test_charm_scaled_by_1_over_365_not_1_over_dte():
     rows, spot, T = _chain()
     ne = ebe.build_net_exposure(rows, spot, T=T)
     for r in ne.rows:
-        expected = (r.greeks["charm"] * (1.0 / ebe.DEFAULT_A) * r.oi * ebe.CONTRACT_MULTIPLIER)
+        expected = (
+            r.greeks["charm"] * (1.0 / ebe.DEFAULT_A) * r.oi * ebe.CONTRACT_MULTIPLIER
+        )
         assert r.exposure["charm"] == pytest.approx(expected, rel=1e-9)
         # would be wrong if scaled by 1/DTE (which for any DTE>365 is LARGER
         # than the correct 1/365 scale): the correct daily scale is strictly
@@ -181,7 +224,9 @@ def test_dealer_charm_is_customer_per_right_net():
     assert raw_otm < 0
     assert raw_otm_put > 0
     assert ebe.dealer_frame_greek("charm", raw_itm, "C") == pytest.approx(raw_itm)
-    assert ebe.dealer_frame_greek("charm", raw_otm_put, "P") == pytest.approx(raw_otm_put)
+    assert ebe.dealer_frame_greek("charm", raw_otm_put, "P") == pytest.approx(
+        raw_otm_put
+    )
 
 
 def test_vanna_flow_31_equals_34():
@@ -201,16 +246,25 @@ def test_vanna_flow_one_formula_decimal_vol():
     rows, spot, T = _chain()
     ne = ebe.build_net_exposure(rows, spot, T=T)
     d_iv = 0.02
-    manual = sum(r.greeks["vanna"] * r.oi * ebe.CONTRACT_MULTIPLIER
-                 * ebe.VANNA_PP_SCALE * (d_iv / 0.01) for r in ne.rows)
+    manual = sum(
+        r.greeks["vanna"]
+        * r.oi
+        * ebe.CONTRACT_MULTIPLIER
+        * ebe.VANNA_PP_SCALE
+        * (d_iv / 0.01)
+        for r in ne.rows
+    )
     assert ebe.vanna_flow(ne, d_iv) == pytest.approx(manual, rel=1e-9)
+
 
 def test_gex_pinned_dollar_gamma_per_1pct():
     """Constraint 7: GEX = Gamma*OI*100*spot^2*0.01 (dollar-gamma-per-1%)."""
     rows, spot, T = _chain()
     ne = ebe.build_net_exposure(rows, spot, T=T)
-    manual = sum(r.greeks["gamma"] * r.oi * ebe.CONTRACT_MULTIPLIER
-                 * spot ** 2 * 0.01 for r in ne.rows)
+    manual = sum(
+        r.greeks["gamma"] * r.oi * ebe.CONTRACT_MULTIPLIER * spot**2 * 0.01
+        for r in ne.rows
+    )
     assert ne.gex() == pytest.approx(manual, rel=1e-9)
 
 
@@ -222,12 +276,18 @@ def test_real_spot_not_median_strike():
     rows, _, T = _chain(spot=spot)
     # shift the grid so median strike is offset from spot by ~5%
     import random
+
     rng = random.Random(3)
-    offset_strikes = [round(k * 0.95, 2) for k in sorted({r["strike"] for r in rows})]
     shifted = []
-    for r, k in zip(rows, offset_strikes):
-        shifted.append({"strike": k, "right": r["right"], "oi": r["oi"],
-                        "implied_vol": r["implied_vol"]})
+    for r in rows:
+        shifted.append(
+            {
+                "strike": round(r["strike"] * 0.95, 2),
+                "right": r["right"],
+                "oi": r["oi"],
+                "implied_vol": r["implied_vol"],
+            }
+        )
     ne = ebe.build_net_exposure(shifted, spot, T=T)
     assert ne.spot == spot
     strikes = sorted(r.strike for r in ne.rows)
@@ -236,5 +296,8 @@ def test_real_spot_not_median_strike():
     # every row's greeks evaluated at the real spot, not the median strike
     for r in ne.rows:
         assert r.greeks["delta"] == pytest.approx(
-            ebe.dealer_frame_greek("delta", ebe.bs_delta(spot, r.strike, r.T, r.iv, right=r.right), r.right),
-            rel=1e-9)
+            ebe.dealer_frame_greek(
+                "delta", ebe.bs_delta(spot, r.strike, r.T, r.iv, right=r.right), r.right
+            ),
+            rel=1e-9,
+        )

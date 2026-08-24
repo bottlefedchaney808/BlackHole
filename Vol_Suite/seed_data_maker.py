@@ -25,6 +25,7 @@ Usage (from Vol_Suite/):
 Writes <out_dir>/seed_data_<TICKER>_<expiry>_<lookback>d.json — same shape
 seed_data_loader.py reads.
 """
+
 import datetime
 import json
 import math
@@ -33,8 +34,6 @@ import sys
 import time
 
 from thetadata_client import ThetaDataController
-import expiry_selector
-import implied_vol as implied_vol_mod
 
 _BT_R = 0.04
 _BT_Q = 0.012
@@ -83,13 +82,22 @@ def build_payload(td, ticker: str, expiry: str, lookback_days: int = 150):
             oi_rows = td.option_bulk_hist_oi_by_day(ticker, expiry, start_str, end_str)
             if len(oi_rows) > 0:
                 break
-            print(f"  [seed_data_maker] {ticker} OI fetch attempt {attempt}: 0 rows, retrying", flush=True)
+            print(
+                f"  [seed_data_maker] {ticker} OI fetch attempt {attempt}: 0 rows, retrying",
+                flush=True,
+            )
         except Exception as e:
-            print(f"  [seed_data_maker] {ticker} OI fetch attempt {attempt}: "
-                  f"{type(e).__name__} {str(e)[:80]}, retrying", flush=True)
+            print(
+                f"  [seed_data_maker] {ticker} OI fetch attempt {attempt}: "
+                f"{type(e).__name__} {str(e)[:80]}, retrying",
+                flush=True,
+            )
         time.sleep(15 * attempt)
-    print(f"  [seed_data_maker] {ticker} EOD_greeks={len(price_rows)} oi={len(oi_rows)} "
-          f"spot={len(spot_rows)} {start_str}->{end_str}", flush=True)
+    print(
+        f"  [seed_data_maker] {ticker} EOD_greeks={len(price_rows)} oi={len(oi_rows)} "
+        f"spot={len(spot_rows)} {start_str}->{end_str}",
+        flush=True,
+    )
 
     close_by_date = {}
     for row in spot_rows:
@@ -117,24 +125,31 @@ def build_payload(td, ticker: str, expiry: str, lookback_days: int = 150):
         try:
             k = int(float(row["strike"]))
             right = str(row.get("right", ""))[:1].upper()
+            iv = float(row.get("implied_vol", 0) or 0)
         except (KeyError, TypeError, ValueError):
             continue
         if right not in ("C", "P"):
             continue
-        iv = float(row.get("implied_vol", 0) or 0)
         if iv <= 0:
             continue
-        greeks.append({
-            "date": d, "strike": str(k), "right": right, "implied_vol": iv,
-            "close": row.get("close"),
-            "vanna": row.get("vanna"),
-            "gamma": row.get("gamma"),
-            "delta": row.get("delta"),
-        })
+        greeks.append(
+            {
+                "date": d,
+                "strike": str(k),
+                "right": right,
+                "implied_vol": iv,
+                "close": row.get("close"),
+                "vanna": row.get("vanna"),
+                "gamma": row.get("gamma"),
+                "delta": row.get("delta"),
+            }
+        )
 
     n_dates = len({g["date"] for g in greeks})
-    print(f"  [seed_data_maker] {ticker}: {len(greeks)} greek rows across {n_dates} distinct "
-          f"dates ({n_no_spot} no-spot dropped)")
+    print(
+        f"  [seed_data_maker] {ticker}: {len(greeks)} greek rows across {n_dates} distinct "
+        f"dates ({n_no_spot} no-spot dropped)"
+    )
     return greeks, oi_rows, spot_rows
 
 
@@ -153,7 +168,10 @@ def main() -> int:
     try:
         if explicit_expiry:
             expiry = explicit_expiry
-            print(f"[seed_data_maker] {ticker}: using explicit expiry {expiry}", flush=True)
+            print(
+                f"[seed_data_maker] {ticker}: using explicit expiry {expiry}",
+                flush=True,
+            )
         else:
             # Resolve to the expiry with the LONGEST available option-chain history
             # (a far-dated/LEAPS expiry listed >= lookback trading days ago), NOT the
@@ -162,8 +180,11 @@ def main() -> int:
             # slow (probes up to 14 far-dated expiries); pass the expiry explicitly
             # to skip it once you know it (e.g. 20261218 for QQQ/SPY).
             expiry = td.resolve_longest_history_expiry(ticker, lookback_days=lookback)
-            print(f"[seed_data_maker] {ticker}: resolved longest-history expiry {expiry} "
-                  f"for {lookback}d lookback", flush=True)
+            print(
+                f"[seed_data_maker] {ticker}: resolved longest-history expiry {expiry} "
+                f"for {lookback}d lookback",
+                flush=True,
+            )
         greeks, oi, spot = build_payload(td, ticker, expiry, lookback)
     finally:
         td.close()
@@ -174,14 +195,20 @@ def main() -> int:
 
     out = os.path.join(out_dir, f"seed_data_{ticker}_{expiry}_{lookback}d.json")
     manifest = {
-        "ticker": ticker, "expiry": expiry, "lookback_days": lookback,
-        "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "n_greeks": len(greeks), "n_oi": len(oi), "n_spot": len(spot),
+        "ticker": ticker,
+        "expiry": expiry,
+        "lookback_days": lookback,
+        "generated": datetime.datetime.now(datetime.UTC).isoformat(),
+        "n_greeks": len(greeks),
+        "n_oi": len(oi),
+        "n_spot": len(spot),
     }
     with open(out, "w", encoding="utf-8") as fh:
         json.dump({"manifest": manifest, "greeks": greeks, "oi": oi, "spot": spot}, fh)
-    print(f"[seed_data_maker] saved {len(greeks)} greeks, {len(oi)} oi, "
-          f"{len(spot)} spot for {ticker}/{expiry} -> {out}")
+    print(
+        f"[seed_data_maker] saved {len(greeks)} greeks, {len(oi)} oi, "
+        f"{len(spot)} spot for {ticker}/{expiry} -> {out}"
+    )
     print(f"  manifest: {json.dumps(manifest)}")
     return 0
 

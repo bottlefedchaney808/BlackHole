@@ -14,27 +14,31 @@ directory for what's open here: Heston reliability, SABR's wing behavior on
 steep short-dated skews, and CRR/LR/NR/MC's coverage gap vs. Market on
 strikes with no live 2-sided quote).
 """
+
 import time
 
+import MCHestonLSM
 import numpy as np
-
-from smile_utils import fetch_market_smile
+from american_binomial import (
+    crr_all_greeks,
+    crr_american_price_batch,
+    leisen_reimer_american_price_batch,
+    lr_all_greeks,
+)
+from barone_adesi_whaley import baw_all_greeks, baw_american_price, brute_force_baw
 from bruteforceimpliedvol import brute_force_batch, brute_force_lr_batch, brute_force_mc
-from barone_adesi_whaley import baw_american_price, baw_all_greeks, brute_force_baw
-from american_binomial import (crr_american_price_batch, leisen_reimer_american_price_batch,
-                               crr_all_greeks, lr_all_greeks)
 from MC import AmericanLSMPricer, mc_all_greeks
 from SABRModel import _sabr_vol_hagan_vec, sabr_all_greeks
-from VannaVolga import get_vol_batch as vanna_volga_vol_batch, vv_all_greeks
-import MCHestonLSM
-
+from smile_utils import fetch_market_smile
+from VannaVolga import get_vol_batch as vanna_volga_vol_batch
+from VannaVolga import vv_all_greeks
 
 # Greek key sets. The analytic/tree models publish the full set at every
 # chain strike; MC and Heston publish only the 1st-order block per strike
 # (their 2nd/3rd-order values are reported once, at the focus K -- see
 # run_full_chain's docstring for the accuracy-vs-runtime reasoning).
-FIRST_ORDER_GREEKS = ('delta', 'gamma', 'vega', 'rho', 'theta')
-HIGHER_ORDER_GREEKS = ('vanna', 'vomma', 'speed', 'charm', 'color')
+FIRST_ORDER_GREEKS = ("delta", "gamma", "vega", "rho", "theta")
+HIGHER_ORDER_GREEKS = ("vanna", "vomma", "speed", "charm", "color")
 
 
 class _AlreadySolved(Exception):
@@ -49,12 +53,19 @@ def _fetch_chain(ticker, market_exp, S, K, T, r, q):
     call, one set of strikes/prices/rights) rather than fetching a second,
     possibly-different snapshot a few seconds later."""
     m_strikes, m_ivs, m_sources, m_forward, m_prices, m_rights = fetch_market_smile(
-        ticker, market_exp, S, T, r, q)
-    grid = np.unique(np.concatenate([m_strikes, [K]])) if len(m_strikes) else np.array([K])
+        ticker, market_exp, S, T, r, q
+    )
+    grid = (
+        np.unique(np.concatenate([m_strikes, [K]])) if len(m_strikes) else np.array([K])
+    )
     return {
-        'strikes': m_strikes, 'ivs': m_ivs, 'sources': m_sources,
-        'forward': m_forward, 'prices': m_prices, 'rights': m_rights,
-        'grid': grid,
+        "strikes": m_strikes,
+        "ivs": m_ivs,
+        "sources": m_sources,
+        "forward": m_forward,
+        "prices": m_prices,
+        "rights": m_rights,
+        "grid": grid,
     }
 
 
@@ -63,11 +74,14 @@ def _usable_quote_mask(prices):
     Same test _solve_chain/_solve_chain_batch already apply -- kept in one
     place so the smile curves and the full-chain per-model dicts agree on
     exactly which strikes are considered quoted."""
-    return np.array([p is not None and np.isfinite(p) and p > 0 for p in prices], dtype=bool)
+    return np.array(
+        [p is not None and np.isfinite(p) and p > 0 for p in prices], dtype=bool
+    )
 
 
-def build_smile_comparison(ticker, market_exp, S, K, T, r, q, models, vol_manager,
-                            atm_vol_vv, rr25, bf25):
+def build_smile_comparison(
+    ticker, market_exp, S, K, T, r, q, models, vol_manager, atm_vol_vv, rr25, bf25
+):
     """
     Build the chain-wide "Smile Comparison" dataset: market IV (vendor-
     preferred -- see smile_utils.fetch_market_smile) plus each model's OWN
@@ -98,14 +112,28 @@ def build_smile_comparison(ticker, market_exp, S, K, T, r, q, models, vol_manage
     """
     try:
         chain = _fetch_chain(ticker, market_exp, S, K, T, r, q)
-        return _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, rr25, bf25)
+        return _build_smile_curves(
+            chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, rr25, bf25
+        )
     except Exception as e:
         print(f"[Smile Chart] Could not build smile comparison: {e}")
         return None
 
 
-def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, rr25, bf25,
-                        precomputed_curves=None):
+def _build_smile_curves(
+    chain,
+    S,
+    K,
+    T,
+    r,
+    q,
+    models,
+    vol_manager,
+    atm_vol_vv,
+    rr25,
+    bf25,
+    precomputed_curves=None,
+):
     """The curve-building body of build_smile_comparison, factored out so
     run_full_chain returns the SAME 'smile' payload without duplicating any
     of this logic (spec: NOTES_chain_evaluation.md, "full chain" section).
@@ -119,10 +147,10 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
     whole report's runtime. SABR / VannaVolga / Heston are NOT precomputed:
     their curves are cheap vectorized formula evaluations over `grid`
     (which includes the focus K), so they stay exactly as before."""
-    m_strikes = chain['strikes']
-    m_prices = chain['prices']
-    m_rights = chain['rights']
-    grid = chain['grid']
+    m_strikes = chain["strikes"]
+    m_prices = chain["prices"]
+    m_rights = chain["rights"]
+    grid = chain["grid"]
     precomputed_curves = precomputed_curves or {}
 
     try:
@@ -131,10 +159,14 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
             _ks, _ivs = _curve
             if len(_ks) >= 3:
                 _order = np.argsort(_ks)
-                smile_curves[_label] = (np.asarray(_ks, dtype=float)[_order],
-                                        np.asarray(_ivs, dtype=float)[_order])
+                smile_curves[_label] = (
+                    np.asarray(_ks, dtype=float)[_order],
+                    np.asarray(_ivs, dtype=float)[_order],
+                )
             else:
-                print(f"[Smile Chart] {_label} chain-wide solve produced only {len(_ks)} usable points -- skipping curve.")
+                print(
+                    f"[Smile Chart] {_label} chain-wide solve produced only {len(_ks)} usable points -- skipping curve."
+                )
 
         def _solve_chain(label, solver_fn):
             """Solve one model's own IV at every real chain strike
@@ -148,7 +180,7 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
             for k, p, right in zip(m_strikes, m_prices, m_rights):
                 if p is None or not np.isfinite(p) or p <= 0:
                     continue
-                cp = (right == 'C')
+                cp = right == "C"
                 try:
                     iv = solver_fn(p, k, cp)
                 except Exception:
@@ -158,7 +190,9 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
                 ks.append(k)
                 ivs.append(iv)
             if len(ks) < 3:
-                print(f"[Smile Chart] {label} chain-wide solve produced only {len(ks)} usable points -- skipping curve.")
+                print(
+                    f"[Smile Chart] {label} chain-wide solve produced only {len(ks)} usable points -- skipping curve."
+                )
                 return
             order = np.argsort(ks)
             smile_curves[label] = (np.array(ks)[order], np.array(ivs)[order])
@@ -177,29 +211,44 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
                 return  # caller already solved this exact curve -- see precomputed_curves
             mask = _usable_quote_mask(m_prices)
             if not np.any(mask):
-                print(f"[Smile Chart] {label} chain-wide solve produced 0 usable points -- skipping curve.")
+                print(
+                    f"[Smile Chart] {label} chain-wide solve produced 0 usable points -- skipping curve."
+                )
                 return
             ks = np.asarray(m_strikes, dtype=float)[mask]
             ps = np.asarray(m_prices, dtype=float)[mask]
-            cps = np.array([right == 'C' for right in np.asarray(m_rights, dtype=object)[mask]])
+            cps = np.array(
+                [right == "C" for right in np.asarray(m_rights, dtype=object)[mask]]
+            )
 
             ivs = solver_batch_fn(ps, ks, cps)
             valid = np.isfinite(ivs) & (ivs > 0)
             ks, ivs = ks[valid], ivs[valid]
             if ks.shape[0] < 3:
-                print(f"[Smile Chart] {label} chain-wide solve produced only {ks.shape[0]} usable points -- skipping curve.")
+                print(
+                    f"[Smile Chart] {label} chain-wide solve produced only {ks.shape[0]} usable points -- skipping curve."
+                )
                 return
             order = np.argsort(ks)
             smile_curves[label] = (ks[order], ivs[order])
 
         try:
-            _solve_chain_batch('CRR', lambda p_arr, k_arr, cp_arr: brute_force_batch(p_arr, S, k_arr, T, r, cp_arr, q=q))
+            _solve_chain_batch(
+                "CRR",
+                lambda p_arr, k_arr, cp_arr: brute_force_batch(
+                    p_arr, S, k_arr, T, r, cp_arr, q=q
+                ),
+            )
         except Exception as e:
             print(f"[Smile Chart] CRR curve failed: {e}")
 
         try:
-            _solve_chain_batch('Leisen-Reimer',
-                                lambda p_arr, k_arr, cp_arr: brute_force_lr_batch(p_arr, S, k_arr, T, r, cp_arr, q=q))
+            _solve_chain_batch(
+                "Leisen-Reimer",
+                lambda p_arr, k_arr, cp_arr: brute_force_lr_batch(
+                    p_arr, S, k_arr, T, r, cp_arr, q=q
+                ),
+            )
         except Exception as e:
             print(f"[Smile Chart] Leisen-Reimer curve failed: {e}")
 
@@ -214,13 +263,17 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
             # this was verified directly (several strikes, calls and
             # puts) to agree with implied_volatility_nr_american's
             # scalar Newton to ~1e-6 in sigma.
-            _solve_chain_batch('Newton-Raphson',
-                                lambda p_arr, k_arr, cp_arr: brute_force_lr_batch(p_arr, S, k_arr, T, r, cp_arr, q=q))
+            _solve_chain_batch(
+                "Newton-Raphson",
+                lambda p_arr, k_arr, cp_arr: brute_force_lr_batch(
+                    p_arr, S, k_arr, T, r, cp_arr, q=q
+                ),
+            )
         except Exception as e:
             print(f"[Smile Chart] Newton-Raphson curve failed: {e}")
 
         try:
-            if 'MC' in precomputed_curves:
+            if "MC" in precomputed_curves:
                 # Already solved by the caller (run_full_chain) -- skip before
                 # even allocating the shared draw array below.
                 raise _AlreadySolved()
@@ -246,10 +299,24 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
             # random numbers" property brute_force_mc's own docstring
             # already relies on, just hoisted out to its natural scope.
             _mc_sims, _mc_steps = 4000, 60
-            _mc_rand = AmericanLSMPricer(S, K, T, r, q, 0.3, simulations=_mc_sims, steps=_mc_steps,
-                                          option='call')._generate_rand(seed=42)
-            _solve_chain('MC', lambda p, k, cp: brute_force_mc(
-                p, S, k, T, r, cp, q=q, simulations=_mc_sims, steps=_mc_steps, rand=_mc_rand))
+            _mc_rand = AmericanLSMPricer(
+                S, K, T, r, q, 0.3, simulations=_mc_sims, steps=_mc_steps, option="call"
+            )._generate_rand(seed=42)
+            _solve_chain(
+                "MC",
+                lambda p, k, cp: brute_force_mc(
+                    p,
+                    S,
+                    k,
+                    T,
+                    r,
+                    cp,
+                    q=q,
+                    simulations=_mc_sims,
+                    steps=_mc_steps,
+                    rand=_mc_rand,
+                ),
+            )
         except _AlreadySolved:
             pass
         except Exception as e:
@@ -269,18 +336,27 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
             # recalibrate from scratch.
             cached = vol_manager.last_sabr_calibration
             if not cached:
-                raise RuntimeError("No cached SABR calibration from vol_manager.get_sigma -- cannot build a consistent curve.")
-            sabr_cal = cached['calibrator']
-            sabr_calib = cached['calib']
+                raise RuntimeError(
+                    "No cached SABR calibration from vol_manager.get_sigma -- cannot build a consistent curve."
+                )
+            sabr_cal = cached["calibrator"]
+            sabr_calib = cached["calib"]
             # Vectorized (one numpy pass over all strikes) instead of
             # a Python-level call to the scalar sabr_vol_hagan per
             # strike -- same formula (see _sabr_vol_hagan_vec's
             # docstring in SABRModel.py: it only skips the separate
             # near-exact-ATM branch, which a real discrete strike grid
             # essentially never lands on).
-            sabr_curve = _sabr_vol_hagan_vec(sabr_cal.forward, grid, T, sabr_calib['alpha'],
-                                              sabr_calib['beta'], sabr_calib['rho'], sabr_calib['nu'])
-            smile_curves['SABR'] = (grid, sabr_curve)
+            sabr_curve = _sabr_vol_hagan_vec(
+                sabr_cal.forward,
+                grid,
+                T,
+                sabr_calib["alpha"],
+                sabr_calib["beta"],
+                sabr_calib["rho"],
+                sabr_calib["nu"],
+            )
+            smile_curves["SABR"] = (grid, sabr_curve)
         except Exception as e:
             print(f"[Smile Chart] SABR curve failed: {e}")
 
@@ -291,13 +367,15 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
                 # anti-symmetrically and RR symmetrically -- backwards --
                 # which made the curve nearly flat regardless of how
                 # strong the real 25-delta risk reversal was).
-                vv_curve = vanna_volga_vol_batch(S, grid, T, r, q, atm_vol_vv, rr25, bf25)
-                smile_curves['VannaVolga'] = (grid, vv_curve)
+                vv_curve = vanna_volga_vol_batch(
+                    S, grid, T, r, q, atm_vol_vv, rr25, bf25
+                )
+                smile_curves["VannaVolga"] = (grid, vv_curve)
         except Exception as e:
             print(f"[Smile Chart] VannaVolga curve failed: {e}")
 
         try:
-            calib_h = models.get('Heston', {}).get('calib') or {}
+            calib_h = models.get("Heston", {}).get("calib") or {}
             if calib_h:
                 # Vectorized -- one shared Gauss-Legendre quadrature
                 # over all strikes (heston_call_prices_batch) plus one
@@ -307,18 +385,28 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
                 # strike. Same batch machinery HestonCalibrator.calibrate()
                 # already uses (see MCHestonLSM.heston_iv_smile_batch).
                 heston_curve = MCHestonLSM.heston_iv_smile_batch(
-                    S, grid, T, r, q, calib_h['v0'], calib_h['kappa'], calib_h['theta'],
-                    calib_h['xi'], calib_h['rho'],
+                    S,
+                    grid,
+                    T,
+                    r,
+                    q,
+                    calib_h["v0"],
+                    calib_h["kappa"],
+                    calib_h["theta"],
+                    calib_h["xi"],
+                    calib_h["rho"],
                 )
-                smile_curves['Heston'] = (grid, heston_curve)
+                smile_curves["Heston"] = (grid, heston_curve)
         except Exception as e:
             print(f"[Smile Chart] Heston curve failed: {e}")
 
         return {
-            'market_strikes': m_strikes, 'market_ivs': chain['ivs'], 'market_sources': chain['sources'],
-            'market_rights': m_rights,
-            'curves': smile_curves,
-            'flats': {},
+            "market_strikes": m_strikes,
+            "market_ivs": chain["ivs"],
+            "market_sources": chain["sources"],
+            "market_rights": m_rights,
+            "curves": smile_curves,
+            "flats": {},
         }
     except Exception as e:
         print(f"[Smile Chart] Could not build smile comparison: {e}")
@@ -328,6 +416,7 @@ def _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, r
 # ---------------------------------------------------------------------------
 # Full-chain evaluation mode
 # ---------------------------------------------------------------------------
+
 
 def _greek_subset(greeks, keys):
     """Take only `keys` out of a model's own Greek dict, and only if every
@@ -359,13 +448,31 @@ def _full_greeks(greeks):
     return dict(greeks)
 
 
-def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
-                   atm_vol_vv, rr25, bf25, option_type,
-                   mc_sims=4000, mc_steps=60,
-                   heston_sims=8000, heston_steps=150,
-                   heston_greek_sims=8000, heston_greek_steps=100,
-                   greek_steps=401, verbose=True,
-                   include_mc=True, include_heston=True):
+def run_full_chain(
+    ticker,
+    market_exp,
+    S,
+    K,
+    T,
+    r,
+    q,
+    models,
+    vol_manager,
+    atm_vol_vv,
+    rr25,
+    bf25,
+    option_type,
+    mc_sims=4000,
+    mc_steps=60,
+    heston_sims=8000,
+    heston_steps=150,
+    heston_greek_sims=8000,
+    heston_greek_steps=100,
+    greek_steps=401,
+    verbose=True,
+    include_mc=True,
+    include_heston=True,
+):
     """Full-chain evaluation: every model, every real strike in the market
     chain -- price + IV + Greeks -- plus the existing smile-comparison
     payload. See NOTES_chain_evaluation.md, "SPEC (2026-07-28): 'full
@@ -492,41 +599,55 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
         print(f"[Full Chain] Could not fetch market chain: {e}")
         return None
 
-    m_strikes = chain['strikes']
+    m_strikes = chain["strikes"]
     if len(m_strikes) == 0:
         print("[Full Chain] Market chain came back empty -- nothing to evaluate.")
         return None
 
     # Market block -- straight from the vendor chain, no model involved.
     market = {}
-    for k, iv, price, right, src in zip(chain['strikes'], chain['ivs'], chain['prices'],
-                                        chain['rights'], chain['sources']):
+    for k, iv, price, right, src in zip(
+        chain["strikes"],
+        chain["ivs"],
+        chain["prices"],
+        chain["rights"],
+        chain["sources"],
+    ):
         market[float(k)] = {
-            'iv': float(iv) if iv is not None and np.isfinite(iv) else None,
-            'price': float(price) if price is not None and np.isfinite(price) else None,
-            'right': right,
-            'source': src,
+            "iv": float(iv) if iv is not None and np.isfinite(iv) else None,
+            "price": float(price) if price is not None and np.isfinite(price) else None,
+            "right": right,
+            "source": src,
         }
 
     # Strikes with a real, invertible quote -- the only ones the
     # price-inverting models can say anything about at all (see
     # NOTES_chain_evaluation.md "Known limitations": this is inherent, you
     # cannot invert a price that does not exist).
-    mask = _usable_quote_mask(chain['prices'])
-    ks_q = np.asarray(chain['strikes'], dtype=float)[mask]
-    ps_q = np.asarray(chain['prices'], dtype=float)[mask]
-    rights_q = np.asarray(chain['rights'], dtype=object)[mask]
-    cps_q = np.array([rt == 'C' for rt in rights_q], dtype=bool)
+    mask = _usable_quote_mask(chain["prices"])
+    ks_q = np.asarray(chain["strikes"], dtype=float)[mask]
+    ps_q = np.asarray(chain["prices"], dtype=float)[mask]
+    rights_q = np.asarray(chain["rights"], dtype=object)[mask]
+    cps_q = np.array([rt == "C" for rt in rights_q], dtype=bool)
 
-    _log(f"{ticker} {market_exp}: {len(m_strikes)} chain strikes, "
-         f"{ks_q.shape[0]} with an invertible quote. "
-         f"S={S:.4f} T={T:.6f} r={r:.4f} q={q:.4f}")
+    _log(
+        f"{ticker} {market_exp}: {len(m_strikes)} chain strikes, "
+        f"{ks_q.shape[0]} with an invertible quote. "
+        f"S={S:.4f} T={T:.6f} r={r:.4f} q={q:.4f}"
+    )
 
     per_model = {}
     precomputed_curves = {}
 
-    def _register(label, strikes_arr, ivs_arr, prices_arr, greeks_list, rights_arr,
-                  curve_ivs=False):
+    def _register(
+        label,
+        strikes_arr,
+        ivs_arr,
+        prices_arr,
+        greeks_list,
+        rights_arr,
+        curve_ivs=False,
+    ):
         """Assemble one model's per-strike dict, dropping any strike whose
         price or Greek row did not come out clean (omitted, never faked).
         curve_ivs=True also records this model's solved IV curve so the
@@ -534,20 +655,27 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
         rows = {}
         ks_kept, ivs_kept = [], []
         n_in = 0
-        for k, sig, px, greeks, rt in zip(strikes_arr, ivs_arr, prices_arr, greeks_list,
-                                          rights_arr):
+        for k, sig, px, greeks, rt in zip(
+            strikes_arr, ivs_arr, prices_arr, greeks_list, rights_arr
+        ):
             n_in += 1
             if px is None or not np.isfinite(px) or px <= 0:
                 continue
             if greeks is None:
                 continue
-            rows[float(k)] = {'price': float(px), 'iv': float(sig), 'right': rt,
-                              'greeks': greeks}
+            rows[float(k)] = {
+                "price": float(px),
+                "iv": float(sig),
+                "right": rt,
+                "greeks": greeks,
+            }
             ks_kept.append(float(k))
             ivs_kept.append(float(sig))
         if not rows:
-            print(f"[Full Chain] {label}: 0 strikes produced a usable price+Greek row "
-                  f"-- omitting model (no substituted numbers).")
+            print(
+                f"[Full Chain] {label}: 0 strikes produced a usable price+Greek row "
+                f"-- omitting model (no substituted numbers)."
+            )
             return
         per_model[label] = rows
         if curve_ivs and len(ks_kept) >= 3:
@@ -564,14 +692,26 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
         greeks_list = []
         for k, sig, cp in zip(ks_i, ivs_i, cps_i):
             try:
-                greeks_list.append(_full_greeks(crr_all_greeks(S, float(k), T, r, float(sig),
-                                                               q, bool(cp), steps=greek_steps)))
+                greeks_list.append(
+                    _full_greeks(
+                        crr_all_greeks(
+                            S,
+                            float(k),
+                            T,
+                            r,
+                            float(sig),
+                            q,
+                            bool(cp),
+                            steps=greek_steps,
+                        )
+                    )
+                )
             except Exception:
                 greeks_list.append(None)
-        _register('CRR', ks_i, ivs_i, prices, greeks_list, rts_i, curve_ivs=True)
+        _register("CRR", ks_i, ivs_i, prices, greeks_list, rts_i, curve_ivs=True)
     except Exception as e:
         print(f"[Full Chain] CRR failed: {e}")
-    timings['CRR'] = time.time() - t0
+    timings["CRR"] = time.time() - t0
 
     # ---- Leisen-Reimer and Newton-Raphson --------------------------------
     # Both price through the LR tree and both invert that same tree, so the
@@ -589,27 +729,48 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
         greeks_list = []
         for k, sig, cp in zip(ks_i, ivs_i, cps_i):
             try:
-                greeks_list.append(_full_greeks(lr_all_greeks(S, float(k), T, r, float(sig),
-                                                              q, bool(cp), steps=greek_steps)))
+                greeks_list.append(
+                    _full_greeks(
+                        lr_all_greeks(
+                            S,
+                            float(k),
+                            T,
+                            r,
+                            float(sig),
+                            q,
+                            bool(cp),
+                            steps=greek_steps,
+                        )
+                    )
+                )
             except Exception:
                 greeks_list.append(None)
-        for label in ('Leisen-Reimer', 'Newton-Raphson'):
+        for label in ("Leisen-Reimer", "Newton-Raphson"):
             _register(label, ks_i, ivs_i, prices, greeks_list, rts_i, curve_ivs=True)
     except Exception as e:
         print(f"[Full Chain] Leisen-Reimer / Newton-Raphson failed: {e}")
-    timings['Leisen-Reimer+Newton-Raphson'] = time.time() - t0
+    timings["Leisen-Reimer+Newton-Raphson"] = time.time() - t0
 
     # ---- SABR: the ONE cached calibration, evaluated across the chain ----
     t0 = time.time()
     try:
-        cached = getattr(vol_manager, 'last_sabr_calibration', None)
-        if not cached or not cached.get('calib'):
-            raise RuntimeError("No cached SABR calibration from vol_manager.get_sigma -- cannot "
-                               "evaluate a consistent chain (a second multi-start L-BFGS-B fit "
-                               "is not guaranteed to be the same one, so no re-calibration here).")
-        sabr_cal, sabr_calib = cached['calibrator'], cached['calib']
-        sig_sabr = _sabr_vol_hagan_vec(sabr_cal.forward, ks_q, T, sabr_calib['alpha'],
-                                       sabr_calib['beta'], sabr_calib['rho'], sabr_calib['nu'])
+        cached = getattr(vol_manager, "last_sabr_calibration", None)
+        if not cached or not cached.get("calib"):
+            raise RuntimeError(
+                "No cached SABR calibration from vol_manager.get_sigma -- cannot "
+                "evaluate a consistent chain (a second multi-start L-BFGS-B fit "
+                "is not guaranteed to be the same one, so no re-calibration here)."
+            )
+        sabr_cal, sabr_calib = cached["calibrator"], cached["calib"]
+        sig_sabr = _sabr_vol_hagan_vec(
+            sabr_cal.forward,
+            ks_q,
+            T,
+            sabr_calib["alpha"],
+            sabr_calib["beta"],
+            sabr_calib["rho"],
+            sabr_calib["nu"],
+        )
         ok = np.isfinite(sig_sabr) & (sig_sabr > 0)
         ks_i, sig_i, cps_i, rts_i = ks_q[ok], sig_sabr[ok], cps_q[ok], rights_q[ok]
         # SABR prices through the LR tree at its own smile sigma -- same as
@@ -618,21 +779,35 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
         greeks_list = []
         for k, cp in zip(ks_i, cps_i):
             try:
-                greeks_list.append(_full_greeks(sabr_all_greeks(S, float(k), T, r, q, bool(cp),
-                                                                sabr_calib, steps=greek_steps)))
+                greeks_list.append(
+                    _full_greeks(
+                        sabr_all_greeks(
+                            S,
+                            float(k),
+                            T,
+                            r,
+                            q,
+                            bool(cp),
+                            sabr_calib,
+                            steps=greek_steps,
+                        )
+                    )
+                )
             except Exception:
                 greeks_list.append(None)
-        _register('SABR', ks_i, sig_i, prices, greeks_list, rts_i)
+        _register("SABR", ks_i, sig_i, prices, greeks_list, rts_i)
     except Exception as e:
         print(f"[Full Chain] SABR failed: {e}")
-    timings['SABR'] = time.time() - t0
+    timings["SABR"] = time.time() - t0
 
     # ---- Vanna-Volga -----------------------------------------------------
     t0 = time.time()
     try:
         if atm_vol_vv is None or atm_vol_vv <= 0:
-            raise RuntimeError("No atm_vol for Vanna-Volga (get_auto_rr_bf returned no market "
-                               "read) -- no smile to evaluate, and no substitute vol.")
+            raise RuntimeError(
+                "No atm_vol for Vanna-Volga (get_auto_rr_bf returned no market "
+                "read) -- no smile to evaluate, and no substitute vol."
+            )
         sig_vv = vanna_volga_vol_batch(S, ks_q, T, r, q, atm_vol_vv, rr25, bf25)
         ok = np.isfinite(sig_vv) & (sig_vv > 0)
         ks_i, sig_i, cps_i, rts_i = ks_q[ok], sig_vv[ok], cps_q[ok], rights_q[ok]
@@ -640,15 +815,28 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
         greeks_list = []
         for k, cp in zip(ks_i, cps_i):
             try:
-                greeks_list.append(_full_greeks(vv_all_greeks(S, float(k), T, r, q, bool(cp),
-                                                              atm_vol=atm_vol_vv, rr25=rr25,
-                                                              bf25=bf25, steps=greek_steps)))
+                greeks_list.append(
+                    _full_greeks(
+                        vv_all_greeks(
+                            S,
+                            float(k),
+                            T,
+                            r,
+                            q,
+                            bool(cp),
+                            atm_vol=atm_vol_vv,
+                            rr25=rr25,
+                            bf25=bf25,
+                            steps=greek_steps,
+                        )
+                    )
+                )
             except Exception:
                 greeks_list.append(None)
-        _register('VannaVolga', ks_i, sig_i, prices, greeks_list, rts_i)
+        _register("VannaVolga", ks_i, sig_i, prices, greeks_list, rts_i)
     except Exception as e:
         print(f"[Full Chain] VannaVolga failed: {e}")
-    timings['VannaVolga'] = time.time() - t0
+    timings["VannaVolga"] = time.time() - t0
 
     # ---- BAW: closed-form American, so per-strike is already cheap -------
     t0 = time.time()
@@ -659,16 +847,23 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
                 sig = brute_force_baw(float(p), S, float(k), T, r, q=q, cp=bool(cp))
                 if sig is None or not np.isfinite(sig) or sig <= 0:
                     continue
-                px = float(baw_american_price(S, float(k), T, r, float(sig), q, bool(cp)))
-                g = _full_greeks(baw_all_greeks(S, float(k), T, r, float(sig), q, bool(cp)))
+                px = float(
+                    baw_american_price(S, float(k), T, r, float(sig), q, bool(cp))
+                )
+                g = _full_greeks(
+                    baw_all_greeks(S, float(k), T, r, float(sig), q, bool(cp))
+                )
             except Exception:
                 continue
-            ks_i.append(k); ivs_i.append(sig); prices_i.append(px)
-            greeks_list.append(g); rts_i.append(rt)
-        _register('BAW', ks_i, ivs_i, prices_i, greeks_list, rts_i)
+            ks_i.append(k)
+            ivs_i.append(sig)
+            prices_i.append(px)
+            greeks_list.append(g)
+            rts_i.append(rt)
+        _register("BAW", ks_i, ivs_i, prices_i, greeks_list, rts_i)
     except Exception as e:
         print(f"[Full Chain] BAW failed: {e}")
-    timings['BAW'] = time.time() - t0
+    timings["BAW"] = time.time() - t0
 
     # ---- MC (Longstaff-Schwartz): 1st-order Greeks per strike only -------
     # Skippable via include_mc=False -- see the docstring note above (this
@@ -681,85 +876,158 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
             # does. Its shape depends only on (steps, simulations), never on the
             # strike, so every strike's bisection and every CRN Greek bump
             # reuses the identical draws.
-            mc_rand = AmericanLSMPricer(S, K, T, r, q, 0.3, simulations=mc_sims, steps=mc_steps,
-                                        option='call')._generate_rand(seed=42)
+            mc_rand = AmericanLSMPricer(
+                S, K, T, r, q, 0.3, simulations=mc_sims, steps=mc_steps, option="call"
+            )._generate_rand(seed=42)
             ks_i, ivs_i, prices_i, greeks_list, rts_i = [], [], [], [], []
             for k, p, cp, rt in zip(ks_q, ps_q, cps_q, rights_q):
-                opt = 'call' if cp else 'put'
+                opt = "call" if cp else "put"
                 try:
-                    sig = brute_force_mc(float(p), S, float(k), T, r, bool(cp), q=q,
-                                         simulations=mc_sims, steps=mc_steps, rand=mc_rand)
+                    sig = brute_force_mc(
+                        float(p),
+                        S,
+                        float(k),
+                        T,
+                        r,
+                        bool(cp),
+                        q=q,
+                        simulations=mc_sims,
+                        steps=mc_steps,
+                        rand=mc_rand,
+                    )
                     if sig is None or not np.isfinite(sig) or sig <= 0:
                         continue
-                    pricer = AmericanLSMPricer(S, float(k), T, r, q, float(sig),
-                                               simulations=mc_sims, steps=mc_steps, option=opt)
+                    pricer = AmericanLSMPricer(
+                        S,
+                        float(k),
+                        T,
+                        r,
+                        q,
+                        float(sig),
+                        simulations=mc_sims,
+                        steps=mc_steps,
+                        option=opt,
+                    )
                     px = float(pricer.price_with_rand(mc_rand))
-                    g = _greek_subset(mc_all_greeks(S, float(k), T, r, q, float(sig),
-                                                    sims=mc_sims, steps=mc_steps, option=opt,
-                                                    seed=42),
-                                      FIRST_ORDER_GREEKS)
+                    g = _greek_subset(
+                        mc_all_greeks(
+                            S,
+                            float(k),
+                            T,
+                            r,
+                            q,
+                            float(sig),
+                            sims=mc_sims,
+                            steps=mc_steps,
+                            option=opt,
+                            seed=42,
+                        ),
+                        FIRST_ORDER_GREEKS,
+                    )
                 except Exception:
                     continue
-                ks_i.append(k); ivs_i.append(sig); prices_i.append(px)
-                greeks_list.append(g); rts_i.append(rt)
-            _register('MC', ks_i, ivs_i, prices_i, greeks_list, rts_i, curve_ivs=True)
+                ks_i.append(k)
+                ivs_i.append(sig)
+                prices_i.append(px)
+                greeks_list.append(g)
+                rts_i.append(rt)
+            _register("MC", ks_i, ivs_i, prices_i, greeks_list, rts_i, curve_ivs=True)
         except Exception as e:
             print(f"[Full Chain] MC failed: {e}")
     else:
-        _log("MC skipped (include_mc=False) -- also excludes MC's own smile-curve "
-             "bisection, itself a separate ~40-iteration-per-strike cost.")
+        _log(
+            "MC skipped (include_mc=False) -- also excludes MC's own smile-curve "
+            "bisection, itself a separate ~40-iteration-per-strike cost."
+        )
         # Tell _build_smile_curves this curve is "already handled" with zero
         # points, so it does NOT fall through to its own from-scratch MC
         # bisection (which is independently expensive of the Greeks loop
         # above -- see the docstring note). An empty pair fails the
         # len(ks)>=3 check there and is silently skipped, same as any other
         # curve with too few points.
-        precomputed_curves['MC'] = (np.array([]), np.array([]))
-    timings['MC'] = time.time() - t0
+        precomputed_curves["MC"] = (np.array([]), np.array([]))
+    timings["MC"] = time.time() - t0
 
     # ---- Heston: ONE calibration, evaluated at every strike --------------
     # Skippable via include_heston=False -- see the docstring note above
     # (this was ~22.5s of a 63.6s live run).
     t0 = time.time()
-    calib_h = (models.get('Heston') or {}).get('calib') or {}
+    calib_h = (models.get("Heston") or {}).get("calib") or {}
     if include_heston:
         try:
             if not calib_h:
-                raise RuntimeError("No Heston calibration in models['Heston']['calib'] -- Heston "
-                                   "failed upstream. Reported as unavailable (never re-calibrated "
-                                   "here, never substituted from another model).")
-            v0, kappa = calib_h['v0'], calib_h['kappa']
-            theta_h, xi, rho_h = calib_h['theta'], calib_h['xi'], calib_h['rho']
+                raise RuntimeError(
+                    "No Heston calibration in models['Heston']['calib'] -- Heston "
+                    "failed upstream. Reported as unavailable (never re-calibrated "
+                    "here, never substituted from another model)."
+                )
+            v0, kappa = calib_h["v0"], calib_h["kappa"]
+            theta_h, xi, rho_h = calib_h["theta"], calib_h["xi"], calib_h["rho"]
             # IVs: the SAME vectorized characteristic-function smile the chart
             # uses -- one shared Gauss-Legendre quadrature over all strikes.
-            sig_h = MCHestonLSM.heston_iv_smile_batch(S, ks_q, T, r, q, v0, kappa, theta_h, xi, rho_h)
+            sig_h = MCHestonLSM.heston_iv_smile_batch(
+                S, ks_q, T, r, q, v0, kappa, theta_h, xi, rho_h
+            )
             ks_i, ivs_i, prices_i, greeks_list, rts_i = [], [], [], [], []
             for k, sig, cp, rt in zip(ks_q, sig_h, cps_q, rights_q):
                 if not np.isfinite(sig) or sig <= 0:
                     continue
-                opt = 'call' if cp else 'put'
+                opt = "call" if cp else "put"
                 try:
                     # Price: Heston's own American LSM under the calibrated
                     # parameters -- NOT the European CF price used for the IV
                     # smile above, and not any tree.
-                    px = float(MCHestonLSM.heston_lsm_price(
-                        S0=S, K=float(k), T=T, r=r, q=q, V0=v0, kappa=kappa, theta=theta_h,
-                        vol_sigma=xi, rho=rho_h, sims=heston_sims, steps=heston_steps,
-                        option=opt, use_market_data=False, seed=42))
-                    g = _greek_subset(MCHestonLSM.heston_all_greeks(
-                        S, float(k), T, r, q, V0=v0, kappa=kappa, theta=theta_h, vol_sigma=xi,
-                        rho=rho_h, sims=heston_greek_sims, steps=heston_greek_steps,
-                        option=opt, seed=42), FIRST_ORDER_GREEKS)
+                    px = float(
+                        MCHestonLSM.heston_lsm_price(
+                            S0=S,
+                            K=float(k),
+                            T=T,
+                            r=r,
+                            q=q,
+                            V0=v0,
+                            kappa=kappa,
+                            theta=theta_h,
+                            vol_sigma=xi,
+                            rho=rho_h,
+                            sims=heston_sims,
+                            steps=heston_steps,
+                            option=opt,
+                            use_market_data=False,
+                            seed=42,
+                        )
+                    )
+                    g = _greek_subset(
+                        MCHestonLSM.heston_all_greeks(
+                            S,
+                            float(k),
+                            T,
+                            r,
+                            q,
+                            V0=v0,
+                            kappa=kappa,
+                            theta=theta_h,
+                            vol_sigma=xi,
+                            rho=rho_h,
+                            sims=heston_greek_sims,
+                            steps=heston_greek_steps,
+                            option=opt,
+                            seed=42,
+                        ),
+                        FIRST_ORDER_GREEKS,
+                    )
                 except Exception:
                     continue
-                ks_i.append(k); ivs_i.append(sig); prices_i.append(px)
-                greeks_list.append(g); rts_i.append(rt)
-            _register('Heston', ks_i, ivs_i, prices_i, greeks_list, rts_i)
+                ks_i.append(k)
+                ivs_i.append(sig)
+                prices_i.append(px)
+                greeks_list.append(g)
+                rts_i.append(rt)
+            _register("Heston", ks_i, ivs_i, prices_i, greeks_list, rts_i)
         except Exception as e:
             print(f"[Full Chain] Heston failed: {e}")
     else:
         _log("Heston skipped (include_heston=False).")
-    timings['Heston'] = time.time() - t0
+    timings["Heston"] = time.time() - t0
 
     # ---- MC / Heston higher-order Greeks: focus K ONLY -------------------
     # Deliberately not per-strike (approved scope decision above). Taken
@@ -768,61 +1036,111 @@ def run_full_chain(ticker, market_exp, S, K, T, r, q, models, vol_manager,
     # only recomputed here if they weren't supplied.
     focus_k_greeks = {}
     t0 = time.time()
-    _focus_labels = (('MC',) if include_mc else ()) + (('Heston',) if include_heston else ())
+    _focus_labels = (("MC",) if include_mc else ()) + (
+        ("Heston",) if include_heston else ()
+    )
     for label in _focus_labels:
-        sub = _greek_subset((models.get(label) or {}).get('greeks'), HIGHER_ORDER_GREEKS)
+        sub = _greek_subset(
+            (models.get(label) or {}).get("greeks"), HIGHER_ORDER_GREEKS
+        )
         if sub is not None:
             focus_k_greeks[label] = sub
             continue
         try:
-            if label == 'MC':
-                sig_focus = (models.get('MC') or {}).get('sigma')
+            if label == "MC":
+                sig_focus = (models.get("MC") or {}).get("sigma")
                 if sig_focus is None:
                     raise RuntimeError("no MC sigma at the focus K in models['MC']")
-                g = mc_all_greeks(S, K, T, r, q, float(sig_focus), sims=mc_sims, steps=mc_steps,
-                                  option=option_type, seed=42)
+                g = mc_all_greeks(
+                    S,
+                    K,
+                    T,
+                    r,
+                    q,
+                    float(sig_focus),
+                    sims=mc_sims,
+                    steps=mc_steps,
+                    option=option_type,
+                    seed=42,
+                )
             else:
                 if not calib_h:
                     raise RuntimeError("no Heston calibration")
                 g = MCHestonLSM.heston_all_greeks(
-                    S, K, T, r, q, V0=calib_h['v0'], kappa=calib_h['kappa'],
-                    theta=calib_h['theta'], vol_sigma=calib_h['xi'], rho=calib_h['rho'],
-                    sims=heston_greek_sims, steps=heston_greek_steps,
-                    option=option_type, seed=42)
+                    S,
+                    K,
+                    T,
+                    r,
+                    q,
+                    V0=calib_h["v0"],
+                    kappa=calib_h["kappa"],
+                    theta=calib_h["theta"],
+                    vol_sigma=calib_h["xi"],
+                    rho=calib_h["rho"],
+                    sims=heston_greek_sims,
+                    steps=heston_greek_steps,
+                    option=option_type,
+                    seed=42,
+                )
             sub = _greek_subset(g, HIGHER_ORDER_GREEKS)
             if sub is not None:
                 focus_k_greeks[label] = sub
         except Exception as e:
-            print(f"[Full Chain] {label} focus-K higher-order Greeks unavailable: {e} "
-                  f"-- omitted (no substituted number).")
-    timings['focus_k_greeks'] = time.time() - t0
+            print(
+                f"[Full Chain] {label} focus-K higher-order Greeks unavailable: {e} "
+                f"-- omitted (no substituted number)."
+            )
+    timings["focus_k_greeks"] = time.time() - t0
 
     # ---- Smile payload: the SAME builder build_smile_comparison uses -----
     t0 = time.time()
-    smile = _build_smile_curves(chain, S, K, T, r, q, models, vol_manager, atm_vol_vv, rr25, bf25,
-                                precomputed_curves=precomputed_curves)
-    if not include_heston:
+    smile = _build_smile_curves(
+        chain,
+        S,
+        K,
+        T,
+        r,
+        q,
+        models,
+        vol_manager,
+        atm_vol_vv,
+        rr25,
+        bf25,
+        precomputed_curves=precomputed_curves,
+    )
+    if smile and not include_heston:
         # Heston's curve itself is cheap (vectorized quadrature, not worth
         # gating for runtime), but pruned anyway for consistency -- Heston
         # is fully excluded from this chain when include_heston=False, not
         # partially present via just the smile chart.
-        smile.get('curves', {}).pop('Heston', None)
-    timings['smile'] = time.time() - t0
+        smile.get("curves", {}).pop("Heston", None)
+    timings["smile"] = time.time() - t0
 
     elapsed = time.time() - t_start
-    _log("done in {:.1f}s -- {}".format(
-        elapsed, ", ".join(f"{lbl}={secs:.1f}s" for lbl, secs in timings.items())))
+    _log(
+        "done in {:.1f}s -- {}".format(
+            elapsed, ", ".join(f"{lbl}={secs:.1f}s" for lbl, secs in timings.items())
+        )
+    )
 
     return {
-        'strikes': np.asarray(chain['strikes'], dtype=float),
-        'market': market,
-        'per_model': per_model,
-        'focus_k_greeks': focus_k_greeks,
-        'smile': smile,
-        'meta': {
-            'ticker': ticker, 'expiry': market_exp, 'S': S, 'K': K, 'T': T, 'r': r, 'q': q,
-            'option_type': option_type, 'forward': chain['forward'],
-            'n_strikes': int(len(chain['strikes'])),
-            'elapsed_sec': elapsed, 'timings': timings,
+        "strikes": np.asarray(chain["strikes"], dtype=float),
+        "market": market,
+        "per_model": per_model,
+        "focus_k_greeks": focus_k_greeks,
+        "smile": smile,
+        "meta": {
+            "ticker": ticker,
+            "expiry": market_exp,
+            "S": S,
+            "K": K,
+            "T": T,
+            "r": r,
+            "q": q,
+            "option_type": option_type,
+            "forward": chain["forward"],
+            "n_strikes": len(chain["strikes"]),
+            "elapsed_sec": elapsed,
+            "timings": timings,
         },
     }

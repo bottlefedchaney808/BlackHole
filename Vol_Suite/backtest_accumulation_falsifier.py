@@ -28,22 +28,6 @@ backtest_stage3.run_backtest). run_falsifier defaults to reading the
 (seed_data_loader.py) rather than hitting ThetaData on every run -- the
 proxy-overload problem already hit once during this investigation.
 """
-import math
-from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-
-import numpy as np
-from scipy import stats as _scipy_stats
-
-from thetadata_client import ThetaDataController, strike_from_theta
-import expiry_selector
-import implied_vol as implied_vol_mod
-import replication_reference
-import dealer_positioning
-import backtest_stage3
-import seed_data_loader
 
 # ---------------------------------------------------------------------------
 # Result cache -- persist heavy computed falsifier results to JSON so re-runs
@@ -53,10 +37,24 @@ import seed_data_loader
 # seed_mode, lookback, ticker)). `_force_recompute()` bypasses.
 # ---------------------------------------------------------------------------
 import json
+import math
 import os
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
 
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "outputs", "falsifier_cache")
+import backtest_stage3
+import dealer_positioning
+import expiry_selector
+import numpy as np
+import replication_reference
+import seed_data_loader
+from scipy import stats as _scipy_stats
+from thetadata_client import ThetaDataController, strike_from_theta
+
+_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "outputs", "falsifier_cache"
+)
 
 
 def _fitter_used() -> str:
@@ -69,7 +67,9 @@ def _cache_path(kind: str, **key) -> str:
     parts = [kind, _fitter_used()]
     for k, v in key.items():
         parts.append(f"{k}={v}")
-    fname = "_".join(str(p) for p in parts).replace("/", "_").replace("\\", "_") + ".json"
+    fname = (
+        "_".join(str(p) for p in parts).replace("/", "_").replace("\\", "_") + ".json"
+    )
     return os.path.join(_CACHE_DIR, fname)
 
 
@@ -79,6 +79,7 @@ def _force_recompute() -> bool:
 
 def _dataclass_to_dict(obj) -> dict:
     from dataclasses import asdict
+
     return asdict(obj)
 
 
@@ -109,6 +110,7 @@ def _hydrate(cls, data) -> object:
     """Reconstruct a dataclass (with nested dict/list defaults) from a loaded
     dict, tolerating missing optional fields."""
     import dataclasses
+
     fields = {f.name: f for f in dataclasses.fields(cls)}
     kwargs = {}
     for name, f in fields.items():
@@ -156,16 +158,19 @@ class FalsifierResult:
     accumulated_coef_tstat: float
     accumulated_coef_pvalue: float
     block_perm_pvalue: float
-    lead_lag_corr: Dict[int, float] = field(default_factory=dict)
+    lead_lag_corr: dict[int, float] = field(default_factory=dict)
     best_lag: int = 0
     verdict: str = "INCONCLUSIVE"
 
 
-def _build_gamma_and_oi_by_date(expiry: str, hist_greek_rows: List[dict],
-                                 hist_oi_rows: List[dict],
-                                 close_by_date: Dict[str, float],
-                                 ) -> Tuple[Dict[str, Dict[Tuple[float, str], float]],
-                                            Dict[str, Dict[Tuple[float, str], int]]]:
+def _build_gamma_and_oi_by_date(
+    expiry: str,
+    hist_greek_rows: list[dict],
+    hist_oi_rows: list[dict],
+    close_by_date: dict[str, float],
+) -> tuple[
+    dict[str, dict[tuple[float, str], float]], dict[str, dict[tuple[float, str], int]]
+]:
     """Same IV/gamma derivation as backtest_stage3._build_day_records (vendor
     gamma when present, else solved from bid/ask via implied_vol + BS gamma)
     -- duplicated rather than imported because backtest_stage3 doesn't
@@ -175,18 +180,22 @@ def _build_gamma_and_oi_by_date(expiry: str, hist_greek_rows: List[dict],
     another module's private internals.
     """
     expiry_date = datetime.strptime(expiry, "%Y%m%d")
-    gamma_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
+    gamma_by_date: dict[str, dict[tuple[float, str], float]] = defaultdict(dict)
     for row in hist_greek_rows:
         d = replication_reference._parse_hist_date(row)
         if not d:
             continue
         try:
-            k = float(row['strike']) if float(row['strike']) < 10000 else strike_from_theta(int(float(row['strike'])))
-            right = str(row['right']).upper()[:1]
+            k = (
+                float(row["strike"])
+                if float(row["strike"]) < 10000
+                else strike_from_theta(int(float(row["strike"])))
+            )
+            right = str(row["right"]).upper()[:1]
         except (KeyError, TypeError, ValueError):
             continue
-        iv = float(row.get('implied_vol', 0) or 0)
-        gamma = float(row.get('gamma', 0) or 0)
+        iv = float(row.get("implied_vol", 0) or 0)
+        gamma = float(row.get("gamma", 0) or 0)
         if gamma <= 0:
             spot = close_by_date.get(d)
             if not spot or iv <= 0:
@@ -196,15 +205,15 @@ def _build_gamma_and_oi_by_date(expiry: str, hist_greek_rows: List[dict],
         if gamma > 0:
             gamma_by_date[d][(k, right)] = gamma
 
-    oi_by_date: Dict[str, Dict[Tuple[float, str], int]] = defaultdict(dict)
+    oi_by_date: dict[str, dict[tuple[float, str], int]] = defaultdict(dict)
     for row in hist_oi_rows:
         d = replication_reference._parse_hist_date(row)
         if not d:
             continue
         try:
-            k = strike_from_theta(int(float(row['strike'])))
-            right = row['right']
-            oi = int(float(row.get('open_interest', 0) or 0))
+            k = strike_from_theta(int(float(row["strike"])))
+            right = row["right"]
+            oi = int(float(row.get("open_interest", 0) or 0))
         except (KeyError, TypeError, ValueError):
             continue
         oi_by_date[d][(k, right)] = oi
@@ -212,13 +221,15 @@ def _build_gamma_and_oi_by_date(expiry: str, hist_greek_rows: List[dict],
     return gamma_by_date, oi_by_date
 
 
-def _ols_r2_and_tstat(y: np.ndarray, X: np.ndarray) -> Tuple[float, np.ndarray, np.ndarray]:
+def _ols_r2_and_tstat(
+    y: np.ndarray, X: np.ndarray
+) -> tuple[float, np.ndarray, np.ndarray]:
     """Closed-form OLS with an intercept column already included in X.
     Returns (R^2, coefficients, t-stats per coefficient)."""
     n, p = X.shape
     beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
     resid = y - X @ beta
-    ss_res = float(np.sum(resid ** 2))
+    ss_res = float(np.sum(resid**2))
     ss_tot = float(np.sum((y - np.mean(y)) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     dof = max(n - p, 1)
@@ -232,13 +243,16 @@ def _ols_r2_and_tstat(y: np.ndarray, X: np.ndarray) -> Tuple[float, np.ndarray, 
     return r2, beta, tstats
 
 
-def _extract_paired_signals(ticker: str, expiry: str,
-                             hist_greek_rows: List[dict], hist_oi_rows: List[dict],
-                             hist_spot_rows: List[dict],
-                             lookback_days: int = 150,
-                             forward_window_days: int = 5,
-                             seed_mode: str = 'replication',
-                             ) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndarray]:
+def _extract_paired_signals(
+    ticker: str,
+    expiry: str,
+    hist_greek_rows: list[dict],
+    hist_oi_rows: list[dict],
+    hist_spot_rows: list[dict],
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
     """Pure function: builds the day-aligned (snapshot sign, accumulated
     sign, forward realized vol) arrays for ONE ticker -- the shared core
     both the single-ticker falsifier (_run_falsifier_from_history) and the
@@ -247,7 +261,11 @@ def _extract_paired_signals(ticker: str, expiry: str,
     Returns (paired_dates, snapshot_sign, accumulated_sign, forward_rv).
     """
     day_records = backtest_stage3._build_day_records(
-        ticker, expiry, hist_greek_rows, hist_oi_rows, hist_spot_rows,
+        ticker,
+        expiry,
+        hist_greek_rows,
+        hist_oi_rows,
+        hist_spot_rows,
         forward_window_days=forward_window_days,
     )
     labeled = [r for r in day_records if r.fwd_realized_vol is not None]
@@ -266,38 +284,53 @@ def _extract_paired_signals(ticker: str, expiry: str,
     # day_records' narrower set here was the second half of the real-data
     # bug found running this against the WSL handoff's cached seed_data
     # (see test_accumulated_arm_uses_full_spot_history_not_just_snapshot_intersection).
-    close_by_date: Dict[str, float] = {}
+    close_by_date: dict[str, float] = {}
     for row in hist_spot_rows:
         d = replication_reference._parse_hist_date(row)
         if not d:
             continue
         try:
-            c = float(row.get('close', 0) or 0)
+            c = float(row.get("close", 0) or 0)
         except (TypeError, ValueError):
             continue
         if c > 0:
             close_by_date[d] = c
 
     gamma_by_date, oi_by_date = _build_gamma_and_oi_by_date(
-        expiry, hist_greek_rows, hist_oi_rows, close_by_date)
+        expiry, hist_greek_rows, hist_oi_rows, close_by_date
+    )
 
     dates_sorted = sorted(gamma_by_date.keys())
 
-    accumulated_by_date: Dict[str, float] = {}
+    accumulated_by_date: dict[str, float] = {}
     for i, d in enumerate(dates_sorted):
-        window_dates = dates_sorted[max(0, i - lookback_days):i + 1]
+        window_dates = dates_sorted[max(0, i - lookback_days) : i + 1]
         if len(window_dates) < 2:
             continue
-        window_greek_rows = [row for row in hist_greek_rows
-                              if replication_reference._parse_hist_date(row) in window_dates]
-        window_oi_rows = [row for row in hist_oi_rows
-                           if replication_reference._parse_hist_date(row) in window_dates]
-        window_spot_rows = [row for row in hist_spot_rows
-                             if replication_reference._parse_hist_date(row) in window_dates]
+        window_greek_rows = [
+            row
+            for row in hist_greek_rows
+            if replication_reference._parse_hist_date(row) in window_dates
+        ]
+        window_oi_rows = [
+            row
+            for row in hist_oi_rows
+            if replication_reference._parse_hist_date(row) in window_dates
+        ]
+        window_spot_rows = [
+            row
+            for row in hist_spot_rows
+            if replication_reference._parse_hist_date(row) in window_dates
+        ]
         try:
             acc = replication_reference._accumulate_from_history(
-                ticker, expiry, len(window_dates) - 1, seed_mode,
-                window_greek_rows, window_oi_rows, window_spot_rows,
+                ticker,
+                expiry,
+                len(window_dates) - 1,
+                seed_mode,
+                window_greek_rows,
+                window_oi_rows,
+                window_spot_rows,
             )
         except ValueError:
             continue
@@ -329,21 +362,29 @@ def _safe_corr(a, b):
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def _run_falsifier_from_history(ticker: str, expiry: str,
-                                 hist_greek_rows: List[dict], hist_oi_rows: List[dict],
-                                 hist_spot_rows: List[dict],
-                                 lookback_days: int = 150,
-                                 forward_window_days: int = 5,
-                                 seed_mode: str = 'replication',
-                                 n_perms: int = _N_PERMUTATIONS,
-                                 ) -> FalsifierResult:
+def _run_falsifier_from_history(
+    ticker: str,
+    expiry: str,
+    hist_greek_rows: list[dict],
+    hist_oi_rows: list[dict],
+    hist_spot_rows: list[dict],
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    n_perms: int = _N_PERMUTATIONS,
+) -> FalsifierResult:
     """Pure function over already-fetched historical rows. See module
     docstring for the design; see tests/test_backtest_accumulation_falsifier.py
     for the network-free regression coverage.
     """
     paired_dates, snap_sign, acc_sign, fwd_rv = _extract_paired_signals(
-        ticker, expiry, hist_greek_rows, hist_oi_rows, hist_spot_rows,
-        lookback_days=lookback_days, forward_window_days=forward_window_days,
+        ticker,
+        expiry,
+        hist_greek_rows,
+        hist_oi_rows,
+        hist_spot_rows,
+        lookback_days=lookback_days,
+        forward_window_days=forward_window_days,
         seed_mode=seed_mode,
     )
 
@@ -375,11 +416,11 @@ def _run_falsifier_from_history(ticker: str, expiry: str,
         n_blocks = max(1, n // block_size)
         for _ in range(n_perms):
             block_order = rng.permutation(n_blocks)
-            shuffled = np.concatenate([
-                acc_sign[b * block_size:(b + 1) * block_size] for b in block_order
-            ])[:n]
+            shuffled = np.concatenate(
+                [acc_sign[b * block_size : (b + 1) * block_size] for b in block_order]
+            )[:n]
             if len(shuffled) < n:
-                shuffled = np.concatenate([shuffled, acc_sign[len(shuffled):n]])
+                shuffled = np.concatenate([shuffled, acc_sign[len(shuffled) : n]])
             X_perm = np.column_stack([ones, snap_sign, shuffled])
             r2_perm, _, _ = _ols_r2_and_tstat(fwd_rv, X_perm)
             if (r2_perm - r2_snap) >= delta_r2:
@@ -391,19 +432,22 @@ def _run_falsifier_from_history(ticker: str, expiry: str,
     # Lead-lag k in {0,1,2}: shift the accumulated sign series k days FORWARD
     # relative to fwd_rv (i.e. does yesterday's/2-days-ago's accumulated read
     # predict today's forward-vol label better than today's own read).
-    lead_lag_corr: Dict[int, float] = {}
+    lead_lag_corr: dict[int, float] = {}
     for k in (0, 1, 2):
         if n - k < 2:
             lead_lag_corr[k] = 0.0
             continue
-        lead_lag_corr[k] = _safe_corr(acc_sign[:n - k], fwd_rv[k:])
+        lead_lag_corr[k] = _safe_corr(acc_sign[: n - k], fwd_rv[k:])
     best_lag = max(lead_lag_corr, key=lambda kk: abs(lead_lag_corr[kk]))
 
     corr_acc_snap = _safe_corr(acc_sign, snap_sign)
     if n < _MIN_USABLE_DAYS:
         verdict = "INCONCLUSIVE"
-    elif (abs(acc_tstat) > _TSTAT_THRESHOLD and abs(corr_acc_snap) < _CORR_INDEPENDENCE_THRESHOLD
-          and block_perm_p < _PERM_P_THRESHOLD):
+    elif (
+        abs(acc_tstat) > _TSTAT_THRESHOLD
+        and abs(corr_acc_snap) < _CORR_INDEPENDENCE_THRESHOLD
+        and block_perm_p < _PERM_P_THRESHOLD
+    ):
         verdict = "ACCUMULATION_ADDS_SIGNAL"
     elif delta_r2 < 0.01:
         verdict = "REDUNDANT"
@@ -411,13 +455,21 @@ def _run_falsifier_from_history(ticker: str, expiry: str,
         verdict = "INCONCLUSIVE"
 
     return FalsifierResult(
-        ticker=ticker, expiry=expiry, n_days=n,
+        ticker=ticker,
+        expiry=expiry,
+        n_days=n,
         n_days_signals_disagree=n_disagree,
-        snapshot_corr=snapshot_corr, accumulated_corr=accumulated_corr,
-        r2_snapshot_only=r2_snap, r2_with_accumulated=r2_both, delta_r2=delta_r2,
-        accumulated_coef_tstat=acc_tstat, accumulated_coef_pvalue=acc_pvalue,
+        snapshot_corr=snapshot_corr,
+        accumulated_corr=accumulated_corr,
+        r2_snapshot_only=r2_snap,
+        r2_with_accumulated=r2_both,
+        delta_r2=delta_r2,
+        accumulated_coef_tstat=acc_tstat,
+        accumulated_coef_pvalue=acc_pvalue,
         block_perm_pvalue=block_perm_p,
-        lead_lag_corr=lead_lag_corr, best_lag=best_lag, verdict=verdict,
+        lead_lag_corr=lead_lag_corr,
+        best_lag=best_lag,
+        verdict=verdict,
     )
 
 
@@ -435,11 +487,11 @@ _MIN_POOLED_TICKERS = 2
 
 @dataclass
 class PooledFalsifierResult:
-    tickers: List[str]
+    tickers: list[str]
     n_tickers: int
-    per_ticker_n_days: Dict[str, int]
+    per_ticker_n_days: dict[str, int]
     n_pooled_days: int
-    skipped: List[Tuple[str, str]] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
     delta_r2: float = 0.0
     accumulated_coef_tstat: float = 0.0
     accumulated_coef_pvalue: float = 1.0
@@ -456,14 +508,16 @@ class PooledFalsifierResult:
     # within-ticker pooling approach, not evidence the accumulated read
     # carries no information -- see HANDOFF.md for the recommended
     # cross-sectional follow-up test.
-    constant_signal_tickers: List[str] = field(default_factory=list)
+    constant_signal_tickers: list[str] = field(default_factory=list)
 
 
 def _run_pooled_falsifier_from_histories(
-        ticker_histories: Dict[str, Tuple[str, List[dict], List[dict], List[dict]]],
-        lookback_days: int = 150, forward_window_days: int = 5,
-        seed_mode: str = 'replication', n_perms: int = _N_PERMUTATIONS,
-        ) -> PooledFalsifierResult:
+    ticker_histories: dict[str, tuple[str, list[dict], list[dict], list[dict]]],
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    n_perms: int = _N_PERMUTATIONS,
+) -> PooledFalsifierResult:
     """Cross-sectional pooled falsifier over MULTIPLE tickers.
 
     `ticker_histories`: {ticker: (expiry, hist_greek_rows, hist_oi_rows, hist_spot_rows)}.
@@ -484,17 +538,22 @@ def _run_pooled_falsifier_from_histories(
     insufficient history) or yields <2 days is skipped and reported in
     `skipped`, not silently dropped.
     """
-    per_ticker_dates: Dict[str, List[str]] = {}
-    per_ticker_snap: Dict[str, np.ndarray] = {}
-    per_ticker_acc: Dict[str, np.ndarray] = {}
-    per_ticker_rv: Dict[str, np.ndarray] = {}
-    skipped: List[Tuple[str, str]] = []
+    per_ticker_dates: dict[str, list[str]] = {}
+    per_ticker_snap: dict[str, np.ndarray] = {}
+    per_ticker_acc: dict[str, np.ndarray] = {}
+    per_ticker_rv: dict[str, np.ndarray] = {}
+    skipped: list[tuple[str, str]] = []
 
     for ticker, (expiry, greek_rows, oi_rows, spot_rows) in ticker_histories.items():
         try:
             dates, snap, acc, rv = _extract_paired_signals(
-                ticker, expiry, greek_rows, oi_rows, spot_rows,
-                lookback_days=lookback_days, forward_window_days=forward_window_days,
+                ticker,
+                expiry,
+                greek_rows,
+                oi_rows,
+                spot_rows,
+                lookback_days=lookback_days,
+                forward_window_days=forward_window_days,
                 seed_mode=seed_mode,
             )
         except ValueError as e:
@@ -517,13 +576,18 @@ def _run_pooled_falsifier_from_histories(
     per_ticker_n_days = {t: len(v) for t, v in per_ticker_snap.items()}
 
     constant_signal_tickers = sorted(
-        t for t in per_ticker_snap
+        t
+        for t in per_ticker_snap
         if np.std(per_ticker_acc[t]) == 0 or np.std(per_ticker_snap[t]) == 0
     )
 
     snap_parts, acc_parts, rv_parts = [], [], []
     for ticker in per_ticker_snap:
-        snap, acc, rv = per_ticker_snap[ticker], per_ticker_acc[ticker], per_ticker_rv[ticker]
+        snap, acc, rv = (
+            per_ticker_snap[ticker],
+            per_ticker_acc[ticker],
+            per_ticker_rv[ticker],
+        )
         snap_parts.append(snap - np.mean(snap))
         acc_parts.append(acc - np.mean(acc))
         rv_parts.append(rv - np.mean(rv))
@@ -540,7 +604,9 @@ def _run_pooled_falsifier_from_histories(
     X_both = np.column_stack([ones, snap_pooled, acc_pooled])
     r2_both, beta_both, tstats_both = _ols_r2_and_tstat(rv_pooled, X_both)
     acc_tstat = float(tstats_both[2]) if len(tstats_both) > 2 else 0.0
-    acc_pvalue = float(2 * (1 - _scipy_stats.t.cdf(abs(acc_tstat), max(n_pooled - 3, 1))))
+    acc_pvalue = float(
+        2 * (1 - _scipy_stats.t.cdf(abs(acc_tstat), max(n_pooled - 3, 1)))
+    )
     delta_r2 = r2_both - r2_snap
 
     # Block-permutation p-value: shuffle the accumulated series WITHIN each
@@ -558,9 +624,10 @@ def _run_pooled_falsifier_from_histories(
             n_blocks = max(1, nT // block_size)
             block_order = rng.permutation(n_blocks)
             shuffled = np.concatenate(
-                [acc[b * block_size:(b + 1) * block_size] for b in block_order])[:nT]
+                [acc[b * block_size : (b + 1) * block_size] for b in block_order]
+            )[:nT]
             if len(shuffled) < nT:
-                shuffled = np.concatenate([shuffled, acc[len(shuffled):nT]])
+                shuffled = np.concatenate([shuffled, acc[len(shuffled) : nT]])
             shuffled_parts.append(shuffled)
         shuffled_pooled = np.concatenate(shuffled_parts)
         X_perm = np.column_stack([ones, snap_pooled, shuffled_pooled])
@@ -573,8 +640,11 @@ def _run_pooled_falsifier_from_histories(
 
     if n_pooled < _MIN_POOLED_DAYS or len(per_ticker_snap) < _MIN_POOLED_TICKERS:
         verdict = "INCONCLUSIVE"
-    elif (abs(acc_tstat) > _TSTAT_THRESHOLD and abs(corr_acc_snap) < _CORR_INDEPENDENCE_THRESHOLD
-          and block_perm_p < _PERM_P_THRESHOLD):
+    elif (
+        abs(acc_tstat) > _TSTAT_THRESHOLD
+        and abs(corr_acc_snap) < _CORR_INDEPENDENCE_THRESHOLD
+        and block_perm_p < _PERM_P_THRESHOLD
+    ):
         verdict = "ACCUMULATION_ADDS_SIGNAL"
     elif delta_r2 < 0.01:
         verdict = "REDUNDANT"
@@ -582,44 +652,70 @@ def _run_pooled_falsifier_from_histories(
         verdict = "INCONCLUSIVE"
 
     return PooledFalsifierResult(
-        tickers=sorted(per_ticker_snap.keys()), n_tickers=len(per_ticker_snap),
-        per_ticker_n_days=per_ticker_n_days, n_pooled_days=n_pooled, skipped=skipped,
-        delta_r2=delta_r2, accumulated_coef_tstat=acc_tstat, accumulated_coef_pvalue=acc_pvalue,
-        block_perm_pvalue=block_perm_p, corr_acc_snap_pooled=corr_acc_snap, verdict=verdict,
+        tickers=sorted(per_ticker_snap.keys()),
+        n_tickers=len(per_ticker_snap),
+        per_ticker_n_days=per_ticker_n_days,
+        n_pooled_days=n_pooled,
+        skipped=skipped,
+        delta_r2=delta_r2,
+        accumulated_coef_tstat=acc_tstat,
+        accumulated_coef_pvalue=acc_pvalue,
+        block_perm_pvalue=block_perm_p,
+        corr_acc_snap_pooled=corr_acc_snap,
+        verdict=verdict,
         constant_signal_tickers=constant_signal_tickers,
     )
 
 
-def run_pooled_falsifier(tickers: Optional[List[str]] = None,
-                          lookback_days: int = 150, forward_window_days: int = 5,
-                          seed_mode: str = 'replication',
-                          cached_dir: Optional[str] = None,
-                          ) -> PooledFalsifierResult:
+def run_pooled_falsifier(
+    tickers: list[str] | None = None,
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    cached_dir: str | None = None,
+) -> PooledFalsifierResult:
     """Orchestrator: loads every cached ticker (or the given subset) via
     seed_data_loader and runs the pooled falsifier -- no ThetaData load.
     Defaults to the handoff package's seed_data/ folder in this repo, same
     default as run_falsifier(use_cached=True).
     """
     import os
+
     search_dir = cached_dir or os.path.join(
-        os.path.dirname(__file__), "docs", "Dealer posistioning notes",
-        "_extracted", "handoff_20260812", "seed_data")
+        os.path.dirname(__file__),
+        "docs",
+        "Dealer posistioning notes",
+        "_extracted",
+        "handoff_20260812",
+        "seed_data",
+    )
     all_data = seed_data_loader.load_all_seed_data(search_dir)
     if tickers:
         all_data = {t: v for t, v in all_data.items() if t in tickers}
     if not all_data:
-        raise ValueError(f"No cached seed_data found in {search_dir} for tickers={tickers}")
+        raise ValueError(
+            f"No cached seed_data found in {search_dir} for tickers={tickers}"
+        )
 
     import glob
+
     ticker_histories = {}
     for ticker, (greeks, oi, spot) in all_data.items():
-        matches = glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
-        expiry = seed_data_loader.manifest_of(matches[0])["expiry"] if matches else "20261120"
+        matches = sorted(
+            glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
+        )
+        expiry = (
+            seed_data_loader.manifest_of(matches[-1])["expiry"]
+            if matches
+            else "20261120"
+        )
         ticker_histories[ticker] = (expiry, greeks, oi, spot)
 
     return _run_pooled_falsifier_from_histories(
-        ticker_histories, lookback_days=lookback_days,
-        forward_window_days=forward_window_days, seed_mode=seed_mode,
+        ticker_histories,
+        lookback_days=lookback_days,
+        forward_window_days=forward_window_days,
+        seed_mode=seed_mode,
     )
 
 
@@ -680,11 +776,11 @@ _MIN_CROSS_TICKERS = 8
 
 @dataclass
 class CrossSectionalFalsifierResult:
-    tickers: List[str]
+    tickers: list[str]
     n_tickers: int
-    per_ticker_acc_sign: Dict[str, float] = field(default_factory=dict)
-    per_ticker_snap_sign: Dict[str, float] = field(default_factory=dict)
-    per_ticker_rv_level: Dict[str, float] = field(default_factory=dict)
+    per_ticker_acc_sign: dict[str, float] = field(default_factory=dict)
+    per_ticker_snap_sign: dict[str, float] = field(default_factory=dict)
+    per_ticker_rv_level: dict[str, float] = field(default_factory=dict)
     rho_acc_rv: float = 0.0
     rho_snap_rv: float = 0.0
     r2_acc: float = 0.0
@@ -698,10 +794,10 @@ class CrossSectionalFalsifierResult:
     n_long: int = 0
     permutation_pvalue: float = 1.0
     verdict: str = "INCONCLUSIVE"
-    skipped: List[Tuple[str, str]] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
 
 
-def _realized_vol_level(hist_spot_rows: List[dict]) -> Optional[float]:
+def _realized_vol_level(hist_spot_rows: list[dict]) -> float | None:
     """Annualized realized-vol LEVEL over the whole sample window for one
     ticker, computed directly from its spot close series (std of log returns,
     ddof=1, x sqrt(252)). Returns None if there aren't enough closes.
@@ -739,26 +835,33 @@ def _dominant_sign(series: np.ndarray) -> float:
 
 
 def _run_cross_sectional_falsifier_from_histories(
-        ticker_histories: Dict[str, Tuple[str, List[dict], List[dict], List[dict]]],
-        lookback_days: int = 150, forward_window_days: int = 5,
-        seed_mode: str = "replication", n_perms: int = _N_PERMUTATIONS,
-        ) -> CrossSectionalFalsifierResult:
+    ticker_histories: dict[str, tuple[str, list[dict], list[dict], list[dict]]],
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    n_perms: int = _N_PERMUTATIONS,
+) -> CrossSectionalFalsifierResult:
     """Pure function: one (accumulated sign, snapshot sign, realized-vol level)
     per ticker, pooled cross-sectionally. Uses _extract_paired_signals per
     ticker (the SAME per-ticker signal logic the day-level falsifiers use),
     reduces each to a dominant sign, and computes the ticker's own realized-vol
     level from its spot series. Returns a CrossSectionalFalsifierResult.
     """
-    per_ticker_acc: Dict[str, float] = {}
-    per_ticker_snap: Dict[str, float] = {}
-    per_ticker_rv: Dict[str, float] = {}
-    skipped: List[Tuple[str, str]] = []
+    per_ticker_acc: dict[str, float] = {}
+    per_ticker_snap: dict[str, float] = {}
+    per_ticker_rv: dict[str, float] = {}
+    skipped: list[tuple[str, str]] = []
 
     for ticker, (expiry, greek_rows, oi_rows, spot_rows) in ticker_histories.items():
         try:
             _, snap, acc, _ = _extract_paired_signals(
-                ticker, expiry, greek_rows, oi_rows, spot_rows,
-                lookback_days=lookback_days, forward_window_days=forward_window_days,
+                ticker,
+                expiry,
+                greek_rows,
+                oi_rows,
+                spot_rows,
+                lookback_days=lookback_days,
+                forward_window_days=forward_window_days,
                 seed_mode=seed_mode,
             )
         except ValueError as e:
@@ -776,8 +879,7 @@ def _run_cross_sectional_falsifier_from_histories(
 
     if not per_ticker_rv:
         raise ValueError(
-            "No ticker produced a usable cross-sectional signal "
-            f"(skipped: {skipped})."
+            f"No ticker produced a usable cross-sectional signal (skipped: {skipped})."
         )
 
     tickers = sorted(per_ticker_rv)
@@ -834,71 +936,109 @@ def _run_cross_sectional_falsifier_from_histories(
         verdict = "INCONCLUSIVE"
 
     return CrossSectionalFalsifierResult(
-        tickers=tickers, n_tickers=n,
-        per_ticker_acc_sign=per_ticker_acc, per_ticker_snap_sign=per_ticker_snap,
+        tickers=tickers,
+        n_tickers=n,
+        per_ticker_acc_sign=per_ticker_acc,
+        per_ticker_snap_sign=per_ticker_snap,
         per_ticker_rv_level=per_ticker_rv,
-        rho_acc_rv=rho_acc, rho_snap_rv=rho_snap,
-        r2_acc=r2_acc, r2_snap=r2_snap, delta_r2=delta_r2,
-        tstat_acc=tstat_acc, pvalue_acc=pvalue_acc,
-        mean_rv_short=mean_rv_short, mean_rv_long=mean_rv_long,
-        n_short=n_short, n_long=n_long,
-        permutation_pvalue=perm_p, verdict=verdict, skipped=skipped,
+        rho_acc_rv=rho_acc,
+        rho_snap_rv=rho_snap,
+        r2_acc=r2_acc,
+        r2_snap=r2_snap,
+        delta_r2=delta_r2,
+        tstat_acc=tstat_acc,
+        pvalue_acc=pvalue_acc,
+        mean_rv_short=mean_rv_short,
+        mean_rv_long=mean_rv_long,
+        n_short=n_short,
+        n_long=n_long,
+        permutation_pvalue=perm_p,
+        verdict=verdict,
+        skipped=skipped,
     )
 
 
-def run_cross_sectional_falsifier(tickers: Optional[List[str]] = None,
-                                  lookback_days: int = 150,
-                                  forward_window_days: int = 5,
-                                  seed_mode: str = "replication",
-                                  cached_dir: Optional[str] = None,
-                                  ) -> CrossSectionalFalsifierResult:
+def run_cross_sectional_falsifier(
+    tickers: list[str] | None = None,
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    cached_dir: str | None = None,
+) -> CrossSectionalFalsifierResult:
     """Orchestrator: loads every cached ticker (or the given subset) via
     seed_data_loader and runs the cross-sectional falsifier -- no ThetaData
     load. Defaults to the handoff package's seed_data/ folder, same default as
     run_pooled_falsifier."""
     import os
+
     search_dir = cached_dir or os.path.join(
-        os.path.dirname(__file__), "docs", "Dealer posistioning notes",
-        "_extracted", "handoff_20260812", "seed_data")
+        os.path.dirname(__file__),
+        "docs",
+        "Dealer posistioning notes",
+        "_extracted",
+        "handoff_20260812",
+        "seed_data",
+    )
     all_data = seed_data_loader.load_all_seed_data(search_dir)
     if tickers:
         all_data = {t: v for t, v in all_data.items() if t in tickers}
     if not all_data:
-        raise ValueError(f"No cached seed_data found in {search_dir} for tickers={tickers}")
+        raise ValueError(
+            f"No cached seed_data found in {search_dir} for tickers={tickers}"
+        )
 
     import glob
+
     ticker_histories = {}
     for ticker, (greeks, oi, spot) in all_data.items():
-        matches = glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
-        expiry = seed_data_loader.manifest_of(matches[0])["expiry"] if matches else "20261120"
+        matches = sorted(
+            glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
+        )
+        expiry = (
+            seed_data_loader.manifest_of(matches[-1])["expiry"]
+            if matches
+            else "20261120"
+        )
         ticker_histories[ticker] = (expiry, greeks, oi, spot)
 
     return _run_cross_sectional_falsifier_from_histories(
-        ticker_histories, lookback_days=lookback_days,
-        forward_window_days=forward_window_days, seed_mode=seed_mode,
+        ticker_histories,
+        lookback_days=lookback_days,
+        forward_window_days=forward_window_days,
+        seed_mode=seed_mode,
     )
 
 
 def run_cross_sectional_falsifier_cached(
-        tickers: Optional[List[str]] = None, lookback_days: int = 150,
-        forward_window_days: int = 5, seed_mode: str = "replication",
-        cached_dir: Optional[str] = None,
-        ) -> CrossSectionalFalsifierResult:
+    tickers: list[str] | None = None,
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    cached_dir: str | None = None,
+) -> CrossSectionalFalsifierResult:
     """Caching wrapper over run_cross_sectional_falsifier: loads a saved result
     if present for (mode, fitter, tickers, lookback, seed_mode), else computes
     and saves. FALSIFIER_FORCE=1 bypasses. Avoids the ~8-min recompute."""
-    key = {"tickers": ",".join(sorted(tickers)) if tickers else "all",
-           "lb": lookback_days, "sm": seed_mode}
+    key = {
+        "tickers": ",".join(sorted(tickers)) if tickers else "all",
+        "lb": lookback_days,
+        "sm": seed_mode,
+    }
     if not _force_recompute():
         cached = _load_result("cross", key)
         if cached is not None:
-            print(f"  [cache] loaded cross-sectional result for fitter={_fitter_used()} "
-                  f"(FALSIFIER_FORCE=1 to recompute)")
+            print(
+                f"  [cache] loaded cross-sectional result for fitter={_fitter_used()} "
+                f"(FALSIFIER_FORCE=1 to recompute)"
+            )
             return _hydrate(CrossSectionalFalsifierResult, cached)
     res = run_cross_sectional_falsifier(
-        tickers=tickers, lookback_days=lookback_days,
-        forward_window_days=forward_window_days, seed_mode=seed_mode,
-        cached_dir=cached_dir)
+        tickers=tickers,
+        lookback_days=lookback_days,
+        forward_window_days=forward_window_days,
+        seed_mode=seed_mode,
+        cached_dir=cached_dir,
+    )
     _save_result("cross", key, res)
     return res
 
@@ -942,26 +1082,30 @@ def format_cross_sectional_falsifier_report(r: CrossSectionalFalsifierResult) ->
 # directive -- nothing canonical, just a testable arm.
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SviMagnitudeFalsifierResult:
-    tickers: List[str]
+    tickers: list[str]
     n_tickers: int
-    per_ticker_magnitude: Dict[str, float] = field(default_factory=dict)
-    per_ticker_net_seed: Dict[str, float] = field(default_factory=dict)
-    per_ticker_rv_level: Dict[str, float] = field(default_factory=dict)
+    per_ticker_magnitude: dict[str, float] = field(default_factory=dict)
+    per_ticker_net_seed: dict[str, float] = field(default_factory=dict)
+    per_ticker_rv_level: dict[str, float] = field(default_factory=dict)
     rho_mag_rv: float = 0.0
     r2_mag: float = 0.0
     tstat_mag: float = 0.0
     pvalue_mag: float = 1.0
     permutation_pvalue: float = 1.0
     verdict: str = "INCONCLUSIVE"
-    skipped: List[Tuple[str, str]] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
 
 
-def _otm_chain_at_date(greek_rows: List[dict], oi_rows: List[dict],
-                       spot: float, expiry: str, d: str,
-                       ) -> Tuple[Dict[Tuple[float, str], float],
-                                  Dict[Tuple[float, str], int]]:
+def _otm_chain_at_date(
+    greek_rows: list[dict],
+    oi_rows: list[dict],
+    spot: float,
+    expiry: str,
+    d: str,
+) -> tuple[dict[tuple[float, str], float], dict[tuple[float, str], int]]:
     """Build the OTM chain_iv + oi_by dicts for ONE date from cached rows
     (calls above spot, puts below -- same OTM restriction svi_rp expects)."""
     expiry_date = datetime.strptime(expiry, "%Y%m%d")
@@ -972,21 +1116,25 @@ def _otm_chain_at_date(greek_rows: List[dict], oi_rows: List[dict],
         if rd != d:
             continue
         try:
-            k = float(row['strike']) if float(row['strike']) < 10000 else strike_from_theta(int(float(row['strike'])))
-            right = str(row['right']).upper()[:1]
-            v = float(row.get('implied_vol', 0) or 0)
+            k = (
+                float(row["strike"])
+                if float(row["strike"]) < 10000
+                else strike_from_theta(int(float(row["strike"])))
+            )
+            right = str(row["right"]).upper()[:1]
+            v = float(row.get("implied_vol", 0) or 0)
         except (KeyError, TypeError, ValueError):
             continue
-        if v > 0 and ((right == 'C' and k > spot) or (right == 'P' and k < spot)):
+        if v > 0 and ((right == "C" and k > spot) or (right == "P" and k < spot)):
             iv[(k, right)] = v
     for row in oi_rows:
         rd = replication_reference._parse_hist_date(row)
         if rd != d:
             continue
         try:
-            k = strike_from_theta(int(float(row['strike'])))
-            right = str(row['right']).upper()[:1]
-            o = int(float(row.get('open_interest', 0) or 0))
+            k = strike_from_theta(int(float(row["strike"])))
+            right = str(row["right"]).upper()[:1]
+            o = int(float(row.get("open_interest", 0) or 0))
         except (KeyError, TypeError, ValueError):
             continue
         oi[(k, right)] = o
@@ -994,9 +1142,9 @@ def _otm_chain_at_date(greek_rows: List[dict], oi_rows: List[dict],
 
 
 def _run_svi_magnitude_cross_sectional_from_histories(
-        ticker_histories: Dict[str, Tuple[str, List[dict], List[dict], List[dict]]],
-        n_perms: int = _N_PERMUTATIONS,
-        ) -> SviMagnitudeFalsifierResult:
+    ticker_histories: dict[str, tuple[str, list[dict], list[dict], list[dict]]],
+    n_perms: int = _N_PERMUTATIONS,
+) -> SviMagnitudeFalsifierResult:
     """Per-ticker SVI cheap/rich MAGNITUDE vs realized-vol level, pooled
     cross-sectionally. Uses the LAST available date's OTM chain in each ticker's
     cached history (no network), calibrates the SSVI reference, and takes two
@@ -1008,10 +1156,11 @@ def _run_svi_magnitude_cross_sectional_from_histories(
     Tests each against the ticker's realized-vol level (Spearman + OLS t-stat
     + permutation p)."""
     import svi_rp
-    per_ticker_mag: Dict[str, float] = {}
-    per_ticker_net: Dict[str, float] = {}
-    per_ticker_rv: Dict[str, float] = {}
-    skipped: List[Tuple[str, str]] = []
+
+    per_ticker_mag: dict[str, float] = {}
+    per_ticker_net: dict[str, float] = {}
+    per_ticker_rv: dict[str, float] = {}
+    skipped: list[tuple[str, str]] = []
 
     for ticker, (expiry, greek_rows, oi_rows, spot_rows) in ticker_histories.items():
         rv_level = _realized_vol_level(spot_rows)
@@ -1019,8 +1168,13 @@ def _run_svi_magnitude_cross_sectional_from_histories(
             skipped.append((ticker, "insufficient spot history for rv level"))
             continue
         # last date present in both greeks and spot
-        g_dates = sorted({replication_reference._parse_hist_date(r) for r in greek_rows
-                          if replication_reference._parse_hist_date(r)})
+        g_dates = sorted(
+            {
+                replication_reference._parse_hist_date(r)
+                for r in greek_rows
+                if replication_reference._parse_hist_date(r)
+            }
+        )
         if not g_dates:
             skipped.append((ticker, "no greek dates"))
             continue
@@ -1030,7 +1184,7 @@ def _run_svi_magnitude_cross_sectional_from_histories(
             rd = replication_reference._parse_hist_date(r)
             if rd:
                 try:
-                    c = float(r.get('close', 0) or 0)
+                    c = float(r.get("close", 0) or 0)
                 except (TypeError, ValueError):
                     c = 0.0
                 if c > 0:
@@ -1044,12 +1198,23 @@ def _run_svi_magnitude_cross_sectional_from_histories(
             skipped.append((ticker, f"only {len(chain_iv)} OTM strikes on {d}"))
             continue
         try:
-            ref = svi_rp.calibrate_ssvi(chain_iv, spot,
-                                        max((datetime.strptime(expiry, "%Y%m%d")
-                                             - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0,
-                                        oi_by=oi_by)
+            ref = svi_rp.calibrate_ssvi(
+                chain_iv,
+                spot,
+                max(
+                    (
+                        datetime.strptime(expiry, "%Y%m%d")
+                        - datetime.strptime(d, "%Y%m%d")
+                    ).days,
+                    1,
+                )
+                / 365.0,
+                oi_by=oi_by,
+            )
         except Exception as e:
-            skipped.append((ticker, f"svi calibrate failed: {type(e).__name__}: {str(e)[:60]}"))
+            skipped.append(
+                (ticker, f"svi calibrate failed: {type(e).__name__}: {str(e)[:60]}")
+            )
             continue
         marks = ref.mark_chain(chain_iv, oi_by)
         total_oi = sum(oi_by.get((k, r), 0) for (k, r) in chain_iv)
@@ -1063,7 +1228,9 @@ def _run_svi_magnitude_cross_sectional_from_histories(
         per_ticker_rv[ticker] = rv_level
 
     if not per_ticker_mag:
-        raise ValueError(f"No ticker produced a usable SVI-magnitude signal (skipped: {skipped})")
+        raise ValueError(
+            f"No ticker produced a usable SVI-magnitude signal (skipped: {skipped})"
+        )
 
     tickers = sorted(per_ticker_mag)
     n = len(tickers)
@@ -1096,51 +1263,78 @@ def _run_svi_magnitude_cross_sectional_from_histories(
         verdict = "INCONCLUSIVE"
 
     return SviMagnitudeFalsifierResult(
-        tickers=tickers, n_tickers=n,
-        per_ticker_magnitude=per_ticker_mag, per_ticker_net_seed=per_ticker_net,
+        tickers=tickers,
+        n_tickers=n,
+        per_ticker_magnitude=per_ticker_mag,
+        per_ticker_net_seed=per_ticker_net,
         per_ticker_rv_level=per_ticker_rv,
-        rho_mag_rv=rho_mag, r2_mag=r2_mag, tstat_mag=tstat_mag, pvalue_mag=pvalue_mag,
-        permutation_pvalue=perm_p, verdict=verdict, skipped=skipped,
+        rho_mag_rv=rho_mag,
+        r2_mag=r2_mag,
+        tstat_mag=tstat_mag,
+        pvalue_mag=pvalue_mag,
+        permutation_pvalue=perm_p,
+        verdict=verdict,
+        skipped=skipped,
     )
 
 
 def run_svi_magnitude_cross_sectional_falsifier(
-        tickers: Optional[List[str]] = None,
-        cached_dir: Optional[str] = None,
-        ) -> SviMagnitudeFalsifierResult:
+    tickers: list[str] | None = None,
+    cached_dir: str | None = None,
+) -> SviMagnitudeFalsifierResult:
     """Orchestrator (offline, no ThetaData): loads cached tickers via
     seed_data_loader and runs the SVI-magnitude cross-sectional axis."""
     import os
+
     search_dir = cached_dir or os.path.join(
-        os.path.dirname(__file__), "docs", "Dealer posistioning notes",
-        "_extracted", "handoff_20260812", "seed_data")
+        os.path.dirname(__file__),
+        "docs",
+        "Dealer posistioning notes",
+        "_extracted",
+        "handoff_20260812",
+        "seed_data",
+    )
     all_data = seed_data_loader.load_all_seed_data(search_dir)
     if tickers:
         all_data = {t: v for t, v in all_data.items() if t in tickers}
     if not all_data:
-        raise ValueError(f"No cached seed_data found in {search_dir} for tickers={tickers}")
+        raise ValueError(
+            f"No cached seed_data found in {search_dir} for tickers={tickers}"
+        )
     import glob
+
     ticker_histories = {}
     for ticker, (greeks, oi, spot) in all_data.items():
-        matches = glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
-        expiry = seed_data_loader.manifest_of(matches[0])["expiry"] if matches else "20261120"
+        matches = sorted(
+            glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
+        )
+        expiry = (
+            seed_data_loader.manifest_of(matches[-1])["expiry"]
+            if matches
+            else "20261120"
+        )
         ticker_histories[ticker] = (expiry, greeks, oi, spot)
     return _run_svi_magnitude_cross_sectional_from_histories(ticker_histories)
 
 
 def run_svi_magnitude_cross_sectional_falsifier_cached(
-        tickers: Optional[List[str]] = None, cached_dir: Optional[str] = None,
-        ) -> SviMagnitudeFalsifierResult:
+    tickers: list[str] | None = None,
+    cached_dir: str | None = None,
+) -> SviMagnitudeFalsifierResult:
     """Caching wrapper over run_svi_magnitude_cross_sectional_falsifier.
     FALSIFIER_FORCE=1 bypasses."""
     key = {"tickers": ",".join(sorted(tickers)) if tickers else "all"}
     if not _force_recompute():
         cached = _load_result("svimag", key)
         if cached is not None:
-            print(f"  [cache] loaded SVI-magnitude result for fitter={_fitter_used()} "
-                  f"(FALSIFIER_FORCE=1 to recompute)")
+            print(
+                f"  [cache] loaded SVI-magnitude result for fitter={_fitter_used()} "
+                f"(FALSIFIER_FORCE=1 to recompute)"
+            )
             return _hydrate(SviMagnitudeFalsifierResult, cached)
-    res = run_svi_magnitude_cross_sectional_falsifier(tickers=tickers, cached_dir=cached_dir)
+    res = run_svi_magnitude_cross_sectional_falsifier(
+        tickers=tickers, cached_dir=cached_dir
+    )
     _save_result("svimag", key, res)
     return res
 
@@ -1163,14 +1357,17 @@ def format_svi_magnitude_falsifier_report(r: SviMagnitudeFalsifierResult) -> str
     return "\n".join(lines)
 
 
-def run_falsifier(ticker: str, expiry: Optional[str] = None,
-                   target_years: float = 0.25,
-                   lookback_days: int = 150, forward_window_days: int = 5,
-                   seed_mode: str = 'replication',
-                   use_cached: bool = True,
-                   cached_path: Optional[str] = None,
-                   cached_dir: Optional[str] = None,
-                   ) -> FalsifierResult:
+def run_falsifier(
+    ticker: str,
+    expiry: str | None = None,
+    target_years: float = 0.25,
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    use_cached: bool = True,
+    cached_path: str | None = None,
+    cached_dir: str | None = None,
+) -> FalsifierResult:
     """Orchestrator. use_cached=True (default) loads the 12-ticker, 150-day
     dataset already pulled once and saved to disk via seed_data_loader.py --
     no ThetaData proxy load. Pass cached_path to a specific
@@ -1187,31 +1384,53 @@ def run_falsifier(ticker: str, expiry: Optional[str] = None,
                 expiry = manifest["expiry"]
         else:
             import os
+
             search_dir = cached_dir or os.path.join(
-                os.path.dirname(__file__), "docs", "Dealer posistioning notes",
-                "_extracted", "handoff_20260812", "seed_data")
+                os.path.dirname(__file__),
+                "docs",
+                "Dealer posistioning notes",
+                "_extracted",
+                "handoff_20260812",
+                "seed_data",
+            )
             all_data = seed_data_loader.load_all_seed_data(search_dir)
             if ticker not in all_data:
                 raise ValueError(f"No cached seed_data for {ticker} in {search_dir}")
             greeks, oi, spot = all_data[ticker]
             if expiry is None:
                 import glob
+
                 # match the file load_all_seed_data actually used (it globs sorted
                 # and overwrites by ticker -> last sorted match wins), so the
                 # expiry label agrees with the loaded data.
-                matches = sorted(glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json")))
-                expiry = seed_data_loader.manifest_of(matches[-1])["expiry"] if matches else "20261120"
+                matches = sorted(
+                    glob.glob(os.path.join(search_dir, f"seed_data_{ticker}_*.json"))
+                )
+                expiry = (
+                    seed_data_loader.manifest_of(matches[-1])["expiry"]
+                    if matches
+                    else "20261120"
+                )
         return _run_falsifier_from_history(
-            ticker, expiry, greeks, oi, spot,
-            lookback_days=lookback_days, forward_window_days=forward_window_days,
+            ticker,
+            expiry,
+            greeks,
+            oi,
+            spot,
+            lookback_days=lookback_days,
+            forward_window_days=forward_window_days,
             seed_mode=seed_mode,
         )
 
     td = ThetaDataController()
     try:
-        resolved_expiry, _ = expiry_selector.resolve_expiration(td, ticker, expiry, target_years)
+        resolved_expiry, _ = expiry_selector.resolve_expiration(
+            td, ticker, expiry, target_years
+        )
         end_date = datetime.now()
-        start_date = end_date - __import__("datetime").timedelta(days=int(lookback_days * 2.2) + 5)
+        start_date = end_date - __import__("datetime").timedelta(
+            days=int(lookback_days * 2.2) + 5
+        )
         start_str, end_str = start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
         greeks = td.option_bulk_hist_greeks(ticker, resolved_expiry, start_str, end_str)
         oi = td.option_bulk_hist_oi(ticker, resolved_expiry, start_str, end_str)
@@ -1219,32 +1438,54 @@ def run_falsifier(ticker: str, expiry: Optional[str] = None,
     finally:
         td.close()
     return _run_falsifier_from_history(
-        ticker, resolved_expiry, greeks, oi, spot,
-        lookback_days=lookback_days, forward_window_days=forward_window_days,
+        ticker,
+        resolved_expiry,
+        greeks,
+        oi,
+        spot,
+        lookback_days=lookback_days,
+        forward_window_days=forward_window_days,
         seed_mode=seed_mode,
     )
 
 
-def run_falsifier_cached(ticker: str, expiry: Optional[str] = None,
-                         lookback_days: int = 150, forward_window_days: int = 5,
-                         seed_mode: str = "replication", use_cached: bool = True,
-                         cached_path: Optional[str] = None,
-                         cached_dir: Optional[str] = None,
-                         ) -> FalsifierResult:
+def run_falsifier_cached(
+    ticker: str,
+    expiry: str | None = None,
+    lookback_days: int = 150,
+    forward_window_days: int = 5,
+    seed_mode: str = "replication",
+    use_cached: bool = True,
+    cached_path: str | None = None,
+    cached_dir: str | None = None,
+) -> FalsifierResult:
     """Caching wrapper over run_falsifier (per-ticker). FALSIFIER_FORCE=1
     bypasses. Keyed by (ticker, expiry, lookback, seed_mode, fitter)."""
-    key = {"ticker": ticker, "exp": expiry or "auto", "lb": lookback_days,
-           "fw": forward_window_days, "sm": seed_mode}
+    key = {
+        "ticker": ticker,
+        "exp": expiry or "auto",
+        "lb": lookback_days,
+        "fw": forward_window_days,
+        "sm": seed_mode,
+    }
     if use_cached and not _force_recompute():
         cached = _load_result("falsifier", key)
         if cached is not None:
-            print(f"  [cache] loaded falsifier result for {ticker} "
-                  f"(fitter={_fitter_used()}, FALSIFIER_FORCE=1 to recompute)")
+            print(
+                f"  [cache] loaded falsifier result for {ticker} "
+                f"(fitter={_fitter_used()}, FALSIFIER_FORCE=1 to recompute)"
+            )
             return _hydrate(FalsifierResult, cached)
     res = run_falsifier(
-        ticker, expiry=expiry, lookback_days=lookback_days,
-        forward_window_days=forward_window_days, seed_mode=seed_mode,
-        use_cached=use_cached, cached_path=cached_path, cached_dir=cached_dir)
+        ticker,
+        expiry=expiry,
+        lookback_days=lookback_days,
+        forward_window_days=forward_window_days,
+        seed_mode=seed_mode,
+        use_cached=use_cached,
+        cached_path=cached_path,
+        cached_dir=cached_dir,
+    )
     if use_cached:
         _save_result("falsifier", key, res)
     return res
@@ -1270,6 +1511,7 @@ def format_falsifier_report(r: FalsifierResult) -> str:
 
 if __name__ == "__main__":
     import sys
+
     arg = sys.argv[1] if len(sys.argv) > 1 else "SPY"
     if arg == "--pooled":
         pooled_result = run_pooled_falsifier()
