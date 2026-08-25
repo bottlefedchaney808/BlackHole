@@ -21,28 +21,32 @@ import json
 import os
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from scanner.stocktwits import StockTwitsScraper
+
+import scanner.youtube
+from correlation.engine import CorrelationEngine
 from scanner.narrative import score_messages
-from scanner.swap_sdr import build_swap_snapshot
+from scanner.options_scanner_base import close_td, get_td
 from scanner.reddit import MCP_AVAILABLE
+from scanner.stocktwits import StockTwitsScraper
+from scanner.swap_sdr import build_swap_snapshot
 from scanner.theta_integration import build_oi_snapshot
 from scanner.ticker_pack import export_alert_group
-from scanner.options_scanner_base import close_td, get_td
-from correlation.engine import CorrelationEngine
-from scanner.youtube import scan_ticker as yt_scan_ticker
 from scanner.youtube import format_scanner_line as yt_format
-import scanner.youtube
+from scanner.youtube import scan_ticker as yt_scan_ticker
+
 _youtube_scan = scanner.youtube.scan_ticker
-from scanner.earnings_scanner import scan_ticker as _scan_earnings_ticker
-from scanner.earnings_scanner import format_earnings_one as format_earnings_line
+import config
 from scanner.earnings_calendar import (
-    upcoming_earnings, format_earnings_digest, fetch_earnings_calendar,
+    fetch_earnings_calendar,
+    format_earnings_digest,
+    upcoming_earnings,
 )
 from scanner.earnings_scanner import EARNINGS_CALENDAR
+from scanner.earnings_scanner import format_earnings_one as format_earnings_line
+from scanner.earnings_scanner import scan_ticker as _scan_earnings_ticker
 from scanner.report import ScannerReport
-import config
 
 
 def _find_vol_suite_python(vol_suite_dir: Path) -> str:
@@ -57,13 +61,17 @@ def _find_vol_suite_python(vol_suite_dir: Path) -> str:
     venv_dir = vol_suite_dir / ".venv"
     candidates = [
         venv_dir / "Scripts" / "python.exe",  # Windows
-        venv_dir / "bin" / "python3",         # Linux / Mac
-        venv_dir / "bin" / "python",          # Linux / Mac fallback
+        venv_dir / "bin" / "python3",  # Linux / Mac
+        venv_dir / "bin" / "python",  # Linux / Mac fallback
     ]
     for candidate in candidates:
         if candidate.exists():
             return str(candidate)
-    default = venv_dir / "Scripts" / "python.exe" if os.name == "nt" else venv_dir / "bin" / "python"
+    default = (
+        venv_dir / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else venv_dir / "bin" / "python"
+    )
     return str(default)
 
 
@@ -72,10 +80,10 @@ def _launch_vol_suite(pack_path: str) -> None:
     vol_suite_py = str(vol_suite_dir / "volatility_suite.py")
     venv_python = _find_vol_suite_python(vol_suite_dir)
     cmd = [venv_python, vol_suite_py, "--pack", pack_path]
-    print(f"\n{'='*60}")
-    print(f"  Launching Volatility Suite on pack...")
+    print(f"\n{'=' * 60}")
+    print("  Launching Volatility Suite on pack...")
     print(f"  {' '.join(cmd)}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         print(proc.stdout)
@@ -88,7 +96,7 @@ def _launch_vol_suite(pack_path: str) -> None:
 
 
 def _make_run_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _prompt_yes_no(question: str, skip: bool = False) -> bool:
@@ -112,17 +120,21 @@ def _launch_sector_rotation() -> None:
     """
     launcher_path = Path(__file__).resolve().parent / "sector_rotation_launcher.py"
     cmd = [sys.executable, str(launcher_path)]
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  Launching Sector Rotation scanner...")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     try:
         # encoding/errors match sector_rotation_launcher.py's stdout.reconfigure
         # to utf-8 (see sector_rotation_launcher.main) so captured output
         # decodes cleanly instead of mojibake-ing through the default locale
         # encoding (cp1252 on Windows).
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=1800,
-            encoding="utf-8", errors="replace",
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            encoding="utf-8",
+            errors="replace",
         )
         print(proc.stdout)
         if proc.returncode != 0:
@@ -170,7 +182,9 @@ def _maybe_build_report(engine, cycle_raw: dict, skip: bool = False) -> None:
         for name, result in raw.items():
             report.add_ticker_results(ticker, name, _raw_result_to_dict(name, result))
         signals = engine.correlate_with_oi(ticker, {})
-        report.add_signals(ticker, signals.get("signals", []), signals.get("severity", "LOW"))
+        report.add_signals(
+            ticker, signals.get("signals", []), signals.get("severity", "LOW")
+        )
 
     report.save(out_dir=config.OUTPUT_DIR)
 
@@ -179,7 +193,7 @@ def _write_context_export(path: str, run_id: str, pack: dict) -> None:
     payload = {
         "schema_version": 2,
         "run_id": run_id,
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "sentiment": {
             "manifest_path": pack.get("manifest_path", ""),
             "pack_json_path": pack.get("pack_json_path") or pack.get("json_path", ""),
@@ -192,6 +206,7 @@ def _write_context_export(path: str, run_id: str, pack: dict) -> None:
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     from shared.schemas import validate_sentiment_context
+
     validate_sentiment_context(payload)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=True, indent=2)
@@ -246,26 +261,37 @@ def _parse_args() -> argparse.Namespace:
         "--universe",
         default=None,
         help="Comma-separated ticker list (e.g. SPY,QQQ,NVDA). Runs one directional "
-             "scan pass (narrative + 6 options scanners [no GEX] + real OI snapshot "
-             "+ composite signals) over exactly this list instead of StockTwits's "
-             "trending symbols, writes results to outputs/directional_scan_*.json, "
-             "and exits -- no looping, no sector-rotation/PDF prompts.",
+        "scan pass (narrative + 6 options scanners [no GEX] + real OI snapshot "
+        "+ composite signals) over exactly this list instead of StockTwits's "
+        "trending symbols, writes results to outputs/directional_scan_*.json, "
+        "and exits -- no looping, no sector-rotation/PDF prompts.",
     )
     return parser.parse_args()
 
 
 # ---- Lazy imports for the 6 options scanners ----
 def _import_scanners():
-    from scanner.gex_scanner import scan_gex, format_gex
-    from scanner.unusual_oi_scanner import scan_unusual_oi, format_unusual_oi
-    from scanner.iv_rank_scanner import scan_iv_rank, format_iv_rank
-    from scanner.skew_scanner import scan_skew, format_skew
-    from scanner.max_pain_scanner import scan_max_pain, format_max_pain
-    from scanner.vol_dispersion_scanner import scan_vol_dispersion, format_dispersion
-    return (scan_gex, format_gex, scan_unusual_oi, format_unusual_oi,
-            scan_iv_rank, format_iv_rank, scan_skew, format_skew,
-            scan_max_pain, format_max_pain,
-            scan_vol_dispersion, format_dispersion)
+    from scanner.gex_scanner import format_gex, scan_gex
+    from scanner.iv_rank_scanner import format_iv_rank, scan_iv_rank
+    from scanner.max_pain_scanner import format_max_pain, scan_max_pain
+    from scanner.skew_scanner import format_skew, scan_skew
+    from scanner.unusual_oi_scanner import format_unusual_oi, scan_unusual_oi
+    from scanner.vol_dispersion_scanner import format_dispersion, scan_vol_dispersion
+
+    return (
+        scan_gex,
+        format_gex,
+        scan_unusual_oi,
+        format_unusual_oi,
+        scan_iv_rank,
+        format_iv_rank,
+        scan_skew,
+        format_skew,
+        scan_max_pain,
+        format_max_pain,
+        scan_vol_dispersion,
+        format_dispersion,
+    )
 
 
 # ---- Core scan functions ----
@@ -276,8 +302,10 @@ def scan_ticker(st, ticker, engine):
     scores = score_messages(messages)
     engine.record_narrative(ticker, scores)
     cns = scores["contested_narrative_score"]
-    print(f"  {ticker:6s} | CNS: {cns:3d} | War: {scores['war_score']:.2f} | "
-          f"Vol: {scores['volume']:3d} | Thesis: {scores['thesis_ratio']:.0%}")
+    print(
+        f"  {ticker:6s} | CNS: {cns:3d} | War: {scores['war_score']:.2f} | "
+        f"Vol: {scores['volume']:3d} | Thesis: {scores['thesis_ratio']:.0%}"
+    )
     if cns >= config.CNS_THRESHOLD:
         return {**scores, "ticker": ticker, "timestamp": datetime.now().isoformat()}
     return None
@@ -290,15 +318,30 @@ def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
     raw maps scanner name -> the scan result object (or None if that
     scanner errored or was skipped), for downstream reporting.
     """
-    (scan_gex, fmt_gex, scan_oi, fmt_oi,
-     scan_iv, fmt_iv, scan_skew, fmt_skew,
-     scan_pain, fmt_pain,
-     scan_disp, fmt_disp) = _import_scanners()
+    (
+        scan_gex,
+        fmt_gex,
+        scan_oi,
+        fmt_oi,
+        scan_iv,
+        fmt_iv,
+        scan_skew,
+        fmt_skew,
+        scan_pain,
+        fmt_pain,
+        scan_disp,
+        fmt_disp,
+    ) = _import_scanners()
 
     results = []
     raw = {
-        "gex": None, "unusual_oi": None, "iv_rank": None, "skew": None,
-        "max_pain": None, "dispersion": None, "earnings": None,
+        "gex": None,
+        "unusual_oi": None,
+        "iv_rank": None,
+        "skew": None,
+        "max_pain": None,
+        "dispersion": None,
+        "earnings": None,
     }
 
     # 1. GEX (most expensive — skip if flagged)
@@ -388,19 +431,23 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
     run_options_scanners, for downstream reporting.
     """
     trending = st.get_trending()
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Trending: {len(trending)} symbols")
+    print(
+        f"\n[{datetime.now().strftime('%H:%M:%S')}] Trending: {len(trending)} symbols"
+    )
     entries = upcoming_earnings(days=7, static_fallback=EARNINGS_CALENDAR)
     live = bool(fetch_earnings_calendar())
     print(format_earnings_digest(entries, days=7, live=live))
     alerts = []
     cycle_raw = {}
-    for t in trending[:config.MAX_TICKERS_TO_SCAN]:
+    for t in trending[: config.MAX_TICKERS_TO_SCAN]:
         ticker = t["symbol"]
         result = scan_ticker(st, ticker, engine)
         if result:
             alerts.append(result)
         # Run options scanners on EVERY trending ticker, not just above-threshold
-        scanner_lines, scanner_raw = run_options_scanners(ticker, engine, benchmark, skip_gex)
+        scanner_lines, scanner_raw = run_options_scanners(
+            ticker, engine, benchmark, skip_gex
+        )
         for line in scanner_lines:
             print(line)
         cycle_raw[ticker] = scanner_raw
@@ -422,10 +469,16 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
 # Signal names that, on their own, indicate a narrative-corroborated setup --
 # used by run_directional_scan's strong-signal gate below.
 _HIGH_CONVICTION_SIGNALS = (
-    "DIRECTIONAL_BET_FORMING", "VOL_EVENT_DETECTED", "GAMMA_SQUEEZE_RISK",
-    "OI_SURGE_WITH_NARRATIVE", "RICH_VOL_PLUS_NARRATIVE", "EXTREME_SKEW_PLUS_NARRATIVE",
-    "PIN_ACTION_WITH_NARRATIVE", "FAR_FROM_PAIN_PLUS_NARRATIVE",
-    "DISPERSION_SETUP_PLUS_NARRATIVE", "EARNINGS_VOL_PLUS_NARRATIVE",
+    "DIRECTIONAL_BET_FORMING",
+    "VOL_EVENT_DETECTED",
+    "GAMMA_SQUEEZE_RISK",
+    "OI_SURGE_WITH_NARRATIVE",
+    "RICH_VOL_PLUS_NARRATIVE",
+    "EXTREME_SKEW_PLUS_NARRATIVE",
+    "PIN_ACTION_WITH_NARRATIVE",
+    "FAR_FROM_PAIN_PLUS_NARRATIVE",
+    "DISPERSION_SETUP_PLUS_NARRATIVE",
+    "EARNINGS_VOL_PLUS_NARRATIVE",
 )
 
 
@@ -444,8 +497,15 @@ def run_directional_scan(tickers, engine, benchmark="SPY"):
     try:
         for i, ticker in enumerate(tickers):
             t0 = time.time()
-            row = {"ticker": ticker, "narrative": None, "scanners": {}, "oi": {},
-                   "signals": [], "severity": "LOW", "errors": []}
+            row = {
+                "ticker": ticker,
+                "narrative": None,
+                "scanners": {},
+                "oi": {},
+                "signals": [],
+                "severity": "LOW",
+                "errors": [],
+            }
 
             # 1. Narrative (CNS / war) -- feeds the signal rules
             try:
@@ -467,7 +527,9 @@ def run_directional_scan(tickers, engine, benchmark="SPY"):
 
             # 2. Options scanners (GEX skipped -- expensive; 6 remain)
             try:
-                _, raw = run_options_scanners(ticker, engine, benchmark=benchmark, skip_gex=True)
+                _, raw = run_options_scanners(
+                    ticker, engine, benchmark=benchmark, skip_gex=True
+                )
                 for name, r in raw.items():
                     if r is None:
                         continue
@@ -476,9 +538,21 @@ def run_directional_scan(tickers, engine, benchmark="SPY"):
                         row["scanners"][name] = {"status": "error", "error": str(err)}
                     else:
                         d = {"status": "ok"}
-                        for attr in ("surge_detected", "regime", "skew_signal", "near_pin",
-                                     "price_vs_pain_pct", "dispersion_signal", "premium_pct",
-                                     "atm_iv", "iv_rank", "total_oi", "call_oi", "put_oi"):
+                        for attr in (
+                            "surge_detected",
+                            "regime",
+                            "skew_signal",
+                            "near_pin",
+                            "max_pain_strike",
+                            "price_vs_pain_pct",
+                            "dispersion_signal",
+                            "premium_pct",
+                            "atm_iv",
+                            "iv_rank",
+                            "total_oi",
+                            "call_oi",
+                            "put_oi",
+                        ):
                             v = getattr(r, attr, None)
                             if v is not None and not callable(v):
                                 d[attr] = round(v, 4) if isinstance(v, float) else v
@@ -502,17 +576,26 @@ def run_directional_scan(tickers, engine, benchmark="SPY"):
                 row["errors"].append(f"correlate:{e}")
 
             # 5. Strong-signal gate for downstream unified runs
-            n_high = sum(1 for s in row["signals"] if s.endswith("_PLUS_NARRATIVE")
-                         or s in _HIGH_CONVICTION_SIGNALS)
+            n_high = sum(
+                1
+                for s in row["signals"]
+                if s.endswith("_PLUS_NARRATIVE") or s in _HIGH_CONVICTION_SIGNALS
+            )
             cns = (row["narrative"] or {}).get("cns") or 0
-            row["strong"] = (row["severity"] == "HIGH") or (len(row["signals"]) >= 2) \
+            row["strong"] = (
+                (row["severity"] == "HIGH")
+                or (len(row["signals"]) >= 2)
                 or (n_high >= 1 and cns >= 40)
+            )
             row["elapsed_s"] = round(time.time() - t0, 1)
             results[ticker] = row
 
-            print(f"[{i+1}/{len(tickers)}] {ticker:6s} | sev={row['severity']:6s} | "
-                  f"signals={len(row['signals']):2d} | CNS={cns:3d} | "
-                  f"strong={row['strong']} | {row['elapsed_s']}s", flush=True)
+            print(
+                f"[{i + 1}/{len(tickers)}] {ticker:6s} | sev={row['severity']:6s} | "
+                f"signals={len(row['signals']):2d} | CNS={cns:3d} | "
+                f"strong={row['strong']} | {row['elapsed_s']}s",
+                flush=True,
+            )
             time.sleep(0.5)
     finally:
         st.close()
@@ -520,37 +603,51 @@ def run_directional_scan(tickers, engine, benchmark="SPY"):
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(
-        out_dir, f"directional_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        out_dir, f"directional_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"timestamp": datetime.now().isoformat(), "universe_size": len(tickers),
-                   "results": results}, f, indent=2, default=str)
+        json.dump(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "universe_size": len(tickers),
+                "results": results,
+            },
+            f,
+            indent=2,
+            default=str,
+        )
 
     strong = [t for t, r in results.items() if r["strong"]]
-    print(f"\nDONE in {time.time()-start:.0f}s -- {len(strong)} strong: {', '.join(strong)}")
+    print(
+        f"\nDONE in {time.time() - start:.0f}s -- {len(strong)} strong: {', '.join(strong)}"
+    )
     print(f"OUTPUT {out_path}")
     return results, out_path
 
 
 def deep_dive(ticker):
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"DEEP DIVE: {ticker}")
-    print(f"{'='*60}")
-    print(f"\n[Options Chain]")
+    print(f"{'=' * 60}")
+    print("\n[Options Chain]")
     oi = build_oi_snapshot(ticker)
     if "error" not in oi:
         print(f"  Spot: ${oi['spot']:.2f}")
-        print(f"  ATM IV: {oi['atm_iv']*100:.2f}%")
+        print(f"  ATM IV: {oi['atm_iv'] * 100:.2f}%")
         print(f"  IV Skew: {oi.get('skew_vol_pts', 0):.2f} vol pts")
         print(f"  Strikes: {oi['num_strikes']}")
     else:
         print(f"  Error: {oi.get('error')}")
 
-    print(f"\n[Swap Data]")
+    print("\n[Swap Data]")
     swap = build_swap_snapshot(ticker, lookback_days=config.SWAP_LOOKBACK_DAYS)
-    print(f"  Swaps: {swap['swap_activity']} | Notional: ${swap['total_notional_usd']:,.0f}")
+    print(
+        f"  Swaps: {swap['swap_activity']} | Notional: ${swap['total_notional_usd']:,.0f}"
+    )
 
     if MCP_AVAILABLE:
         from scanner.reddit import RedditScraper
+
         rs = RedditScraper()
         reddit_posts = rs.get_hot_posts("wallstreetbets", limit=10)
         print(f"  Reddit WSB hot posts: {len(reddit_posts)}")
@@ -561,9 +658,9 @@ def deep_dive(ticker):
 
 def print_correlation_summary(engine, tickers):
     """Print composite signals for all tickers that had scanners run."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("COMPOSITE SIGNALS")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     for ticker in sorted(set(tickers)):
         summary = engine.get_scanner_summary(ticker)
         signals = engine.correlate_with_oi(ticker, {})
@@ -610,15 +707,18 @@ def main():
             close_td()
         return
 
-    print("="*60)
+    print("=" * 60)
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")
-    print("="*60)
+    print("=" * 60)
     print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps) | YouTube")
-    print(f"Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion | Earnings")
-    print("="*60)
+    print(
+        "Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion | Earnings"
+    )
+    print("=" * 60)
 
     if _prompt_yes_no(
-        "Launch Sector Rotation scanner now?", skip=args.skip_sector_prompt,
+        "Launch Sector Rotation scanner now?",
+        skip=args.skip_sector_prompt,
     ):
         _launch_sector_rotation()
 
@@ -627,7 +727,9 @@ def main():
     cycle_raw = {}
     try:
         run_id = _make_run_id()
-        alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
+        alerts, cycle_raw = scan_trending(
+            st, engine, args.benchmark, args.skip_gex, args.skip_youtube
+        )
         pack = {}
 
         if alerts:
@@ -641,13 +743,17 @@ def main():
             if pack:
                 print(f"  Highlight pack: {pack['json_path']}")
             for a in alerts:
-                print(f"  {a['ticker']} — CNS: {a['contested_narrative_score']} | "
-                      f"War: {a['war_score']:.2f} | Bull: {a['bullish_pct']:.0f}% Bear: {a['bearish_pct']:.0f}%")
+                print(
+                    f"  {a['ticker']} — CNS: {a['contested_narrative_score']} | "
+                    f"War: {a['war_score']:.2f} | Bull: {a['bullish_pct']:.0f}% Bear: {a['bearish_pct']:.0f}%"
+                )
             for a in alerts[:3]:
                 deep_dive(a["ticker"])
 
         # Print correlation composite signals for ALL scanned tickers
-        scanned_tickers = [t["symbol"] for t in st.get_trending()[:config.MAX_TICKERS_TO_SCAN]]
+        scanned_tickers = [
+            t["symbol"] for t in st.get_trending()[: config.MAX_TICKERS_TO_SCAN]
+        ]
         print_correlation_summary(engine, scanned_tickers)
 
         if args.export_context_path:
@@ -671,7 +777,9 @@ def main():
             print(f"\n--- Next scan in {config.SCAN_INTERVAL_MINUTES} min ---")
             time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
             run_id = _make_run_id()
-            alerts, cycle_raw = scan_trending(st, engine, args.benchmark, args.skip_gex, args.skip_youtube)
+            alerts, cycle_raw = scan_trending(
+                st, engine, args.benchmark, args.skip_gex, args.skip_youtube
+            )
             pack = {}
             if alerts:
                 pack = export_alert_group(
