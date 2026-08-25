@@ -91,12 +91,12 @@
 
     const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
 
-    function line(name, data, color, width, dash) {
+    function line(name, data, color, width, dash, xIdx, yIdx) {
       return {
         name: name,
         type: "line",
-        xAxisIndex: 0,
-        yAxisIndex: 0,
+        xAxisIndex: xIdx != null ? xIdx : 0,
+        yAxisIndex: yIdx != null ? yIdx : 0,
         data: data,
         showSymbol: false,
         connectNulls: false,
@@ -178,6 +178,11 @@
         itemStyle: { color: b.close >= b.open ? UP : DOWN },
       }));
 
+      const hasFlow = !!state.flow;
+      const flowCall = hasFlow ? (state.flow.call || []) : [];
+      const flowPut = hasFlow ? (state.flow.put || []) : [];
+      const flowNet = hasFlow ? (state.flow.net || []) : [];
+
       const key = ticker + "|" + interval + "|" + bars.length;
       const resetZoom = key !== lastKey;
       lastKey = key;
@@ -194,22 +199,42 @@
           itemHeight: 6,
           textStyle: { color: MUTED, fontSize: 10 },
           inactiveColor: "#334155",
-          data: ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
+          data: hasFlow
+            ? ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale", "call", "put", "net"]
+            : ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
         },
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-        axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
-        grid: [
-          { left: 56, right: 16, top: 8, height: "62%" },
-          { left: 56, right: 16, top: "72%", height: "12%" },
-        ],
-        xAxis: [
-          { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-          { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-        ],
-        yAxis: [
-          { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
-          { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
-        ],
+        axisPointer: { link: [{ xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1] }] },
+        grid: hasFlow
+          ? [
+              { left: 56, right: 16, top: 8, height: "52%" },
+              { left: 56, right: 16, top: "62%", height: "9%" },
+              { left: 56, right: 16, top: "73%", height: "15%" },
+            ]
+          : [
+              { left: 56, right: 16, top: 8, height: "62%" },
+              { left: 56, right: 16, top: "72%", height: "12%" },
+            ],
+        xAxis: hasFlow
+          ? [
+              { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+              { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+              { type: "category", data: cats, gridIndex: 2, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+            ]
+          : [
+              { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+              { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+            ],
+        yAxis: hasFlow
+          ? [
+              { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
+              { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
+              { scale: true, gridIndex: 2, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
+            ]
+          : [
+              { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
+              { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
+            ],
         series: [
           {
             name: "ohlc",
@@ -239,6 +264,11 @@
             yAxisIndex: 1,
             data: volumes,
           },
+          ...(hasFlow ? [
+            line("call", flowCall, "#34d399", 1.2, null, 2, 2),
+            line("put", flowPut, "#f87171", 1.2, null, 2, 2),
+            line("net", flowNet, "#F4F7FF", 1.1, null, 2, 2),
+          ] : []),
         ],
         textStyle: { color: TEXT },
       };
@@ -246,7 +276,7 @@
         opt.dataZoom = [
           {
             type: "inside",
-            xAxisIndex: [0, 1],
+            xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
             filterMode: "none",
             zoomOnMouseWheel: true,
             moveOnMouseMove: true,
@@ -254,7 +284,7 @@
           },
           {
             type: "slider",
-            xAxisIndex: [0, 1],
+            xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
             height: 22,
             bottom: 6,
             start: startPct,

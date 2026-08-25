@@ -120,11 +120,11 @@ def create_app(
 
 
 def _production_flow_fn(root, start_dt, end_dt, min_premium):
-    """One scanner_trades call per session date — not per bar.
+    """One scanner_trades call (paginated) per session date — not per bar.
 
-    ``scanner_trades_in_time_range`` 400s/times out on multi-hour windows.
-    A single calendar day returns in-process (~500 rows). Cap at 5 days so
-    a 1y daily chart does not fan out.
+    Always full tape (min_premium=0 internally; passed arg ignored).
+    Date-only calls (start_date/end_date). Pagination limit=10000 + offset loop
+    until short/empty page per day. 5-day cap. except:continue (degrade).
     """
     from datetime import datetime, timedelta
 
@@ -149,18 +149,28 @@ def _production_flow_fn(root, start_dt, end_dt, min_premium):
         return []
     client = _thread_client()
     rows: list = []
+    LIMIT = 10000
     for day in days:
         ymd = day.strftime("%Y%m%d")
-        try:
-            env = client.flow.scanner_trades(
-                root=root,
-                start_date=ymd,
-                end_date=ymd,
-                min_premium=min_premium,
-            )
-            rows.extend(rows_from_flow_payload(getattr(env, "data", None)))
-        except Exception:
-            continue
+        offset = 0
+        while True:
+            try:
+                env = client.flow.scanner_trades(
+                    root=root,
+                    start_date=ymd,
+                    end_date=ymd,
+                    min_premium=0,  # full tape always (ignore the passed arg)
+                    limit=LIMIT,
+                    offset=offset,
+                )
+                page = rows_from_flow_payload(getattr(env, "data", None))
+                rows.extend(page)
+                if len(page) < LIMIT:
+                    break
+                offset += LIMIT
+            except Exception:
+                # per-day degrade (keep existing contract); do not raise
+                break
     return rows
 
 
