@@ -83,6 +83,37 @@ def _parse_pack_date(pack: dict) -> str | None:
         return None
 
 
+def _normalize_eod_rows(rows: list) -> list[dict]:
+    """Normalise raw ThetaData EOD bars into one row per trading day.
+
+    Raw ``hist_stock_eod`` bars carry the date in ``created`` / ``last_trade``
+    (an ISO timestamp, ET), not a ``date`` key, and may include a trailing
+    empty ``{}`` bar plus multiple intraday snapshots per day.  This collapses
+    them to ``[{"date": "YYYY-MM-DD", "close": float}]`` sorted by date, keeping
+    the last close seen for each day, so downstream helpers that index by
+    trading day (e.g. ``_to_trading_dates``) see exactly one bar per day.
+
+    Already-normalised rows (with a ``date`` key) pass through idempotently.
+    """
+    by_date: dict[str, float] = {}
+    for r in rows or []:
+        if not r:
+            continue
+        ts = r.get("date") or r.get("created") or r.get("last_trade") or ""
+        close = r.get("close")
+        if not ts or close in (None, ""):
+            continue
+        try:
+            c = float(close)
+        except (TypeError, ValueError):
+            continue
+        if c <= 0:
+            continue
+        d = str(ts)[:10]  # 'YYYY-MM-DD'
+        by_date[d] = c  # last close per day wins
+    return [{"date": d, "close": c} for d, c in sorted(by_date.items())]
+
+
 def _to_trading_dates(
     close_rows: list, reference_date: str, forward_days: int
 ) -> tuple[float | None, float | None]:
@@ -306,7 +337,8 @@ def run_sentiment_backtest(
                 end_dt = start_dt + timedelta(days=forward_days * 2 + 10)
                 end_compact = end_dt.strftime("%Y%m%d")
 
-                rows = td.hist_stock_eod(symbol, start_compact, end_compact)  # type: ignore[union-attr]
+                raw_rows = td.hist_stock_eod(symbol, start_compact, end_compact)  # type: ignore[union-attr]
+                rows = _normalize_eod_rows(raw_rows)
                 f5, f10 = _to_trading_dates(rows, pack_date, forward_days)
             except Exception:
                 f5, f10 = None, None
