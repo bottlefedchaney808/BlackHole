@@ -1,10 +1,12 @@
 """Production adapter for the expiry-book dealer exposure engine."""
+
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Mapping, Optional
+from typing import Any
 
 import expiry_book_exposure as ebe
 
@@ -50,18 +52,24 @@ def normalize_snapshot_rows(raw_rows: list[Mapping[str, Any]]) -> list[dict[str,
         raise ExpiryBookUnavailable("empty option snapshot")
     normalized: list[dict[str, Any]] = []
     for raw in raw_rows:
-        strike = _theta_strike_to_dollars(_number(raw, ("strike", "strike_price"), "strike"))
+        strike = _theta_strike_to_dollars(
+            _number(raw, ("strike", "strike_price"), "strike")
+        )
         right = str(raw.get("right", raw.get("put_call", ""))).upper()[:1]
         if right not in {"C", "P"}:
             raise ExpiryBookUnavailable("missing or invalid option right")
         oi = _number(raw, ("oi", "open_interest", "openInterest"), "open interest")
-        iv = _number(raw, ("implied_vol", "impliedVol", "iv", "IV"), "implied volatility")
+        iv = _number(
+            raw, ("implied_vol", "impliedVol", "iv", "IV"), "implied volatility"
+        )
         # Vendor leaves implied_vol=0 / greeks=0 on unsolved deep-ITM legs
         # (WMT 20261120: 5/54 rows). That is not a missing field — drop the
         # unusable row instead of aborting the whole book.
         if strike <= 0 or oi < 0 or iv <= 0:
             continue
-        normalized.append({"strike": strike, "right": right, "oi": oi, "implied_vol": iv})
+        normalized.append(
+            {"strike": strike, "right": right, "oi": oi, "implied_vol": iv}
+        )
     if not normalized:
         raise ExpiryBookUnavailable("snapshot has no usable option rows")
     return normalized
@@ -86,21 +94,21 @@ class ProductionDealerExposure:
     units: dict[str, str]
     provenance: dict[str, str]
     accumulation_claimed: bool = False
-    structural_regime: Optional[ebe.StructuralRegime] = None
-    svi_overlay: Optional[ebe.SviOverlay] = None
-    vanna_flow_live: Optional[float] = None
+    structural_regime: ebe.StructuralRegime | None = None
+    svi_overlay: ebe.SviOverlay | None = None
+    vanna_flow_live: float | None = None
     vanna_flow_provenance: str = "delta_iv_missing"
     charm_1d: float = 0.0
     gex_reference: float = 0.0
     book_gamma: float = 0.0
     extra_books: list = field(default_factory=list)
-    vendor_dealer: Optional[dict] = None
-    d_iv_used: Optional[float] = None
-    residual_vanna_inventory: Optional[float] = None
+    vendor_dealer: dict | None = None
+    d_iv_used: float | None = None
+    residual_vanna_inventory: float | None = None
     flow_volume_rows: int = 0
     flow_provenance: str = "quotes_missing"
-    prior_spot: Optional[float] = None
-    prior_asof: Optional[str] = None
+    prior_spot: float | None = None
+    prior_asof: str | None = None
 
 
 def _trades_to_quote_rows(trades, expiry: str) -> list:
@@ -131,8 +139,16 @@ def _trades_to_quote_rows(trades, expiry: str) -> list:
         mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
         bought = size if (mid and price >= mid) else (0.0 if mid else size * 0.5)
         key = (round(k, 4), right)
-        rec = agg.setdefault(key, {"strike": k, "right": right,
-                                   "volume": 0.0, "bid_size": 0.0, "ask_size": 0.0})
+        rec = agg.setdefault(
+            key,
+            {
+                "strike": k,
+                "right": right,
+                "volume": 0.0,
+                "bid_size": 0.0,
+                "ask_size": 0.0,
+            },
+        )
         rec["volume"] += size
         rec["bid_size"] += bought
         rec["ask_size"] += size - bought
@@ -147,7 +163,9 @@ def _merge_greeks_oi(rows, oi_rows) -> list:
         try:
             strike = float(row.get("strike", 0.0))
             right = str(row.get("right", "")).upper()[:1]
-            oi_by_key[(round(strike, 8), right)] = row.get("open_interest", row.get("oi"))
+            oi_by_key[(round(strike, 8), right)] = row.get(
+                "open_interest", row.get("oi")
+            )
         except (TypeError, ValueError):
             continue
     merged = []
@@ -157,13 +175,17 @@ def _merge_greeks_oi(rows, oi_rows) -> list:
         item = dict(row)
         item["strike"] = strike
         item["right"] = right
-        item["open_interest"] = oi_by_key.get((round(strike, 8), right), row.get("open_interest"))
+        item["open_interest"] = oi_by_key.get(
+            (round(strike, 8), right), row.get("open_interest")
+        )
         merged.append(item)
     return merged
 
 
 def _dte_of(expiry: str) -> int:
-    return (date.fromisoformat(f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:8]}") - date.today()).days
+    return (
+        date.fromisoformat(f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:8]}") - date.today()
+    ).days
 
 
 def _bucket(dte: int) -> str | None:
@@ -176,7 +198,9 @@ def _bucket(dte: int) -> str | None:
     return None
 
 
-def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDealerExposure:
+def fetch_production_result(
+    td: Any, ticker: str, expiry: str
+) -> ProductionDealerExposure:
     """Fetch the primary expiry plus near/mid/far books when listed."""
     try:
         spot = float(td.fetch_spot_price(ticker))
@@ -224,7 +248,9 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
         try:
             grows = td.option_bulk_greeks(ticker, cand)
             goi = td.option_bulk_oi(ticker, cand)
-            extra.append({"expiry": cand, "rows": _merge_greeks_oi(grows, goi), "dte": cdte})
+            extra.append(
+                {"expiry": cand, "rows": _merge_greeks_oi(grows, goi), "dte": cdte}
+            )
             have[b] = cand
         except Exception:
             continue
@@ -238,7 +264,9 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
     try:
         end = date.today() - timedelta(days=1)
         start = end - timedelta(days=10)
-        hist = td.hist_stock_eod(ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
+        hist = td.hist_stock_eod(
+            ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+        )
         if hist:
             last = hist[-1]
             prior_close = float(last.get("close") or 0) or None
@@ -248,8 +276,12 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
     if callable(hist_fn):
         try:
             end = date.today() - timedelta(days=1)
-            start = end - timedelta(days=min(VANNA_FLOW_LOOKBACK_DAYS, VANNA_FLOW_LOOKBACK_MAX))
-            grows = hist_fn(ticker, expiry, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
+            start = end - timedelta(
+                days=min(VANNA_FLOW_LOOKBACK_DAYS, VANNA_FLOW_LOOKBACK_MAX)
+            )
+            grows = hist_fn(
+                ticker, expiry, start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+            )
             by_day = {}
             for row in grows or []:
                 d = str(row.get("date") or row.get("created") or "")
@@ -271,7 +303,8 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
                                 k = float(o.get("strike", 0.0))
                                 rt = str(o.get("right", "")).upper()[:1]
                                 oi_map[(round(k, 8), rt)] = o.get(
-                                    "open_interest", o.get("oi"))
+                                    "open_interest", o.get("oi")
+                                )
                             except (TypeError, ValueError):
                                 continue
                         for r in prior_eod_rows:
@@ -303,11 +336,15 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
             start = end - timedelta(days=10)
             if vendor_endpoint == "dealer.weighted_greeks_summary":
                 payload = vendor_fn(
-                    ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
+                    ticker,
+                    start.strftime("%Y%m%d"),
+                    end.strftime("%Y%m%d"),
                 )
             else:
                 payload = vendor_fn(
-                    ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
+                    ticker,
+                    start.strftime("%Y%m%d"),
+                    end.strftime("%Y%m%d"),
                     latest_only=True,
                 )
             vendor_dealer = _summarize_vendor_dealer(payload, endpoint=vendor_endpoint)
@@ -329,7 +366,12 @@ def fetch_production_result(td: Any, ticker: str, expiry: str) -> ProductionDeal
             d_iv_measured = None
 
     result = production_result_from_rows(
-        ticker, expiry, spot, merged, dte=dte, q=q,
+        ticker,
+        expiry,
+        spot,
+        merged,
+        dte=dte,
+        q=q,
         extra_books=extra,
         prior_atm_iv=prior_atm_iv,
         prior_iv_asof=prior_iv_asof,
@@ -352,31 +394,41 @@ def _prior_eod_to_rows(eod_rows: list) -> list:
     for r in eod_rows or []:
         try:
             iv = r.get("implied_vol", r.get("iv"))
-            oi = r.get("open_interest", r.get("oi", r.get("openInterest", r.get("Open Interest", 0))))
+            oi = r.get(
+                "open_interest",
+                r.get("oi", r.get("openInterest", r.get("Open Interest", 0))),
+            )
             k = float(r.get("strike", 0.0))
             right = str(r.get("right", "")).upper()[:1]
             if right not in {"C", "P"} or k <= 0:
                 continue
-            out.append({"strike": k, "right": right, "open_interest": oi, "implied_vol": iv})
+            out.append(
+                {"strike": k, "right": right, "open_interest": oi, "implied_vol": iv}
+            )
         except (TypeError, ValueError):
             continue
     return out
 
 
-def production_result_from_rows(ticker: str, expiry: str, spot: float,
-                                raw_rows: list[Mapping[str, Any]], *, dte: int,
-                                q: float = 0.0,
-                                extra_books: Optional[list] = None,
-                                prior_atm_iv: Optional[float] = None,
-                                prior_iv_asof: Optional[str] = None,
-                                prior_close: Optional[float] = None,
-                                vendor_dealer: Optional[dict] = None,
-                                d_iv_measured: Optional[float] = None,
-                                d_iv_source: Optional[str] = None,
-                                quote_rows: Optional[list] = None,
-                                prior_eod_rows: Optional[list] = None,
-                                prior_asof: Optional[str] = None,
-                                ) -> ProductionDealerExposure:
+def production_result_from_rows(
+    ticker: str,
+    expiry: str,
+    spot: float,
+    raw_rows: list[Mapping[str, Any]],
+    *,
+    dte: int,
+    q: float = 0.0,
+    extra_books: list | None = None,
+    prior_atm_iv: float | None = None,
+    prior_iv_asof: str | None = None,
+    prior_close: float | None = None,
+    vendor_dealer: dict | None = None,
+    d_iv_measured: float | None = None,
+    d_iv_source: str | None = None,
+    quote_rows: list | None = None,
+    prior_eod_rows: list | None = None,
+    prior_asof: str | None = None,
+) -> ProductionDealerExposure:
     if not isinstance(ticker, str) or not ticker.strip():
         raise ExpiryBookUnavailable("ticker is required")
     if not isinstance(expiry, str) or len(expiry) != 8 or not expiry.isdigit():
@@ -396,7 +448,11 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
             oi_sum = sum(float(r.get("oi") or 0) for r in prow)
             if prow and oi_sum > 0:
                 rows = prow
-                if prior_close and math.isfinite(float(prior_close)) and float(prior_close) > 0:
+                if (
+                    prior_close
+                    and math.isfinite(float(prior_close))
+                    and float(prior_close) > 0
+                ):
                     book_spot = float(prior_close)
                 book_src = f"prior_close:{prior_asof or 'eod'}"
         except ExpiryBookUnavailable:
@@ -404,30 +460,41 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
     if rows is None:
         rows = normalize_snapshot_rows(raw_rows)
     t = int(dte) / ebe.DEFAULT_A
-    snapshot = ebe.build_net_exposure(rows, book_spot, ticker=ticker,
-                                      expiry=expiry, T=t, dte=int(dte), q=float(q))
+    snapshot = ebe.build_net_exposure(
+        rows, book_spot, ticker=ticker, expiry=expiry, T=t, dte=int(dte), q=float(q)
+    )
     if not snapshot.rows:
         raise ExpiryBookUnavailable("snapshot has no usable option rows")
-    n_vol = ebe.apply_vannacharm_flow(snapshot, quote_rows or [], float(spot))
+    n_vol = ebe.apply_vannacharm_flow(snapshot, quote_rows or [], book_spot)
     flow_prov = (
-        (f"{book_src}+flow_analysis" if n_vol else
-        (f"{book_src}+flow_empty" if not quote_rows else f"{book_src}+volume_zero"))
+        f"{book_src}+flow_analysis"
+        if n_vol
+        else (f"{book_src}+flow_empty" if not quote_rows else f"{book_src}+volume_zero")
     )
 
-    chain_iv = {(r.strike, r.right): r.iv for r in snapshot.rows
-                if r.iv == r.iv and r.iv > 0}
+    chain_iv = {
+        (r.strike, r.right): r.iv for r in snapshot.rows if r.iv == r.iv and r.iv > 0
+    }
     oi_by = {(r.strike, r.right): int(r.oi) for r in snapshot.rows}
     overlay = ebe.svi_rp_overlay(
-        chain_iv, float(spot), t, oi_by=oi_by, ticker=ticker,
-        r=ebe.RISK_FREE_RATE, q=float(q),
+        chain_iv,
+        book_spot,
+        t,
+        oi_by=oi_by,
+        ticker=ticker,
+        r=ebe.RISK_FREE_RATE,
+        q=float(q),
     )
-    ebe.apply_svi_book_signs(snapshot, overlay, float(spot), t)
+    ebe.apply_svi_book_signs(snapshot, overlay, book_spot, t)
 
-    locus = ebe.execution_locus(rows, float(spot), T=t, q=float(q), ne=snapshot)
-    budget = ebe.scenario_hedge_flow(rows, float(spot), T=t, dte=int(dte),
-                                     ticker=ticker, q=float(q), ne=snapshot)
+    locus = ebe.execution_locus(rows, book_spot, T=t, q=float(q), ne=snapshot)
+    budget = ebe.scenario_hedge_flow(
+        rows, book_spot, T=t, dte=int(dte), ticker=ticker, q=float(q), ne=snapshot
+    )
 
-    books = [{"expiry": expiry, "spot": float(spot), "rows": rows, "T": t, "dte": int(dte)}]
+    books = [
+        {"expiry": expiry, "spot": float(spot), "rows": rows, "T": t, "dte": int(dte)}
+    ]
     for extra in extra_books or []:
         try:
             erows = normalize_snapshot_rows(extra["rows"])
@@ -436,13 +503,15 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
         edte = int(extra.get("dte") or 0)
         if edte <= 0 or len(erows) < 8:
             continue
-        books.append({
-            "expiry": str(extra["expiry"]),
-            "spot": float(spot),
-            "rows": erows,
-            "T": edte / ebe.DEFAULT_A,
-            "dte": edte,
-        })
+        books.append(
+            {
+                "expiry": str(extra["expiry"]),
+                "spot": float(spot),
+                "rows": erows,
+                "T": edte / ebe.DEFAULT_A,
+                "dte": edte,
+            }
+        )
 
     buckets = {}
     for b in books:
@@ -477,13 +546,22 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
     vanna_inv = float(snapshot.net("vanna"))
 
     return ProductionDealerExposure(
-        ticker=ticker.upper(), expiry=expiry, spot=float(spot),
+        ticker=ticker.upper(),
+        expiry=expiry,
+        spot=float(spot),
         status="available",
-        snapshot=snapshot, execution_locus=locus, scenario_budget=budget,
-        structural=st, structural_regime=regime, svi_overlay=overlay,
-        vanna_flow_live=vflow, vanna_flow_provenance=vprov,
-        charm_1d=float(charm_1d), gex_reference=float(gex_ref),
-        book_gamma=float(book_g), extra_books=list(extra_books or []),
+        snapshot=snapshot,
+        execution_locus=locus,
+        scenario_budget=budget,
+        structural=st,
+        structural_regime=regime,
+        svi_overlay=overlay,
+        vanna_flow_live=vflow,
+        vanna_flow_provenance=vprov,
+        charm_1d=float(charm_1d),
+        gex_reference=float(gex_ref),
+        book_gamma=float(book_g),
+        extra_books=list(extra_books or []),
         vendor_dealer=vendor_dealer,
         d_iv_used=d_iv_used,
         residual_vanna_inventory=vanna_inv,
@@ -491,21 +569,25 @@ def production_result_from_rows(ticker: str, expiry: str, spot: float,
         flow_provenance=flow_prov,
         prior_spot=book_spot if book_src.startswith("prior_close") else None,
         prior_asof=prior_asof if book_src.startswith("prior_close") else None,
-        units={"gex": "dollar_gamma_per_1pct_move_imported_call_put",
-               "book_gamma": "dollar_gamma_per_1pct_svi_otm",
-               "dex": "post_multiplier_shares",
-               "vanna": "shares_per_vol_point",
-               "residual_vanna_inventory": "shares_per_vol_point",
-               "vanna_flow": "shares"},
-        provenance={"source": "ThetaData snapshot",
-                    "greeks": "Black-Scholes from real spot/IV/DTE",
-                    "accumulation": "not_claimed",
-                    "book_sign": "svi_cheap_rich_otm_deadband_0.01",
-                    "dividend_yield_q": f"{float(q):.6f}",
-                    "vanna_flow": vprov,
-                    "vendor_dealer": (vendor_dealer or {}).get("endpoint", "not_fetched"),
-                    "book": book_src,
-                    "intraday_flow": flow_prov},
+        units={
+            "gex": "dollar_gamma_per_1pct_move_imported_call_put",
+            "book_gamma": "dollar_gamma_per_1pct_svi_otm",
+            "dex": "post_multiplier_shares",
+            "vanna": "shares_per_vol_point",
+            "residual_vanna_inventory": "shares_per_vol_point",
+            "vanna_flow": "shares",
+        },
+        provenance={
+            "source": "ThetaData snapshot",
+            "greeks": "Black-Scholes from real spot/IV/DTE",
+            "accumulation": "not_claimed",
+            "book_sign": "svi_cheap_rich_otm_deadband_0.01",
+            "dividend_yield_q": f"{float(q):.6f}",
+            "vanna_flow": vprov,
+            "vendor_dealer": (vendor_dealer or {}).get("endpoint", "not_fetched"),
+            "book": book_src,
+            "intraday_flow": flow_prov,
+        },
     )
 
 
@@ -562,12 +644,24 @@ def _summarize_vendor_dealer(payload, endpoint: str = "dealer.positioning") -> d
     if payload is None:
         return {"status": "unavailable", "endpoint": endpoint}
     if isinstance(payload, list):
-        payload = payload[-1] if payload and isinstance(payload[-1], dict) else {"rows": payload}
+        payload = (
+            payload[-1]
+            if payload and isinstance(payload[-1], dict)
+            else {"rows": payload}
+        )
     if not isinstance(payload, dict):
         return {"status": "unavailable", "endpoint": endpoint}
     out = {"status": "available", "endpoint": endpoint, "oi_multiplied": False}
-    for key in ("net_gamma", "net_gex", "gex", "total_net_dollar_gamma",
-                "gamma", "netGamma", "dealer_gamma", "weighted_gamma"):
+    for key in (
+        "net_gamma",
+        "net_gex",
+        "gex",
+        "total_net_dollar_gamma",
+        "gamma",
+        "netGamma",
+        "dealer_gamma",
+        "weighted_gamma",
+    ):
         if key in payload and payload[key] not in (None, ""):
             try:
                 out["net"] = float(payload[key])
@@ -589,8 +683,16 @@ def _extract_surface_div(payload) -> float | None:
         payload = payload[-1]
     if not isinstance(payload, dict):
         return None
-    for key in ("atm_change", "d_iv", "delta_iv", "atm_iv_change", "atm_delta",
-                "mean_change", "iv_change", "surface_change"):
+    for key in (
+        "atm_change",
+        "d_iv",
+        "delta_iv",
+        "atm_iv_change",
+        "atm_delta",
+        "mean_change",
+        "iv_change",
+        "surface_change",
+    ):
         if key in payload and payload[key] not in (None, ""):
             try:
                 v = float(payload[key])

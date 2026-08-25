@@ -27,6 +27,7 @@ Design (pre-registered):
 Reuses: expiry_book_exposure.build_daily_signals_from_seed, build_net_exposure,
 execution_locus, hedge_flow_at, _block_perm_p, _safe_corr. No network.
 """
+
 import math
 import os
 import sys
@@ -38,12 +39,21 @@ import expiry_book_exposure as ebe
 
 def min_detectable_r(n, alpha=0.05, power=0.80):
     """Two-sided minimum detectable |r| for given n at alpha/power."""
-    import statistics
-    z_a = 1.959963984540054   # z_{1-alpha/2}
+    z_a = 1.959963984540054  # z_{1-alpha/2}
     z_b = 0.8416212335729143  # z_{power}
     z = z_a + z_b
     # Fisher-based approx: r_min ~= z / sqrt(n + z^2)
     return z / math.sqrt(n + z * z)
+
+
+def _two_sided_p(r, n):
+    """Two-sided p-value for a Pearson corr via normal approx of the t distribution."""
+    if n < 4 or abs(r) >= 1:
+        return 1.0
+    t = r * math.sqrt((n - 2) / (1 - r * r))
+    z = abs(t)
+    p = 2 * (1 - 0.5 * (1 + math.erf(z / math.sqrt(2))))
+    return min(max(p, 1e-12), 1.0)
 
 
 def corr_ci(r, n):
@@ -51,7 +61,11 @@ def corr_ci(r, n):
     if n < 4:
         return (-1.0, 1.0)
     se = 1.0 / math.sqrt(n - 3)
-    z = 0.5 * math.log((1 + r) / (1 - r)) if abs(r) < 1 else (math.copysign(float('inf'), r))
+    z = (
+        0.5 * math.log((1 + r) / (1 - r))
+        if abs(r) < 1
+        else (math.copysign(float("inf"), r))
+    )
     lo = math.tanh(z - 1.959963984540054 * se)
     hi = math.tanh(z + 1.959963984540054 * se)
     return (lo, hi)
@@ -69,10 +83,17 @@ def build_fast_signals():
         # Rebuild per-day net exposure (level), spot, and forward return exactly like
         # build_daily_signals, but keep the LEVEL (gex) + band-breach impulse.
         imp, proxy, vanna, charm, fwd, fwdsign, dates = ebe_daily_series(
-            seed.get("greeks", []), seed.get("oi", []), seed.get("spot", []),
-            expiry, tk)
-        out[tk] = dict(dates=dates, impulse=imp, proxy=proxy, vanna=vanna,
-                       charm=charm, fwd=fwd, fwd_sign=fwdsign)
+            seed.get("greeks", []), seed.get("oi", []), seed.get("spot", []), expiry, tk
+        )
+        out[tk] = dict(
+            dates=dates,
+            impulse=imp,
+            proxy=proxy,
+            vanna=vanna,
+            charm=charm,
+            fwd=fwd,
+            fwd_sign=fwdsign,
+        )
     return out
 
 
@@ -81,6 +102,7 @@ def ebe_daily_series(hist_greek_rows, hist_oi_rows, hist_spot_rows, expiry, tick
     impulse_t = gex_level_t * (dS_t/spot_t), fired only on band breach; plus the
     Delta(dollar-gamma) proxy for contrast, vanna level, charm, and forward returns."""
     from datetime import datetime
+
     try:
         exp_dt = datetime.strptime(str(expiry), "%Y%m%d")
     except Exception:
@@ -100,27 +122,48 @@ def ebe_daily_series(hist_greek_rows, hist_oi_rows, hist_spot_rows, expiry, tick
         iv = ebe._extract(g, "implied_vol")
         if not math.isnan(k) and not math.isnan(iv) and iv > 0:
             greeks_by_date.setdefault(d, []).append(
-                {"strike": k, "right": str(g.get("right", "C")).upper()[:1],
-                 "implied_vol": iv})
+                {
+                    "strike": k,
+                    "right": str(g.get("right", "C")).upper()[:1],
+                    "implied_vol": iv,
+                }
+            )
     oi_by_date = {}
     for o in hist_oi_rows:
         d = ebe._date_of(o)
         k = ebe._extract(o, "strike")
         if not math.isnan(k) and k > 10000:
             k = k / 1000.0
-        oi_by_date.setdefault(d, {})[(k, str(o.get("right", "C")).upper()[:1])] = \
-            int(ebe._extract(o, "open_interest", 0.0))
+        oi_by_date.setdefault(d, {})[(k, str(o.get("right", "C")).upper()[:1])] = int(
+            ebe._extract(o, "open_interest", 0.0)
+        )
     ordered = sorted(spot_by_date)
-    imp, proxy, vanna, charm, fwd, fwdsign, dates, gex_level, dspot = [], [], [], [], [], [], [], [], []
+    imp, proxy, vanna, charm, fwd, fwdsign, dates, gex_level, dspot = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
     prev_gex = None
     spot_list = [spot_by_date[d] for d in ordered]
     for i, d in enumerate(ordered):
         if d not in greeks_by_date:
             continue
         spot = spot_by_date[d]
-        rows = [{"strike": g["strike"], "right": g["right"],
-                 "oi": oi_by_date.get(d, {}).get((g["strike"], g["right"]), 0),
-                 "implied_vol": g["implied_vol"]} for g in greeks_by_date[d]]
+        rows = [
+            {
+                "strike": g["strike"],
+                "right": g["right"],
+                "oi": oi_by_date.get(d, {}).get((g["strike"], g["right"]), 0),
+                "implied_vol": g["implied_vol"],
+            }
+            for g in greeks_by_date[d]
+        ]
         T = 0.25
         if exp_dt is not None:
             try:
@@ -142,10 +185,13 @@ def ebe_daily_series(hist_greek_rows, hist_oi_rows, hist_spot_rows, expiry, tick
             fwd.append(r)
             fwdsign.append(1.0 if r > 0 else (-1.0 if r < 0 else 0.0))
         else:
-            fwd.append(0.0); fwdsign.append(0.0)
+            fwd.append(0.0)
+            fwdsign.append(0.0)
         # day-over-day spot move (for the impulse)
         if i > 0:
-            dspot.append((spot - spot_by_date[ordered[i - 1]]) / spot_by_date[ordered[i - 1]])
+            dspot.append(
+                (spot - spot_by_date[ordered[i - 1]]) / spot_by_date[ordered[i - 1]]
+            )
         else:
             dspot.append(0.0)
         dates.append(d)
@@ -158,7 +204,15 @@ def ebe_daily_series(hist_greek_rows, hist_oi_rows, hist_spot_rows, expiry, tick
         fired = ds if abs(ds) > band else 0.0
         impulse.append(gex_level[i] * fired)
     n = min(len(dates), len(fwd))
-    return (impulse[:n], proxy[:n], vanna[:n], charm[:n], fwd[:n], fwdsign[:n], dates[:n])
+    return (
+        impulse[:n],
+        proxy[:n],
+        vanna[:n],
+        charm[:n],
+        fwd[:n],
+        fwdsign[:n],
+        dates[:n],
+    )
 
 
 def pooled_corr_de_meaned(sig_map, key):
@@ -182,38 +236,54 @@ def pooled_corr_de_meaned(sig_map, key):
 def main():
     t0 = time.time()
     signals = build_fast_signals()
-    print(f"[fast] built {len(signals)} tickers in {time.time()-t0:.1f}s")
+    print(f"[fast] built {len(signals)} tickers in {time.time() - t0:.1f}s")
     for tk in signals:
-        print(f"  {tk:5s} n={len(signals[tk]['dates']):4d} impulse_nnz="
-              f"{sum(1 for v in signals[tk]['impulse'] if v!=0):3d}")
+        print(
+            f"  {tk:5s} n={len(signals[tk]['dates']):4d} impulse_nnz="
+            f"{sum(1 for v in signals[tk]['impulse'] if v != 0):3d}"
+        )
 
-    print("\n=== PRIMARY: TRUE HEDGE-FLOW OBJECT (impulse = gex_level * dS/spot, band-gated) ===")
+    print(
+        "\n=== PRIMARY: TRUE HEDGE-FLOW OBJECT (impulse = gex_level * dS/spot, band-gated) ==="
+    )
     r, n, md = pooled_corr_de_meaned(signals, "impulse")
     lo, hi = corr_ci(r, n)
-    print(f"  pooled n={n}  corr={r:+.4f}  95% CI=[{lo:+.4f},{hi:+.4f}]  "
-          f"min-detectable|r|@80%={md:.4f}")
+    print(
+        f"  pooled n={n}  corr={r:+.4f}  95% CI=[{lo:+.4f},{hi:+.4f}]  "
+        f"min-detectable|r|@80%={md:.4f}"
+    )
     # Decision rule
     abs_r = abs(r)
     if abs_r < md and (abs(lo) < md and abs(hi) < md):
         verdict = "RULED_OUT"
-        print(f"  VERDICT: {verdict}  (|r|={abs_r:.4f} < md={md:.4f} AND CI excludes md) -> "
-              f"clean 'no edge in primary GEX/hedge-flow channel at the daily clock'. "
-              f"Ship descriptive instrument, permanently demote predictive framing.")
-    elif abs_r >= md and lo <= 0 <= hi is False and abs(lo) > 0:
+        print(
+            f"  VERDICT: {verdict}  (|r|={abs_r:.4f} < md={md:.4f} AND CI excludes md) -> "
+            f"clean 'no edge in primary GEX/hedge-flow channel at the daily clock'. "
+            f"Ship descriptive instrument, permanently demote predictive framing."
+        )
+    elif abs_r >= md and (lo > 0 or hi < 0):
         verdict = "SUPPORTED"
-        print(f"  VERDICT: {verdict}  -> first honest evidence of a flow edge -> justifies the longer build.")
+        print(
+            f"  VERDICT: {verdict}  -> first honest evidence of a flow edge -> justifies the longer build."
+        )
     else:
         verdict = "UNDERPOWERED/INCONCLUSIVE"
-        print(f"  VERDICT: {verdict}  (CI straddles md) -> 'can't tell yet' -> event-clock build warranted.")
+        print(
+            f"  VERDICT: {verdict}  (CI straddles md) -> 'can't tell yet' -> event-clock build warranted."
+        )
 
     # SPY/QQQ sign-consistency on the pooled primary
-    spy = signals.get("SPY", {}).get("impulse", []); spyf = signals.get("SPY", {}).get("fwd_sign", [])
-    qqq = signals.get("QQQ", {}).get("impulse", []); qqqf = signals.get("QQQ", {}).get("fwd_sign", [])
+    spy = signals.get("SPY", {}).get("impulse", [])
+    spyf = signals.get("SPY", {}).get("fwd_sign", [])
+    qqq = signals.get("QQQ", {}).get("impulse", [])
+    qqqf = signals.get("QQQ", {}).get("fwd_sign", [])
     if spy and qqq:
         r_spy = ebe._safe_corr(spy, spyf)
         r_qqq = ebe._safe_corr(qqq, qqqf)
         consistent = (r_spy > 0) == (r_qqq > 0)
-        print(f"  SPY corr={r_spy:+.4f}  QQQ corr={r_qqq:+.4f}  sign-consistent={consistent}")
+        print(
+            f"  SPY corr={r_spy:+.4f}  QQQ corr={r_qqq:+.4f}  sign-consistent={consistent}"
+        )
 
     # Exploratory secondaries (de-meaned pooled) with BH over the true family
     print("\n=== EXPLORATORY SECONDARIES (pooled de-meaned, BH over true family) ===")
@@ -222,9 +292,8 @@ def main():
         rr, nn, _ = pooled_corr_de_meaned(signals, key)
         sec[key] = (rr, nn)
         print(f"  {key:8s} n={nn:5d} corr={rr:+.4f}")
-    ps = sorted((abs(sec[k][0]) for k in sec), reverse=True)
-    import numpy as np
-    qs = ebe._bh_qvalues(dict(zip(sec.keys(), [abs(sec[k][0]) for k in sec])))
+    pvals = {k: _two_sided_p(sec[k][0], sec[k][1]) for k in sec}
+    qs = ebe._bh_qvalues(pvals)
     for k in sec:
         print(f"    -> {k}: q={qs.get(k, 0):.3f}")
 
@@ -238,7 +307,7 @@ def main():
     p = ebe._block_perm_p(allx, ally, n_perms=500)
     print(f"\n  PRIMARY block-perm p={p:.4f} (n={len(allx)})")
 
-    print(f"\n[fast] total {time.time()-t0:.1f}s")
+    print(f"\n[fast] total {time.time() - t0:.1f}s")
 
 
 if __name__ == "__main__":

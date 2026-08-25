@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # SABR model tests
 # ---------------------------------------------------------------------------
+
 
 class TestSABRModel:
     """Verify SABR Hagan volatility surface is well-behaved."""
@@ -64,8 +64,9 @@ class TestSABRModel:
         vol_otm_call = sabr_vol_hagan(F, 115.0, T, alpha, beta, rho, nu)
 
         # Negative rho -> put wing > call wing
-        assert vol_otm_put > vol_otm_call, \
+        assert vol_otm_put > vol_otm_call, (
             f"Negative rho skew expected: put vol {vol_otm_put:.4f} <= call vol {vol_otm_call:.4f}"
+        )
 
     @pytest.mark.unit
     def test_sabr_increases_with_nu(self):
@@ -79,8 +80,9 @@ class TestSABRModel:
         vol_low = sabr_vol_hagan(F, K, T, alpha, beta, rho, nu=0.2)
         vol_high = sabr_vol_hagan(F, K, T, alpha, beta, rho, nu=1.0)
 
-        assert vol_high > vol_low, \
+        assert vol_high > vol_low, (
             f"Higher nu should increase wing vol: {vol_high:.4f} <= {vol_low:.4f}"
+        )
 
     @pytest.mark.unit
     def test_sabr_model_instantiation(self):
@@ -96,6 +98,7 @@ class TestSABRModel:
 # ---------------------------------------------------------------------------
 # Vanna-Volga tests
 # ---------------------------------------------------------------------------
+
 
 class TestVannaVolga:
     """Smoke tests for VannaVolga.get_vol."""
@@ -121,8 +124,9 @@ class TestVannaVolga:
         atm_vol, rr25, bf25 = 0.30, 5.0, 2.0
 
         vol = get_vol(S, K, T, r, q, atm_vol, rr25, bf25)
-        assert abs(vol - atm_vol) < 0.05, \
+        assert abs(vol - atm_vol) < 0.05, (
             f"ATM vol {vol:.4f} too far from input {atm_vol}"
+        )
 
     @pytest.mark.unit
     def test_get_vol_wing_separation(self):
@@ -135,8 +139,9 @@ class TestVannaVolga:
         vol_call = get_vol(S, 115.0, T, r, q, atm_vol, rr25, bf25)
         vol_put = get_vol(S, 85.0, T, r, q, atm_vol, rr25, bf25)
         # Positive RR means call wing > put wing
-        assert vol_call > vol_put, \
+        assert vol_call > vol_put, (
             f"Positive RR: call vol {vol_call:.4f} should exceed put vol {vol_put:.4f}"
+        )
 
     @pytest.mark.unit
     def test_rr_bf_symmetry_matches_their_definitions(self):
@@ -163,13 +168,20 @@ class TestVannaVolga:
         # (the eps=1e-8 floor vs. the other pillars' finite log-strike
         # distance), so get_vol(K_25C) recovers sigma_25C to ~1e-6 precision.
         from scipy.stats import norm
+
         sigma_25c_expected = atm_vol + bf25 / 100.0 + rr25 / 200.0
         sigma_25p_expected = atm_vol + bf25 / 100.0 - rr25 / 200.0
         F = S * math.exp((r - q) * T)
         d1_put = -norm.ppf(0.25)
-        k_25p = F * math.exp(-d1_put * sigma_25p_expected * math.sqrt(T) + 0.5 * sigma_25p_expected**2 * T)
+        k_25p = F * math.exp(
+            -d1_put * sigma_25p_expected * math.sqrt(T)
+            + 0.5 * sigma_25p_expected**2 * T
+        )
         d1_call = norm.ppf(0.25)
-        k_25c = F * math.exp(-d1_call * sigma_25c_expected * math.sqrt(T) + 0.5 * sigma_25c_expected**2 * T)
+        k_25c = F * math.exp(
+            -d1_call * sigma_25c_expected * math.sqrt(T)
+            + 0.5 * sigma_25c_expected**2 * T
+        )
 
         vol_25c = get_vol(S, k_25c, T, r, q, atm_vol, rr25, bf25)
         vol_25p = get_vol(S, k_25p, T, r, q, atm_vol, rr25, bf25)
@@ -177,9 +189,9 @@ class TestVannaVolga:
         assert (vol_25c - vol_25p) == pytest.approx(rr25 / 100.0, abs=1e-6), (
             "sigma_25C - sigma_25P must equal rr25/100 (anti-symmetric RR)"
         )
-        assert ((vol_25c + vol_25p) / 2 - atm_vol) == pytest.approx(bf25 / 100.0, abs=1e-6), (
-            "(sigma_25C + sigma_25P)/2 - ATM must equal bf25/100 (symmetric BF)"
-        )
+        assert ((vol_25c + vol_25p) / 2 - atm_vol) == pytest.approx(
+            bf25 / 100.0, abs=1e-6
+        ), "(sigma_25C + sigma_25P)/2 - ATM must equal bf25/100 (symmetric BF)"
 
     @pytest.mark.unit
     def test_get_vol_batch_matches_scalar(self):
@@ -202,6 +214,7 @@ class TestVannaVolga:
 # American LSM Monte Carlo tests
 # ---------------------------------------------------------------------------
 
+
 class TestAmericanLSMPricer:
     """Smoke tests for AmericanLSMPricer (MC.py)."""
 
@@ -210,10 +223,19 @@ class TestAmericanLSMPricer:
         """AmericanLSMPricer can be instantiated with standard parameters."""
         from MC import AmericanLSMPricer
 
-        pricer = AmericanLSMPricer(S=100.0, K=100.0, T=0.5, r=0.05, q=0.0,
-                                   sigma=0.25, simulations=5000, steps=50, option='call')
+        pricer = AmericanLSMPricer(
+            S=100.0,
+            K=100.0,
+            T=0.5,
+            r=0.05,
+            q=0.0,
+            sigma=0.25,
+            simulations=5000,
+            steps=50,
+            option="call",
+        )
         assert pricer is not None
-        assert pricer.option == 'call'
+        assert pricer.option == "call"
         assert pricer.simulations == 5000
         assert pricer.steps == 50
 
@@ -222,8 +244,17 @@ class TestAmericanLSMPricer:
         """price() should return a finite float for realistic inputs."""
         from MC import AmericanLSMPricer
 
-        pricer = AmericanLSMPricer(S=100.0, K=100.0, T=0.5, r=0.05, q=0.0,
-                                   sigma=0.25, simulations=5000, steps=50, option='call')
+        pricer = AmericanLSMPricer(
+            S=100.0,
+            K=100.0,
+            T=0.5,
+            r=0.05,
+            q=0.0,
+            sigma=0.25,
+            simulations=5000,
+            steps=50,
+            option="call",
+        )
         price = pricer.price()
         assert math.isfinite(price), f"Non-finite MC price: {price}"
         assert price > 0, f"Non-positive MC price: {price}"
@@ -233,8 +264,17 @@ class TestAmericanLSMPricer:
         """ATM put price should be between ~2-15 for moderate params."""
         from MC import AmericanLSMPricer
 
-        pricer = AmericanLSMPricer(S=100.0, K=100.0, T=0.5, r=0.05, q=0.0,
-                                   sigma=0.25, simulations=5000, steps=50, option='put')
+        pricer = AmericanLSMPricer(
+            S=100.0,
+            K=100.0,
+            T=0.5,
+            r=0.05,
+            q=0.0,
+            sigma=0.25,
+            simulations=5000,
+            steps=50,
+            option="put",
+        )
         price = pricer.price()
         assert 1.0 <= price <= 20.0, f"ATM put price {price:.4f} out of expected range"
 
@@ -244,12 +284,23 @@ class TestAmericanLSMPricer:
         because early-exercise optionality has non-zero value."""
         from MC import AmericanLSMPricer
 
-        pricer = AmericanLSMPricer(S=80.0, K=100.0, T=0.5, r=0.05, q=0.02,
-                                   sigma=0.20, simulations=5000, steps=50, option='put')
+        pricer = AmericanLSMPricer(
+            S=80.0,
+            K=100.0,
+            T=0.5,
+            r=0.05,
+            q=0.02,
+            sigma=0.20,
+            simulations=5000,
+            steps=50,
+            option="put",
+        )
         price = pricer.price()
         # Intrinsic value is a guaranteed lower bound
         intrinsic = 20.0
-        assert price >= intrinsic * 0.95, f"MC put {price:.4f} well below intrinsic {intrinsic}"
+        assert price >= intrinsic * 0.95, (
+            f"MC put {price:.4f} well below intrinsic {intrinsic}"
+        )
 
     @pytest.mark.unit
     def test_invalid_option_raises(self):
@@ -257,8 +308,17 @@ class TestAmericanLSMPricer:
         from MC import AmericanLSMPricer
 
         with pytest.raises(ValueError, match="Option type"):
-            AmericanLSMPricer(S=100.0, K=100.0, T=0.5, r=0.05, q=0.0,
-                              sigma=0.25, simulations=5000, steps=50, option='invalid')
+            AmericanLSMPricer(
+                S=100.0,
+                K=100.0,
+                T=0.5,
+                r=0.05,
+                q=0.0,
+                sigma=0.25,
+                simulations=5000,
+                steps=50,
+                option="invalid",
+            )
 
     @pytest.mark.unit
     def test_mc_all_greeks_gamma_is_stable_and_positive_across_seeds(self):
@@ -278,10 +338,11 @@ class TestAmericanLSMPricer:
         S, K, T, r, q, sigma = 100.0, 100.0, 0.5, 0.05, 0.0, 0.25
         gammas, rhos = [], []
         for seed in (1, 2, 3):
-            g = mc_all_greeks(S, K, T, r, q, sigma, sims=8000, steps=50,
-                              option='put', seed=seed)
-            gammas.append(g['gamma'])
-            rhos.append(g['rho'])
+            g = mc_all_greeks(
+                S, K, T, r, q, sigma, sims=8000, steps=50, option="put", seed=seed
+            )
+            gammas.append(g["gamma"])
+            rhos.append(g["rho"])
 
         assert all(gm > 0 for gm in gammas), (
             f"gamma went non-positive across seeds {gammas} -- CRN cancellation "
@@ -299,6 +360,7 @@ class TestAmericanLSMPricer:
 # Heston pricer tests
 # ---------------------------------------------------------------------------
 
+
 class TestHestonEuropeanCallPrice:
     """Regression coverage for the malformed-discriminant bug in
     heston_european_call_price (see its own docstring): the previous
@@ -315,7 +377,9 @@ class TestHestonEuropeanCallPrice:
         from MCHestonLSM import heston_european_call_price
 
         def bs_call(S, K, T, r, q, sigma):
-            d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+            d1 = (math.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (
+                sigma * math.sqrt(T)
+            )
             d2 = d1 - sigma * math.sqrt(T)
             n = lambda x: 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
             return S * math.exp(-q * T) * n(d1) - K * math.exp(-r * T) * n(d2)
@@ -325,7 +389,9 @@ class TestHestonEuropeanCallPrice:
         sigma = math.sqrt(v0)
         kappa, theta, rho, xi = 2.0, v0, 0.0, 1e-4
 
-        heston_price = heston_european_call_price(S, K, T, r, q, v0, kappa, theta, xi, rho)
+        heston_price = heston_european_call_price(
+            S, K, T, r, q, v0, kappa, theta, xi, rho
+        )
         bs_price = bs_call(S, K, T, r, q, sigma)
 
         assert heston_price == pytest.approx(bs_price, abs=1e-4), (
@@ -342,6 +408,7 @@ class TestHestonEuropeanCallPrice:
 # would catch it. Network calls are mocked out; this only pins which method
 # name gets passed to VolManager.get_sigma.)
 # ---------------------------------------------------------------------------
+
 
 def _load_options_main():
     """Load Options_Suite/main.py under a unique module name.
@@ -382,19 +449,35 @@ def _load_options_main():
         return sys.modules[module_name]
     options_suite_root = str(Path(__file__).resolve().parent.parent)
     flat_names = (
-        "config", "market_data", "vol_manager", "american_binomial", "MC",
-        "VannaVolga", "NewtonRaphsonIV", "bruteforceimpliedvol", "SABRModel",
+        "config",
+        "market_data",
+        "vol_manager",
+        "american_binomial",
+        "MC",
+        "VannaVolga",
+        "NewtonRaphsonIV",
+        "bruteforceimpliedvol",
+        "SABRModel",
         "barone_adesi_whaley",
     )
-    stashed = {name: sys.modules.pop(name) for name in flat_names if name in sys.modules}
+    stashed = {
+        name: sys.modules.pop(name) for name in flat_names if name in sys.modules
+    }
     spec = importlib.util.spec_from_file_location(
-        module_name, str(Path(__file__).resolve().parent.parent / "main.py"))
+        module_name, str(Path(__file__).resolve().parent.parent / "main.py")
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
     original_path = list(sys.path)
     try:
-        sys.path = [options_suite_root] + [p for p in sys.path if p != options_suite_root]
-        spec.loader.exec_module(mod)
+        sys.path = [options_suite_root] + [
+            p for p in sys.path if p != options_suite_root
+        ]
+        try:
+            spec.loader.exec_module(mod)
+        except BaseException:
+            sys.modules.pop(module_name, None)
+            raise
     finally:
         sys.path = original_path
         for name in flat_names:
@@ -404,16 +487,20 @@ def _load_options_main():
 
 
 class TestContextModeDefaultPricingMethod:
-
     @pytest.mark.unit
-    def test_run_context_mode_uses_leisen_reimer_by_default(self, tmp_path, monkeypatch):
+    def test_run_context_mode_uses_leisen_reimer_by_default(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("THETADATA_CF_ACCESS_CLIENT_ID", "test-client-id")
         monkeypatch.setenv("THETADATA_CF_ACCESS_CLIENT_SECRET", "test-client-secret")
 
         import json as json_mod
+
         options_main = _load_options_main()
 
-        context = {"focus": {"ticker": "AAPL", "option_type": "call", "target_years": 0.25}}
+        context = {
+            "focus": {"ticker": "AAPL", "option_type": "call", "target_years": 0.25}
+        }
         context_path = tmp_path / "ctx.json"
         context_path.write_text(json_mod.dumps(context), encoding="utf-8")
         out_path = tmp_path / "options_result.json"
@@ -430,7 +517,9 @@ class TestContextModeDefaultPricingMethod:
             def fetch_dividend_yield(self, ticker):
                 return 0.0
 
-            def validate_strike(self, ticker, strike, target_years=None, expiration_date=None):
+            def validate_strike(
+                self, ticker, strike, target_years=None, expiration_date=None
+            ):
                 return {"closest": strike}
 
         class FakeVolManager:
@@ -441,7 +530,9 @@ class TestContextModeDefaultPricingMethod:
         monkeypatch.setattr(options_main, "MarketDataController", FakeMarketData)
         monkeypatch.setattr(options_main, "VolManager", FakeVolManager)
 
-        rc = options_main.run_context_mode(str(context_path), str(out_path), no_interactive=True)
+        rc = options_main.run_context_mode(
+            str(context_path), str(out_path), no_interactive=True
+        )
 
         assert rc == 0
         assert calls.get("method") == "LeisenReimer", (

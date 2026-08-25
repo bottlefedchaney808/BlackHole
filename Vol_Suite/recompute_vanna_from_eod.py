@@ -25,6 +25,7 @@ Usage:
 Emits a JSON map: { "date": { "K": {"C": vanna, "P": vanna}, ... }, ... }
 (per-strike vanna, NOT netted across rights -- the battery's construction rule).
 """
+
 import datetime
 import json
 import math
@@ -32,8 +33,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from shared.thetadata import ThetaDataController
 import implied_vol as implied_vol_mod  # same IV-derivation the backtest uses
+
+from shared.thetadata import ThetaDataController
 
 # Measured convention (Gate-0 pin, 2026-08-11): rec.vanna = -1 * BS_vanna.
 # |scale| ~1.0 (SPY 0.951, QQQ 1.005); uniform across moneyness + both rights.
@@ -43,14 +45,14 @@ _BT_R = 0.04
 _BT_Q = 0.012
 
 
-def bs_vanna(S, K, T, sigma):
+def bs_vanna(S, K, T, sigma, r=_BT_R, q=_BT_Q):
     """BS closed-form vanna (right-symmetric)."""
     if sigma <= 0 or T <= 0 or K <= 0:
         return 0.0
-    d1 = (math.log(S / K) + (0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
     phi = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
-    return math.exp(0.0) * phi * (d2 / sigma)
+    return math.exp(-q * T) * phi * (d2 / sigma)
 
 
 def _norm_date(row):
@@ -79,7 +81,10 @@ def recompute(td, ticker, expiry):
 
     # dense EOD rows (prices only, no IV field). Full history.
     price_rows = td.option_bulk_hist_eod(ticker, expiry, start_str, end_str)
-    print(f"[recompute] {ticker}/{expiry} EOD rows {start_str}-{end_str}: {len(price_rows)}", flush=True)
+    print(
+        f"[recompute] {ticker}/{expiry} EOD rows {start_str}-{end_str}: {len(price_rows)}",
+        flush=True,
+    )
 
     # stock spot per day
     spot_rows = td.hist_stock_eod(ticker, start_str, end_str)
@@ -93,7 +98,10 @@ def recompute(td, ticker, expiry):
                 c = 0.0
             if c > 0:
                 close_by_date[d] = c
-    print(f"[recompute] spot days: {len(close_by_date)} ({start_str}->{end_str})", flush=True)
+    print(
+        f"[recompute] spot days: {len(close_by_date)} ({start_str}->{end_str})",
+        flush=True,
+    )
 
     exp_date = datetime.datetime.strptime(expiry, "%Y%m%d").date()
     vanna_by_day = {}
@@ -103,7 +111,11 @@ def recompute(td, ticker, expiry):
         if not d:
             continue
         try:
-            k = float(row["strike"]) / 1000.0 if float(row["strike"]) > 1000 else float(row["strike"])
+            k = (
+                float(row["strike"]) / 1000.0
+                if float(row["strike"]) >= 1000
+                else float(row["strike"])
+            )
             right = row["right"][0] if row.get("right") else "?"
         except (KeyError, TypeError, ValueError):
             continue
@@ -119,7 +131,9 @@ def recompute(td, ticker, expiry):
         if not spot:
             n_unrecoverable += 1
             continue
-        mark = implied_vol_mod.mid_price(row.get("bid"), row.get("ask"), row.get("close"))
+        mark = implied_vol_mod.mid_price(
+            row.get("bid"), row.get("ask"), row.get("close")
+        )
         if not mark or mark <= 0:
             n_unrecoverable += 1
             continue
@@ -128,15 +142,18 @@ def recompute(td, ticker, expiry):
             n_unrecoverable += 1
             continue
         n_iv += 1
-        v = VANNA_SIGN * bs_vanna(spot, k, T, solved)
+        v = VANNA_SIGN * bs_vanna(spot, k, T, solved, _BT_R, _BT_Q)
         vanna_by_day.setdefault(d, {}).setdefault(k, {})[right] = v
 
     tte_years = max((exp_date - datetime.date.today()).days, 1) / 365.0
     n_days = len(vanna_by_day)
-    last_spot = max(close_by_date.values()) if close_by_date else None
-    print(f"[recompute] {n_iv}/{n_total} cells solved IV "
-          f"({n_unrecoverable} no IV/spot); {n_days} distinct days; "
-          f"last spot~{last_spot if last_spot else 'n/a'}; TTE={tte_years:.4f}", flush=True)
+    last_spot = close_by_date[max(close_by_date)] if close_by_date else None
+    print(
+        f"[recompute] {n_iv}/{n_total} cells solved IV "
+        f"({n_unrecoverable} no IV/spot); {n_days} distinct days; "
+        f"last spot~{last_spot if last_spot else 'n/a'}; TTE={tte_years:.4f}",
+        flush=True,
+    )
     return vanna_by_day, tte_years, last_spot, n_days
 
 
@@ -156,8 +173,12 @@ def main():
         return 2
 
     result = {
-        "ticker": ticker, "expiry": expiry, "tte_years": tte_years,
-        "spot": spot, "n_days": n_days, "convention": "rec.vanna = -1 * BS_vanna",
+        "ticker": ticker,
+        "expiry": expiry,
+        "tte_years": tte_years,
+        "spot": spot,
+        "n_days": n_days,
+        "convention": "rec.vanna = -1 * BS_vanna",
         "vanna_by_day": vanna_by_day,
     }
     if out_path:

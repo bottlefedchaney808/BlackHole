@@ -19,7 +19,9 @@ distribution to the Black-Scholes normal distribution via Peizer-Pratt
 inversion, giving smooth, monotonic convergence usable accurately at far fewer
 steps.
 """
+
 import math
+
 import numpy as np
 
 
@@ -84,22 +86,34 @@ def crr_american_price(S, K, T, r, sigma, q=0.0, cp=True, steps=200):
     p = min(max(p, 1e-9), 1.0 - 1e-9)
 
     j = np.arange(steps + 1)
-    ST = S * (u ** j) * (d ** (steps - j))
+    ST = S * (u**j) * (d ** (steps - j))
     values = np.maximum(ST - K, 0.0) if cp else np.maximum(K - ST, 0.0)
 
     for i in range(steps - 1, -1, -1):
-        continuation = disc * (p * values[1:i + 2] + (1.0 - p) * values[0:i + 1])
+        continuation = disc * (p * values[1 : i + 2] + (1.0 - p) * values[0 : i + 1])
         jn = np.arange(i + 1)
-        St = S * (u ** jn) * (d ** (i - jn))
+        St = S * (u**jn) * (d ** (i - jn))
         intrinsic = np.maximum(St - K, 0.0) if cp else np.maximum(K - St, 0.0)
         values = np.maximum(continuation, intrinsic)
 
     return float(values[0])
 
 
-def _tree_all_greeks(pricer_fn, S, K, T, r, sigma, q, cp, steps,
-                     dS_frac=0.01, dSig_frac=0.02, dSig_2nd_frac=0.15,
-                     second_order_via_fd=True):
+def _tree_all_greeks(
+    pricer_fn,
+    S,
+    K,
+    T,
+    r,
+    sigma,
+    q,
+    cp,
+    steps,
+    dS_frac=0.01,
+    dSig_frac=0.02,
+    dSig_2nd_frac=0.15,
+    second_order_via_fd=True,
+):
     """Shared FD-greeks body over ANY American tree pricer with signature
     pricer_fn(S, K, T, r, sigma, q, cp, steps) -> float. Split out of
     american_all_greeks so BOTH the LR (leisen_reimer_american_price) and
@@ -128,9 +142,20 @@ def _tree_all_greeks(pricer_fn, S, K, T, r, sigma, q, cp, steps,
     a discrete tree.
     """
     if T <= 0 or sigma <= 1e-6:
-        return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,
-                'vanna': 0.0, 'vomma': 0.0, 'speed': 0.0, 'charm': 0.0, 'color': 0.0,
-                'rho_euro': 0.0, 'rho_ee_premium': 0.0}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "vega": 0.0,
+            "rho": 0.0,
+            "theta": 0.0,
+            "vanna": 0.0,
+            "vomma": 0.0,
+            "speed": 0.0,
+            "charm": 0.0,
+            "color": 0.0,
+            "rho_euro": 0.0,
+            "rho_ee_premium": 0.0,
+        }
 
     dS = S * dS_frac
     dSig = max(sigma * dSig_frac, 1e-4)
@@ -149,7 +174,7 @@ def _tree_all_greeks(pricer_fn, S, K, T, r, sigma, q, cp, steps,
         return (price(S + dS, sigma_) - price(S - dS, sigma_)) / (2 * dS)
 
     delta = delta_at()
-    gamma = (price(S + dS) - 2 * p0 + price(S - dS)) / (dS ** 2)
+    gamma = (price(S + dS) - 2 * p0 + price(S - dS)) / (dS**2)
     vega = (price(sigma_=sigma + dSig) - price(sigma_=sigma - dSig)) / (2 * dSig)
     rho = (price(r_=r + dR) - price(r_=r - dR)) / (2 * dR)
     theta = -(price(T_=T + dT) - price(T_=T_dn)) / T_span / 365.0
@@ -175,7 +200,9 @@ def _tree_all_greeks(pricer_fn, S, K, T, r, sigma, q, cp, steps,
         p_sig_up = price(sigma_=sigma + dSig_2)
         p_sig_dn = price(sigma_=sigma - dSig_2)
         vomma = (p_sig_up - 2 * p0 + p_sig_dn) / (dSig_2 * dSig_2)
-        vanna = (delta_at(sigma_=sigma + dSig_2) - delta_at(sigma_=sigma - dSig_2)) / (2 * dSig_2)
+        vanna = (delta_at(sigma_=sigma + dSig_2) - delta_at(sigma_=sigma - dSig_2)) / (
+            2 * dSig_2
+        )
     else:
         vanna = 0.0
         vomma = 0.0
@@ -195,9 +222,20 @@ def _tree_all_greeks(pricer_fn, S, K, T, r, sigma, q, cp, steps,
     rho_euro = _bs_rho(S, K, T, r, q, sigma, cp)
     rho_ee_premium = rho - rho_euro
 
-    return {'delta': delta, 'gamma': gamma, 'vega': vega, 'rho': rho, 'theta': theta,
-            'vanna': vanna, 'vomma': vomma, 'speed': speed, 'charm': charm, 'color': color,
-            'rho_euro': rho_euro, 'rho_ee_premium': rho_ee_premium}
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "vega": vega,
+        "rho": rho,
+        "theta": theta,
+        "vanna": vanna,
+        "vomma": vomma,
+        "speed": speed,
+        "charm": charm,
+        "color": color,
+        "rho_euro": rho_euro,
+        "rho_ee_premium": rho_ee_premium,
+    }
 
 
 def _charm_color_fd(price_ST, S, T, dS, dT):
@@ -221,14 +259,16 @@ def _charm_color_fd(price_ST, S, T, dS, dT):
     which silently returned the exact negative of the house convention for
     both Greeks in both engines.
     """
-    T_dn = max(1e-6, T - dT)          # never evaluate a non-positive maturity
-    T_span = dT + (T - T_dn)          # == 2*dT unless the floor above clipped it
+    T_dn = max(1e-6, T - dT)  # never evaluate a non-positive maturity
+    T_span = dT + (T - T_dn)  # == 2*dT unless the floor above clipped it
 
     def delta_at(T_):
         return (price_ST(S + dS, T_) - price_ST(S - dS, T_)) / (2 * dS)
 
     def gamma_at(T_):
-        return (price_ST(S + dS, T_) - 2 * price_ST(S, T_) + price_ST(S - dS, T_)) / (dS ** 2)
+        return (price_ST(S + dS, T_) - 2 * price_ST(S, T_) + price_ST(S - dS, T_)) / (
+            dS**2
+        )
 
     charm = -(delta_at(T + dT) - delta_at(T_dn)) / T_span
     color = (gamma_at(T + dT) - gamma_at(T_dn)) / T_span
@@ -254,6 +294,7 @@ def _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps):
     volatility; when that floor bites, the (then asymmetric) second
     difference below still evaluates correctly.
     """
+
     def price(S_=S, sigma_=sigma):
         return leisen_reimer_american_price(S_, K, T, r, sigma_, q, cp, steps)
 
@@ -261,8 +302,12 @@ def _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps):
 
     # Vanna = dVega/dS (wider S bump so the mixed FD sees real curvature)
     dS_vanna = max(S * 0.03, 0.03)
-    vega_up = (price(S + dS_vanna, sigma + dsig) - price(S + dS_vanna, sigma - dsig)) / (2 * dsig)
-    vega_down = (price(S - dS_vanna, sigma + dsig) - price(S - dS_vanna, sigma - dsig)) / (2 * dsig)
+    vega_up = (
+        price(S + dS_vanna, sigma + dsig) - price(S + dS_vanna, sigma - dsig)
+    ) / (2 * dsig)
+    vega_down = (
+        price(S - dS_vanna, sigma + dsig) - price(S - dS_vanna, sigma - dsig)
+    ) / (2 * dsig)
     vanna = (vega_up - vega_down) / (2 * dS_vanna)
 
     # Vomma = dVega/dSigma
@@ -276,7 +321,11 @@ def _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps):
     p_lo = price(sigma_=sig_lo)
     # Non-uniform central 2nd difference; collapses to the textbook
     # (p_hi - 2*p_mid + p_lo)/h^2 whenever the floor above did not bite.
-    vomma = 2.0 * (h_dn * (p_hi - p_mid) - h_up * (p_mid - p_lo)) / (h_up * h_dn * (h_up + h_dn))
+    vomma = (
+        2.0
+        * (h_dn * (p_hi - p_mid) - h_up * (p_mid - p_lo))
+        / (h_up * h_dn * (h_up + h_dn))
+    )
 
     return vanna, vomma
 
@@ -304,9 +353,20 @@ def lr_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=401):
     genuinely different tree lattice regardless of how smooth the
     underlying convergence is."""
     if T <= 0 or sigma <= 1e-6:
-        return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,
-                'vanna': 0.0, 'vomma': 0.0, 'speed': 0.0, 'charm': 0.0, 'color': 0.0,
-                'rho_euro': 0.0, 'rho_ee_premium': 0.0}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "vega": 0.0,
+            "rho": 0.0,
+            "theta": 0.0,
+            "vanna": 0.0,
+            "vomma": 0.0,
+            "speed": 0.0,
+            "charm": 0.0,
+            "color": 0.0,
+            "rho_euro": 0.0,
+            "rho_ee_premium": 0.0,
+        }
 
     dS = S * 0.01
     dsig = max(sigma * 0.02, 1e-4)
@@ -322,36 +382,41 @@ def lr_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=401):
 
     # 1st-order Greeks.
     delta = (price(S + dS) - price(S - dS)) / (2 * dS)
-    gamma = (price(S + dS) - 2 * p0 + price(S - dS)) / (dS ** 2)
+    gamma = (price(S + dS) - 2 * p0 + price(S - dS)) / (dS**2)
     vega = (price(sigma_=sigma + dsig) - price(sigma_=sigma - dsig)) / (2 * dsig)
     rho = (price(r_=r + dR) - price(r_=r - dR)) / (2 * dR)
     theta = -(price(T_=T + dT) - price(T_=T_dn)) / T_span / 365.0
 
-    greeks = {'delta': delta, 'gamma': gamma, 'vega': vega, 'rho': rho, 'theta': theta}
+    greeks = {"delta": delta, "gamma": gamma, "vega": vega, "rho": rho, "theta": theta}
 
     # 2nd-order Greeks: Vanna, Vomma, Speed, Charm, Color
     # LR is uniquely stable for 2nd-order sigma FD due to smooth Peizer-Pratt convergence
 
     # Vanna / Vomma -- shared LR implementation (this IS LR's own tree here).
-    greeks['vanna'], greeks['vomma'] = _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps)
+    greeks["vanna"], greeks["vomma"] = _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps)
 
     # Speed = dGamma/dS
     dS_speed = max(S * 0.03, 0.03)
-    gamma_speed_up = (price(S + dS_speed + dS) - 2 * price(S + dS_speed) + price(S + dS_speed - dS)) / (dS ** 2)
-    gamma_speed_down = (price(S - dS_speed + dS) - 2 * price(S - dS_speed) + price(S - dS_speed - dS)) / (dS ** 2)
-    greeks['speed'] = (gamma_speed_up - gamma_speed_down) / (2 * dS_speed)
+    gamma_speed_up = (
+        price(S + dS_speed + dS) - 2 * price(S + dS_speed) + price(S + dS_speed - dS)
+    ) / (dS**2)
+    gamma_speed_down = (
+        price(S - dS_speed + dS) - 2 * price(S - dS_speed) + price(S - dS_speed - dS)
+    ) / (dS**2)
+    greeks["speed"] = (gamma_speed_up - gamma_speed_down) / (2 * dS_speed)
 
     # Charm = -dDelta/dTau, Color = +dGamma/dTau, both per YEAR -- delegated to
     # the shared _charm_color_fd so the sign convention lives in exactly one
     # place (this block previously carried its own copy with the T-bump legs
     # transposed, returning the exact negative of both Greeks).
     dT_charm = max(T * 0.01, 1.0 / 365.0)
-    greeks['charm'], greeks['color'] = _charm_color_fd(
-        lambda S_, T_: price(S_, T_=T_), S, T, dS, dT_charm)
+    greeks["charm"], greeks["color"] = _charm_color_fd(
+        lambda S_, T_: price(S_, T_=T_), S, T, dS, dT_charm
+    )
 
     rho_euro = _bs_rho(S, K, T, r, q, sigma, cp)
-    greeks['rho_euro'] = rho_euro
-    greeks['rho_ee_premium'] = rho - rho_euro
+    greeks["rho_euro"] = rho_euro
+    greeks["rho_ee_premium"] = rho - rho_euro
 
     return greeks
 
@@ -390,9 +455,20 @@ def crr_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=401):
     Peizer-Pratt inversion is smooth enough to use narrower ones; see
     american_second_third_order_greeks)."""
     if T <= 0 or sigma <= 1e-6:
-        return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,
-                'vanna': 0.0, 'vomma': 0.0, 'speed': 0.0, 'charm': 0.0, 'color': 0.0,
-                'rho_euro': 0.0, 'rho_ee_premium': 0.0}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "vega": 0.0,
+            "rho": 0.0,
+            "theta": 0.0,
+            "vanna": 0.0,
+            "vomma": 0.0,
+            "speed": 0.0,
+            "charm": 0.0,
+            "color": 0.0,
+            "rho_euro": 0.0,
+            "rho_ee_premium": 0.0,
+        }
 
     dS = S * 0.03
     dsig = max(sigma * 0.02, 1e-4)
@@ -408,12 +484,12 @@ def crr_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=401):
 
     # 1st-order Greeks (unchanged from before this task).
     delta = (price(S + dS) - price(S - dS)) / (2 * dS)
-    gamma = (price(S + dS) - 2 * p0 + price(S - dS)) / (dS ** 2)
+    gamma = (price(S + dS) - 2 * p0 + price(S - dS)) / (dS**2)
     vega = (price(sigma_=sigma + dsig) - price(sigma_=sigma - dsig)) / (2 * dsig)
     rho = (price(r_=r + dR) - price(r_=r - dR)) / (2 * dR)
     theta = -(price(T_=T + dT) - price(T_=T_dn)) / T_span / 365.0
 
-    greeks = {'delta': delta, 'gamma': gamma, 'vega': vega, 'rho': rho, 'theta': theta}
+    greeks = {"delta": delta, "gamma": gamma, "vega": vega, "rho": rho, "theta": theta}
 
     # 2nd-order Greeks: Vanna, Vomma, Speed, Charm, Color
     # Speed/Charm/Color stay on the CRR tree with wider bumps to overcome CRR
@@ -439,25 +515,30 @@ def crr_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=401):
     # reasoning that previously sent CRR's 2nd-order sigma Greeks to the
     # closed-form BS expressions, except LR keeps the early-exercise premium
     # that the European closed form drops.
-    greeks['vanna'], greeks['vomma'] = _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps)
+    greeks["vanna"], greeks["vomma"] = _lr_vanna_vomma(S, K, T, r, sigma, q, cp, steps)
 
     # Speed = dGamma/dS (wider outer S bump)
     dS_speed = max(S * 0.05, 0.05)
-    gamma_speed_up = (price(S + dS_speed + dS) - 2 * price(S + dS_speed) + price(S + dS_speed - dS)) / (dS ** 2)
-    gamma_speed_down = (price(S - dS_speed + dS) - 2 * price(S - dS_speed) + price(S - dS_speed - dS)) / (dS ** 2)
-    greeks['speed'] = (gamma_speed_up - gamma_speed_down) / (2 * dS_speed)
+    gamma_speed_up = (
+        price(S + dS_speed + dS) - 2 * price(S + dS_speed) + price(S + dS_speed - dS)
+    ) / (dS**2)
+    gamma_speed_down = (
+        price(S - dS_speed + dS) - 2 * price(S - dS_speed) + price(S - dS_speed - dS)
+    ) / (dS**2)
+    greeks["speed"] = (gamma_speed_up - gamma_speed_down) / (2 * dS_speed)
 
     # Charm = -dDelta/dTau, Color = +dGamma/dTau, both per YEAR -- delegated to
     # the shared _charm_color_fd (still on CRR's own tree via `price`). This
     # block previously carried its own copy of the stencil with the T-bump legs
     # transposed, returning the exact negative of both Greeks.
     dT_charm = max(T * 0.01, 1.0 / 365.0)
-    greeks['charm'], greeks['color'] = _charm_color_fd(
-        lambda S_, T_: price(S_, T_=T_), S, T, dS, dT_charm)
+    greeks["charm"], greeks["color"] = _charm_color_fd(
+        lambda S_, T_: price(S_, T_=T_), S, T, dS, dT_charm
+    )
 
     rho_euro = _bs_rho(S, K, T, r, q, sigma, cp)
-    greeks['rho_euro'] = rho_euro
-    greeks['rho_ee_premium'] = rho - rho_euro
+    greeks["rho_euro"] = rho_euro
+    greeks["rho_ee_premium"] = rho - rho_euro
 
     return greeks
 
@@ -561,7 +642,7 @@ def american_second_third_order_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=
     with both the earlier closed-form derivation and this live comparison).
     """
     if T <= 0 or sigma <= 1e-6:
-        return {'vanna': 0.0, 'vomma': 0.0, 'speed': 0.0, 'charm': 0.0, 'color': 0.0}
+        return {"vanna": 0.0, "vomma": 0.0, "speed": 0.0, "charm": 0.0, "color": 0.0}
 
     dS = S * 0.01
     dSig = max(sigma * 0.03, 1e-4)
@@ -575,10 +656,16 @@ def american_second_third_order_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=
         return (price(S_ + dS, sigma_, T_) - price(S_ - dS, sigma_, T_)) / (2 * dS)
 
     def gamma_at(S_=S, T_=T, sigma_=sigma):
-        return (price(S_ + dS, sigma_, T_) - 2 * price(S_, sigma_, T_) + price(S_ - dS, sigma_, T_)) / (dS ** 2)
+        return (
+            price(S_ + dS, sigma_, T_)
+            - 2 * price(S_, sigma_, T_)
+            + price(S_ - dS, sigma_, T_)
+        ) / (dS**2)
 
     vanna = (delta_at(sigma_=sigma + dSig) - delta_at(sigma_=sigma - dSig)) / (2 * dSig)
-    vomma = (price(sigma_=sigma + dSig) - 2 * price() + price(sigma_=sigma - dSig)) / (dSig ** 2)
+    vomma = (price(sigma_=sigma + dSig) - 2 * price() + price(sigma_=sigma - dSig)) / (
+        dSig**2
+    )
     speed = (gamma_at(S_=S + dS) - gamma_at(S_=S - dS)) / (2 * dS)
     # Charm/Color via the shared stencil (identical maths to the inline version
     # this replaced -- same dS, same dT, same T_dn/T_span clamping); it is now
@@ -586,7 +673,13 @@ def american_second_third_order_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=
     # and by both lr_all_greeks and crr_all_greeks.
     charm, color = _charm_color_fd(lambda S_, T_: price(S_, sigma, T_), S, T, dS, dT)
 
-    return {'vanna': vanna, 'vomma': vomma, 'speed': speed, 'charm': charm, 'color': color}
+    return {
+        "vanna": vanna,
+        "vomma": vomma,
+        "speed": speed,
+        "charm": charm,
+        "color": color,
+    }
 
 
 def _peizer_pratt_inversion(z: float, n: int) -> float:
@@ -671,13 +764,13 @@ def leisen_reimer_american_price(S, K, T, r, sigma, q=0.0, cp=True, steps=200):
     disc = np.exp(-r * dt)
 
     j = np.arange(n + 1)
-    ST = S * (u ** j) * (d ** (n - j))
+    ST = S * (u**j) * (d ** (n - j))
     values = np.maximum(ST - K, 0.0) if cp else np.maximum(K - ST, 0.0)
 
     for i in range(n - 1, -1, -1):
-        continuation = disc * (p * values[1:i + 2] + (1.0 - p) * values[0:i + 1])
+        continuation = disc * (p * values[1 : i + 2] + (1.0 - p) * values[0 : i + 1])
         jn = np.arange(i + 1)
-        St = S * (u ** jn) * (d ** (i - jn))
+        St = S * (u**jn) * (d ** (i - jn))
         intrinsic = np.maximum(St - K, 0.0) if cp else np.maximum(K - St, 0.0)
         values = np.maximum(continuation, intrinsic)
 
@@ -706,6 +799,7 @@ def leisen_reimer_american_price(S, K, T, r, sigma, q=0.0, cp=True, steps=200):
 # builds -- so bisecting a whole chain costs ~50 vectorized steps total,
 # not ~50 * n_strikes.
 # ---------------------------------------------------------------------------
+
 
 def _peizer_pratt_inversion_vec(z, n):
     """Array version of _peizer_pratt_inversion -- identical formula, just
@@ -736,6 +830,11 @@ def crr_american_price_batch(S, K, T, r, sigma, q=0.0, cp=True, steps=200):
     n = K.shape[0]
     cp_arr = np.broadcast_to(np.asarray(cp, dtype=bool), (n,))
 
+    if T <= 0:
+        call_intr = np.maximum(S - K, 0.0)
+        put_intr = np.maximum(K - S, 0.0)
+        return np.where(cp_arr, call_intr, put_intr)
+
     steps = max(int(steps), 1)
     dt = T / steps
     u = np.exp(sigma * np.sqrt(dt))
@@ -751,7 +850,10 @@ def crr_american_price_batch(S, K, T, r, sigma, q=0.0, cp=True, steps=200):
     values = np.where(cp_arr[:, None], call_payoff, put_payoff)
 
     for i in range(steps - 1, -1, -1):
-        continuation = disc * (p[:, None] * values[:, 1:i + 2] + (1.0 - p[:, None]) * values[:, 0:i + 1])
+        continuation = disc * (
+            p[:, None] * values[:, 1 : i + 2]
+            + (1.0 - p[:, None]) * values[:, 0 : i + 1]
+        )
         jn = np.arange(i + 1)
         St = S * (u[:, None] ** jn[None, :]) * (d[:, None] ** (i - jn)[None, :])
         call_intr = np.maximum(St - K[:, None], 0.0)
@@ -776,6 +878,11 @@ def leisen_reimer_american_price_batch(S, K, T, r, sigma, q=0.0, cp=True, steps=
     sigma = np.atleast_1d(np.asarray(sigma, dtype=float))
     n = K.shape[0]
     cp_arr = np.broadcast_to(np.asarray(cp, dtype=bool), (n,))
+
+    if T <= 0:
+        call_intr = np.maximum(S - K, 0.0)
+        put_intr = np.maximum(K - S, 0.0)
+        return np.where(cp_arr, call_intr, put_intr)
 
     steps = max(int(steps), 1)
     if steps % 2 == 0:
@@ -804,7 +911,10 @@ def leisen_reimer_american_price_batch(S, K, T, r, sigma, q=0.0, cp=True, steps=
     values = np.where(cp_arr[:, None], call_payoff, put_payoff)
 
     for i in range(steps - 1, -1, -1):
-        continuation = disc * (p[:, None] * values[:, 1:i + 2] + (1.0 - p[:, None]) * values[:, 0:i + 1])
+        continuation = disc * (
+            p[:, None] * values[:, 1 : i + 2]
+            + (1.0 - p[:, None]) * values[:, 0 : i + 1]
+        )
         jn = np.arange(i + 1)
         St = S * (u[:, None] ** jn[None, :]) * (d[:, None] ** (i - jn)[None, :])
         call_intr = np.maximum(St - K[:, None], 0.0)

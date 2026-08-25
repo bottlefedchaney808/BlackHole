@@ -3,9 +3,9 @@
 
 Writes one seed_data_<TICKER>_<EXPIRY>_short.json per ticker into a scratch dir.
 """
+
 import datetime
 import json
-import math
 import os
 import sys
 import time
@@ -13,15 +13,23 @@ import time
 # Ensure Vol_Suite on path for thetadata_client + expiry_selector + implied_vol
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from thetadata_client import ThetaDataController
-import expiry_selector
-import implied_vol as implied_vol_mod
 
 SCRATCH_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(SCRATCH_DIR, exist_ok=True)
 
 TICKERS = [
-    "AAPL", "AMD", "AMZN", "GOOGL", "JPM", "META",
-    "MSFT", "NFLX", "NVDA", "QQQ", "SPY", "TSLA",
+    "AAPL",
+    "AMD",
+    "AMZN",
+    "GOOGL",
+    "JPM",
+    "META",
+    "MSFT",
+    "NFLX",
+    "NVDA",
+    "QQQ",
+    "SPY",
+    "TSLA",
 ]
 
 # Load .env from the FinancialDevelopment repo root (parent of this worktree)
@@ -33,13 +41,15 @@ if not os.path.exists(_env):
     _env = os.path.join(_root, ".env")
 if os.path.exists(_env):
     for line in open(_env, encoding="utf-8").read().splitlines():
-        line=line.strip()
+        line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, _, v = line.partition("=")
-        k=k.strip(); v=v.strip().strip('"').strip("'")
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
         if k and k not in os.environ:
             os.environ[k] = v
+
 
 def _norm_date(row):
     for key in ("date", "Date", "created", "datetime"):
@@ -50,12 +60,14 @@ def _norm_date(row):
                 return digits
     return None
 
+
 def dte(expiry: str, as_of: datetime.date) -> int:
     try:
         exp = datetime.datetime.strptime(expiry, "%Y%m%d").date()
         return max((exp - as_of).days, 0)
     except Exception:
         return 10**9
+
 
 def pick_short_dte_expiry(td, ticker, as_of):
     exps = td.list_expirations(ticker)
@@ -69,12 +81,22 @@ def pick_short_dte_expiry(td, ticker, as_of):
     eligible.sort()
     return eligible[0][1], eligible
 
+
 def pull_one(ticker, as_of):
     td = ThetaDataController()
-    out = {"ticker": ticker, "as_of": as_of.isoformat(), "status": "ok",
-           "expiry": None, "dte": None, "eligible": [],
-           "greeks_rows": 0, "oi_rows": 0, "spot_rows": 0,
-           "error": None, "file": None}
+    out = {
+        "ticker": ticker,
+        "as_of": as_of.isoformat(),
+        "status": "ok",
+        "expiry": None,
+        "dte": None,
+        "eligible": [],
+        "greeks_rows": 0,
+        "oi_rows": 0,
+        "spot_rows": 0,
+        "error": None,
+        "file": None,
+    }
     try:
         expiry, eligible = pick_short_dte_expiry(td, ticker, as_of)
         out["expiry"] = expiry
@@ -98,10 +120,15 @@ def pull_one(ticker, as_of):
                 oi_rows = td.option_bulk_hist_oi_by_day(ticker, expiry, start_s, end_s)
                 if len(oi_rows) > 0:
                     break
-            except Exception as e:
+            except Exception:
                 if attempt == 3:
                     raise
                 time.sleep(5 * attempt)
+
+        if not oi_rows:
+            out["status"] = "BLOCKED"
+            out["error"] = "no OI rows returned after retries"
+            return out
 
         # filter: only rows where date has spot (to align with driver expectations)
         close_by_date = {}
@@ -131,14 +158,18 @@ def pull_one(ticker, as_of):
             iv = float(row.get("implied_vol", 0) or 0)
             if iv <= 0:
                 continue
-            greeks.append({
-                "date": d, "strike": str(k), "right": right,
-                "implied_vol": iv,
-                "close": row.get("close"),
-                "vanna": row.get("vanna"),
-                "gamma": row.get("gamma"),
-                "delta": row.get("delta"),
-            })
+            greeks.append(
+                {
+                    "date": d,
+                    "strike": str(k),
+                    "right": right,
+                    "implied_vol": iv,
+                    "close": row.get("close"),
+                    "vanna": row.get("vanna"),
+                    "gamma": row.get("gamma"),
+                    "delta": row.get("delta"),
+                }
+            )
 
         out["greeks_rows"] = len(greeks)
         out["oi_rows"] = len(oi_rows)
@@ -148,14 +179,19 @@ def pull_one(ticker, as_of):
             "ticker": ticker,
             "expiry": expiry,
             "lookback_days": 14,
-            "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "generated": datetime.datetime.now(datetime.UTC).isoformat(),
             "n_greeks": len(greeks),
             "n_oi": len(oi_rows),
             "n_spot": len(spot_rows),
             "dte_at_pull": out["dte"],
             "eligible_expiries_2_7": out["eligible"],
         }
-        payload = {"manifest": manifest, "greeks": greeks, "oi": oi_rows, "spot": spot_rows}
+        payload = {
+            "manifest": manifest,
+            "greeks": greeks,
+            "oi": oi_rows,
+            "spot": spot_rows,
+        }
         out_path = os.path.join(SCRATCH_DIR, f"seed_data_{ticker}_{expiry}_short.json")
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
@@ -170,6 +206,7 @@ def pull_one(ticker, as_of):
             pass
     return out
 
+
 def main():
     as_of = datetime.date.today()
     print(f"[tier2-pull] as_of={as_of}  scratch={SCRATCH_DIR}")
@@ -178,15 +215,20 @@ def main():
         print(f"[tier2-pull] {tk} ...", flush=True)
         r = pull_one(tk, as_of)
         results.append(r)
-        print(f"  -> {r['status']} expiry={r.get('expiry')} dte={r.get('dte')} "
-              f"greeks={r['greeks_rows']} oi={r['oi_rows']} spot={r['spot_rows']} "
-              f"err={r.get('error')}")
+        print(
+            f"  -> {r['status']} expiry={r.get('expiry')} dte={r.get('dte')} "
+            f"greeks={r['greeks_rows']} oi={r['oi_rows']} spot={r['spot_rows']} "
+            f"err={r.get('error')}"
+        )
     # Write manifest
     mpath = os.path.join(SCRATCH_DIR, "pull_manifest.json")
     with open(mpath, "w", encoding="utf-8") as fh:
-        json.dump({"as_of": as_of.isoformat(), "results": results}, fh, indent=2, default=str)
+        json.dump(
+            {"as_of": as_of.isoformat(), "results": results}, fh, indent=2, default=str
+        )
     print(f"\n[tier2-pull] manifest -> {mpath}")
     return results
+
 
 if __name__ == "__main__":
     main()

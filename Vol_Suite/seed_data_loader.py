@@ -18,13 +18,13 @@ Usage:
 For a directory scan:
   load_all_seed_data("/path/to/dir") -> {ticker: (greeks, oi, spot)}
 """
+
 import glob
 import json
 import os
-from typing import Dict, List, Tuple
 
 
-def load_seed_data(path: str) -> Tuple[List[dict], List[dict], List[dict]]:
+def load_seed_data(path: str) -> tuple[list[dict], list[dict], list[dict]]:
     """Load one saved payload. Returns (greeks, oi, spot) rows verbatim."""
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -32,19 +32,25 @@ def load_seed_data(path: str) -> Tuple[List[dict], List[dict], List[dict]]:
 
 
 def load_all_seed_data(
-        dirpath: str,
-) -> Dict[str, Tuple[List[dict], List[dict], List[dict]]]:
+    dirpath: str,
+) -> dict[str, tuple[list[dict], list[dict], list[dict]]]:
     """Scan a directory for seed_data_*.json and return {ticker: payload}.
 
     Ticker is parsed from the filename (seed_data_<TICKER>_<expiry>_<n>d.json).
     """
-    out: Dict[str, Tuple[List[dict], List[dict], List[dict]]] = {}
+    out: dict[str, tuple[list[dict], list[dict], list[dict]]] = {}
     for path in sorted(glob.glob(os.path.join(dirpath, "seed_data_*.json"))):
         base = os.path.basename(path)
         try:
             ticker = base.split("_")[2]
         except IndexError:
             continue
+        if ticker in out:
+            raise ValueError(
+                f"load_all_seed_data: multiple seed files found for ticker {ticker!r} "
+                f"in {dirpath!r} (latest: {path!r}); load them individually with "
+                f"load_seed_data() instead of scanning the directory."
+            )
         out[ticker] = load_seed_data(path)
     return out
 
@@ -56,7 +62,10 @@ def manifest_of(path: str) -> dict:
 
 if __name__ == "__main__":
     import sys
+
     for p in sys.argv[1:]:
         g, o, s = load_seed_data(p)
-        print(f"{os.path.basename(p)}: greeks={len(g)} oi={len(o)} spot={len(s)} "
-              f"manifest={manifest_of(p)}")
+        print(
+            f"{os.path.basename(p)}: greeks={len(g)} oi={len(o)} spot={len(s)} "
+            f"manifest={manifest_of(p)}"
+        )

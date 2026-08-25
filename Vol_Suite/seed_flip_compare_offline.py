@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Re-run the 4-arm seed/flow comparison OFFLINE from saved seed_data_*.json
-# (no ThetaData proxy needed). Reads the payloads via seed_data_loader.py and
-# feeds them into _accumulate_from_history.
-#
-# Usage (from Vol_Suite/):
-#   env -u PYTHONPATH -u VIRTUAL_ENV ../Financial_Dev_Env/bin/python3 \
-#     seed_flip_compare_offline.py ../handoff_20260812/seed_data 150
-import datetime
+"""Re-run the 4-arm seed/flow comparison OFFLINE from saved seed_data_*.json
+(no ThetaData proxy needed). Reads the payloads via seed_data_loader.py and
+feeds them into _accumulate_from_history.
+
+Usage (from Vol_Suite/):
+  env -u PYTHONPATH -u VIRTUAL_ENV ../Financial_Dev_Env/bin/python3 \\
+    seed_flip_compare_offline.py ../handoff_20260812/seed_data 150
+"""
+
 import glob
-import json
-import math
 import os
 import sys
 
@@ -54,20 +53,28 @@ def main() -> int:
             os.environ["DEALER_VANNA_FLOW"] = vflow
             try:
                 acc = rr._accumulate_from_history(
-                    ticker, expiry, lookback, seed_mode, greeks, oi, spot)
+                    ticker, expiry, lookback, seed_mode, greeks, oi, spot
+                )
             finally:
                 os.environ.pop("DEALER_SEED_SIGN", None)
                 os.environ.pop("DEALER_VANNA_FLOW", None)
             book = acc.position_by_strike
             end_book = sum(book.values())
             regime = "SHORT" if end_book < 0 else ("LONG" if end_book > 0 else "FLAT")
-            results[label] = {"end_book": end_book, "regime": regime,
-                              "n_days": len(acc.daily_trace)}
-            print(f"  {label:<16} end_book={end_book:,.0f} ({regime}) n_days={len(acc.daily_trace)}")
+            results[label] = {
+                "end_book": end_book,
+                "regime": regime,
+                "n_days": len(acc.daily_trace),
+            }
+            print(
+                f"  {label:<16} end_book={end_book:,.0f} ({regime}) n_days={len(acc.daily_trace)}"
+            )
         summary[ticker] = results
 
     print("\n===== CONSOLIDATED (offline) =====")
-    print(f"{'Ticker':<7} {'live':>12} {'vanna_seed':>12} {'vannaflow':>12} {'svi_rp_seed':>12}")
+    print(
+        f"{'Ticker':<7} {'live':>12} {'vanna_seed':>12} {'vannaflow':>12} {'svi_rp_seed':>12}"
+    )
     for ticker, results in sorted(summary.items()):
         live = results["live(repl)"]["end_book"]
         vs = results["vanna_seed"]["end_book"]

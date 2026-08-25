@@ -14,9 +14,13 @@ change the canonical sign model; do not.
 
     from sabr_dealer_calib import fit_sabr_dealer   # == fit_sabr_reference
 """
+
 from __future__ import annotations
 
-from Vol_Suite.vol_surface_reference import fit_sabr_reference  # type: ignore
+try:
+    from .vol_surface_reference import fit_sabr_reference
+except ImportError:
+    from vol_surface_reference import fit_sabr_reference
 
 # Canonical dealer-facing entry point (identical behaviour to the original).
 fit_sabr_dealer = fit_sabr_reference

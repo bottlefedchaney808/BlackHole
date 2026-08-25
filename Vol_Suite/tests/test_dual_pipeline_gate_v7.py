@@ -16,10 +16,10 @@ re-admission-to-evidence (NOT promotion) ruling:
 Network-free: pure functions + synthetic fixtures + the persisted v6/v5 obs where
 present. No ThetaData / .env / clock / sockets.
 """
+
 import inspect
 import json
 import os
-import sys
 
 import run_dual_pipeline_gate_v7 as v7
 
@@ -43,7 +43,9 @@ def test_benchmark_framing_label_present():
     split = v7.delta_new_split(all_pairs)
     src = inspect.getsource(v7)
     # label must name the moneyness sign map
-    assert "−1×BS_vanna MONEYNESS SIGN MAP" in src or "moneyness sign map" in src.lower()
+    assert (
+        "−1×BS_vanna MONEYNESS SIGN MAP" in src or "moneyness sign map" in src.lower()
+    )
     # must NOT claim a flat −1 baseline
     assert "flat −1×BS benchmark" not in src
     assert "flat -1×BS baseline" not in src
@@ -74,8 +76,13 @@ def test_weight_independent_keeps_deadband_mass():
 def test_weightings_identical_for_confident_sign():
     # for sign=±1 rows the two weightings are mathematically identical
     for s in (-1, 1):
-        assert abs(v7.weight_conservative(s, 100.0, 0.2)
-                   - v7.weight_convention_independent(100.0, 0.2)) < 1e-12
+        assert (
+            abs(
+                v7.weight_conservative(s, 100.0, 0.2)
+                - v7.weight_convention_independent(100.0, 0.2)
+            )
+            < 1e-12
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +96,7 @@ def test_n_eff_formula_and_bounds():
     assert abs(v7.n_eff([]) - 0.0) < 1e-9
     # bounds always hold: 1 <= n_eff <= len
     import random
+
     random.seed(0)
     for _ in range(50):
         w = [random.random() * 10 for _ in range(20)]
@@ -183,7 +191,9 @@ def test_loo_12_rows_one_per_cluster():
     assert sorted(omitted) == clusters
     for r in loo:
         assert r["n_clusters"] == 11
-        assert r["n_rows"] == 447 - sum(1 for p in all_pairs if p["cluster"] == r["omitted"])
+        assert r["n_rows"] == 447 - sum(
+            1 for p in all_pairs if p["cluster"] == r["omitted"]
+        )
 
 
 def test_loo_spy0728_is_single_hinge():
@@ -208,11 +218,16 @@ def test_exact_binomial_reference_values():
 
 def test_cluster_gate_n12_bar8_exact_null():
     rows, all_pairs = v7.build_all_pairs()
-    k, n, aligned_clusters, P, clears = v7.cluster_as_unit_gate(all_pairs, "weight_conv")
+    k, n, aligned_clusters, P, clears = v7.cluster_as_unit_gate(
+        all_pairs, "weight_conv"
+    )
     assert n == 12
     assert v7.BAR_2_3 == 8
     assert k == len(aligned_clusters)
-    assert abs(P - sum(__import__("math").comb(12, x) for x in range(k, 13)) / 2**12) < 1e-9
+    assert (
+        abs(P - sum(__import__("math").comb(12, x) for x in range(k, 13)) / 2**12)
+        < 1e-9
+    )
     # R2/R9: 6/12 aligned, chance-median -> does NOT clear the 2/3 bar
     assert k == 6
     assert clears is False
@@ -230,29 +245,44 @@ def test_cluster_gate_independent_weights_deadband():
     # cluster's D_conv to >= 0.50 -> all 12 align. This is exactly the R2
     # caution: |OI·vanna| is more favorable, conservative |sign·OI·vanna| is
     # the honest bar.
-    assert kc == 6          # conservative: chance-median, fails the 2/3 bar
-    assert ki == 12         # convention-independent: all align
+    assert kc == 6  # conservative: chance-median, fails the 2/3 bar
+    assert ki == 12  # convention-independent: all align
     assert Pc > 0.5 and Pi < 0.01
     assert clr is False and clri is True
     # conservative is the binding/fragility-honest gate
-    assert v7.build_verdict(rows and all_pairs, v7.delta_new_split(all_pairs),
-                            v7.family_dconv(all_pairs, "weight_conv"),
-                            v7.cluster_as_unit_gate(all_pairs, "weight_conv"))[0] \
+    assert (
+        v7.build_verdict(
+            all_pairs,
+            v7.delta_new_split(all_pairs),
+            v7.family_dconv(all_pairs, "weight_conv"),
+            v7.cluster_as_unit_gate(all_pairs, "weight_conv"),
+        )[0]
         == "OPEN (not certified)"
+    )
 
 
 def test_cluster_gate_synthetic_clear():
     # synthetic: 9 clusters with D>=0.5 (weighting-dependent alignment) -> clears 8/12
     pairs = []
     from run_dual_pipeline_gate_v6 import RESOLVABLE
+
     for i, (tk, day, exp, src) in enumerate(RESOLVABLE):
         aligned = i < 9
         dp = 1 if aligned else -1
-        pairs.append({"cluster": f"{tk}_{day}", "family": tk,
-                      "delta_prod": dp, "delta_new": -dp, "dist": 2 if aligned else 0,
-                      "weight_conv": 10.0 if aligned else 10.0,
-                      "weight_ind": 10.0, "oi_vanna_mass": 10.0, "oi": 1.0,
-                      "prod_vanna": 1.0})
+        pairs.append(
+            {
+                "cluster": f"{tk}_{day}",
+                "family": tk,
+                "delta_prod": dp,
+                "delta_new": -dp,
+                "dist": 2 if aligned else 0,
+                "weight_conv": 10.0 if aligned else 10.0,
+                "weight_ind": 10.0,
+                "oi_vanna_mass": 10.0,
+                "oi": 1.0,
+                "prod_vanna": 1.0,
+            }
+        )
     k, n, a, P, clears = v7.cluster_as_unit_gate(pairs, "weight_conv")
     assert k == 9 and n == 12 and clears is True
     assert abs(P - v7.exact_binom_ge(9, 12, 0.5)) < 1e-9
@@ -298,6 +328,7 @@ def test_binding_blockers_unchanged():
 def test_verdict_present_in_obs():
     if not os.path.exists(v7.V7_OBS):
         import pytest
+
         pytest.skip("v7 obs not generated yet; run run_dual_pipeline_gate_v7.py")
     d = json.load(open(v7.V7_OBS, encoding="utf-8"))
     assert d["verdict"] == "OPEN (not certified)"
@@ -319,9 +350,16 @@ def test_v7_module_is_network_free():
     code = inspect.getsource(v7)
     # drop module docstring
     if code.startswith('"""'):
-        code = code[code.find('"""', 3) + 3:]
-    for bad in ("import socket", "import urllib", "import requests", "from requests",
-                "import httpx", "import subprocess", "os.environ"):
+        code = code[code.find('"""', 3) + 3 :]
+    for bad in (
+        "import socket",
+        "import urllib",
+        "import requests",
+        "from requests",
+        "import httpx",
+        "import subprocess",
+        "os.environ",
+    ):
         assert bad not in code, bad
     # v6 import must not pull network on import (it is pure functions)
     assert v6_import_clean()
@@ -329,6 +367,7 @@ def test_v7_module_is_network_free():
 
 def v6_import_clean():
     import run_dual_pipeline_gate_v6 as v6
+
     s = inspect.getsource(v6)
     for bad in ("socket", "urllib", "requests.", "httpx", "subprocess"):
         assert bad not in s.lower()

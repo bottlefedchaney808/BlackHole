@@ -31,6 +31,7 @@ price) rather than falling back to a shared Black-Scholes closed form --
 BAW is analytical, so these FD Greeks are noise-free and reflect BAW's
 own early-exercise-adjusted sensitivities end to end.
 """
+
 import math
 
 
@@ -50,12 +51,16 @@ def _bs_price(S, K, T, r, sigma, q, cp):
     d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T) / (sigma * sqrtT)
     d2 = d1 - sigma * sqrtT
     if cp:
-        return S * math.exp(-q * T) * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
+        return S * math.exp(-q * T) * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(
+            d2
+        )
     return K * math.exp(-r * T) * _norm_cdf(-d2) - S * math.exp(-q * T) * _norm_cdf(-d1)
 
 
 def _bs_d1(S, K, T, r, sigma, q):
-    return (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    return (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T) / (
+        sigma * math.sqrt(T)
+    )
 
 
 def _solve_baw_boundary_call(K, T, r, sigma, q, q2):
@@ -65,7 +70,11 @@ def _solve_baw_boundary_call(K, T, r, sigma, q, q2):
     """
     # Initial guess (Haug 7-4b): S_infty is the perpetual-American boundary
     S_infty = K / (1.0 - 1.0 / q2) if q2 != 1.0 else K * 2.0
-    h2 = -((r - q) * T + 2.0 * sigma * math.sqrt(T)) * (K / (S_infty - K)) if S_infty > K else -0.5
+    h2 = (
+        -((r - q) * T + 2.0 * sigma * math.sqrt(T)) * (K / (S_infty - K))
+        if S_infty > K
+        else -0.5
+    )
     Sstar = K + (S_infty - K) * (1.0 - math.exp(h2))
     Sstar = max(Sstar, K * 1.001)  # must be strictly above K for a call
 
@@ -103,7 +112,11 @@ def _solve_baw_boundary_put(K, T, r, sigma, q, q1):
     should be exercised early. Symmetric to _solve_baw_boundary_call.
     """
     S_infty = K / (1.0 - 1.0 / q1) if q1 != 1.0 else K * 0.5
-    h1 = ((r - q) * T - 2.0 * sigma * math.sqrt(T)) * (K / (K - S_infty)) if K > S_infty else -0.5
+    h1 = (
+        ((r - q) * T - 2.0 * sigma * math.sqrt(T)) * (K / (K - S_infty))
+        if K > S_infty
+        else -0.5
+    )
     Sstar = S_infty + (K - S_infty) * math.exp(h1)
     Sstar = max(Sstar, K * 0.001)  # must be strictly positive for a put
 
@@ -125,7 +138,7 @@ def _solve_baw_boundary_put(K, T, r, sigma, q, q1):
         #   Working it out step by step:
         term1 = -(1.0 - eqT_Nmd1) / q1
         term2 = -math.exp(-q * T) * _norm_pdf(d1s) / (q1 * sigma * math.sqrt(T))
-        dRHS = -eqT_Nmd1 + term1 - term2
+        dRHS = -eqT_Nmd1 + term1 + term2
         fprime = -1.0 - dRHS
         if abs(fprime) < 1e-12:
             break
@@ -146,8 +159,7 @@ def baw_american_price(S, K, T, r, sigma, q=0.0, cp=True, steps=None):
     into the same call sites (bruteforceimpliedvol, vol_manager, main).
     """
     # Clamp sigma floor to 0.1% to prevent OverflowError at very low sigma
-    if sigma < 0.001:
-        sigma = 0.001
+    sigma = max(sigma, 0.001)
 
     if T <= 0 or sigma <= 1e-6:
         return float(max(S - K, 0.0) if cp else max(K - S, 0.0))
@@ -207,9 +219,20 @@ def baw_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=None):
         from american_binomial import _bs_rho
 
     if T <= 0 or sigma <= 1e-6:
-        return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,
-                'vanna': 0.0, 'vomma': 0.0, 'speed': 0.0, 'charm': 0.0, 'color': 0.0,
-                'rho_euro': 0.0, 'rho_ee_premium': 0.0}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "vega": 0.0,
+            "rho": 0.0,
+            "theta": 0.0,
+            "vanna": 0.0,
+            "vomma": 0.0,
+            "speed": 0.0,
+            "charm": 0.0,
+            "color": 0.0,
+            "rho_euro": 0.0,
+            "rho_ee_premium": 0.0,
+        }
 
     is_call = cp
 
@@ -228,16 +251,16 @@ def baw_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=None):
     p_s_up = price(S_=S + dS)
     p_s_down = price(S_=S - dS)
 
-    greeks['delta'] = (p_s_up - p_s_down) / (2 * dS)
-    greeks['gamma'] = (p_s_up - 2 * p_base + p_s_down) / (dS ** 2)
+    greeks["delta"] = (p_s_up - p_s_down) / (2 * dS)
+    greeks["gamma"] = (p_s_up - 2 * p_base + p_s_down) / (dS**2)
 
     p_sig_up = price(sigma_=sigma + dsig)
     p_sig_down = price(sigma_=sigma - dsig)
-    greeks['vega'] = (p_sig_up - p_sig_down) / (2 * dsig)
+    greeks["vega"] = (p_sig_up - p_sig_down) / (2 * dsig)
 
     p_r_up = price(r_=r + dr)
     p_r_down = price(r_=r - dr)
-    greeks['rho'] = (p_r_up - p_r_down) / (2 * dr)
+    greeks["rho"] = (p_r_up - p_r_down) / (2 * dr)
 
     # Theta = -dV/dT (T = time to expiry), scaled to a per-calendar-day
     # figure -- clamp T_dn away from 0 rather than letting it go negative,
@@ -246,17 +269,19 @@ def baw_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=None):
     # other engines' *_all_greeks (see MCHestonLSM.heston_all_greeks).
     T_dn = max(1e-6, T - dT)
     T_span = dT + (T - T_dn)
-    greeks['theta'] = -(price(T_=T + dT) - price(T_=T_dn)) / T_span / 365.0
+    greeks["theta"] = -(price(T_=T + dT) - price(T_=T_dn)) / T_span / 365.0
 
     # 2nd-order: Vanna, Vomma, Speed, Charm, Color -- all via BAW closed-
     # form finite differences on baw_american_price, no shared BS.
 
     # Vanna = dVega/dS
-    vega_s_up = (price(S_=S + dS, sigma_=sigma + dsig) -
-                 price(S_=S + dS, sigma_=sigma - dsig)) / (2 * dsig)
-    vega_s_down = (price(S_=S - dS, sigma_=sigma + dsig) -
-                   price(S_=S - dS, sigma_=sigma - dsig)) / (2 * dsig)
-    greeks['vanna'] = (vega_s_up - vega_s_down) / (2 * dS)
+    vega_s_up = (
+        price(S_=S + dS, sigma_=sigma + dsig) - price(S_=S + dS, sigma_=sigma - dsig)
+    ) / (2 * dsig)
+    vega_s_down = (
+        price(S_=S - dS, sigma_=sigma + dsig) - price(S_=S - dS, sigma_=sigma - dsig)
+    ) / (2 * dsig)
+    greeks["vanna"] = (vega_s_up - vega_s_down) / (2 * dS)
 
     # Vomma = dVega/dSigma. Bump kept narrow (0.06*sigma, vs. the old 0.15
     # which spanned an effective 30% of sigma and truncation-biased Vomma
@@ -267,35 +292,44 @@ def baw_all_greeks(S, K, T, r, sigma, q=0.0, cp=True, steps=None):
     sigma_lo = max(sigma - 2 * dsig_vomma, 1e-4)
     vega_sig_up = (price(sigma_=sigma + 2 * dsig_vomma) - p_base) / (2 * dsig_vomma)
     vega_sig_down = (p_base - price(sigma_=sigma_lo)) / (2 * dsig_vomma)
-    greeks['vomma'] = (vega_sig_up - vega_sig_down) / (2 * dsig_vomma)
+    greeks["vomma"] = (vega_sig_up - vega_sig_down) / (2 * dsig_vomma)
 
     # Speed = dGamma/dS
     dS_speed = max(S * 0.03, 0.03)
-    gamma_s_up = (price(S_=S + 2 * dS_speed) - 2 * price(S_=S + dS_speed) + p_base) / (dS_speed ** 2)
-    gamma_s_down = (p_base - 2 * price(S_=S - dS_speed) + price(S_=S - 2 * dS_speed)) / (dS_speed ** 2)
-    greeks['speed'] = (gamma_s_up - gamma_s_down) / (2 * dS_speed)
+    gamma_s_up = (price(S_=S + 2 * dS_speed) - 2 * price(S_=S + dS_speed) + p_base) / (
+        dS_speed**2
+    )
+    gamma_s_down = (
+        p_base - 2 * price(S_=S - dS_speed) + price(S_=S - 2 * dS_speed)
+    ) / (dS_speed**2)
+    greeks["speed"] = (gamma_s_up - gamma_s_down) / (2 * dS_speed)
 
     # Charm = -dDelta/dT and Color = dGamma/dT. Reuse the same T_dn/T_span
     # from Theta so all three time-sensitive Greeks agree on how "time
     # passing" is modeled (T increasing = MORE time to expiry).
     delta_Tup = (price(S_=S + dS, T_=T + dT) - price(S_=S - dS, T_=T + dT)) / (2 * dS)
     delta_Tdn = (price(S_=S + dS, T_=T_dn) - price(S_=S - dS, T_=T_dn)) / (2 * dS)
-    greeks['charm'] = -(delta_Tup - delta_Tdn) / T_span
+    greeks["charm"] = -(delta_Tup - delta_Tdn) / T_span
 
-    gamma_Tup = (price(S_=S + dS, T_=T + dT) - 2 * price(T_=T + dT) + price(S_=S - dS, T_=T + dT)) / (dS ** 2)
-    gamma_Tdn = (price(S_=S + dS, T_=T_dn) - 2 * price(T_=T_dn) + price(S_=S - dS, T_=T_dn)) / (dS ** 2)
-    greeks['color'] = (gamma_Tup - gamma_Tdn) / T_span
+    gamma_Tup = (
+        price(S_=S + dS, T_=T + dT) - 2 * price(T_=T + dT) + price(S_=S - dS, T_=T + dT)
+    ) / (dS**2)
+    gamma_Tdn = (
+        price(S_=S + dS, T_=T_dn) - 2 * price(T_=T_dn) + price(S_=S - dS, T_=T_dn)
+    ) / (dS**2)
+    greeks["color"] = (gamma_Tup - gamma_Tdn) / T_span
 
     rho_euro = _bs_rho(S, K, T, r, q, sigma, is_call)
-    rho_ee_premium = greeks['rho'] - rho_euro
-    greeks['rho_euro'] = rho_euro
-    greeks['rho_ee_premium'] = rho_ee_premium
+    rho_ee_premium = greeks["rho"] - rho_euro
+    greeks["rho_euro"] = rho_euro
+    greeks["rho_ee_premium"] = rho_ee_premium
 
     return greeks
 
 
-def brute_force_baw(market_price, S, K, T, r, q=0.0, cp=True,
-                    low=1e-3, high=5.0, tol=1e-4, max_iter=200):
+def brute_force_baw(
+    market_price, S, K, T, r, q=0.0, cp=True, low=1e-3, high=5.0, tol=1e-4, max_iter=200
+):
     """Bisection IV solve against baw_american_price. Same interface as
     brute_force / brute_force_lr / brute_force_mc so this drops into
     vol_manager the same way.
@@ -306,10 +340,14 @@ def brute_force_baw(market_price, S, K, T, r, q=0.0, cp=True,
     bruteforceimpliedvol.py's docstring); this new one follows suit.
     """
     if market_price is None or market_price <= 0:
-        raise ValueError(f"[BAW IV] Cannot solve for IV without a positive market price (got {market_price}).")
+        raise ValueError(
+            f"[BAW IV] Cannot solve for IV without a positive market price (got {market_price})."
+        )
     intrinsic = max(S - K, 0.0) if cp else max(K - S, 0.0)
     if market_price < intrinsic - 1e-6:
-        raise ValueError(f"[BAW IV] Market price {market_price:.4f} below intrinsic {intrinsic:.4f} -- arbitrageable, cannot solve.")
+        raise ValueError(
+            f"[BAW IV] Market price {market_price:.4f} below intrinsic {intrinsic:.4f} -- arbitrageable, cannot solve."
+        )
 
     p_low = baw_american_price(S, K, T, r, low, q, cp)
     p_high = baw_american_price(S, K, T, r, high, q, cp)
@@ -329,4 +367,6 @@ def brute_force_baw(market_price, S, K, T, r, q=0.0, cp=True,
             lo = mid
         else:
             hi = mid
-    raise ValueError(f"[BAW IV] Did not converge after {max_iter} iterations. No fallback.")
+    raise ValueError(
+        f"[BAW IV] Did not converge after {max_iter} iterations. No fallback."
+    )

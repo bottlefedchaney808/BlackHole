@@ -1,0 +1,9 @@
+reviews:
+  path_filters:
+    - "!Vol_Suite/_causal_acquisition_20260815/**"
+    - "!Vol_Suite/_scratch_tier2b/**"
+    - "!Vol_Suite/_expiry_falsifier_cache/**"
+    - "!**/*.png"
+    - "!**/*.pdf"
+    - "!**/*.zip"
+    - "!**/*.patch"

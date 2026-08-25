@@ -4,6 +4,7 @@ This module is orchestration only: acquisition, canonical-input construction,
 comparison validation, and Task 4 estimation remain owned by their respective
 modules.  Adapters are injected so this runner never acquires network data.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,10 @@ except ImportError:
 # valid scientific conclusion.
 COMPLETED_STATUSES = {"BETTER", "WORSE"}
 STATUSES = COMPLETED_STATUSES | {
-    "INDETERMINATE", "COMPARISON_INVALID", "CAUSAL_BLOCKED", "HARD_GAP",
+    "INDETERMINATE",
+    "COMPARISON_INVALID",
+    "CAUSAL_BLOCKED",
+    "HARD_GAP",
     "FAILED_EXECUTION",
 }
 
@@ -81,7 +85,9 @@ def _unit_input(unit: Mapping[str, Any]):
     rows = source.get("rows", source.get("chain_rows"))
     source_hashes = source.get("source_hashes")
     if rows is None or source_hashes is None:
-        raise ComparisonInvalid("canonical rows/source hashes are missing", structured_invalid=True)
+        raise ComparisonInvalid(
+            "canonical rows/source hashes are missing", structured_invalid=True
+        )
     return make_canonical_input(
         str(source.get("ticker", unit.get("ticker", ""))),
         str(source.get("calendar_day", unit.get("calendar_day", ""))),
@@ -89,7 +95,9 @@ def _unit_input(unit: Mapping[str, Any]):
         int(source.get("dte", unit.get("dte", 0))),
         float(source.get("spot", source.get("spot_price"))),
         str(source.get("iv_source_ts", unit.get("iv_source_ts", ""))),
-        rows, source_hashes, str(source.get("chain_source", "offline-canonical")),
+        rows,
+        source_hashes,
+        str(source.get("chain_source", "offline-canonical")),
     )
 
 
@@ -97,10 +105,19 @@ def _status_from_evaluation(evaluation: Mapping[str, Any] | None) -> str:
     if not evaluation:
         return "INDETERMINATE"
     declared = str(evaluation.get("status", "")).upper()
-    if declared in {"COMPARISON_INVALID", "CAUSAL_BLOCKED", "HARD_GAP", "FAILED_EXECUTION"}:
+    if declared in {
+        "COMPARISON_INVALID",
+        "CAUSAL_BLOCKED",
+        "HARD_GAP",
+        "FAILED_EXECUTION",
+    }:
         return declared
     decision = str(evaluation.get("decision", "INDETERMINATE")).upper()
-    return decision if decision in {"BETTER", "WORSE", "INDETERMINATE"} else "INDETERMINATE"
+    return (
+        decision
+        if decision in {"BETTER", "WORSE", "INDETERMINATE"}
+        else "INDETERMINATE"
+    )
 
 
 def run_universe_causal_comparison(
@@ -109,7 +126,8 @@ def run_universe_causal_comparison(
     *,
     live_runner: Callable[[Any], Any] | None = None,
     new_runner: Callable[[Any], Any] | None = None,
-    task4_evaluator: Callable[[Iterable[Mapping[str, Any]]], Mapping[str, Any]] | None = None,
+    task4_evaluator: Callable[[Iterable[Mapping[str, Any]]], Mapping[str, Any]]
+    | None = None,
     output_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run the complete offline pipeline and emit one auditable verdict.
@@ -139,8 +157,14 @@ def run_universe_causal_comparison(
     try:
         units_days = _unique_days(units)
         declared_days = manifest.get("intended_unique_day_denominator")
-        if isinstance(declared_days, bool) or not isinstance(declared_days, int) or declared_days < 0:
-            raise ValueError("intended_unique_day_denominator must be a non-negative integer")
+        if (
+            isinstance(declared_days, bool)
+            or not isinstance(declared_days, int)
+            or declared_days < 0
+        ):
+            raise ValueError(
+                "intended_unique_day_denominator must be a non-negative integer"
+            )
         if declared_days != len(units_days):
             artifact.update(
                 status="COMPARISON_INVALID",
@@ -150,7 +174,10 @@ def run_universe_causal_comparison(
             )
             return _write(artifact, output_path)
     except (TypeError, ValueError) as exc:
-        artifact.update(status="COMPARISON_INVALID", reason=f"calendar-day denominator failure: {exc}")
+        artifact.update(
+            status="COMPARISON_INVALID",
+            reason=f"calendar-day denominator failure: {exc}",
+        )
         return _write(artifact, output_path)
 
     artifact["same_day_units"] = _cluster_metadata(units)
@@ -161,16 +188,22 @@ def run_universe_causal_comparison(
     # independent Task 3 corpus.
     try:
         causal = validate_causal_eligibility(
-            units, intended_units=len(units),
+            units,
+            intended_units=len(units),
             intended_corpus_manifest={"units": manifest.get("units", units)},
             artifact_registry=registry,
         )
     except (KeyError, TypeError, ValueError, OSError) as exc:
-        artifact.update(status="COMPARISON_INVALID", reason=f"causal evidence/schema failure: {exc}")
+        artifact.update(
+            status="COMPARISON_INVALID", reason=f"causal evidence/schema failure: {exc}"
+        )
         return _write(artifact, output_path)
     artifact["causal_gate"] = causal
     if causal.get("causal_status") != "CAUSAL_ELIGIBLE":
-        artifact.update(status="CAUSAL_BLOCKED", reason="100% PRE_WINDOW coverage and registry validation are required")
+        artifact.update(
+            status="CAUSAL_BLOCKED",
+            reason="100% PRE_WINDOW coverage and registry validation are required",
+        )
         return _write(artifact, output_path)
 
     # Task 3's adapter accepts one CanonicalInput, not a clustered universe.
@@ -187,7 +220,10 @@ def run_universe_causal_comparison(
         )
         return _write(artifact, output_path)
     if not callable(live_runner) or not callable(new_runner):
-        artifact.update(status="FAILED_EXECUTION", reason="both injected live_runner and new_runner are required")
+        artifact.update(
+            status="FAILED_EXECUTION",
+            reason="both injected live_runner and new_runner are required",
+        )
         return _write(artifact, output_path)
 
     unit = units[0]
@@ -195,29 +231,51 @@ def run_universe_causal_comparison(
     try:
         canonical = _unit_input(unit)
         comparison = compare_expansion_common_input(
-            canonical, live_runner=live_runner, new_runner=new_runner,
-            provenance_units=[unit], artifact_registry=registry,
-            intended_units=1, intended_corpus_manifest={"units": [unit]},
+            canonical,
+            live_runner=live_runner,
+            new_runner=new_runner,
+            provenance_units=[unit],
+            artifact_registry=registry,
+            intended_units=1,
+            intended_corpus_manifest={"units": [unit]},
         )
         if not isinstance(comparison, Mapping) or comparison.get("status") != "VALID":
-            raise ComparisonInvalid("runner received missing or invalid comparison output", structured_invalid=True)
+            raise ComparisonInvalid(
+                "runner received missing or invalid comparison output",
+                structured_invalid=True,
+            )
         # Task 4 expects its own validated record shape.  Preserve the full
         # Task 3 unit/provenance/registry and add the comparison artifact.
         item = dict(unit)
-        item.update({"day": unit.get("calendar_day"), "comparison": dict(comparison),
-                     "artifact_registry": registry})
+        item.update(
+            {
+                "day": unit.get("calendar_day"),
+                "comparison": dict(comparison),
+                "artifact_registry": registry,
+            }
+        )
         records.append(item)
     except ComparisonInvalid as exc:
-        artifact.update(status="COMPARISON_INVALID", reason=str(exc), invalid_result=exc.invalid_result)
+        artifact.update(
+            status="COMPARISON_INVALID",
+            reason=str(exc),
+            invalid_result=exc.invalid_result,
+        )
         return _write(artifact, output_path)
     except (KeyError, TypeError, ValueError, OSError) as exc:
-        artifact.update(status="COMPARISON_INVALID", reason=f"runner output/schema failure: {exc}")
+        artifact.update(
+            status="COMPARISON_INVALID", reason=f"runner output/schema failure: {exc}"
+        )
         return _write(artifact, output_path)
     artifact["comparisons"] = records
 
-    evaluator = task4_evaluator if task4_evaluator is not None else _default_task4_evaluator
+    evaluator = (
+        task4_evaluator if task4_evaluator is not None else _default_task4_evaluator
+    )
     if not callable(evaluator):
-        artifact.update(status="FAILED_EXECUTION", reason="Task 4 evaluator is unavailable")
+        artifact.update(
+            status="FAILED_EXECUTION", reason="Task 4 evaluator is unavailable"
+        )
         return _write(artifact, output_path)
     try:
         evaluation = dict(evaluator(records))
@@ -228,7 +286,9 @@ def run_universe_causal_comparison(
         artifact.update(status="COMPARISON_INVALID", reason=str(exc))
         return _write(artifact, output_path)
     except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
-        artifact.update(status="FAILED_EXECUTION", reason=f"Task 4 evaluation failed: {exc}")
+        artifact.update(
+            status="FAILED_EXECUTION", reason=f"Task 4 evaluation failed: {exc}"
+        )
         return _write(artifact, output_path)
     artifact["task4_evaluation"] = evaluation
     artifact["status"] = _status_from_evaluation(evaluation)
@@ -242,7 +302,25 @@ def _write(artifact: dict[str, Any], output_path: str | Path | None) -> dict[str
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         artifact["artifact_path"] = str(path)
-        path.write_text(json.dumps(artifact, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        try:
+            serialized = (
+                json.dumps(artifact, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            )
+        except ValueError as exc:
+            reason = f"artifact contains non-finite value(s), cannot serialize: {exc}"
+            fallback = {
+                "schema_version": artifact.get("schema_version"),
+                "runner": artifact.get("runner"),
+                "status": "FAILED_EXECUTION",
+                "reason": reason,
+                "artifact_path": artifact.get("artifact_path"),
+            }
+            artifact["status"] = "FAILED_EXECUTION"
+            artifact["reason"] = reason
+            serialized = (
+                json.dumps(fallback, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            )
+        path.write_text(serialized, encoding="utf-8")
     return artifact
 
 
@@ -252,7 +330,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("evidence")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
-    result = run_universe_causal_comparison(args.manifest, args.evidence, output_path=args.output)
+    result = run_universe_causal_comparison(
+        args.manifest, args.evidence, output_path=args.output
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["status"] in COMPLETED_STATUSES else 2
 

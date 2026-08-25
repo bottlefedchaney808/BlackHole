@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__robinhood__get_option_quotes",
+      "mcp__robinhood__review_equity_order",
+      "mcp__robinhood__get_equity_positions",
+      "mcp__robinhood__get_option_instruments",
+      "mcp__claude-in-chrome__get_page_text",
+      "Bash(tasklist *)",
+      "mcp__robinhood__review_option_order",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__robinhood__get_watchlist_items",
+      "mcp__robinhood__get_earnings_calendar",
+      "Bash(schtasks /query*)",
+      "mcp__robinhood__get_equity_historicals",
+      "mcp__robinhood__get_equity_technical_indicators"
+    ]
+  }
+}

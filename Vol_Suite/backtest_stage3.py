@@ -50,30 +50,29 @@ _accumulate_from_history split -- the pure function is what
 tests/test_backtest_stage3.py exercises directly with synthetic,
 network-free data.
 """
+
+import importlib.util
 import math
 import sys
-import importlib.util
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-from scipy import stats as _scipy_stats
-
-from thetadata_client import ThetaDataController, strike_from_theta, strike_to_theta
+import dealer_positioning
 import expiry_selector
 import implied_vol as implied_vol_mod
+import numpy as np
 import replication_reference
 import vol_surface_reference
-import dealer_positioning
+from scipy import stats as _scipy_stats
+from thetadata_client import ThetaDataController, strike_from_theta, strike_to_theta
 
 TRADING_DAYS_PER_YEAR = 252  # trading days/year, for realized-vol annualization from
-                              # trading-day closes. NOT expiry_selector.DEFAULT_A (365,
-                              # calendar days, used only for expiry-date resolution) --
-                              # see variance_swap_live.py:25-36 for why these must stay
-                              # separate; conflating them was already a bug fixed there once.
+# trading-day closes. NOT expiry_selector.DEFAULT_A (365,
+# calendar days, used only for expiry-date resolution) --
+# see variance_swap_live.py:25-36 for why these must stay
+# separate; conflating them was already a bug fixed there once.
 
 # Forward-window realized vol needs at least this many forward trading days
 # of price data after a given day to be computed at all -- days too close to
@@ -101,11 +100,13 @@ class DayRecord:
     spot: float
     net_gamma_v1: float
     net_gamma_v2: float
-    regime_v1: str              # 'long' or 'short'
+    regime_v1: str  # 'long' or 'short'
     regime_v2: str
-    fwd_realized_vol: Optional[float]  # annualized, None if too close to the end of the sample
-    net_gamma_dealer: float = 0.0       # dealer_exposure_model net gex (dealer frame)
-    regime_dealer_exposure: Optional[str] = None  # 'long'/'short' when the engine ran
+    fwd_realized_vol: (
+        float | None
+    )  # annualized, None if too close to the end of the sample
+    net_gamma_dealer: float = 0.0  # dealer_exposure_model net gex (dealer frame)
+    regime_dealer_exposure: str | None = None  # 'long'/'short' when the engine ran
 
 
 @dataclass
@@ -113,36 +114,37 @@ class BacktestResult:
     ticker: str
     expiry: str
     forward_window_days: int
-    day_records: List[DayRecord] = field(default_factory=list)
+    day_records: list[DayRecord] = field(default_factory=list)
     # v1 (oi_heuristic)
     v1_n_long: int = 0
     v1_n_short: int = 0
-    v1_long_mean_vol: float = float('nan')
-    v1_short_mean_vol: float = float('nan')
-    v1_diff: float = float('nan')       # short_mean - long_mean; hypothesis predicts > 0
-    v1_tstat: float = float('nan')
-    v1_pvalue: float = float('nan')
+    v1_long_mean_vol: float = float("nan")
+    v1_short_mean_vol: float = float("nan")
+    v1_diff: float = float("nan")  # short_mean - long_mean; hypothesis predicts > 0
+    v1_tstat: float = float("nan")
+    v1_pvalue: float = float("nan")
     # v2 (vol_surface_replication)
     v2_n_long: int = 0
     v2_n_short: int = 0
-    v2_long_mean_vol: float = float('nan')
-    v2_short_mean_vol: float = float('nan')
-    v2_diff: float = float('nan')
-    v2_tstat: float = float('nan')
-    v2_pvalue: float = float('nan')
+    v2_long_mean_vol: float = float("nan")
+    v2_short_mean_vol: float = float("nan")
+    v2_diff: float = float("nan")
+    v2_tstat: float = float("nan")
+    v2_pvalue: float = float("nan")
     # dealer_exposure (dealer-frame greeks engine, sourced from the
     # Dealer-Exposure-Dev worktree -- NOT merged into master)
     dealer_exposure_n_long: int = 0
     dealer_exposure_n_short: int = 0
-    dealer_exposure_long_mean_vol: float = float('nan')
-    dealer_exposure_short_mean_vol: float = float('nan')
-    dealer_exposure_diff: float = float('nan')
-    dealer_exposure_tstat: float = float('nan')
-    dealer_exposure_pvalue: float = float('nan')
+    dealer_exposure_long_mean_vol: float = float("nan")
+    dealer_exposure_short_mean_vol: float = float("nan")
+    dealer_exposure_diff: float = float("nan")
+    dealer_exposure_tstat: float = float("nan")
+    dealer_exposure_pvalue: float = float("nan")
 
 
-def _net_gamma_v1(gamma_map: Dict[Tuple[float, str], float],
-                   oi_map: Dict[Tuple[float, str], int]) -> float:
+def _net_gamma_v1(
+    gamma_map: dict[tuple[float, str], float], oi_map: dict[tuple[float, str], int]
+) -> float:
     """v1 (oi_heuristic): flat call=+/put=- across the WHOLE chain, no
     moneyness restriction -- exactly dealer_positioning._resolve_sign's
     'oi_heuristic' branch.
@@ -156,17 +158,22 @@ def _net_gamma_v1(gamma_map: Dict[Tuple[float, str], float],
     return total
 
 
-def _net_gamma_v2(gamma_map: Dict[Tuple[float, str], float],
-                   oi_map: Dict[Tuple[float, str], int],
-                   chain_iv: Dict[Tuple[float, str], float],
-                   spot: float, forward: float, T: float) -> float:
+def _net_gamma_v2(
+    gamma_map: dict[tuple[float, str], float],
+    oi_map: dict[tuple[float, str], int],
+    chain_iv: dict[tuple[float, str], float],
+    spot: float,
+    forward: float,
+    T: float,
+) -> float:
     """v2 (vol_surface_replication): OTM-restricted, Layer 1a-flippable sign
     -- same call dealer_positioning.py's per-expiry loop makes for this sign
     model, just against a historical day's chain instead of a live one.
     """
     otm_strikes = set(replication_reference._otm_leg_weights(chain_iv, spot, T).keys())
     vol_surface_ref = vol_surface_reference.compute_vol_surface_reference(
-        "BACKTEST", chain_iv, spot, forward=forward, T=T)
+        "BACKTEST", chain_iv, spot, forward=forward, T=T
+    )
 
     total = 0.0
     for (k, right), gamma in gamma_map.items():
@@ -174,7 +181,8 @@ def _net_gamma_v2(gamma_map: Dict[Tuple[float, str], float],
         if oi <= 0 or gamma == 0:
             continue
         sign = dealer_positioning._resolve_sign(
-            right, k, 'vol_surface_replication', otm_strikes, vol_surface_ref)
+            right, k, "vol_surface_replication", otm_strikes, vol_surface_ref
+        )
         total += sign * gamma * oi
     return total
 
@@ -207,13 +215,17 @@ def _net_gamma_v2(gamma_map: Dict[Tuple[float, str], float],
 # -- same fallback dealer_positioning._resolve_sign uses for missing data.
 # ---------------------------------------------------------------------------
 
-_V3_NOISE_FLOOR_MULT = 0.5   # multiples of SABR fit RMSE below which a deviation is ignored
-_V3_MAX_WEIGHT = 3.0         # cap on how many multiples of the floor one strike's weight can carry
+_V3_NOISE_FLOOR_MULT = (
+    0.5  # multiples of SABR fit RMSE below which a deviation is ignored
+)
+_V3_MAX_WEIGHT = (
+    3.0  # cap on how many multiples of the floor one strike's weight can carry
+)
 
 
-def _resolve_sign_weighted(right: str, strike: float,
-                            otm_strikes: Optional[set],
-                            vol_surface_ref) -> float:
+def _resolve_sign_weighted(
+    right: str, strike: float, otm_strikes: set | None, vol_surface_ref
+) -> float:
     """Materiality-gated, magnitude-weighted variant of
     dealer_positioning._resolve_sign's 'vol_surface_replication' branch --
     see module-level comment above for the rationale. Still gated by Layer
@@ -222,12 +234,18 @@ def _resolve_sign_weighted(right: str, strike: float,
     """
     if otm_strikes is None or (strike, right) not in otm_strikes:
         return 0.0
-    if vol_surface_ref is None or vol_surface_ref.fitter != 'sabr' or not vol_surface_ref.sabr_params:
-        return -1.0  # no SABR fit -> no noise floor to gate on; plain replication default
+    if (
+        vol_surface_ref is None
+        or vol_surface_ref.fitter != "sabr"
+        or not vol_surface_ref.sabr_params
+    ):
+        return (
+            -1.0
+        )  # no SABR fit -> no noise floor to gate on; plain replication default
     dev = vol_surface_ref.deviation_by_strike.get((strike, right))
     if dev is None:
         return -1.0
-    rmse = vol_surface_ref.sabr_params.get('rmse') or 0.0
+    rmse = vol_surface_ref.sabr_params.get("rmse") or 0.0
     if rmse <= 0:
         return -1.0 if dev >= 0 else 1.0
     z = abs(dev) / rmse
@@ -237,16 +255,21 @@ def _resolve_sign_weighted(right: str, strike: float,
     return -weight if dev > 0 else weight
 
 
-def _net_gamma_v3(gamma_map: Dict[Tuple[float, str], float],
-                   oi_map: Dict[Tuple[float, str], int],
-                   chain_iv: Dict[Tuple[float, str], float],
-                   spot: float, forward: float, T: float) -> float:
+def _net_gamma_v3(
+    gamma_map: dict[tuple[float, str], float],
+    oi_map: dict[tuple[float, str], int],
+    chain_iv: dict[tuple[float, str], float],
+    spot: float,
+    forward: float,
+    T: float,
+) -> float:
     """v3 (vol_surface_replication_weighted): same OTM gating as v2, but the
     Layer 1a sign uses _resolve_sign_weighted instead of the flat +/-1 flip.
     """
     otm_strikes = set(replication_reference._otm_leg_weights(chain_iv, spot, T).keys())
     vol_surface_ref = vol_surface_reference.compute_vol_surface_reference(
-        "BACKTEST", chain_iv, spot, forward=forward, T=T)
+        "BACKTEST", chain_iv, spot, forward=forward, T=T
+    )
 
     total = 0.0
     for (k, right), gamma in gamma_map.items():
@@ -269,10 +292,15 @@ def _net_gamma_v3(gamma_map: Dict[Tuple[float, str], float],
 # (VALID_SIGN_MODELS is untouched).
 # ---------------------------------------------------------------------------
 
-def _net_gamma_whale(gamma_map: Dict[Tuple[float, str], float],
-                      oi_map: Dict[Tuple[float, str], int],
-                      chain_iv: Dict[Tuple[float, str], float],
-                      spot: float, T: float, whale_bias: str) -> float:
+
+def _net_gamma_whale(
+    gamma_map: dict[tuple[float, str], float],
+    oi_map: dict[tuple[float, str], int],
+    chain_iv: dict[tuple[float, str], float],
+    spot: float,
+    T: float,
+    whale_bias: str,
+) -> float:
     """whale (whale-flow): same OTM gating as v2, but applies ONE uniform
     sign for the whole day (from that day's whale-flow bias) instead of a
     per-strike sign. 'bullish' -> customers bought call convexity / sold
@@ -281,10 +309,10 @@ def _net_gamma_whale(gamma_map: Dict[Tuple[float, str], float],
     the caller leaves regime_whale as None for these days rather than
     folding them into a default sign).
     """
-    if whale_bias == 'neutral':
+    if whale_bias == "neutral":
         return 0.0
     otm_strikes = set(replication_reference._otm_leg_weights(chain_iv, spot, T).keys())
-    direction_bias = 1.0 if whale_bias == 'bullish' else -1.0
+    direction_bias = 1.0 if whale_bias == "bullish" else -1.0
 
     total = 0.0
     for (k, right), gamma in gamma_map.items():
@@ -293,13 +321,13 @@ def _net_gamma_whale(gamma_map: Dict[Tuple[float, str], float],
         oi = oi_map.get((k, right), 0)
         if oi <= 0 or gamma == 0:
             continue
-        leg_direction = 1.0 if right == 'C' else -1.0
+        leg_direction = 1.0 if right == "C" else -1.0
         sign = -direction_bias * leg_direction
         total += sign * gamma * oi
     return total
 
 
-def _forward_realized_vol(closes_from_today: List[float], window: int) -> Optional[float]:
+def _forward_realized_vol(closes_from_today: list[float], window: int) -> float | None:
     """Annualized close-to-close realized vol over the next `window` trading
     days, given a list of closes starting at today's close (index 0) through
     at least `window` more trading days. Returns None if there aren't enough
@@ -309,7 +337,7 @@ def _forward_realized_vol(closes_from_today: List[float], window: int) -> Option
     """
     if len(closes_from_today) < window + 1:
         return None
-    prices = closes_from_today[:window + 1]
+    prices = closes_from_today[: window + 1]
     log_rets = np.diff(np.log(prices))
     if len(log_rets) < 2:
         return None
@@ -327,11 +355,14 @@ def _forward_realized_vol(closes_from_today: List[float], window: int) -> Option
 _IN_TREE_EXPIRY_EXPOSURE = Path(__file__).resolve().parent / "expiry_book_exposure.py"
 _DEV_WORKTREE_EXPIRY_EXPOSURE = (
     Path(__file__).resolve().parent.parent
-    / ".worktrees" / "dealer-exposure-dev" / "Vol_Suite" / "expiry_book_exposure.py"
+    / ".worktrees"
+    / "dealer-exposure-dev"
+    / "Vol_Suite"
+    / "expiry_book_exposure.py"
 )
 
 
-def _dealer_exposure_engine_path() -> Optional[Path]:
+def _dealer_exposure_engine_path() -> Path | None:
     if _IN_TREE_EXPIRY_EXPOSURE.is_file():
         return _IN_TREE_EXPIRY_EXPOSURE
     if _DEV_WORKTREE_EXPIRY_EXPOSURE.is_file():
@@ -352,42 +383,46 @@ def _load_dealer_exposure_engine():
             "dealer_exposure_model requires expiry_book_exposure.py (the live "
             "dealer-frame greeks engine); it is not in the main tree "
             f"({_IN_TREE_EXPIRY_EXPOSURE}) nor the Dealer-Exposure-Dev worktree "
-            f"({_DEV_WORKTREE_EXPIRY_EXPOSURE}).")
-    if path.name in sys.modules and "expiry_book_exposure" in sys.modules:
-        return sys.modules["expiry_book_exposure"]
-    spec = importlib.util.spec_from_file_location(
-        "expiry_book_exposure", str(path))
+            f"({_DEV_WORKTREE_EXPIRY_EXPOSURE})."
+        )
+    existing = sys.modules.get("expiry_book_exposure")
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location("expiry_book_exposure", str(path))
     mod = importlib.util.module_from_spec(spec)
     sys.modules["expiry_book_exposure"] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
-def _build_day_records(ticker: str, expiry: str,
-                        hist_greek_rows: List[dict], hist_oi_rows: List[dict],
-                        hist_price_rows: List[dict],
-                        forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
-                        accumulated_position: Optional[dict] = None,
-                        use_dealer_exposure: bool = False,
-                        ) -> List[DayRecord]:
+def _build_day_records(
+    ticker: str,
+    expiry: str,
+    hist_greek_rows: list[dict],
+    hist_oi_rows: list[dict],
+    hist_price_rows: list[dict],
+    forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
+    accumulated_position: dict | None = None,
+    use_dealer_exposure: bool = False,
+) -> list[DayRecord]:
     """Pure function over already-fetched historical rows -- the part
     tests/test_backtest_stage3.py exercises directly with synthetic data,
     same split as replication_reference._accumulate_from_history.
     """
     expiry_date = datetime.strptime(expiry, "%Y%m%d")
 
-    close_by_date_pre: Dict[str, float] = {}
+    close_by_date_pre: dict[str, float] = {}
     for row in hist_price_rows:
-        d = row.get('date') or replication_reference._parse_hist_date(row)
+        d = row.get("date") or replication_reference._parse_hist_date(row)
         try:
-            c = float(row.get('close', 0) or 0)
+            c = float(row.get("close", 0) or 0)
         except (TypeError, ValueError):
             continue
         if d and c > 0:
             close_by_date_pre[d] = c
 
-    gamma_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
-    iv_by_date: Dict[str, Dict[Tuple[float, str], float]] = defaultdict(dict)
+    gamma_by_date: dict[str, dict[tuple[float, str], float]] = defaultdict(dict)
+    iv_by_date: dict[str, dict[tuple[float, str], float]] = defaultdict(dict)
     n_derived = n_vendor = n_unrecoverable = 0
 
     for row in hist_greek_rows:
@@ -418,19 +453,19 @@ def _build_day_records(ticker: str, expiry: str,
             # Auto-detect instead of assuming one producer: a real listed
             # equity/index strike is never >= 10,000 dollars, so a raw value
             # that large can only be theta-scaled.
-            raw_k = float(row['strike'])
+            raw_k = float(row["strike"])
             k = strike_from_theta(int(round(raw_k))) if raw_k >= 10000 else raw_k
             # Also normalize `right` to a single uppercase char here: the
             # live route returns the full word ("CALL"/"PUT"), while
             # oi_by_date below is keyed on ThetaData's normal single-char
             # "C"/"P" -- left unnormalized, every (k, right) lookup into
             # oi_map in _net_gamma_v1/_v2 would silently miss.
-            right = str(row['right']).upper()[:1]
+            right = str(row["right"]).upper()[:1]
         except (KeyError, TypeError, ValueError):
             continue
 
-        iv = float(row.get('implied_vol', 0) or 0)
-        gamma = float(row.get('gamma', 0) or 0)
+        iv = float(row.get("implied_vol", 0) or 0)
+        gamma = float(row.get("gamma", 0) or 0)
 
         # Rows from hist/option/eod carry prices but no greeks -- that route
         # is the only per-contract one that honors a date range, which is why
@@ -457,10 +492,12 @@ def _build_day_records(ticker: str, expiry: str,
                 n_unrecoverable += 1
                 continue
             T = max((expiry_date - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0
-            mark = implied_vol_mod.mid_price(row.get('bid'), row.get('ask'),
-                                             row.get('close'))
+            mark = implied_vol_mod.mid_price(
+                row.get("bid"), row.get("ask"), row.get("close")
+            )
             solved = implied_vol_mod.implied_vol(
-                mark, spot, k, T, _BACKTEST_R, _BACKTEST_Q, right)
+                mark, spot, k, T, _BACKTEST_R, _BACKTEST_Q, right
+            )
             if solved is None:
                 # Deliberately NOT zero-filled. A strike whose price carries
                 # no recoverable vol is missing information, and imputing a
@@ -477,7 +514,9 @@ def _build_day_records(ticker: str, expiry: str,
             spot = close_by_date_pre.get(d)
             if spot:
                 T = max((expiry_date - datetime.strptime(d, "%Y%m%d")).days, 1) / 365.0
-                gamma = dealer_positioning.bs_gamma(spot, k, T, _BACKTEST_R, _BACKTEST_Q, iv)
+                gamma = dealer_positioning.bs_gamma(
+                    spot, k, T, _BACKTEST_R, _BACKTEST_Q, iv
+                )
 
         if iv > 0:
             iv_by_date[d][(k, right)] = iv
@@ -486,28 +525,30 @@ def _build_day_records(ticker: str, expiry: str,
 
     if n_derived or n_unrecoverable:
         total = n_derived + n_vendor + n_unrecoverable
-        print(f"  [backtest_stage3] IV/gamma source: {n_derived} derived from price, "
-              f"{n_vendor} vendor, {n_unrecoverable} unrecoverable "
-              f"({100.0 * n_unrecoverable / total:.1f}% dropped) of {total} rows")
+        print(
+            f"  [backtest_stage3] IV/gamma source: {n_derived} derived from price, "
+            f"{n_vendor} vendor, {n_unrecoverable} unrecoverable "
+            f"({100.0 * n_unrecoverable / total:.1f}% dropped) of {total} rows"
+        )
 
-    oi_by_date: Dict[str, Dict[Tuple[float, str], int]] = defaultdict(dict)
+    oi_by_date: dict[str, dict[tuple[float, str], int]] = defaultdict(dict)
     for row in hist_oi_rows:
         d = replication_reference._parse_hist_date(row)
         if not d:
             continue
         try:
-            k = strike_from_theta(int(float(row['strike'])))
-            right = row['right']
-            oi = int(float(row.get('open_interest', 0) or 0))
+            k = strike_from_theta(int(float(row["strike"])))
+            right = row["right"]
+            oi = int(float(row.get("open_interest", 0) or 0))
         except (KeyError, TypeError, ValueError):
             continue
         oi_by_date[d][(k, right)] = oi
 
-    close_by_date: Dict[str, float] = {}
+    close_by_date: dict[str, float] = {}
     for row in hist_price_rows:
-        d = row.get('date') or replication_reference._parse_hist_date(row)
+        d = row.get("date") or replication_reference._parse_hist_date(row)
         try:
-            close = float(row.get('close', 0) or 0)
+            close = float(row.get("close", 0) or 0)
         except (TypeError, ValueError):
             continue
         if d and close > 0:
@@ -522,22 +563,30 @@ def _build_day_records(ticker: str, expiry: str,
     # size of the intersection is always attributable to a specific missing
     # input rather than a mystery.
     trading_dates = sorted(
-        d for d in gamma_by_date
+        d
+        for d in gamma_by_date
         if d in oi_by_date and d in iv_by_date and d in close_by_date
     )
-    print(f"  [backtest_stage3] {ticker} {expiry} date coverage: "
-          f"gamma={len(gamma_by_date)} iv={len(iv_by_date)} oi={len(oi_by_date)} "
-          f"close={len(close_by_date)} -> {len(trading_dates)} usable days")
-    if trading_dates and len(trading_dates) < min(len(gamma_by_date), len(oi_by_date),
-                                                   len(close_by_date)):
+    print(
+        f"  [backtest_stage3] {ticker} {expiry} date coverage: "
+        f"gamma={len(gamma_by_date)} iv={len(iv_by_date)} oi={len(oi_by_date)} "
+        f"close={len(close_by_date)} -> {len(trading_dates)} usable days"
+    )
+    if trading_dates and len(trading_dates) < min(
+        len(gamma_by_date), len(oi_by_date), len(close_by_date)
+    ):
         missing_oi = sorted(set(gamma_by_date) - set(oi_by_date))[:5]
         missing_close = sorted(set(gamma_by_date) - set(close_by_date))[:5]
         if missing_oi:
-            print(f"  [backtest_stage3] dates with greeks but no OI (first 5): {missing_oi}")
+            print(
+                f"  [backtest_stage3] dates with greeks but no OI (first 5): {missing_oi}"
+            )
         if missing_close:
-            print(f"  [backtest_stage3] dates with greeks but no close (first 5): {missing_close}")
+            print(
+                f"  [backtest_stage3] dates with greeks but no close (first 5): {missing_close}"
+            )
 
-    records: List[DayRecord] = []
+    records: list[DayRecord] = []
     _dealer_engine = None
     if use_dealer_exposure:
         _dealer_engine = _load_dealer_exposure_engine()
@@ -556,8 +605,10 @@ def _build_day_records(ticker: str, expiry: str,
             # book (sign already baked in), so classify the v2 regime from it
             # with pass-through sign=1.0 -- mirrors dealer_positioning's
             # accumulate branch (position_by_strike, applied_sign=1.0).
-            net_v2 = sum(gamma * accumulated_position.get((k, right), 0.0)
-                         for (k, right), gamma in gamma_map.items())
+            net_v2 = sum(
+                gamma * accumulated_position.get((k, right), 0.0)
+                for (k, right), gamma in gamma_map.items()
+            )
         else:
             net_v2 = _net_gamma_v2(gamma_map, oi_map, chain_iv, spot, forward, T)
 
@@ -568,16 +619,21 @@ def _build_day_records(ticker: str, expiry: str,
             # via the dev-worktree greeks engine (build_net_exposure). GEX sign
             # (dollar-gamma-per-1%) drives the long/short regime.
             dealer_rows = [
-                {"strike": k, "right": right, "oi": oi,
-                 "implied_vol": chain_iv.get((k, right))}
+                {
+                    "strike": k,
+                    "right": right,
+                    "oi": oi,
+                    "implied_vol": chain_iv.get((k, right)),
+                }
                 for (k, right), oi in oi_map.items()
                 if oi > 0 and chain_iv.get((k, right), 0) > 0
             ]
             if dealer_rows:
                 ne = _dealer_engine.build_net_exposure(
-                    dealer_rows, spot, ticker, expiry, T=T)
+                    dealer_rows, spot, ticker, expiry, T=T
+                )
                 net_dealer = float(ne.gex())
-                regime_dealer = 'long' if net_dealer > 0 else 'short'
+                regime_dealer = "long" if net_dealer > 0 else "short"
 
         # Forward realized vol uses ANY available future close (not just the
         # dates that happen to have a full option chain snapshot), since
@@ -585,23 +641,28 @@ def _build_day_records(ticker: str, expiry: str,
         # reason to throw away real trading days just because that
         # particular day wasn't also an OI/greeks history date.
         future_closes = [spot] + [
-            close_by_date[fd] for fd in sorted(close_by_date)
-            if fd > d
+            close_by_date[fd] for fd in sorted(close_by_date) if fd > d
         ][:forward_window_days]
         fwd_vol = _forward_realized_vol(future_closes, forward_window_days)
 
-        records.append(DayRecord(
-            date=d, spot=spot, net_gamma_v1=net_v1, net_gamma_v2=net_v2,
-            regime_v1='long' if net_v1 > 0 else 'short',
-            regime_v2='long' if net_v2 > 0 else 'short',
-            fwd_realized_vol=fwd_vol,
-            net_gamma_dealer=net_dealer, regime_dealer_exposure=regime_dealer,
-        ))
+        records.append(
+            DayRecord(
+                date=d,
+                spot=spot,
+                net_gamma_v1=net_v1,
+                net_gamma_v2=net_v2,
+                regime_v1="long" if net_v1 > 0 else "short",
+                regime_v2="long" if net_v2 > 0 else "short",
+                fwd_realized_vol=fwd_vol,
+                net_gamma_dealer=net_dealer,
+                regime_dealer_exposure=regime_dealer,
+            )
+        )
 
     return records
 
 
-def _summarize(records: List[DayRecord], regime_attr: str) -> dict:
+def _summarize(records: list[DayRecord], regime_attr: str) -> dict:
     """Welch's two-sample t-test (unequal variance) between forward realized
     vol on 'short' vs 'long' gamma days for one model's regime
     classification. Welch's, not Student's, because there's no reason to
@@ -609,69 +670,102 @@ def _summarize(records: List[DayRecord], regime_attr: str) -> dict:
     unequal counts (which these are, especially v1's flat heuristic) is
     exactly the case where that assumption would matter most.
     """
-    long_vols = [r.fwd_realized_vol for r in records
-                 if getattr(r, regime_attr) == 'long' and r.fwd_realized_vol is not None]
-    short_vols = [r.fwd_realized_vol for r in records
-                  if getattr(r, regime_attr) == 'short' and r.fwd_realized_vol is not None]
+    long_vols = [
+        r.fwd_realized_vol
+        for r in records
+        if getattr(r, regime_attr) == "long" and r.fwd_realized_vol is not None
+    ]
+    short_vols = [
+        r.fwd_realized_vol
+        for r in records
+        if getattr(r, regime_attr) == "short" and r.fwd_realized_vol is not None
+    ]
 
     out = {
-        'n_long': len(long_vols), 'n_short': len(short_vols),
-        'long_mean_vol': float(np.mean(long_vols)) if long_vols else float('nan'),
-        'short_mean_vol': float(np.mean(short_vols)) if short_vols else float('nan'),
-        'diff': float('nan'), 'tstat': float('nan'), 'pvalue': float('nan'),
+        "n_long": len(long_vols),
+        "n_short": len(short_vols),
+        "long_mean_vol": float(np.mean(long_vols)) if long_vols else float("nan"),
+        "short_mean_vol": float(np.mean(short_vols)) if short_vols else float("nan"),
+        "diff": float("nan"),
+        "tstat": float("nan"),
+        "pvalue": float("nan"),
     }
     if len(long_vols) >= 2 and len(short_vols) >= 2:
-        out['diff'] = out['short_mean_vol'] - out['long_mean_vol']
+        out["diff"] = out["short_mean_vol"] - out["long_mean_vol"]
         t_res = _scipy_stats.ttest_ind(short_vols, long_vols, equal_var=False)
-        out['tstat'] = float(t_res.statistic)
-        out['pvalue'] = float(t_res.pvalue)
+        out["tstat"] = float(t_res.statistic)
+        out["pvalue"] = float(t_res.pvalue)
     return out
 
 
-def _run_backtest_from_history(ticker: str, expiry: str,
-                                hist_greek_rows: List[dict], hist_oi_rows: List[dict],
-                                hist_price_rows: List[dict],
-                                forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
-                                accumulated_position: Optional[dict] = None,
-                                use_dealer_exposure: bool = False,
-                                ) -> BacktestResult:
-    records = _build_day_records(ticker, expiry, hist_greek_rows, hist_oi_rows,
-                                  hist_price_rows, forward_window_days,
-                                  accumulated_position=accumulated_position,
-                                  use_dealer_exposure=use_dealer_exposure)
+def _run_backtest_from_history(
+    ticker: str,
+    expiry: str,
+    hist_greek_rows: list[dict],
+    hist_oi_rows: list[dict],
+    hist_price_rows: list[dict],
+    forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
+    accumulated_position: dict | None = None,
+    use_dealer_exposure: bool = False,
+) -> BacktestResult:
+    records = _build_day_records(
+        ticker,
+        expiry,
+        hist_greek_rows,
+        hist_oi_rows,
+        hist_price_rows,
+        forward_window_days,
+        accumulated_position=accumulated_position,
+        use_dealer_exposure=use_dealer_exposure,
+    )
     if not records:
         raise ValueError(
             f"No overlapping greeks/OI/price history for {ticker} {expiry} -- "
             f"nothing to backtest."
         )
 
-    v1 = _summarize(records, 'regime_v1')
-    v2 = _summarize(records, 'regime_v2')
-    dealer = _summarize(records, 'regime_dealer_exposure')
+    v1 = _summarize(records, "regime_v1")
+    v2 = _summarize(records, "regime_v2")
+    dealer = _summarize(records, "regime_dealer_exposure")
 
     return BacktestResult(
-        ticker=ticker, expiry=expiry, forward_window_days=forward_window_days,
+        ticker=ticker,
+        expiry=expiry,
+        forward_window_days=forward_window_days,
         day_records=records,
-        v1_n_long=v1['n_long'], v1_n_short=v1['n_short'],
-        v1_long_mean_vol=v1['long_mean_vol'], v1_short_mean_vol=v1['short_mean_vol'],
-        v1_diff=v1['diff'], v1_tstat=v1['tstat'], v1_pvalue=v1['pvalue'],
-        v2_n_long=v2['n_long'], v2_n_short=v2['n_short'],
-        v2_long_mean_vol=v2['long_mean_vol'], v2_short_mean_vol=v2['short_mean_vol'],
-        v2_diff=v2['diff'], v2_tstat=v2['tstat'], v2_pvalue=v2['pvalue'],
-        dealer_exposure_n_long=dealer['n_long'], dealer_exposure_n_short=dealer['n_short'],
-        dealer_exposure_long_mean_vol=dealer['long_mean_vol'],
-        dealer_exposure_short_mean_vol=dealer['short_mean_vol'],
-        dealer_exposure_diff=dealer['diff'], dealer_exposure_tstat=dealer['tstat'],
-        dealer_exposure_pvalue=dealer['pvalue'],
+        v1_n_long=v1["n_long"],
+        v1_n_short=v1["n_short"],
+        v1_long_mean_vol=v1["long_mean_vol"],
+        v1_short_mean_vol=v1["short_mean_vol"],
+        v1_diff=v1["diff"],
+        v1_tstat=v1["tstat"],
+        v1_pvalue=v1["pvalue"],
+        v2_n_long=v2["n_long"],
+        v2_n_short=v2["n_short"],
+        v2_long_mean_vol=v2["long_mean_vol"],
+        v2_short_mean_vol=v2["short_mean_vol"],
+        v2_diff=v2["diff"],
+        v2_tstat=v2["tstat"],
+        v2_pvalue=v2["pvalue"],
+        dealer_exposure_n_long=dealer["n_long"],
+        dealer_exposure_n_short=dealer["n_short"],
+        dealer_exposure_long_mean_vol=dealer["long_mean_vol"],
+        dealer_exposure_short_mean_vol=dealer["short_mean_vol"],
+        dealer_exposure_diff=dealer["diff"],
+        dealer_exposure_tstat=dealer["tstat"],
+        dealer_exposure_pvalue=dealer["pvalue"],
     )
 
 
-def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: float = 0.25,
-                  lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-                  forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
-                  accumulate: bool = False,
-                  sign_model: str = 'all',
-                  ) -> BacktestResult:
+def run_backtest(
+    ticker: str,
+    expiration: str | None = None,
+    target_years: float = 0.25,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    forward_window_days: int = DEFAULT_FORWARD_WINDOW_DAYS,
+    accumulate: bool = False,
+    sign_model: str = "all",
+) -> BacktestResult:
     """Network-touching orchestrator: resolves the target expiry, pulls
     historical greeks/OI/price straight from ThetaData, and runs the pure
     backtest over it.
@@ -691,7 +785,9 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
     """
     td = ThetaDataController()
     try:
-        expiry, _ = expiry_selector.resolve_expiration(td, ticker, expiration, target_years)
+        expiry, _ = expiry_selector.resolve_expiration(
+            td, ticker, expiration, target_years
+        )
 
         # End at yesterday, not today: today's EOD greeks don't exist
         # server-side until the session closes, so asking for them
@@ -724,7 +820,9 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
         # could not build a position. Same convention as oi_by_day (string
         # YYYYMMDD 'date', right 'C'/'P', strike cents-int); _build_day_records
         # auto-detects strike scale and normalizes right.
-        hist_greek_rows = td.option_bulk_hist_eod_greeks(ticker, expiry, start_str, end_str)
+        hist_greek_rows = td.option_bulk_hist_eod_greeks(
+            ticker, expiry, start_str, end_str
+        )
         hist_oi_rows = td.option_bulk_hist_oi_by_day(ticker, expiry, start_str, end_str)
         hist_price_rows = td.hist_stock_eod(ticker, start_str, end_str)
     finally:
@@ -737,27 +835,39 @@ def run_backtest(ticker: str, expiration: Optional[str] = None, target_years: fl
         # same-day OI snapshot. Route through dealer_positioning -- the single
         # live model -- so there is no second, separate accumulation path.
         accumulated_position = dealer_positioning.compute_accumulated_position(
-            ticker, expiry, lookback_days=lookback_days, seed_mode='replication',
-            hist_rows=(hist_greek_rows, hist_oi_rows, hist_price_rows))
+            ticker,
+            expiry,
+            lookback_days=lookback_days,
+            seed_mode="replication",
+            hist_rows=(hist_greek_rows, hist_oi_rows, hist_price_rows),
+        )
         if not accumulated_position:
             raise ValueError(
                 f"v2_live accumulation produced no position for {ticker} "
-                f"{expiry}; refusing to fall back to a same-day snapshot.")
+                f"{expiry}; refusing to fall back to a same-day snapshot."
+            )
 
     # The study's default ('all') now runs all THREE of Jason's live models
     # together: v1 (oi_heuristic), v2_live (accumulated, via `accumulate`), and
     # dealer_exposure (dealer-frame engine). There is no per-model selector.
-    use_dealer_exposure = sign_model in ('all', 'dealer_exposure', 'live')
+    use_dealer_exposure = sign_model in ("all", "dealer_exposure", "live")
     if use_dealer_exposure and not _dealer_exposure_engine_available():
         raise ValueError(
             "dealer_exposure_model requires the merged expiry_book_exposure.py "
             "in the main tree (Vol_Suite/expiry_book_exposure.py); it was not "
-            "found in the in-tree location or the dev worktree.")
+            "found in the in-tree location or the dev worktree."
+        )
 
-    return _run_backtest_from_history(ticker, expiry, hist_greek_rows, hist_oi_rows,
-                                       hist_price_rows, forward_window_days,
-                                       accumulated_position=accumulated_position,
-                                       use_dealer_exposure=use_dealer_exposure)
+    return _run_backtest_from_history(
+        ticker,
+        expiry,
+        hist_greek_rows,
+        hist_oi_rows,
+        hist_price_rows,
+        forward_window_days,
+        accumulated_position=accumulated_position,
+        use_dealer_exposure=use_dealer_exposure,
+    )
 
 
 def format_backtest_report(result: BacktestResult) -> str:
@@ -783,7 +893,6 @@ def format_backtest_report(result: BacktestResult) -> str:
         "v1/v2_live are retained as legacy comparison arms only.",
     ]
     return "\n".join(lines)
-
 
 
 # ---------------------------------------------------------------------------
@@ -814,30 +923,32 @@ def format_backtest_report(result: BacktestResult) -> str:
 @dataclass
 class StrategyBacktestResult:
     strategy_type: str
-    legs: List[dict]
+    legs: list[dict]
     entry_date: str
     exit_date: str
-    entry_cost: float   # net debit paid (positive) or credit received (negative) to open
-    exit_value: float   # net value received (positive) or owed (negative) to close/settle
-    pnl: float           # exit_value - entry_cost
-    pnl_pct: float        # pnl / abs(entry_cost) * 100; nan if entry_cost == 0
+    entry_cost: float  # net debit paid (positive) or credit received (negative) to open
+    exit_value: (
+        float  # net value received (positive) or owed (negative) to close/settle
+    )
+    pnl: float  # exit_value - entry_cost
+    pnl_pct: float  # pnl / abs(entry_cost) * 100; nan if entry_cost == 0
     contract_multiplier: float = 100.0
 
 
-def _leg_key(leg: dict) -> Tuple[float, str]:
+def _leg_key(leg: dict) -> tuple[float, str]:
     """(strike, instrument_type) identity for a leg -- matches both
     StrategyLeg (via dataclasses.asdict/_strategy_to_dict) and a plain dict
     read straight out of a suite_context.json "strategies" entry, since both
     shapes carry 'strike' and 'instrument_type' fields.
     """
-    return (float(leg['strike']), leg['instrument_type'])
+    return (float(leg["strike"]), leg["instrument_type"])
 
 
 def _leg_intrinsic_value(strike: float, instrument_type: str, spot: float) -> float:
     """Payoff at/after expiration: max(S-K, 0) for a call, max(K-S, 0) for a
     put -- the option's only remaining value once there's no time left.
     """
-    if instrument_type == 'call':
+    if instrument_type == "call":
         return max(spot - strike, 0.0)
     return max(strike - spot, 0.0)
 
@@ -847,9 +958,9 @@ def _run_strategy_backtest_from_history(
     entry_date: str,
     exit_date: str,
     expiry: str,
-    entry_prices: Dict[Tuple[float, str], float],
-    exit_prices: Dict[Tuple[float, str], float],
-    exit_spot: Optional[float] = None,
+    entry_prices: dict[tuple[float, str], float],
+    exit_prices: dict[tuple[float, str], float],
+    exit_spot: float | None = None,
     contract_multiplier: float = 100.0,
 ) -> StrategyBacktestResult:
     """Pure function over already-resolved per-leg prices -- the part
@@ -874,20 +985,22 @@ def _run_strategy_backtest_from_history(
     always "what you'd have in hand at the end" minus "what it cost to
     get in", with the correct sign for both long and short legs.
     """
-    legs = strategy['legs']
+    legs = strategy["legs"]
     if not legs:
-        raise ValueError(f"strategy {strategy.get('strategy_type')!r} has no legs to backtest")
+        raise ValueError(
+            f"strategy {strategy.get('strategy_type')!r} has no legs to backtest"
+        )
 
     expired = exit_date >= expiry
 
     entry_cost = 0.0
     exit_value = 0.0
-    missing_entry: List[Tuple[float, str]] = []
-    missing_exit: List[Tuple[float, str]] = []
+    missing_entry: list[tuple[float, str]] = []
+    missing_exit: list[tuple[float, str]] = []
 
     for leg in legs:
         key = _leg_key(leg)
-        qty = int(leg['quantity'])
+        qty = int(leg["quantity"])
 
         entry_px = entry_prices.get(key)
         if entry_px is None:
@@ -921,10 +1034,10 @@ def _run_strategy_backtest_from_history(
         )
 
     pnl = exit_value - entry_cost
-    pnl_pct = (pnl / abs(entry_cost) * 100.0) if entry_cost != 0 else float('nan')
+    pnl_pct = (pnl / abs(entry_cost) * 100.0) if entry_cost != 0 else float("nan")
 
     return StrategyBacktestResult(
-        strategy_type=strategy['strategy_type'],
+        strategy_type=strategy["strategy_type"],
         legs=legs,
         entry_date=entry_date,
         exit_date=exit_date,
@@ -941,7 +1054,7 @@ def run_strategy_backtest(
     ticker: str,
     expiry: str,
     entry_date: str,
-    exit_date: Optional[str] = None,
+    exit_date: str | None = None,
     contract_multiplier: float = 100.0,
 ) -> StrategyBacktestResult:
     """Network-touching orchestrator: pulls each leg's per-contract EOD
@@ -971,26 +1084,30 @@ def run_strategy_backtest(
     end_dt = end_anchor + timedelta(days=5)
     start_str, end_str = start_dt.strftime(fmt), end_dt.strftime(fmt)
 
-    right_map = {'call': 'C', 'put': 'P'}
+    right_map = {"call": "C", "put": "P"}
 
     td = ThetaDataController()
     try:
-        entry_prices: Dict[Tuple[float, str], float] = {}
-        exit_prices: Dict[Tuple[float, str], float] = {}
+        entry_prices: dict[tuple[float, str], float] = {}
+        exit_prices: dict[tuple[float, str], float] = {}
 
-        for leg in strategy['legs']:
-            strike = float(leg['strike'])
-            instrument_type = leg['instrument_type']
+        for leg in strategy["legs"]:
+            strike = float(leg["strike"])
+            instrument_type = leg["instrument_type"]
             right = right_map.get(instrument_type, str(instrument_type)[:1].upper())
             k_theta = strike_to_theta(strike)
 
-            rows = td.option_hist_eod_single(ticker, expiry, k_theta, right, start_str, end_str)
-            by_date: Dict[str, float] = {}
+            rows = td.option_hist_eod_single(
+                ticker, expiry, k_theta, right, start_str, end_str
+            )
+            by_date: dict[str, float] = {}
             for row in rows:
                 d = replication_reference._parse_hist_date(row)
                 if not d:
                     continue
-                px = implied_vol_mod.mid_price(row.get('bid'), row.get('ask'), row.get('close'))
+                px = implied_vol_mod.mid_price(
+                    row.get("bid"), row.get("ask"), row.get("close")
+                )
                 if px is not None:
                     by_date[d] = px
 
@@ -1003,11 +1120,11 @@ def run_strategy_backtest(
         exit_spot = None
         if expired:
             spot_rows = td.hist_stock_eod(ticker, start_str, end_str)
-            spot_by_date: Dict[str, float] = {}
+            spot_by_date: dict[str, float] = {}
             for row in spot_rows:
-                d = row.get('date') or replication_reference._parse_hist_date(row)
+                d = row.get("date") or replication_reference._parse_hist_date(row)
                 try:
-                    c = float(row.get('close', 0) or 0)
+                    c = float(row.get("close", 0) or 0)
                 except (TypeError, ValueError):
                     continue
                 if d and c > 0:
@@ -1025,8 +1142,13 @@ def run_strategy_backtest(
         td.close()
 
     return _run_strategy_backtest_from_history(
-        strategy, entry_date, exit_date, expiry,
-        entry_prices, exit_prices, exit_spot=exit_spot,
+        strategy,
+        entry_date,
+        exit_date,
+        expiry,
+        entry_prices,
+        exit_prices,
+        exit_spot=exit_spot,
         contract_multiplier=contract_multiplier,
     )
 
@@ -1034,8 +1156,8 @@ def run_strategy_backtest(
 def format_strategy_backtest_report(result: StrategyBacktestResult) -> str:
     leg_lines = []
     for leg in result.legs:
-        qty = int(leg['quantity'])
-        side = 'long' if qty > 0 else 'short'
+        qty = int(leg["quantity"])
+        side = "long" if qty > 0 else "short"
         leg_lines.append(
             f"    {side:5s} {abs(qty)}x {leg['instrument_type']:4s} @ {float(leg['strike']):.2f}"
         )
@@ -1057,6 +1179,7 @@ def format_strategy_backtest_report(result: StrategyBacktestResult) -> str:
 
 if __name__ == "__main__":
     import sys
+
     ticker = sys.argv[1] if len(sys.argv) > 1 else "SPY"
     lookback = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_LOOKBACK_DAYS
     result = run_backtest(ticker, lookback_days=lookback)

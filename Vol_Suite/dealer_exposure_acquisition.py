@@ -5,6 +5,7 @@ This module is network-capable by dependency injection, but importing it and usi
 is sequential ticker x calendar-day and the historical concurrency contract is
 fail-closed at one.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -23,6 +24,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from .dealer_exposure_authorization import (
+    AcquisitionAuthorization,
+    candidate_manifest_projection,
+)
 from .dealer_exposure_universe import (
     DTE_STRATA,
     EVENT_HABITATS,
@@ -36,7 +41,6 @@ from .provenance_contract import (
     sha256_bytes,
     validate_source_hashes,
 )
-from .dealer_exposure_authorization import AcquisitionAuthorization, candidate_manifest_projection
 
 NETWORK_ACQUISITION_EXECUTED = False
 _STATUS = {"PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL"}
@@ -49,7 +53,15 @@ _CONTEXT_STATES: dict[int, dict[str, Any]] = {}
 # state dict, lock, limits, counters, or blocked flag cannot create continuity.
 _CONTEXT_ATTESTATIONS: dict[int, dict[str, Any]] = {}
 _CONTEXT_ATTESTATION_KEY = secrets.token_bytes(32)
-_CONTEXT_FIELDS = ("units", "probe_calls", "heavy_calls", "total_endpoint_calls", "payload_bytes", "wall_seconds", "concurrency")
+_CONTEXT_FIELDS = (
+    "units",
+    "probe_calls",
+    "heavy_calls",
+    "total_endpoint_calls",
+    "payload_bytes",
+    "wall_seconds",
+    "concurrency",
+)
 
 
 def _state_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -69,12 +81,18 @@ def _state_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _state_seal(state: Mapping[str, Any]) -> str:
-    return hashlib.sha256(_CONTEXT_ATTESTATION_KEY + canonical_json_bytes(_state_snapshot(state))).hexdigest()
+    return hashlib.sha256(
+        _CONTEXT_ATTESTATION_KEY + canonical_json_bytes(_state_snapshot(state))
+    ).hexdigest()
 
 
 def _attest_new_state(context: Any, state: dict[str, Any]) -> None:
     seal = _state_seal(state)
-    _CONTEXT_ATTESTATIONS[id(context)] = {"state": state, "seal": seal, "history": (seal,)}
+    _CONTEXT_ATTESTATIONS[id(context)] = {
+        "state": state,
+        "seal": seal,
+        "history": (seal,),
+    }
 
 
 def _verify_state_integrity(context: Any, state: Any) -> bool:
@@ -84,7 +102,12 @@ def _verify_state_integrity(context: Any, state: Any) -> bool:
     if attestation.get("state") is not state:
         return False
     seal = _state_seal(state)
-    return seal == attestation.get("seal") and isinstance(attestation.get("history"), tuple) and attestation["history"] and attestation["history"][-1] == seal
+    return (
+        seal == attestation.get("seal")
+        and isinstance(attestation.get("history"), tuple)
+        and attestation["history"]
+        and attestation["history"][-1] == seal
+    )
 
 
 def _commit_state(context: Any, state: dict[str, Any]) -> None:
@@ -92,7 +115,9 @@ def _commit_state(context: Any, state: dict[str, Any]) -> None:
     # attestation is then advanced exactly once for that controlled mutation.
     attestation = _CONTEXT_ATTESTATIONS.get(id(context))
     if not isinstance(attestation, dict) or attestation.get("state") is not state:
-        raise AcquisitionGateError("authenticated runtime context integrity continuity is invalid")
+        raise AcquisitionGateError(
+            "authenticated runtime context integrity continuity is invalid"
+        )
     seal = _state_seal(state)
     attestation["seal"] = seal
     attestation["history"] = (*attestation["history"], seal)
@@ -102,7 +127,11 @@ class AcquisitionGateError(RuntimeError):
     """Raised when an approval, concurrency, or provenance gate fails."""
 
 
-def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any], registry_entry: Mapping[str, Any]) -> list[str]:
+def _strict_prewindow(
+    item: Mapping[str, Any],
+    manifest_unit: Mapping[str, Any],
+    registry_entry: Mapping[str, Any],
+) -> list[str]:
     """Validate the complete, registered two-point PRE_WINDOW contract."""
     errors: list[str] = []
     observations = item.get("pre_window_observations")
@@ -112,31 +141,45 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
     timezone = item.get("declared_timezone")
     try:
         from zoneinfo import ZoneInfo
+
         zone = ZoneInfo(timezone) if isinstance(timezone, str) and timezone else None
         if zone is None:
             raise ValueError("declared_timezone is required")
         cutoff_dt = _timestamp(cutoff)
         day = str(manifest_unit.get("calendar_day"))
         if cutoff_dt.astimezone(zone).date().isoformat() != day:
-            raise ValueError("breach_window_start_prov must be on the local calendar day")
+            raise ValueError(
+                "breach_window_start_prov must be on the local calendar day"
+            )
         parsed: list[tuple[dt.datetime, float, Mapping[str, Any]]] = []
         for index, observation in enumerate(observations):
-            if not isinstance(observation, Mapping) or observation.get("role") != _PREWINDOW:
+            if (
+                not isinstance(observation, Mapping)
+                or observation.get("role") != _PREWINDOW
+            ):
                 errors.append(f"observation {index} must declare role PRE_WINDOW")
                 continue
             try:
                 stamp = _timestamp(observation.get("timestamp"))
                 value = observation.get("iv")
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                ):
                     raise ValueError("IV value must be finite")
                 identity = observation.get("source_identity")
                 source_hash = observation.get("source_hash")
                 if not isinstance(identity, str) or not identity.strip():
                     raise ValueError("source identity is required")
-                if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
+                if not isinstance(source_hash, str) or not re.fullmatch(
+                    r"[0-9a-fA-F]{64}", source_hash
+                ):
                     raise ValueError("source hash must be SHA-256")
                 if stamp >= cutoff_dt:
-                    raise ValueError("observation must strictly precede breach_window_start_prov")
+                    raise ValueError(
+                        "observation must strictly precede breach_window_start_prov"
+                    )
                 if stamp.astimezone(zone).date().isoformat() != day:
                     raise ValueError("observation must be on the local calendar day")
                 parsed.append((stamp, float(value), observation))
@@ -147,7 +190,9 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
         if parsed[0][0] >= parsed[1][0] or parsed[0][0] == parsed[1][0]:
             return ["PRE_WINDOW observations must be ordered and distinct"]
         try:
-            registered = set(validate_source_hashes(registry_entry.get("source_hashes")))
+            registered = set(
+                validate_source_hashes(registry_entry.get("source_hashes"))
+            )
         except (TypeError, ValueError) as exc:
             errors.append(f"registry source hashes are invalid: {exc}")
             registered = set()
@@ -156,14 +201,25 @@ def _strict_prewindow(item: Mapping[str, Any], manifest_unit: Mapping[str, Any],
         except (TypeError, ValueError) as exc:
             errors.append(f"unit source hashes are invalid: {exc}")
             declared = set()
-        if any(obs[2]["source_hash"] not in registered or obs[2]["source_hash"] not in declared for obs in parsed):
+        if any(
+            obs[2]["source_hash"] not in registered
+            or obs[2]["source_hash"] not in declared
+            for obs in parsed
+        ):
             errors.append("PRE_WINDOW source hash is absent from the manifest/registry")
         if item.get("imputed") is not False or item.get("no_imputation") is not True:
             errors.append("PRE_WINDOW evidence must explicitly reject imputation")
-        if item.get("delta_iv_aggregation") != "iv_source_minus_iv_before" or str(item.get("delta_iv_aggregation_version")) != "1":
+        if (
+            item.get("delta_iv_aggregation") != "iv_source_minus_iv_before"
+            or str(item.get("delta_iv_aggregation_version")) != "1"
+        ):
             errors.append("PRE_WINDOW aggregation identity is unsupported")
         delta = item.get("delta_iv_pre_window")
-        if isinstance(delta, bool) or not isinstance(delta, (int, float)) or not math.isfinite(float(delta)):
+        if (
+            isinstance(delta, bool)
+            or not isinstance(delta, (int, float))
+            or not math.isfinite(float(delta))
+        ):
             errors.append("delta_iv_pre_window must be finite")
         elif float(delta) != parsed[1][1] - parsed[0][1]:
             errors.append("delta_iv_pre_window does not equal source-minus-before")
@@ -187,15 +243,44 @@ class _AdmissionContext:
 
     __slots__ = ("_authorization", "_manifest")
 
-    def __init__(self, authorization: AcquisitionAuthorization, manifest: Mapping[str, Any], _token: object = _CONTEXT_CONSTRUCTION_TOKEN) -> None:
+    def __init__(
+        self,
+        authorization: AcquisitionAuthorization,
+        manifest: Mapping[str, Any],
+        _token: object = _CONTEXT_CONSTRUCTION_TOKEN,
+    ) -> None:
         if _token is not _CONTEXT_CONSTRUCTION_TOKEN:
             raise TypeError("invalid admission context construction token")
         self._authorization = authorization
         self._manifest = candidate_manifest_projection(manifest)
         cost = authorization.to_mapping()["cost_ceiling"]
-        limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
-        usage = {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
-        state = {"limits": limits, "usage": usage, "finalized_usage": dict(usage), "lock": threading.Lock(), "blocked": None, "authorization": authorization, "manifest": self._manifest}
+        limits = {
+            "units": cost["max_units"],
+            "probe_calls": cost["max_probe_calls"],
+            "heavy_calls": cost["max_heavy_calls"],
+            "total_endpoint_calls": cost["max_total_endpoint_calls"],
+            "payload_bytes": cost["max_payload_bytes"],
+            "wall_seconds": cost["max_wall_seconds"],
+            "concurrency": cost["concurrency"],
+        }
+        usage = {
+            "units": 0,
+            "probe_calls": 0,
+            "heavy_calls": 0,
+            "total_endpoint_calls": 0,
+            "payload_bytes": 0,
+            "wall_seconds": 0.0,
+            "concurrency": 0,
+        }
+        state = {
+            "limits": limits,
+            "usage": usage,
+            "finalized_usage": dict(usage),
+            "lock": threading.Lock(),
+            "blocked": None,
+            "authorization": authorization,
+            "manifest": self._manifest,
+        }
         _CONTEXT_STATES[id(self)] = state
         _CONTEXT_OWNERS[id(self)] = self
         _attest_new_state(self, state)
@@ -210,8 +295,15 @@ class _AdmissionContext:
 
     def _state(self) -> dict[str, Any]:
         state = _CONTEXT_STATES.get(id(self))
-        if not isinstance(state, dict) or state.get("authorization") is not self._authorization or state.get("manifest") != self._manifest or not _verify_state_integrity(self, state):
-            raise AcquisitionGateError("authenticated runtime context integrity continuity is invalid")
+        if (
+            not isinstance(state, dict)
+            or state.get("authorization") is not self._authorization
+            or state.get("manifest") != self._manifest
+            or not _verify_state_integrity(self, state)
+        ):
+            raise AcquisitionGateError(
+                "authenticated runtime context integrity continuity is invalid"
+            )
         return state
 
     @property
@@ -260,7 +352,9 @@ class _AdmissionContext:
                 # A contending caller is rejected without poisoning the context;
                 # the in-flight call releases the slot in its finally block.
                 if state["limits"]["concurrency"] <= 0:
-                    state["blocked"] = "authorization cost ceiling exceeded: concurrency"
+                    state["blocked"] = (
+                        "authorization cost ceiling exceeded: concurrency"
+                    )
                     # _reject() re-verifies integrity via self._state(), which
                     # reseals against the live state; that seal must already
                     # reflect this mutation or the re-verification itself fails
@@ -298,9 +392,13 @@ class _AdmissionContext:
                 state["usage"]["payload_bytes"] += size
                 state["usage"]["concurrency"] = 0
                 if state["usage"]["wall_seconds"] > state["limits"]["wall_seconds"]:
-                    state["blocked"] = "authorization cost ceiling exceeded: wall_seconds"
+                    state["blocked"] = (
+                        "authorization cost ceiling exceeded: wall_seconds"
+                    )
                 elif state["usage"]["payload_bytes"] > state["limits"]["payload_bytes"]:
-                    state["blocked"] = "authorization cost ceiling exceeded: payload_bytes"
+                    state["blocked"] = (
+                        "authorization cost ceiling exceeded: payload_bytes"
+                    )
                 finalized = dict(state["usage"])
                 state["finalized_usage"] = finalized
                 _commit_state(self, state)
@@ -316,35 +414,69 @@ class _AdmissionContext:
         return value, finalized
 
 
-def _context_is_owned_and_initialized(context: Any, authorization: AcquisitionAuthorization) -> bool:
+def _context_is_owned_and_initialized(
+    context: Any, authorization: AcquisitionAuthorization
+) -> bool:
     """Validate private provenance and the complete initialized runtime state."""
-    if type(context) is not _AdmissionContext or _CONTEXT_OWNERS.get(id(context)) is not context:
+    if (
+        type(context) is not _AdmissionContext
+        or _CONTEXT_OWNERS.get(id(context)) is not context
+    ):
         return False
     state = _CONTEXT_STATES.get(id(context))
-    if not isinstance(state, dict) or state.get("authorization") is not authorization or not _verify_state_integrity(context, state):
+    if (
+        not isinstance(state, dict)
+        or state.get("authorization") is not authorization
+        or not _verify_state_integrity(context, state)
+    ):
         return False
     if not isinstance(state.get("lock"), type(threading.Lock())):
         return False
-    if context.authorization is not authorization or context.manifest != authorization.candidate_manifest_projection():
+    if (
+        context.authorization is not authorization
+        or context.manifest != authorization.candidate_manifest_projection()
+    ):
         return False
     try:
         ceiling = authorization.to_mapping()["cost_ceiling"]
-        expected_limits = {"units": ceiling["max_units"], "probe_calls": ceiling["max_probe_calls"], "heavy_calls": ceiling["max_heavy_calls"], "total_endpoint_calls": ceiling["max_total_endpoint_calls"], "payload_bytes": ceiling["max_payload_bytes"], "wall_seconds": ceiling["max_wall_seconds"], "concurrency": ceiling["concurrency"]}
-        if state.get("limits") != expected_limits or state.get("manifest") != context.manifest:
+        expected_limits = {
+            "units": ceiling["max_units"],
+            "probe_calls": ceiling["max_probe_calls"],
+            "heavy_calls": ceiling["max_heavy_calls"],
+            "total_endpoint_calls": ceiling["max_total_endpoint_calls"],
+            "payload_bytes": ceiling["max_payload_bytes"],
+            "wall_seconds": ceiling["max_wall_seconds"],
+            "concurrency": ceiling["concurrency"],
+        }
+        if (
+            state.get("limits") != expected_limits
+            or state.get("manifest") != context.manifest
+        ):
             return False
         for counters in (state.get("usage"), state.get("finalized_usage")):
-            if not isinstance(counters, dict) or set(counters) != set(_CONTEXT_FIELDS) or any(type(value) not in (int, float) or value < 0 for value in counters.values()):
+            if (
+                not isinstance(counters, dict)
+                or set(counters) != set(_CONTEXT_FIELDS)
+                or any(
+                    type(value) not in (int, float) or value < 0
+                    for value in counters.values()
+                )
+            ):
                 return False
         if state["usage"]["wall_seconds"] != float(state["usage"]["wall_seconds"]):
             return False
-        if state.get("blocked") is not None and (not isinstance(state["blocked"], str) or not state["blocked"]):
+        if state.get("blocked") is not None and (
+            not isinstance(state["blocked"], str) or not state["blocked"]
+        ):
             return False
     except (TypeError, ValueError, KeyError, AttributeError):
         return False
     return True
 
 
-def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) -> _AdmissionContext | None:
+def _preflight_authorization(
+    authorization: Any, manifest: Mapping[str, Any]
+) -> _AdmissionContext | None:
     """Validate the calendar-enriched manifest and authorization before any call."""
     if not isinstance(authorization, AcquisitionAuthorization):
         return None
@@ -352,14 +484,19 @@ def _preflight_authorization(authorization: Any, manifest: Mapping[str, Any]) ->
         projection = candidate_manifest_projection(manifest)
         if authorization.candidate_manifest_projection() != projection:
             return None
-        if authorization.authorization_sha256() != authorization.to_mapping()["authorization_sha256"]:
+        if (
+            authorization.authorization_sha256()
+            != authorization.to_mapping()["authorization_sha256"]
+        ):
             return None
         return _AdmissionContext(authorization, projection)
     except (TypeError, ValueError, KeyError):
         return None
 
 
-def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization) -> tuple[bool, dict[str, Any], str]:
+def _authorized_executor(
+    executor: Any, authorization: AcquisitionAuthorization
+) -> tuple[bool, dict[str, Any], str]:
     """Validate only a registry-created opaque adapter handle.
 
     Metadata on a caller-supplied callable is never authorization evidence.  The
@@ -376,12 +513,20 @@ def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization)
         return False, {}, "registered adapter handle and authorization are required"
     try:
         from .dealer_exposure_executor import RegisteredAdapter, RestrictedExecutor
+
         if not isinstance(executor, RegisteredAdapter):
             return False, {}, "unregistered adapter handle is forbidden"
         instance = RestrictedExecutor(executor, authorization)
         instance._check_executor_identity()
         registration = executor._registration
-        identity = {"registry_key": registration.registry_key, "entrypoint": registration.identity, "endpoint": registration.endpoint, "request_method": registration.method, "scope_binding": registration.scope, "family": registration.family}
+        identity = {
+            "registry_key": registration.registry_key,
+            "entrypoint": registration.identity,
+            "endpoint": registration.endpoint,
+            "request_method": registration.method,
+            "scope_binding": registration.scope,
+            "family": registration.family,
+        }
         return True, identity, ""
     except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
         return False, {}, str(exc)[:200] or "registered adapter trust checks failed"
@@ -390,6 +535,7 @@ def _authorized_executor(executor: Any, authorization: AcquisitionAuthorization)
 def _attest_registered(executor: Any, authorization: AcquisitionAuthorization) -> None:
     """Run the shared registry/policy/code-hash checks immediately before dispatch."""
     from .dealer_exposure_executor import RestrictedExecutor
+
     RestrictedExecutor(executor, authorization)._attest_entrypoint()
 
 
@@ -413,7 +559,9 @@ def _canonical_payload_sha256(entry: Mapping[str, Any]) -> str:
     return canonical_sha256(payload)
 
 
-def _validate_registry_attestation(item: Mapping[str, Any], entry: Mapping[str, Any], artifact_hash: str) -> None:
+def _validate_registry_attestation(
+    item: Mapping[str, Any], entry: Mapping[str, Any], artifact_hash: str
+) -> None:
     """Recompute and close every artifact, payload, request, calendar, and source identity."""
     if str(entry.get("artifact_hash", "")).lower() != artifact_hash.lower():
         raise ValueError("registry artifact binding does not match")
@@ -423,28 +571,56 @@ def _validate_registry_attestation(item: Mapping[str, Any], entry: Mapping[str, 
     if canonical_sha256(manifest) != artifact_hash.lower():
         raise ValueError("artifact hash does not match canonical registry manifest")
     payload_hash = _canonical_payload_sha256(entry)
-    if payload_hash != str(entry.get("raw_payload_hash", "")).lower() or payload_hash != str(item.get("raw_payload_hash", "")).lower():
+    if (
+        payload_hash != str(entry.get("raw_payload_hash", "")).lower()
+        or payload_hash != str(item.get("raw_payload_hash", "")).lower()
+    ):
         raise ValueError("raw payload hash does not match canonical registered payload")
     if str(manifest.get("raw_payload_hash", "")).lower() != payload_hash:
         raise ValueError("artifact manifest raw payload hash is detached")
-    if entry.get("artifact_basis") is not None and entry.get("artifact_basis") != canonical_json_bytes(manifest).decode("utf-8"):
+    if entry.get("artifact_basis") is not None and entry.get(
+        "artifact_basis"
+    ) != canonical_json_bytes(manifest).decode("utf-8"):
         raise ValueError("artifact basis is not canonical")
-    for field in ("candidate_key", "ticker", "calendar_day", "expiry", "dte", "status", "canonical_input_hash", "source_hashes", "calendar_binding"):
-        if entry.get(field) != manifest.get(field) or entry.get(field) != item.get(field):
+    for field in (
+        "candidate_key",
+        "ticker",
+        "calendar_day",
+        "expiry",
+        "dte",
+        "status",
+        "canonical_input_hash",
+        "source_hashes",
+        "calendar_binding",
+    ):
+        if entry.get(field) != manifest.get(field) or entry.get(field) != item.get(
+            field
+        ):
             raise ValueError(f"registry {field} identity is detached")
-    if entry.get("request_identity", manifest.get("request_identity")) != manifest.get("request_identity"):
+    if entry.get("request_identity", manifest.get("request_identity")) != manifest.get(
+        "request_identity"
+    ):
         raise ValueError("registry request identity is detached")
     if item.get("request_parameters") != manifest.get("request_identity"):
         raise ValueError("request identity is detached from artifact manifest")
     validate_source_hashes(entry.get("source_hashes"))
-    if validate_source_hashes(entry["source_hashes"]) != validate_source_hashes(item.get("source_hashes")):
+    if validate_source_hashes(entry["source_hashes"]) != validate_source_hashes(
+        item.get("source_hashes")
+    ):
         raise ValueError("source hashes are detached from registry")
-    if item.get("breach_eligible") is not True or str(item.get("acquisition_decision", "")).upper() == "HARD_GAP":
+    if (
+        item.get("breach_eligible") is not True
+        or str(item.get("acquisition_decision", "")).upper() == "HARD_GAP"
+    ):
         raise ValueError("raw acquisition is not breach eligible")
 
 
-def _admission_failure(reasons: list[str], stages: list[str]) -> tuple[tuple[Any, ...], Mapping[str, Any]]:
-    return (), _immutable({"admitted": False, "stages": stages, "admitted_keys": [], "blocked": reasons})
+def _admission_failure(
+    reasons: list[str], stages: list[str]
+) -> tuple[tuple[Any, ...], Mapping[str, Any]]:
+    return (), _immutable(
+        {"admitted": False, "stages": stages, "admitted_keys": [], "blocked": reasons}
+    )
 
 
 def admit_acquisition(
@@ -461,10 +637,21 @@ def admit_acquisition(
         projection = candidate_manifest_projection(manifest)
         stages.append("calendar-enriched manifest")
         if authorization is None or isinstance(authorization, bool):
-            return _admission_failure(["authorization is mandatory; boolean approval is not authorization"], stages)
-        auth = authorization if isinstance(authorization, AcquisitionAuthorization) else AcquisitionAuthorization.from_mapping(authorization, candidate_manifest=projection)
+            return _admission_failure(
+                ["authorization is mandatory; boolean approval is not authorization"],
+                stages,
+            )
+        auth = (
+            authorization
+            if isinstance(authorization, AcquisitionAuthorization)
+            else AcquisitionAuthorization.from_mapping(
+                authorization, candidate_manifest=projection
+            )
+        )
         if auth.candidate_manifest_projection() != projection:
-            return _admission_failure(["authorization manifest projection is detached or mutated"], stages)
+            return _admission_failure(
+                ["authorization manifest projection is detached or mutated"], stages
+            )
         auth_data = auth.to_mapping()
         keys = tuple(unit["candidate_key"] for unit in projection["units"])
         scope = auth_data["scope"]
@@ -479,25 +666,63 @@ def admit_acquisition(
         if cost.get("concurrency") != 1:
             reasons.append("concurrency must be exactly one")
         usage = _cost_usage(evidence) if isinstance(evidence, Mapping) else None
-        required_usage = ("units", "probe_calls", "heavy_calls", "total_endpoint_calls", "payload_bytes", "wall_seconds", "concurrency")
+        required_usage = (
+            "units",
+            "probe_calls",
+            "heavy_calls",
+            "total_endpoint_calls",
+            "payload_bytes",
+            "wall_seconds",
+            "concurrency",
+        )
         if usage is None or any(field not in usage for field in required_usage):
-            reasons.append("complete authorization cost usage counters are required; missing is not zero")
+            reasons.append(
+                "complete authorization cost usage counters are required; missing is not zero"
+            )
         else:
             for field in required_usage:
                 value = usage[field]
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                ):
                     reasons.append(f"cost usage {field} is missing or invalid")
-            limits = {"units": cost["max_units"], "probe_calls": cost["max_probe_calls"], "heavy_calls": cost["max_heavy_calls"], "total_endpoint_calls": cost["max_total_endpoint_calls"], "payload_bytes": cost["max_payload_bytes"], "wall_seconds": cost["max_wall_seconds"], "concurrency": cost["concurrency"]}
+            limits = {
+                "units": cost["max_units"],
+                "probe_calls": cost["max_probe_calls"],
+                "heavy_calls": cost["max_heavy_calls"],
+                "total_endpoint_calls": cost["max_total_endpoint_calls"],
+                "payload_bytes": cost["max_payload_bytes"],
+                "wall_seconds": cost["max_wall_seconds"],
+                "concurrency": cost["concurrency"],
+            }
             for field, limit in limits.items():
                 if field in usage and usage[field] > limit:
                     reasons.append(f"authorization cost ceiling exceeded: {field}")
-        if any(u.get("held_pair_exclusion") or u.get("network") is True or u.get("imputed") is True for u in projection["units"]):
-            reasons.append("held/new/live/scheduler/out-of-root or no-imputation permission violation")
+        if any(
+            u.get("held_pair_exclusion")
+            or u.get("network") is True
+            or u.get("imputed") is True
+            for u in projection["units"]
+        ):
+            reasons.append(
+                "held/new/live/scheduler/out-of-root or no-imputation permission violation"
+            )
         stages.append("exact candidate scope/hash/quota/cost/concurrency")
 
-        raw_probes = list(probes) if isinstance(probes, Iterable) and not isinstance(probes, (str, bytes, Mapping)) else []
-        probe_keys = [p.get("candidate_key") for p in raw_probes if isinstance(p, Mapping)]
-        if len(raw_probes) != len(probe_keys) or len(set(probe_keys)) != len(probe_keys):
+        raw_probes = (
+            list(probes)
+            if isinstance(probes, Iterable)
+            and not isinstance(probes, (str, bytes, Mapping))
+            else []
+        )
+        probe_keys = [
+            p.get("candidate_key") for p in raw_probes if isinstance(p, Mapping)
+        ]
+        if len(raw_probes) != len(probe_keys) or len(set(probe_keys)) != len(
+            probe_keys
+        ):
             reasons.append("probe identities are malformed or duplicated")
         if set(probe_keys) != set(keys):
             reasons.append("probe coverage is not exact; unknown or missing probe")
@@ -507,16 +732,48 @@ def admit_acquisition(
             if not isinstance(probe, Mapping):
                 continue
             key = probe.get("candidate_key")
-            unit = next((u for u in projection["units"] if u["candidate_key"] == key), None)
+            unit = next(
+                (u for u in projection["units"] if u["candidate_key"] == key), None
+            )
             if unit is None:
                 continue
-            expected_request = {name: unit[name] for name in ("ticker", "calendar_day", "expiry", "dte", "habitat", "sector", "candidate_source")}
+            expected_request = {
+                name: unit[name]
+                for name in (
+                    "ticker",
+                    "calendar_day",
+                    "expiry",
+                    "dte",
+                    "habitat",
+                    "sector",
+                    "candidate_source",
+                )
+            }
             expected_request["calendar_binding"] = unit.get("calendar_binding")
             if probe.get("request_parameters") != expected_request:
                 reasons.append(f"probe {key} request identity is detached")
-            evidence_identity = probe.get("evidence") if isinstance(probe.get("evidence"), Mapping) else {}
-            identity_fields = ("snapshot_hash", "calendar_hash", "calendar_policy_version", "resolver_code_hash", "session_id", "settlement_style", "window_policy", "calendar_binding_hash", "as_of", "source_hashes")
-            identity = probe.get("probe_identity") if isinstance(probe.get("probe_identity"), Mapping) else evidence_identity.get("probe_identity")
+            evidence_identity = (
+                probe.get("evidence")
+                if isinstance(probe.get("evidence"), Mapping)
+                else {}
+            )
+            identity_fields = (
+                "snapshot_hash",
+                "calendar_hash",
+                "calendar_policy_version",
+                "resolver_code_hash",
+                "session_id",
+                "settlement_style",
+                "window_policy",
+                "calendar_binding_hash",
+                "as_of",
+                "source_hashes",
+            )
+            identity = (
+                probe.get("probe_identity")
+                if isinstance(probe.get("probe_identity"), Mapping)
+                else evidence_identity.get("probe_identity")
+            )
             if not isinstance(identity, Mapping):
                 reasons.append(f"probe {key} exact identity is missing")
             else:
@@ -525,24 +782,42 @@ def admit_acquisition(
                     actual = identity.get(field)
                     if expected in (None, "") or actual != expected:
                         reasons.append(f"probe {key} identity mismatch: {field}")
-                if identity.get("request_identity", identity.get("request_parameters")) != expected_request:
-                    reasons.append(f"probe {key} candidate request identity is detached")
+                if (
+                    identity.get("request_identity", identity.get("request_parameters"))
+                    != expected_request
+                ):
+                    reasons.append(
+                        f"probe {key} candidate request identity is detached"
+                    )
             if probe.get("probe_code_hash") != expected_code_hash:
                 reasons.append(f"probe {key} code hash mismatch")
             for field in ("ticker", "expiry", "dte"):
                 if probe.get(field) != unit[field]:
                     reasons.append(f"probe {key} {field} identity mismatch")
-            if probe.get("day") != unit["calendar_day"] or any(probe.get(f) != unit.get(f) for f in ("habitat", "sector", "candidate_source")):
-                reasons.append(f"probe {key} ticker/day/expiry/DTE/habitat/sector/source identity mismatch")
-            binding = probe.get("calendar_binding") or (probe.get("evidence") or {}).get("calendar_binding")
+            if probe.get("day") != unit["calendar_day"] or any(
+                probe.get(f) != unit.get(f)
+                for f in ("habitat", "sector", "candidate_source")
+            ):
+                reasons.append(
+                    f"probe {key} ticker/day/expiry/DTE/habitat/sector/source identity mismatch"
+                )
+            binding = probe.get("calendar_binding") or (
+                probe.get("evidence") or {}
+            ).get("calendar_binding")
             if binding != unit.get("calendar_binding"):
                 reasons.append(f"probe {key} calendar identity detached")
             if probe.get("probe_code_hash") != expected_code_hash:
                 reasons.append(f"probe {key} code hash mismatch")
-            if probe.get("status") != "PASS" or probe.get("validated") is not True or probe.get("invoked") is not True:
+            if (
+                probe.get("status") != "PASS"
+                or probe.get("validated") is not True
+                or probe.get("invoked") is not True
+            ):
                 reasons.append(f"probe {key} is not a validated invoked PASS")
             checks = probe.get("checks")
-            if not isinstance(checks, Mapping) or any(checks.get(check) != "PASS" for check in required_checks):
+            if not isinstance(checks, Mapping) or any(
+                checks.get(check) != "PASS" for check in required_checks
+            ):
                 reasons.append(f"probe {key} checks are incomplete")
         stages.append("complete Task 1 probe contract")
 
@@ -550,10 +825,25 @@ def admit_acquisition(
         if not isinstance(raw_units, list) or len(raw_units) != len(keys):
             reasons.append("evidence unit coverage is incomplete")
             raw_units = []
-        evidence_keys = [u.get("candidate_key") for u in raw_units if isinstance(u, Mapping)]
-        if len(evidence_keys) != len(raw_units) or len(set(evidence_keys)) != len(evidence_keys) or set(evidence_keys) != set(keys):
-            reasons.append("evidence contains duplicate, unknown, or missing candidates")
-        if not isinstance(registry, Mapping) or not registry or (evidence.get("artifact_registry") is not None and evidence.get("artifact_registry") != registry):
+        evidence_keys = [
+            u.get("candidate_key") for u in raw_units if isinstance(u, Mapping)
+        ]
+        if (
+            len(evidence_keys) != len(raw_units)
+            or len(set(evidence_keys)) != len(evidence_keys)
+            or set(evidence_keys) != set(keys)
+        ):
+            reasons.append(
+                "evidence contains duplicate, unknown, or missing candidates"
+            )
+        if (
+            not isinstance(registry, Mapping)
+            or not registry
+            or (
+                evidence.get("artifact_registry") is not None
+                and evidence.get("artifact_registry") != registry
+            )
+        ):
             reasons.append("artifact registry is missing or detached")
         admitted: list[dict[str, Any]] = []
         registry_artifacts: dict[str, str] = {}
@@ -562,36 +852,70 @@ def admit_acquisition(
             if not isinstance(item, Mapping):
                 continue
             key = item.get("candidate_key")
-            manifest_unit = next((u for u in projection["units"] if u["candidate_key"] == key), None)
+            manifest_unit = next(
+                (u for u in projection["units"] if u["candidate_key"] == key), None
+            )
             artifact_hash = item.get("artifact_hash")
-            entry = registry.get(artifact_hash) if isinstance(artifact_hash, str) else None
+            entry = (
+                registry.get(artifact_hash) if isinstance(artifact_hash, str) else None
+            )
             if manifest_unit is None or not isinstance(entry, Mapping):
                 reasons.append(f"artifact/source closure missing for {key}")
                 continue
             try:
                 normalized_artifact_hash = str(artifact_hash).lower()
-                if normalized_artifact_hash in registry_artifacts and registry_artifacts[normalized_artifact_hash] != key:
-                    raise ValueError("artifact registry entry is reused across candidate units")
+                if (
+                    normalized_artifact_hash in registry_artifacts
+                    and registry_artifacts[normalized_artifact_hash] != key
+                ):
+                    raise ValueError(
+                        "artifact registry entry is reused across candidate units"
+                    )
                 _validate_registry_attestation(item, entry, normalized_artifact_hash)
                 payload_digest = _canonical_payload_sha256(entry)
-                if payload_digest in registry_payloads and registry_payloads[payload_digest] != key:
-                    raise ValueError("canonical payload is reused across candidate units")
+                if (
+                    payload_digest in registry_payloads
+                    and registry_payloads[payload_digest] != key
+                ):
+                    raise ValueError(
+                        "canonical payload is reused across candidate units"
+                    )
                 registry_artifacts[normalized_artifact_hash] = key
                 registry_payloads[payload_digest] = key
             except (TypeError, ValueError, KeyError) as exc:
                 reasons.append(f"artifact/source closure invalid for {key}: {exc}")
-            if entry.get("candidate_key") != key or entry.get("artifact_hash") != artifact_hash or entry.get("artifact_manifest") != item.get("artifact_manifest"):
+            if (
+                entry.get("candidate_key") != key
+                or entry.get("artifact_hash") != artifact_hash
+                or entry.get("artifact_manifest") != item.get("artifact_manifest")
+            ):
                 reasons.append(f"artifact registry closure mismatch for {key}")
-            closure_fields = ("source_hashes", "calendar_binding", "request_identity", "raw_payload_hash", "artifact_hash", "artifact_manifest", "evidence")
+            closure_fields = (
+                "source_hashes",
+                "calendar_binding",
+                "request_identity",
+                "raw_payload_hash",
+                "artifact_hash",
+                "artifact_manifest",
+                "evidence",
+            )
             for field in closure_fields:
                 expected = item.get(field)
                 if field == "request_identity":
                     expected = item.get("artifact_manifest", {}).get("request_identity")
                 if field not in entry or entry.get(field) != expected:
-                    reasons.append(f"registry closure is shallow or detached for {key}: {field}")
-            if item.get("status") != "PASS" or item.get("imputed") is not False or item.get("no_imputation") is not True:
+                    reasons.append(
+                        f"registry closure is shallow or detached for {key}: {field}"
+                    )
+            if (
+                item.get("status") != "PASS"
+                or item.get("imputed") is not False
+                or item.get("no_imputation") is not True
+            ):
                 reasons.append(f"evidence {key} is not an unimputed PASS")
-            if item.get("calendar_binding") != manifest_unit.get("calendar_binding") or item.get("source_hashes") != manifest_unit.get("source_hashes"):
+            if item.get("calendar_binding") != manifest_unit.get(
+                "calendar_binding"
+            ) or item.get("source_hashes") != manifest_unit.get("source_hashes"):
                 reasons.append(f"calendar/source hashes detached for {key}")
             for pre_reason in _strict_prewindow(item, manifest_unit, entry):
                 reasons.append(f"{key}: {pre_reason}")
@@ -602,20 +926,40 @@ def admit_acquisition(
                 reasons.append(f"artifact manifest is not canonical for {key}")
             if entry.get("payload_bytes") is None and entry.get("payload") is None:
                 reasons.append(f"raw payload identity is missing for {key}")
-            if not any(str(reason).endswith(f"for {key}") and "closure invalid" in str(reason) for reason in reasons):
+            if not any(
+                str(reason).endswith(f"for {key}") and "closure invalid" in str(reason)
+                for reason in reasons
+            ):
                 admitted.append(dict(item))
         stages.append("registry/source/artifact closure")
         if auth.authorization_sha256() != auth_data["authorization_sha256"]:
             reasons.append("authorization self-hash is invalid")
         policy = auth_data["executor_policy"]
-        if any(policy[field] for field in ("allow_new_candidate_keys", "allow_held_pairs", "allow_live_model_calls", "allow_scheduler_calls", "allow_writes_outside_artifact_root")):
+        if any(
+            policy[field]
+            for field in (
+                "allow_new_candidate_keys",
+                "allow_held_pairs",
+                "allow_live_model_calls",
+                "allow_scheduler_calls",
+                "allow_writes_outside_artifact_root",
+            )
+        ):
             reasons.append("executor policy contains restricted permission")
         stages.append("authorization self-hash/scope/expiry")
         if reasons:
             return _admission_failure(sorted(set(reasons)), stages)
         admitted.sort(key=lambda item: item["candidate_key"])
         frozen = tuple(_immutable(item) for item in admitted)
-        return frozen, _immutable({"admitted": True, "stages": stages + ["restricted executor handoff"], "admitted_keys": [item["candidate_key"] for item in admitted], "blocked": [], "evidence": [dict(item) for item in admitted]})
+        return frozen, _immutable(
+            {
+                "admitted": True,
+                "stages": stages + ["restricted executor handoff"],
+                "admitted_keys": [item["candidate_key"] for item in admitted],
+                "blocked": [],
+                "evidence": [dict(item) for item in admitted],
+            }
+        )
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
         return _admission_failure([str(exc)], stages)
 
@@ -659,14 +1003,38 @@ def _held_references(paths: Iterable[str | Path]) -> dict[tuple[str, str], str]:
             visit(payload, objects)
             for obj in objects:
                 ticker = str(obj.get("ticker", "")).strip().lstrip("$").upper()
-                day = next((obj.get(k) for k in ("calendar_day", "day", "date", "trade_date", "as_of", "acquired_on") if obj.get(k) is not None), None)
+                day = next(
+                    (
+                        obj.get(k)
+                        for k in (
+                            "calendar_day",
+                            "day",
+                            "date",
+                            "trade_date",
+                            "as_of",
+                            "acquired_on",
+                        )
+                        if obj.get(k) is not None
+                    ),
+                    None,
+                )
                 if ticker and day is not None:
-                    try: refs[(ticker, _date(day))] = f"{path.name}:{_date(day)}"
-                    except ValueError: pass
+                    try:
+                        refs[(ticker, _date(day))] = f"{path.name}:{_date(day)}"
+                    except ValueError:
+                        pass
     return refs
 
 
-def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_paths: Iterable[str | Path] = (), held_pairs: Iterable[tuple[str, str]] = (), calendar_snapshot: Any | None = None, as_of: str | None = None, window_policy: str = "OPEX_DAY") -> list[dict[str, Any]]:
+def build_candidate_schedule(
+    candidates: Iterable[Mapping[str, Any]],
+    *,
+    held_paths: Iterable[str | Path] = (),
+    held_pairs: Iterable[tuple[str, str]] = (),
+    calendar_snapshot: Any | None = None,
+    as_of: str | None = None,
+    window_policy: str = "OPEX_DAY",
+) -> list[dict[str, Any]]:
     """Normalize and deterministically sort candidate ticker x day requests.
 
     Held rows remain in the census schedule and are marked, never silently
@@ -679,21 +1047,34 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
     result_by_key: dict[str, dict[str, Any]] = {}
     for raw in candidates:
         ticker = str(raw.get("ticker", "")).strip().lstrip("$").upper()
-        if ticker in {"SPY", "QQQ"}: raise ValueError("reference families cannot be expansion candidates")
-        if not ticker: raise ValueError("ticker is required")
+        if ticker in {"SPY", "QQQ"}:
+            raise ValueError("reference families cannot be expansion candidates")
+        if not ticker:
+            raise ValueError("ticker is required")
         day = _date(raw.get("calendar_day", raw.get("day", raw.get("date"))))
         expiry = _date(raw.get("expiry"))
-        try: dte = int(raw.get("dte"))
-        except (TypeError, ValueError) as exc: raise ValueError("DTE is required") from exc
-        if dte <= 0 or (dt.date.fromisoformat(expiry) - dt.date.fromisoformat(day)).days != dte:
+        try:
+            dte = int(raw.get("dte"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("DTE is required") from exc
+        if (
+            dte <= 0
+            or (dt.date.fromisoformat(expiry) - dt.date.fromisoformat(day)).days != dte
+        ):
             raise ValueError("expiry and DTE must agree and DTE must be positive")
-        if not any(lo <= dte <= hi for lo, hi in DTE_STRATA): raise ValueError("DTE outside locked strata")
-        habitat = str(raw.get("habitat", raw.get("event_habitat", "NONE"))).strip().upper()
-        if habitat not in {"NONE", *EVENT_HABITATS, "DESCRIPTIVE-HABITAT"}: raise ValueError("invalid habitat")
+        if not any(lo <= dte <= hi for lo, hi in DTE_STRATA):
+            raise ValueError("DTE outside locked strata")
+        habitat = (
+            str(raw.get("habitat", raw.get("event_habitat", "NONE"))).strip().upper()
+        )
+        if habitat not in {"NONE", *EVENT_HABITATS, "DESCRIPTIVE-HABITAT"}:
+            raise ValueError("invalid habitat")
         sector = str(raw.get("sector", "")).strip()
-        if not sector: raise ValueError("sector is required")
+        if not sector:
+            raise ValueError("sector is required")
         source = raw.get("candidate_source", raw.get("source_list"))
-        if not isinstance(source, str) or not source.strip(): raise ValueError("candidate_source is required")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("candidate_source is required")
         source = source.strip()
         key = "|".join((day, ticker, expiry, str(dte), habitat, sector, source))
         pair = (ticker, day)
@@ -702,33 +1083,98 @@ def build_candidate_schedule(candidates: Iterable[Mapping[str, Any]], *, held_pa
         if not excluded:
             if calendar_snapshot is None:
                 if isinstance(binding, Mapping):
-                    raise ValueError("calendar snapshot is required to validate a caller calendar binding")
+                    raise ValueError(
+                        "calendar snapshot is required to validate a caller calendar binding"
+                    )
                 # Legacy census construction remains network-free, but this
                 # unbound row is never eligible for non-dry-run acquisition.
                 binding = None
             else:
                 try:
                     if not isinstance(binding, Mapping):
-                        binding = calendar_for_probe(calendar_snapshot, ticker=ticker, calendar_day=day, expiry=expiry, dte=dte, as_of=as_of, window_policy=window_policy)
-                    binding = _validate_calendar_binding(binding, ticker=ticker, day=day, expiry=expiry, dte=dte, calendar_snapshot=calendar_snapshot)
+                        binding = calendar_for_probe(
+                            calendar_snapshot,
+                            ticker=ticker,
+                            calendar_day=day,
+                            expiry=expiry,
+                            dte=dte,
+                            as_of=as_of,
+                            window_policy=window_policy,
+                        )
+                    binding = _validate_calendar_binding(
+                        binding,
+                        ticker=ticker,
+                        day=day,
+                        expiry=expiry,
+                        dte=dte,
+                        calendar_snapshot=calendar_snapshot,
+                    )
                 except (AttributeError, CalendarGapError, TypeError, ValueError) as exc:
                     raise ValueError(f"calendar binding: {exc}") from exc
         elif isinstance(binding, Mapping):
-            binding = _validate_calendar_binding(binding, ticker=ticker, day=day, expiry=expiry, dte=dte)
-        item = {"calendar_day": day, "ticker": ticker, "expiry": expiry, "dte": dte, "habitat": habitat, "sector": sector, "candidate_source": source, "asset_type": str(raw.get("asset_type", "equity")), "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])), "candidate_key": key, "held_pair_exclusion": excluded, "held_pair_exclusion_reason": "held_ticker_day" if excluded else None, "held_day_reference": refs.get(pair), "calendar_binding": binding, **({"declared_timezone": raw["declared_timezone"]} if raw.get("declared_timezone") is not None else {})}
+            binding = _validate_calendar_binding(
+                binding, ticker=ticker, day=day, expiry=expiry, dte=dte
+            )
+        item = {
+            "calendar_day": day,
+            "ticker": ticker,
+            "expiry": expiry,
+            "dte": dte,
+            "habitat": habitat,
+            "sector": sector,
+            "candidate_source": source,
+            "asset_type": str(raw.get("asset_type", "equity")),
+            "dte_stratum": list(next(s for s in DTE_STRATA if s[0] <= dte <= s[1])),
+            "candidate_key": key,
+            "held_pair_exclusion": excluded,
+            "held_pair_exclusion_reason": "held_ticker_day" if excluded else None,
+            "held_day_reference": refs.get(pair),
+            "calendar_binding": binding,
+            **(
+                {"declared_timezone": raw["declared_timezone"]}
+                if raw.get("declared_timezone") is not None
+                else {}
+            ),
+        }
         previous = result_by_key.get(key)
-        if previous is None or canonical_json_bytes(item) < canonical_json_bytes(previous):
+        if previous is None or canonical_json_bytes(item) < canonical_json_bytes(
+            previous
+        ):
             result_by_key[key] = item
-    return sorted(result_by_key.values(), key=lambda x: tuple(x[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")))
+    return sorted(
+        result_by_key.values(),
+        key=lambda x: tuple(
+            x[k]
+            for k in (
+                "calendar_day",
+                "ticker",
+                "expiry",
+                "dte",
+                "habitat",
+                "sector",
+                "candidate_source",
+            )
+        ),
+    )
 
 
 def _extract_l2(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    record = payload.get("record") if isinstance(payload.get("record"), Mapping) else payload
-    l2 = record.get("l2") if isinstance(record, Mapping) and isinstance(record.get("l2"), Mapping) else record
+    record = (
+        payload.get("record") if isinstance(payload.get("record"), Mapping) else payload
+    )
+    l2 = (
+        record.get("l2")
+        if isinstance(record, Mapping) and isinstance(record.get("l2"), Mapping)
+        else record
+    )
     return l2 if isinstance(l2, Mapping) else {}
 
 
-_ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+_ISO_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
+
+
 def _timestamp(value: Any) -> dt.datetime:
     """Parse a timezone-qualified ISO-8601 instant and normalize it to UTC."""
     if not isinstance(value, str) or not _ISO_TIMESTAMP_RE.fullmatch(value):
@@ -744,11 +1190,20 @@ def _captured_row_timestamp(day: Any, ms_of_day: Any, timezone: Any) -> str:
     from zoneinfo import ZoneInfo
 
     date_text = _date(day)
-    if isinstance(ms_of_day, bool) or not isinstance(ms_of_day, int) or not 0 <= ms_of_day < 86_400_000:
+    if (
+        isinstance(ms_of_day, bool)
+        or not isinstance(ms_of_day, int)
+        or not 0 <= ms_of_day < 86_400_000
+    ):
         raise ValueError("invalid captured row ms_of_day")
     local = dt.datetime.combine(dt.date.fromisoformat(date_text), dt.time())
     local += dt.timedelta(milliseconds=ms_of_day)
-    return local.replace(tzinfo=ZoneInfo(timezone.strip())).astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+    return (
+        local.replace(tzinfo=ZoneInfo(timezone.strip()))
+        .astimezone(dt.UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _captured_table_rows(call: Mapping[str, Any]) -> list[dict[str, Any]] | None:
@@ -775,13 +1230,17 @@ def _captured_call_hash(call: Mapping[str, Any]) -> str:
     try:
         expected = canonical_sha256(call.get("payload"))
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("successful captured call payload cannot be canonically hashed") from exc
+        raise ValueError(
+            "successful captured call payload cannot be canonically hashed"
+        ) from exc
     if value.lower() != expected:
         raise ValueError("captured call payload_sha256 does not match payload")
     return expected
 
 
-def _captured_call_rows(calls: Iterable[Mapping[str, Any]], required: str) -> list[tuple[Mapping[str, Any], dict[str, Any]]]:
+def _captured_call_rows(
+    calls: Iterable[Mapping[str, Any]], required: str
+) -> list[tuple[Mapping[str, Any], dict[str, Any]]]:
     """Return rows with their producing call; any malformed successful call blocks."""
     selected: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
     for call in calls:
@@ -804,22 +1263,77 @@ def _map_captured_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, An
     if not isinstance(payload, Mapping) or not isinstance(payload.get("calls"), list):
         return {}
     timezone = unit.get("declared_timezone")
-    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), Mapping) else {}
+    metrics = (
+        payload.get("metrics") if isinstance(payload.get("metrics"), Mapping) else {}
+    )
     # Acquisition-side eligibility is an attestation, not something mapping may infer.
     decision = str(payload.get("decision", metrics.get("decision", ""))).upper()
-    if metrics.get("breach_eligible") is not True or decision == "HARD_GAP" or str(payload.get("status", "")).upper() == "HARD_GAP":
-        return {"_mapping_status": "HARD_GAP", "_mapping_reason": "raw acquisition is not breach eligible"}
-    calls = [call for call in payload["calls"] if isinstance(call, Mapping) and call.get("response_status") == 200]
-    spot_calls = [call for call in calls if "/stock/ohlc/" in str(call.get("endpoint", ""))]
-    chain_calls = [call for call in calls if "/option/all_greeks/" in str(call.get("endpoint", ""))]
+    if (
+        metrics.get("breach_eligible") is not True
+        or decision == "HARD_GAP"
+        or str(payload.get("status", "")).upper() == "HARD_GAP"
+    ):
+        return {
+            "_mapping_status": "HARD_GAP",
+            "_mapping_reason": "raw acquisition is not breach eligible",
+        }
+    calls = [
+        call
+        for call in payload["calls"]
+        if isinstance(call, Mapping) and call.get("response_status") == 200
+    ]
+    spot_calls = [
+        call for call in calls if "/stock/ohlc/" in str(call.get("endpoint", ""))
+    ]
+    chain_calls = [
+        call for call in calls if "/option/all_greeks/" in str(call.get("endpoint", ""))
+    ]
     try:
         spot_rows = _captured_call_rows(spot_calls, "spot")
         chain_rows = _captured_call_rows(chain_calls, "chain")
         breach_ms = metrics.get("breach_window_start_prov")
         breach = _captured_row_timestamp(unit.get("calendar_day"), breach_ms, timezone)
         breach_dt = _timestamp(breach)
-        spot_observed = sorted(((_timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)), call) for call, row in spot_rows if _timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)) < breach_dt), key=lambda item: item[0])
-        chain_observed = sorted(((_timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)), call) for call, row in chain_rows if _timestamp(_captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)) < breach_dt), key=lambda item: item[0])
+        spot_observed = sorted(
+            (
+                (
+                    _timestamp(
+                        _captured_row_timestamp(
+                            row.get("date"), row.get("ms_of_day"), timezone
+                        )
+                    ),
+                    call,
+                )
+                for call, row in spot_rows
+                if _timestamp(
+                    _captured_row_timestamp(
+                        row.get("date"), row.get("ms_of_day"), timezone
+                    )
+                )
+                < breach_dt
+            ),
+            key=lambda item: item[0],
+        )
+        chain_observed = sorted(
+            (
+                (
+                    _timestamp(
+                        _captured_row_timestamp(
+                            row.get("date"), row.get("ms_of_day"), timezone
+                        )
+                    ),
+                    call,
+                )
+                for call, row in chain_rows
+                if _timestamp(
+                    _captured_row_timestamp(
+                        row.get("date"), row.get("ms_of_day"), timezone
+                    )
+                )
+                < breach_dt
+            ),
+            key=lambda item: item[0],
+        )
         if not spot_observed or not chain_observed:
             return {}
         spot_ts, spot_call = spot_observed[-1]
@@ -829,7 +1343,9 @@ def _map_captured_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, An
             endpoint = str(call.get("endpoint", ""))
             # Every row in required successful chain data must be well formed;
             # valid rows must not hide a malformed mixed response.
-            timestamp = _captured_row_timestamp(row.get("date"), row.get("ms_of_day"), timezone)
+            timestamp = _captured_row_timestamp(
+                row.get("date"), row.get("ms_of_day"), timezone
+            )
             iv = float(row.get("implied_vol"))
             if not math.isfinite(iv):
                 raise ValueError("malformed required IV row")
@@ -841,34 +1357,76 @@ def _map_captured_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, An
         by_timestamp: dict[dt.datetime, tuple[float, Mapping[str, Any], str, str]] = {}
         for timestamp, iv, row, endpoint, call_hash in iv_rows:
             try:
-                distance = abs(float(row.get("strike")) / 1000.0 - float(row.get("underlying_price")))
+                distance = abs(
+                    float(row.get("strike")) / 1000.0
+                    - float(row.get("underlying_price"))
+                )
             except (TypeError, ValueError):
                 distance = math.inf
             previous = by_timestamp.get(timestamp)
             if previous is None or distance < previous[0]:
-                by_timestamp[timestamp] = (distance, {"iv": iv, **row}, endpoint, call_hash)
-        observed = sorted((timestamp, value[1], value[2], value[3]) for timestamp, value in by_timestamp.items())
+                by_timestamp[timestamp] = (
+                    distance,
+                    {"iv": iv, **row},
+                    endpoint,
+                    call_hash,
+                )
+        observed = sorted(
+            (timestamp, value[1], value[2], value[3])
+            for timestamp, value in by_timestamp.items()
+        )
         if len(observed) < 2:
             return {}
         before_ts, before_row, before_endpoint, before_hash = observed[-2]
         source_ts, source_row, source_endpoint, source_hash = observed[-1]
         observations = [
-            {"role": _PREWINDOW, "timestamp": before_ts.isoformat().replace("+00:00", "Z"), "iv": float(before_row["iv"]), "source_identity": before_endpoint, "source_hash": before_hash},
-            {"role": _PREWINDOW, "timestamp": source_ts.isoformat().replace("+00:00", "Z"), "iv": float(source_row["iv"]), "source_identity": source_endpoint, "source_hash": source_hash},
+            {
+                "role": _PREWINDOW,
+                "timestamp": before_ts.isoformat().replace("+00:00", "Z"),
+                "iv": float(before_row["iv"]),
+                "source_identity": before_endpoint,
+                "source_hash": before_hash,
+            },
+            {
+                "role": _PREWINDOW,
+                "timestamp": source_ts.isoformat().replace("+00:00", "Z"),
+                "iv": float(source_row["iv"]),
+                "source_identity": source_endpoint,
+                "source_hash": source_hash,
+            },
         ]
-        source_hashes = sorted({before_hash, source_hash, _captured_call_hash(spot_call), _captured_call_hash(chain_call)})
+        source_hashes = sorted(
+            {
+                before_hash,
+                source_hash,
+                _captured_call_hash(spot_call),
+                _captured_call_hash(chain_call),
+            }
+        )
         if len(source_hashes) < 2:
             return {}
-        return {"delta_iv_provenance": _PREWINDOW, "delta_iv_pre_window": observations[1]["iv"] - observations[0]["iv"],
-                "iv_before_ts": observations[0]["timestamp"], "iv_before_value": observations[0]["iv"],
-                "iv_source_ts": observations[1]["timestamp"], "iv_source_value": observations[1]["iv"],
-                "breach_window_start_prov": breach, "declared_timezone": timezone,
-                "spot_timestamp": spot_ts.isoformat().replace("+00:00", "Z"), "chain_timestamp": chain_ts.isoformat().replace("+00:00", "Z"),
-                "spot_source_identity": str(spot_call.get("endpoint")), "spot_source_hash": _captured_call_hash(spot_call),
-                "chain_source_identity": str(chain_call.get("endpoint")), "chain_source_hash": _captured_call_hash(chain_call),
-                "endpoint": source_endpoint, "request_parameters": {"captured_calls": len(calls)},
-                "source_hashes": source_hashes, "pre_window_observations": observations,
-                "delta_iv_aggregation": "iv_source_minus_iv_before", "delta_iv_aggregation_version": "1"}
+        return {
+            "delta_iv_provenance": _PREWINDOW,
+            "delta_iv_pre_window": observations[1]["iv"] - observations[0]["iv"],
+            "iv_before_ts": observations[0]["timestamp"],
+            "iv_before_value": observations[0]["iv"],
+            "iv_source_ts": observations[1]["timestamp"],
+            "iv_source_value": observations[1]["iv"],
+            "breach_window_start_prov": breach,
+            "declared_timezone": timezone,
+            "spot_timestamp": spot_ts.isoformat().replace("+00:00", "Z"),
+            "chain_timestamp": chain_ts.isoformat().replace("+00:00", "Z"),
+            "spot_source_identity": str(spot_call.get("endpoint")),
+            "spot_source_hash": _captured_call_hash(spot_call),
+            "chain_source_identity": str(chain_call.get("endpoint")),
+            "chain_source_hash": _captured_call_hash(chain_call),
+            "endpoint": source_endpoint,
+            "request_parameters": {"captured_calls": len(calls)},
+            "source_hashes": source_hashes,
+            "pre_window_observations": observations,
+            "delta_iv_aggregation": "iv_source_minus_iv_before",
+            "delta_iv_aggregation_version": "1",
+        }
     except (TypeError, ValueError, OSError) as exc:
         return {"_mapping_status": "HARD_GAP", "_mapping_reason": str(exc)[:200]}
 
@@ -877,47 +1435,101 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
     raw_hash = _hash(payload)
     l2 = dict(_extract_l2(payload)) if isinstance(payload, Mapping) else {}
     mapped = _map_captured_payload(unit, payload)
-    mapping_status = mapped.get("_mapping_status") if isinstance(mapped, Mapping) else None
-    mapping_reason = mapped.get("_mapping_reason") if isinstance(mapped, Mapping) else None
+    mapping_status = (
+        mapped.get("_mapping_status") if isinstance(mapped, Mapping) else None
+    )
+    mapping_reason = (
+        mapped.get("_mapping_reason") if isinstance(mapped, Mapping) else None
+    )
     if mapping_status is None and isinstance(mapped, Mapping):
         conflicts = [
-            key for key, value in mapped.items()
-            if not key.startswith("_") and key in l2 and l2[key] is not None and l2[key] != value
+            key
+            for key, value in mapped.items()
+            if not key.startswith("_")
+            and key in l2
+            and l2[key] is not None
+            and l2[key] != value
         ]
         if conflicts:
             mapped = {
                 "_mapping_status": "HARD_GAP",
-                "_mapping_reason": "record.l2 conflicts with captured endpoint provenance: " + ", ".join(sorted(conflicts)),
+                "_mapping_reason": "record.l2 conflicts with captured endpoint provenance: "
+                + ", ".join(sorted(conflicts)),
             }
             mapping_status = mapped["_mapping_status"]
             mapping_reason = mapped["_mapping_reason"]
-    l2.update({key: value for key, value in mapped.items() if not key.startswith("_") and (key not in l2 or l2[key] is None)})
+    l2.update(
+        {
+            key: value
+            for key, value in mapped.items()
+            if not key.startswith("_") and (key not in l2 or l2[key] is None)
+        }
+    )
     prov = str(l2.get("delta_iv_provenance", "")).upper()
     value = l2.get("delta_iv_pre_window")
     source_ts, breach_ts = l2.get("iv_source_ts"), l2.get("breach_window_start_prov")
     root = payload if isinstance(payload, Mapping) else {}
     supplied_hashes = l2.get("source_hashes", root.get("source_hashes"))
-    declared_timezone = l2.get("declared_timezone", root.get("declared_timezone", unit.get("declared_timezone")))
-    endpoint = l2.get("endpoint", l2.get("request_endpoint", root.get("endpoint", root.get("request_endpoint"))))
-    parameters = l2.get("request_parameters", l2.get("parameters", root.get("request_parameters", root.get("parameters"))))
+    declared_timezone = l2.get(
+        "declared_timezone",
+        root.get("declared_timezone", unit.get("declared_timezone")),
+    )
+    endpoint = l2.get(
+        "endpoint",
+        l2.get("request_endpoint", root.get("endpoint", root.get("request_endpoint"))),
+    )
+    parameters = l2.get(
+        "request_parameters",
+        l2.get("parameters", root.get("request_parameters", root.get("parameters"))),
+    )
     spot_timestamp = l2.get("spot_timestamp", root.get("spot_timestamp"))
     chain_timestamp = l2.get("chain_timestamp", root.get("chain_timestamp"))
     iv_before_ts = l2.get("iv_before_ts", root.get("iv_before_ts"))
     iv_before_value = l2.get("iv_before_value", root.get("iv_before_value"))
     iv_source_value = l2.get("iv_source_value", root.get("iv_source_value"))
-    aggregation = l2.get("delta_iv_aggregation", l2.get("aggregation_id", root.get("delta_iv_aggregation", root.get("aggregation_id"))))
-    aggregation_version = l2.get("delta_iv_aggregation_version", l2.get("aggregation_version", root.get("delta_iv_aggregation_version", root.get("aggregation_version"))))
+    aggregation = l2.get(
+        "delta_iv_aggregation",
+        l2.get(
+            "aggregation_id",
+            root.get("delta_iv_aggregation", root.get("aggregation_id")),
+        ),
+    )
+    aggregation_version = l2.get(
+        "delta_iv_aggregation_version",
+        l2.get(
+            "aggregation_version",
+            root.get("delta_iv_aggregation_version", root.get("aggregation_version")),
+        ),
+    )
     cluster = l2.get("same_day_cluster", root.get("same_day_cluster"))
-    request_parameters = dict(parameters) if isinstance(parameters, Mapping) else parameters
+    request_parameters = (
+        dict(parameters) if isinstance(parameters, Mapping) else parameters
+    )
     valid = False
     timestamp_reason = mapping_reason
-    eligibility = payload.get("metrics", {}).get("breach_eligible") if isinstance(payload, Mapping) and isinstance(payload.get("metrics"), Mapping) else None
-    raw_decision = str(payload.get("decision", payload.get("metrics", {}).get("decision", ""))).upper() if isinstance(payload, Mapping) else ""
+    eligibility = (
+        payload.get("metrics", {}).get("breach_eligible")
+        if isinstance(payload, Mapping) and isinstance(payload.get("metrics"), Mapping)
+        else None
+    )
+    raw_decision = (
+        str(
+            payload.get("decision", payload.get("metrics", {}).get("decision", ""))
+        ).upper()
+        if isinstance(payload, Mapping)
+        else ""
+    )
     if mapping_status == "HARD_GAP":
         timestamp_reason = mapping_reason or "raw acquisition is not breach eligible"
     elif eligibility is not True or raw_decision == "HARD_GAP":
         timestamp_reason = "explicit breach eligibility is required"
-    elif prov == _PREWINDOW and value is not None and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)):
+    elif (
+        prov == _PREWINDOW
+        and value is not None
+        and not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+    ):
         try:
             validate_source_hashes(supplied_hashes)
             source = _timestamp(source_ts)
@@ -927,164 +1539,508 @@ def _unit_from_payload(unit: Mapping[str, Any], payload: Any) -> dict[str, Any]:
             if not isinstance(declared_timezone, str) or not declared_timezone:
                 raise ValueError("declared_timezone is required")
             from zoneinfo import ZoneInfo
+
             zone = ZoneInfo(declared_timezone)
             day = _date(unit.get("calendar_day"))
             if source >= breach:
-                timestamp_reason = "PRE_WINDOW source timestamp must strictly precede breach"
-            elif any(ts.astimezone(zone).date().isoformat() != day for ts in (source, breach, spot, chain)):
+                timestamp_reason = (
+                    "PRE_WINDOW source timestamp must strictly precede breach"
+                )
+            elif any(
+                ts.astimezone(zone).date().isoformat() != day
+                for ts in (source, breach, spot, chain)
+            ):
                 timestamp_reason = "PRE_WINDOW timestamps must match calendar day"
-            elif not isinstance(endpoint, str) or not endpoint.strip() or not isinstance(request_parameters, Mapping):
-                timestamp_reason = "acquisition endpoint and request_parameters are required"
-            elif iv_before_ts is None or iv_before_value is None or iv_source_value is None or not aggregation or not aggregation_version:
+            elif (
+                not isinstance(endpoint, str)
+                or not endpoint.strip()
+                or not isinstance(request_parameters, Mapping)
+            ):
+                timestamp_reason = (
+                    "acquisition endpoint and request_parameters are required"
+                )
+            elif (
+                iv_before_ts is None
+                or iv_before_value is None
+                or iv_source_value is None
+                or not aggregation
+                or not aggregation_version
+            ):
                 timestamp_reason = "two timestamped pre-window IV observations and aggregation are required"
             else:
                 before = _timestamp(iv_before_ts)
                 source_value = float(iv_source_value)
                 before_value = float(iv_before_value)
                 if before >= source or source >= breach:
-                    timestamp_reason = "pre-window IV timestamps must be ordered before breach"
-                elif before.astimezone(zone).date().isoformat() != day or not math.isfinite(source_value) or not math.isfinite(before_value):
-                    timestamp_reason = "pre-window IV observations are invalid or wrong-day"
-                elif aggregation != "iv_source_minus_iv_before" or str(aggregation_version) != "1":
+                    timestamp_reason = (
+                        "pre-window IV timestamps must be ordered before breach"
+                    )
+                elif (
+                    before.astimezone(zone).date().isoformat() != day
+                    or not math.isfinite(source_value)
+                    or not math.isfinite(before_value)
+                ):
+                    timestamp_reason = (
+                        "pre-window IV observations are invalid or wrong-day"
+                    )
+                elif (
+                    aggregation != "iv_source_minus_iv_before"
+                    or str(aggregation_version) != "1"
+                ):
                     timestamp_reason = "unsupported pre-window IV aggregation"
-                elif not math.isclose(float(value), source_value - before_value, rel_tol=1e-12, abs_tol=1e-12):
-                    timestamp_reason = "delta_iv_pre_window does not equal registered aggregation"
+                elif not math.isclose(
+                    float(value),
+                    source_value - before_value,
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
+                ):
+                    timestamp_reason = (
+                        "delta_iv_pre_window does not equal registered aggregation"
+                    )
                 else:
                     valid = True
         except (TypeError, ValueError, OSError) as exc:
             timestamp_reason = str(exc)
-    status = "PASS" if valid else ("HARD_GAP" if mapping_status == "HARD_GAP" or payload is None or eligibility is not True or raw_decision == "HARD_GAP" else "ASSOCIATIONAL")
+    status = (
+        "PASS"
+        if valid
+        else (
+            "HARD_GAP"
+            if mapping_status == "HARD_GAP"
+            or payload is None
+            or eligibility is not True
+            or raw_decision == "HARD_GAP"
+            else "ASSOCIATIONAL"
+        )
+    )
     artifact = dict(unit)
     binding = unit.get("calendar_binding")
     if not isinstance(binding, Mapping):
         status = "HARD_GAP"
-        timestamp_reason = timestamp_reason or "COMPARISON_INVALID: calendar binding is required"
+        timestamp_reason = (
+            timestamp_reason or "COMPARISON_INVALID: calendar binding is required"
+        )
     else:
         # Persist the supplied Stage-2 binding as immutable Task-3 evidence;
         # Task 4 consumes these fields and never re-resolves them.
-        artifact.update({
-            "calendar_hash": binding.get("calendar_hash"),
-            "calendar_policy_version": binding.get("calendar_policy_version"),
-            "resolver_code_hash": binding.get("resolver_code_hash"),
-            "snapshot_hash": binding.get("snapshot_hash"),
-            "as_of": binding.get("as_of"),
-            "event_ids": list(binding.get("event_ids", ())),
-            "event_types": sorted({str(v.get("event_type")) for v in binding.get("event_windows", {}).values() if isinstance(v, Mapping) and v.get("event_type")}),
-            "event_overlap": len(binding.get("event_ids", ())) > 1,
-            "event_window_id": binding.get("event_window_id"),
-            "window_start": binding.get("window_start"),
-            "window_end": binding.get("window_end"),
-            "window_policy": binding.get("window_policy"),
-            "nominal_date": binding.get("nominal_date"),
-            "observed_expiry_date": binding.get("observed_expiry_date"),
-            "session_id": binding.get("session_id"),
-            "session_status": binding.get("session_status"),
-            "regular_open": binding.get("regular_open"),
-            "regular_close": binding.get("regular_close"),
-            "early_close": binding.get("early_close"),
-            "settlement_style": binding.get("settlement_style"),
-            "settlement_timestamp": binding.get("settlement_timestamp"),
-            "timezone": binding.get("timezone"),
-            "calendar_binding_hash": binding.get("calendar_binding_hash"),
-        })
-    artifact.update({"status": status, "breach_eligible": eligibility, "acquisition_decision": raw_decision or None, "pre_window_provenance": prov or "ASSOCIATIONAL", "pre_window_value": value if valid else None, "delta_iv_pre_window": value if valid else None, "iv_source_ts": source_ts, "breach_window_start_prov": breach_ts, "declared_timezone": declared_timezone, "endpoint": endpoint, "parameters": request_parameters, "request_parameters": request_parameters, "spot_timestamp": spot_timestamp, "chain_timestamp": chain_timestamp, "iv_before_ts": iv_before_ts, "iv_before_value": iv_before_value, "iv_source_value": iv_source_value, "pre_window_observations": l2.get("pre_window_observations", []), "delta_iv_aggregation": aggregation, "delta_iv_aggregation_version": aggregation_version, "same_day_cluster": cluster, "spot_source_identity": l2.get("spot_source_identity"), "spot_source_hash": l2.get("spot_source_hash"), "chain_source_identity": l2.get("chain_source_identity"), "chain_source_hash": l2.get("chain_source_hash"), "source_hashes": list(supplied_hashes) if isinstance(supplied_hashes, (list, tuple)) else None, "canonical_input_hash": unit.get("canonical_input_hash"), "imputed": False, "no_imputation": True, "raw_payload_hash": raw_hash})
-    manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"),
-                "calendar_day": unit.get("calendar_day"), "canonical_input_hash": unit.get("canonical_input_hash"),
-                "raw_payload_hash": raw_hash, "status": status,
-                "expiry": unit.get("expiry"), "dte": unit.get("dte"),
-                "request_identity": _probe_request(unit), "calendar_binding": unit.get("calendar_binding"),
-                "source_hashes": artifact.get("source_hashes"),
-                "imputed": False, "no_imputation": True}
-    for field in ("calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
-                  "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
-                  "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
-                  "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
-                  "timezone", "calendar_binding_hash"):
+        artifact.update(
+            {
+                "calendar_hash": binding.get("calendar_hash"),
+                "calendar_policy_version": binding.get("calendar_policy_version"),
+                "resolver_code_hash": binding.get("resolver_code_hash"),
+                "snapshot_hash": binding.get("snapshot_hash"),
+                "as_of": binding.get("as_of"),
+                "event_ids": list(binding.get("event_ids", ())),
+                "event_types": sorted(
+                    {
+                        str(v.get("event_type"))
+                        for v in binding.get("event_windows", {}).values()
+                        if isinstance(v, Mapping) and v.get("event_type")
+                    }
+                ),
+                "event_overlap": len(binding.get("event_ids", ())) > 1,
+                "event_window_id": binding.get("event_window_id"),
+                "window_start": binding.get("window_start"),
+                "window_end": binding.get("window_end"),
+                "window_policy": binding.get("window_policy"),
+                "nominal_date": binding.get("nominal_date"),
+                "observed_expiry_date": binding.get("observed_expiry_date"),
+                "session_id": binding.get("session_id"),
+                "session_status": binding.get("session_status"),
+                "regular_open": binding.get("regular_open"),
+                "regular_close": binding.get("regular_close"),
+                "early_close": binding.get("early_close"),
+                "settlement_style": binding.get("settlement_style"),
+                "settlement_timestamp": binding.get("settlement_timestamp"),
+                "timezone": binding.get("timezone"),
+                "calendar_binding_hash": binding.get("calendar_binding_hash"),
+            }
+        )
+    artifact.update(
+        {
+            "status": status,
+            "breach_eligible": eligibility,
+            "acquisition_decision": raw_decision or None,
+            "pre_window_provenance": prov or "ASSOCIATIONAL",
+            "pre_window_value": value if valid else None,
+            "delta_iv_pre_window": value if valid else None,
+            "iv_source_ts": source_ts,
+            "breach_window_start_prov": breach_ts,
+            "declared_timezone": declared_timezone,
+            "endpoint": endpoint,
+            "parameters": request_parameters,
+            "request_parameters": request_parameters,
+            "spot_timestamp": spot_timestamp,
+            "chain_timestamp": chain_timestamp,
+            "iv_before_ts": iv_before_ts,
+            "iv_before_value": iv_before_value,
+            "iv_source_value": iv_source_value,
+            "pre_window_observations": l2.get("pre_window_observations", []),
+            "delta_iv_aggregation": aggregation,
+            "delta_iv_aggregation_version": aggregation_version,
+            "same_day_cluster": cluster,
+            "spot_source_identity": l2.get("spot_source_identity"),
+            "spot_source_hash": l2.get("spot_source_hash"),
+            "chain_source_identity": l2.get("chain_source_identity"),
+            "chain_source_hash": l2.get("chain_source_hash"),
+            "source_hashes": list(supplied_hashes)
+            if isinstance(supplied_hashes, (list, tuple))
+            else None,
+            "canonical_input_hash": unit.get("canonical_input_hash"),
+            "imputed": False,
+            "no_imputation": True,
+            "raw_payload_hash": raw_hash,
+        }
+    )
+    manifest = {
+        "candidate_key": unit["candidate_key"],
+        "ticker": unit.get("ticker"),
+        "calendar_day": unit.get("calendar_day"),
+        "canonical_input_hash": unit.get("canonical_input_hash"),
+        "raw_payload_hash": raw_hash,
+        "status": status,
+        "expiry": unit.get("expiry"),
+        "dte": unit.get("dte"),
+        "request_identity": _probe_request(unit),
+        "calendar_binding": unit.get("calendar_binding"),
+        "source_hashes": artifact.get("source_hashes"),
+        "imputed": False,
+        "no_imputation": True,
+    }
+    for field in (
+        "calendar_hash",
+        "calendar_policy_version",
+        "resolver_code_hash",
+        "snapshot_hash",
+        "as_of",
+        "event_ids",
+        "event_types",
+        "event_overlap",
+        "event_window_id",
+        "window_start",
+        "window_end",
+        "window_policy",
+        "nominal_date",
+        "observed_expiry_date",
+        "session_id",
+        "session_status",
+        "regular_open",
+        "regular_close",
+        "early_close",
+        "settlement_style",
+        "settlement_timestamp",
+        "timezone",
+        "calendar_binding_hash",
+    ):
         manifest[field] = artifact.get(field)
     artifact["artifact_manifest"] = manifest
     artifact["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
     artifact["artifact_hash"] = _hash(manifest)
-    artifact["reason"] = None if status == "PASS" else (timestamp_reason or ("missing_or_associational_prewindow" if status == "ASSOCIATIONAL" else "hard_gap"))
+    artifact["reason"] = (
+        None
+        if status == "PASS"
+        else (
+            timestamp_reason
+            or (
+                "missing_or_associational_prewindow"
+                if status == "ASSOCIATIONAL"
+                else "hard_gap"
+            )
+        )
+    )
     return artifact
 
 
-def build_provenance_census(units: Iterable[Mapping[str, Any]], *, intended_units: int, fail_loud: bool = False, generated_at: str | None = None, artifact_registry: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    if intended_units < 0: raise ValueError("intended_units cannot be negative")
+def build_provenance_census(
+    units: Iterable[Mapping[str, Any]],
+    *,
+    intended_units: int,
+    fail_loud: bool = False,
+    generated_at: str | None = None,
+    artifact_registry: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if intended_units < 0:
+        raise ValueError("intended_units cannot be negative")
     rows = [dict(u) for u in units]
-    rows.sort(key=lambda u: (str(u.get("calendar_day", "")), str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
+    rows.sort(
+        key=lambda u: (
+            str(u.get("calendar_day", "")),
+            str(u.get("ticker", "")),
+            str(u.get("candidate_key", "")),
+        )
+    )
     from .run_live_vs_expiry_book_common_input import validate_causal_eligibility
-    causal = validate_causal_eligibility(rows, intended_units=intended_units, artifact_registry=artifact_registry)
-    n = sum(u.get("status") == "PASS" and str(u.get("pre_window_provenance", "")).upper() == _PREWINDOW for u in rows)
+
+    causal = validate_causal_eligibility(
+        rows, intended_units=intended_units, artifact_registry=artifact_registry
+    )
+    n = sum(
+        u.get("status") == "PASS"
+        and str(u.get("pre_window_provenance", "")).upper() == _PREWINDOW
+        for u in rows
+    )
     coverage = n / intended_units if intended_units else 1.0
-    gate = len(rows) == intended_units and coverage == 1.0 and causal["causal_status"] == "CAUSAL_ELIGIBLE"
+    gate = (
+        len(rows) == intended_units
+        and coverage == 1.0
+        and causal["causal_status"] == "CAUSAL_ELIGIBLE"
+    )
     day_groups = defaultdict(list)
-    for unit in rows: day_groups[str(unit.get("calendar_day", ""))].append(unit)
-    day_gate = all(all(item.get("status") == "PASS" and str(item.get("pre_window_provenance", "")).upper() == _PREWINDOW for item in group) for group in day_groups.values())
+    for unit in rows:
+        day_groups[str(unit.get("calendar_day", ""))].append(unit)
+    day_gate = all(
+        all(
+            item.get("status") == "PASS"
+            and str(item.get("pre_window_provenance", "")).upper() == _PREWINDOW
+            for item in group
+        )
+        for group in day_groups.values()
+    )
     gate = gate and day_gate
     reasons = list(causal["reasons"])
-    doc = {"provenance_census": True, "units": rows, "unit_count": len(rows), "intended_units": intended_units, "pre_window_n": n, "pre_window_N": intended_units, "pre_window_coverage": coverage, "gate_pass": gate, "causal_status": "CAUSAL_ELIGIBLE" if gate else "CAUSAL_BLOCKED", "comparison_status": "COMPARISON_VALID" if gate else "COMPARISON_INVALID", "reasons": reasons, "fail_loud": fail_loud, "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(), "no_imputation": True, "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows), "statuses": {s: sum(u.get("status") == s for u in rows) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "pass_n": sum(u.get("status") == "PASS" for u in rows), "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows), "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows), "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows), "associational_exclusions": [u for u in rows if u.get("status") == "ASSOCIATIONAL"], "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"], "same_day_gate": day_gate, "gate_reason": "100% PRE_WINDOW coverage" if gate else f"strict causal eligibility failed ({n}/{intended_units})", "causal_reasons": reasons}
-    if fail_loud and not gate: raise AcquisitionGateError(f"100% PRE_WINDOW gate failed: {n}/{intended_units}")
+    doc = {
+        "provenance_census": True,
+        "units": rows,
+        "unit_count": len(rows),
+        "intended_units": intended_units,
+        "pre_window_n": n,
+        "pre_window_N": intended_units,
+        "pre_window_coverage": coverage,
+        "gate_pass": gate,
+        "causal_status": "CAUSAL_ELIGIBLE" if gate else "CAUSAL_BLOCKED",
+        "comparison_status": "COMPARISON_VALID" if gate else "COMPARISON_INVALID",
+        "reasons": reasons,
+        "fail_loud": fail_loud,
+        "generated_at": generated_at or dt.datetime.now(dt.UTC).isoformat(),
+        "no_imputation": True,
+        "raw_payload_hash_census": all(bool(u.get("raw_payload_hash")) for u in rows),
+        "statuses": {
+            s: sum(u.get("status") == s for u in rows)
+            for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")
+        },
+        "pass_n": sum(u.get("status") == "PASS" for u in rows),
+        "ineligible_n": sum(u.get("status") == "INELIGIBLE" for u in rows),
+        "hard_gap_n": sum(u.get("status") == "HARD_GAP" for u in rows),
+        "associational_n": sum(u.get("status") == "ASSOCIATIONAL" for u in rows),
+        "associational_exclusions": [
+            u for u in rows if u.get("status") == "ASSOCIATIONAL"
+        ],
+        "ineligible_exclusions": [u for u in rows if u.get("status") == "INELIGIBLE"],
+        "same_day_gate": day_gate,
+        "gate_reason": "100% PRE_WINDOW coverage"
+        if gate
+        else f"strict causal eligibility failed ({n}/{intended_units})",
+        "causal_reasons": reasons,
+    }
+    if fail_loud and not gate:
+        raise AcquisitionGateError(f"100% PRE_WINDOW gate failed: {n}/{intended_units}")
     return doc
 
 
 def cluster_same_day(units: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     grouped: defaultdict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    for u in units: grouped[str(u["calendar_day"])].append(u)
+    for u in units:
+        grouped[str(u["calendar_day"])].append(u)
     rank = {"PASS": 0, "INELIGIBLE": 1, "ASSOCIATIONAL": 2, "HARD_GAP": 3}
     out = {}
     for day in sorted(grouped):
-        rows = grouped[day]; statuses = [str(u.get("status", "HARD_GAP")) if u.get("status") in _STATUS else "HARD_GAP" for u in rows]
-        nested = sorted((dict(u) for u in rows), key=lambda u: (str(u.get("ticker", "")), str(u.get("candidate_key", ""))))
-        out[day] = {"calendar_day": day, "tickers": sorted({str(u.get("ticker", "")) for u in rows}), "n_tickers": len({u.get("ticker") for u in rows}), "expiry_set": sorted({str(u.get("expiry")) for u in rows if u.get("expiry") is not None}), "status": max(statuses, key=lambda s: rank[s]), "status_counts": {s: statuses.count(s) for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")}, "units": nested, "aggregation_rule": "preserve ticker-specific values; no averaging before fitting"}
+        rows = grouped[day]
+        statuses = [
+            str(u.get("status", "HARD_GAP"))
+            if u.get("status") in _STATUS
+            else "HARD_GAP"
+            for u in rows
+        ]
+        nested = sorted(
+            (dict(u) for u in rows),
+            key=lambda u: (str(u.get("ticker", "")), str(u.get("candidate_key", ""))),
+        )
+        out[day] = {
+            "calendar_day": day,
+            "tickers": sorted({str(u.get("ticker", "")) for u in rows}),
+            "n_tickers": len({u.get("ticker") for u in rows}),
+            "expiry_set": sorted(
+                {str(u.get("expiry")) for u in rows if u.get("expiry") is not None}
+            ),
+            "status": max(statuses, key=lambda s: rank[s]),
+            "status_counts": {
+                s: statuses.count(s)
+                for s in ("PASS", "INELIGIBLE", "HARD_GAP", "ASSOCIATIONAL")
+            },
+            "units": nested,
+            "aggregation_rule": "preserve ticker-specific values; no averaging before fitting",
+        }
     return out
 
 
 def _probe_request(unit: Mapping[str, Any]) -> dict[str, Any]:
-    request = {k: unit[k] for k in ("calendar_day", "ticker", "expiry", "dte", "habitat", "sector", "candidate_source")}
+    request = {
+        k: unit[k]
+        for k in (
+            "calendar_day",
+            "ticker",
+            "expiry",
+            "dte",
+            "habitat",
+            "sector",
+            "candidate_source",
+        )
+    }
     request["calendar_binding"] = unit.get("calendar_binding")
     return request
 
 
-def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, authorization: AcquisitionAuthorization | None = None, authorization_context: Any | None = None, dry_run: bool = True, probe_only: bool = False, code_version: str = "dealer-exposure-probe-v1", code_hash: str | None = None, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
+def run_availability_probes(
+    schedule: Iterable[Mapping[str, Any]],
+    *,
+    probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None,
+    approval: bool = False,
+    authorization: AcquisitionAuthorization | None = None,
+    authorization_context: Any | None = None,
+    dry_run: bool = True,
+    probe_only: bool = False,
+    code_version: str = "dealer-exposure-probe-v1",
+    code_hash: str | None = None,
+    calendar_snapshot: Any | None = None,
+) -> list[dict[str, Any]]:
     """Run sequential lightweight probes; never dispatches the heavy fetcher."""
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     if dry_run or probe_only or approval is not True or probe_fetcher is None:
-        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP" if probe_fetcher is None and approval is True and not (dry_run or probe_only) else "INELIGIBLE", "reason": "probe_not_run", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False} for u in ordered]
-    if not _context_is_owned_and_initialized(authorization_context, authorization) or authorization_context.authorization is not authorization:
-        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": "admitted authorization context is required; boolean approval is not authorization", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
+        return [
+            {
+                "candidate_key": u["candidate_key"],
+                "status": "HARD_GAP"
+                if probe_fetcher is None
+                and approval is True
+                and not (dry_run or probe_only)
+                else "INELIGIBLE",
+                "reason": "probe_not_run",
+                "request_parameters": _probe_request(u),
+                "response_status": None,
+                "response_counts": {},
+                "source_counts": {},
+                "probe_code_version": code_version,
+                "probe_code_hash": code_hash or _hash(code_version),
+                "validated": False,
+                "invoked": False,
+            }
+            for u in ordered
+        ]
+    if (
+        not _context_is_owned_and_initialized(authorization_context, authorization)
+        or authorization_context.authorization is not authorization
+    ):
+        return [
+            {
+                "candidate_key": u["candidate_key"],
+                "status": "HARD_GAP",
+                "reason": "admitted authorization context is required; boolean approval is not authorization",
+                "request_parameters": _probe_request(u),
+                "response_status": None,
+                "response_counts": {},
+                "source_counts": {},
+                "probe_code_version": code_version,
+                "probe_code_hash": code_hash or _hash(code_version),
+                "validated": False,
+                "invoked": False,
+                "comparison_status": "COMPARISON_INVALID",
+            }
+            for u in ordered
+        ]
     executor_ok, _, executor_reason = _authorized_executor(probe_fetcher, authorization)
     if not executor_ok:
-        return [{"candidate_key": u["candidate_key"], "status": "HARD_GAP", "reason": f"authorized probe executor required: {executor_reason}", "request_parameters": _probe_request(u), "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"} for u in ordered]
+        return [
+            {
+                "candidate_key": u["candidate_key"],
+                "status": "HARD_GAP",
+                "reason": f"authorized probe executor required: {executor_reason}",
+                "request_parameters": _probe_request(u),
+                "response_status": None,
+                "response_counts": {},
+                "source_counts": {},
+                "probe_code_version": code_version,
+                "probe_code_hash": code_hash or _hash(code_version),
+                "validated": False,
+                "invoked": False,
+                "comparison_status": "COMPARISON_INVALID",
+            }
+            for u in ordered
+        ]
     # Probe dispatch uses the exact same RestrictedExecutor boundary as heavy
     # acquisition.  The adapter handle is passed through unchanged; no caller
     # callable is invoked after the registry/policy checks.
     from .dealer_exposure_executor import ExecutorFailure, RestrictedExecutor
+
     executor = RestrictedExecutor(probe_fetcher, authorization)
     dispatch_units = []
     skipped: dict[str, dict[str, Any]] = {}
     for unit in ordered:
         request = _probe_request(unit)
         if not unit.get("held_pair_exclusion") and calendar_snapshot is None:
-            skipped[unit["candidate_key"]] = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": "HARD_GAP", "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required", "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "evidence": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID"}
+            skipped[unit["candidate_key"]] = {
+                "candidate_key": unit["candidate_key"],
+                "ticker": unit.get("ticker"),
+                "day": unit.get("calendar_day"),
+                "expiry": unit.get("expiry"),
+                "dte": unit.get("dte"),
+                "status": "HARD_GAP",
+                "reason": "COMPARISON_INVALID: exact CalendarSnapshot is required",
+                "request_parameters": request,
+                "response_status": None,
+                "response_counts": {},
+                "source_counts": {},
+                "evidence": {},
+                "probe_code_version": code_version,
+                "probe_code_hash": code_hash or _hash(code_version),
+                "validated": False,
+                "invoked": False,
+                "comparison_status": "COMPARISON_INVALID",
+            }
             continue
         enriched = dict(unit)
-        enriched.setdefault("artifact_hash", _hash({"probe": request, "candidate_key": unit["candidate_key"]}))
-        enriched.setdefault("manifest_hash", canonical_sha256(authorization.candidate_manifest_projection()))
+        enriched.setdefault(
+            "artifact_hash",
+            _hash({"probe": request, "candidate_key": unit["candidate_key"]}),
+        )
+        enriched.setdefault(
+            "manifest_hash",
+            canonical_sha256(authorization.candidate_manifest_projection()),
+        )
         enriched.setdefault("authorization_hash", authorization.authorization_sha256())
         enriched.setdefault("registry_key", probe_fetcher._registration.registry_key)
-        enriched.setdefault("pre_window_evidence_hashes", tuple(unit.get("source_hashes", ())))
+        enriched.setdefault(
+            "pre_window_evidence_hashes", tuple(unit.get("source_hashes", ()))
+        )
         dispatch_units.append(_immutable(enriched))
-    execution = executor.run(tuple(dispatch_units), authorization_context, call_kind="probe")
-    response_by_key = {item.get("candidate_key"): item for item in execution.get("results", ()) if isinstance(item, Mapping)}
+    execution = executor.run(
+        tuple(dispatch_units), authorization_context, call_kind="probe"
+    )
+    response_by_key = {
+        item.get("candidate_key"): item
+        for item in execution.get("results", ())
+        if isinstance(item, Mapping)
+    }
     usage = execution.get("audit", {}).get("finalized_usage", {})
     # Raw probe responses are never receipt-eligible on their own; the executor
     # deliberately withholds a probe receipt at dispatch time.  A receipt may
     # only be minted below, via build_post_validated_probe_receipt(), once this
     # function's own post-dispatch validation (status/response_status/counts/
     # calendar evidence) has fully passed for that exact candidate.
-    dispatch_by_key = {item.get("candidate_key"): item for item in dispatch_units if isinstance(item, Mapping)}
-    request_audit_by_key = {item.get("candidate_key"): item for item in execution.get("audit", {}).get("requests", ()) if isinstance(item, Mapping)}
-    response_audit_by_key = {item.get("candidate_key"): item for item in execution.get("audit", {}).get("responses", ()) if isinstance(item, Mapping)}
+    dispatch_by_key = {
+        item.get("candidate_key"): item
+        for item in dispatch_units
+        if isinstance(item, Mapping)
+    }
+    request_audit_by_key = {
+        item.get("candidate_key"): item
+        for item in execution.get("audit", {}).get("requests", ())
+        if isinstance(item, Mapping)
+    }
+    response_audit_by_key = {
+        item.get("candidate_key"): item
+        for item in execution.get("audit", {}).get("responses", ())
+        if isinstance(item, Mapping)
+    }
     results = []
     for unit in ordered:
         request = _probe_request(unit)
@@ -1094,19 +2050,30 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
         try:
             response = response_by_key.get(unit["candidate_key"])
             if response is None:
-                raise AcquisitionGateError(execution.get("reason", "restricted probe executor hard stop"))
+                raise AcquisitionGateError(
+                    execution.get("reason", "restricted probe executor hard stop")
+                )
             if not isinstance(response, Mapping):
                 raise TypeError("probe response must be a mapping")
             status = str(response.get("status", "HARD_GAP")).upper()
             if status not in {"PASS", "INELIGIBLE", "HARD_GAP"}:
                 status = "HARD_GAP"
-            response_status = response.get("response_status", response.get("status_code"))
-            response_counts = dict(response.get("response_counts", response.get("counts", {})) or {})
+            response_status = response.get(
+                "response_status", response.get("status_code")
+            )
+            response_counts = dict(
+                response.get("response_counts", response.get("counts", {})) or {}
+            )
             source_counts = dict(response.get("source_counts", {}) or {})
             evidence = dict(response.get("evidence", {}) or {})
             if "calendar_binding" in response:
                 evidence["calendar_binding"] = response["calendar_binding"]
-            validated = status == "PASS" and response_status is not None and bool(response_counts) and bool(source_counts)
+            validated = (
+                status == "PASS"
+                and response_status is not None
+                and bool(response_counts)
+                and bool(source_counts)
+            )
             reason = response.get("reason")
             comparison_status = "COMPARISON_VALID"
             if status == "PASS" and not validated:
@@ -1116,60 +2083,174 @@ def run_availability_probes(schedule: Iterable[Mapping[str, Any]], *, probe_fetc
             if validated:
                 supplied = evidence.get("calendar_binding")
                 try:
-                    checked = _validate_calendar_binding(supplied, ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), expected=unit.get("calendar_binding"), calendar_snapshot=calendar_snapshot)
-                    if not isinstance(unit.get("calendar_binding"), Mapping) or checked != dict(unit["calendar_binding"]):
-                        raise ValueError("calendar binding does not exactly match schedule")
+                    checked = _validate_calendar_binding(
+                        supplied,
+                        ticker=str(unit["ticker"]),
+                        day=str(unit["calendar_day"]),
+                        expiry=str(unit["expiry"]),
+                        dte=int(unit["dte"]),
+                        expected=unit.get("calendar_binding"),
+                        calendar_snapshot=calendar_snapshot,
+                    )
+                    if not isinstance(
+                        unit.get("calendar_binding"), Mapping
+                    ) or checked != dict(unit["calendar_binding"]):
+                        raise ValueError(
+                            "calendar binding does not exactly match schedule"
+                        )
                 except (TypeError, ValueError) as exc:
-                    status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
+                    status, validated, comparison_status = (
+                        "HARD_GAP",
+                        False,
+                        "COMPARISON_INVALID",
+                    )
                     reason = f"COMPARISON_INVALID: {exc}"
                 if status == "PASS" and unit.get("held_pair_exclusion"):
-                    status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
-                    reason = reason or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
+                    status, validated, comparison_status = (
+                        "HARD_GAP",
+                        False,
+                        "COMPARISON_INVALID",
+                    )
+                    reason = (
+                        reason
+                        or "COMPARISON_INVALID: held-pair exclusion is non-admissible"
+                    )
             executor_receipts: tuple[Mapping[str, Any], ...] = ()
             if status == "PASS" and validated:
                 dispatch_unit = dispatch_by_key.get(unit["candidate_key"])
                 request_audit = request_audit_by_key.get(unit["candidate_key"])
                 response_audit = response_audit_by_key.get(unit["candidate_key"])
-                if dispatch_unit is None or request_audit is None or response_audit is None:
-                    status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
-                    reason = "COMPARISON_INVALID: post-validated receipt evidence is missing"
+                if (
+                    dispatch_unit is None
+                    or request_audit is None
+                    or response_audit is None
+                ):
+                    status, validated, comparison_status = (
+                        "HARD_GAP",
+                        False,
+                        "COMPARISON_INVALID",
+                    )
+                    reason = (
+                        "COMPARISON_INVALID: post-validated receipt evidence is missing"
+                    )
                 else:
                     try:
-                        executor_receipts = (executor.build_post_validated_probe_receipt(dispatch_unit, request_audit, response_audit),)
+                        executor_receipts = (
+                            executor.build_post_validated_probe_receipt(
+                                dispatch_unit, request_audit, response_audit
+                            ),
+                        )
                     except ExecutorFailure as exc:
-                        status, validated, comparison_status = "HARD_GAP", False, "COMPARISON_INVALID"
+                        status, validated, comparison_status = (
+                            "HARD_GAP",
+                            False,
+                            "COMPARISON_INVALID",
+                        )
                         reason = f"COMPARISON_INVALID: {exc}"
-            results.append({"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "status": status, "reason": reason, "request_parameters": request, "response_status": response_status, "response_counts": response_counts, "source_counts": source_counts, "evidence": evidence, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": validated, "invoked": True, "comparison_status": comparison_status, "network_executed": False, "admitted": False, "network": False, "admission": False, "runtime_usage": usage, "executor_receipts": executor_receipts})
+            results.append(
+                {
+                    "candidate_key": unit["candidate_key"],
+                    "ticker": unit.get("ticker"),
+                    "day": unit.get("calendar_day"),
+                    "expiry": unit.get("expiry"),
+                    "dte": unit.get("dte"),
+                    "status": status,
+                    "reason": reason,
+                    "request_parameters": request,
+                    "response_status": response_status,
+                    "response_counts": response_counts,
+                    "source_counts": source_counts,
+                    "evidence": evidence,
+                    "probe_code_version": code_version,
+                    "probe_code_hash": code_hash or _hash(code_version),
+                    "validated": validated,
+                    "invoked": True,
+                    "comparison_status": comparison_status,
+                    "network_executed": False,
+                    "admitted": False,
+                    "network": False,
+                    "admission": False,
+                    "runtime_usage": usage,
+                    "executor_receipts": executor_receipts,
+                }
+            )
         except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
-            results.append({"candidate_key": unit["candidate_key"], "status": "HARD_GAP", "reason": str(exc)[:200], "request_parameters": request, "response_status": None, "response_counts": {}, "source_counts": {}, "probe_code_version": code_version, "probe_code_hash": code_hash or _hash(code_version), "validated": False, "invoked": False, "comparison_status": "COMPARISON_INVALID", "runtime_usage": dict(getattr(exc, "runtime_usage", usage)), "executor_receipts": ()})
+            results.append(
+                {
+                    "candidate_key": unit["candidate_key"],
+                    "status": "HARD_GAP",
+                    "reason": str(exc)[:200],
+                    "request_parameters": request,
+                    "response_status": None,
+                    "response_counts": {},
+                    "source_counts": {},
+                    "probe_code_version": code_version,
+                    "probe_code_hash": code_hash or _hash(code_version),
+                    "validated": False,
+                    "invoked": False,
+                    "comparison_status": "COMPARISON_INVALID",
+                    "runtime_usage": dict(getattr(exc, "runtime_usage", usage)),
+                    "executor_receipts": (),
+                }
+            )
     return results
 
 
-def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Iterable[Mapping[str, Any]], *, calendar_snapshot: Any | None = None) -> list[dict[str, Any]]:
+def select_primary_schedule(
+    schedule: Iterable[Mapping[str, Any]],
+    probes: Iterable[Mapping[str, Any]],
+    *,
+    calendar_snapshot: Any | None = None,
+) -> list[dict[str, Any]]:
     """Admit only PASS probes with a recomputed, exact calendar binding."""
     by_key: dict[str, Mapping[str, Any]] = {}
     if calendar_snapshot is None:
         return []
     for probe in probes:
-        if probe.get("status") != "PASS" or probe.get("validated") is not True or probe.get("invoked") is not True:
+        if (
+            probe.get("status") != "PASS"
+            or probe.get("validated") is not True
+            or probe.get("invoked") is not True
+        ):
             continue
         key = probe.get("candidate_key")
         evidence = probe.get("evidence")
-        binding = evidence.get("calendar_binding") if isinstance(evidence, Mapping) else None
+        binding = (
+            evidence.get("calendar_binding") if isinstance(evidence, Mapping) else None
+        )
         if isinstance(key, str) and isinstance(binding, Mapping):
             try:
-                checked = _validate_calendar_binding(binding, ticker=str(probe.get("ticker", "")), day=str(probe.get("day", "")), expiry=str(probe.get("expiry", "")), dte=int(probe.get("dte")), calendar_snapshot=calendar_snapshot)
+                checked = _validate_calendar_binding(
+                    binding,
+                    ticker=str(probe.get("ticker", "")),
+                    day=str(probe.get("day", "")),
+                    expiry=str(probe.get("expiry", "")),
+                    dte=int(probe.get("dte")),
+                    calendar_snapshot=calendar_snapshot,
+                )
                 if checked == dict(binding):
                     by_key[key] = probe
             except (TypeError, ValueError):
                 continue
     admitted = []
     for unit in sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"]):
-        probe = by_key.get(unit.get("candidate_key")); schedule_binding = unit.get("calendar_binding")
-        if unit.get("held_pair_exclusion") or probe is None or not isinstance(schedule_binding, Mapping):
+        probe = by_key.get(unit.get("candidate_key"))
+        schedule_binding = unit.get("calendar_binding")
+        if (
+            unit.get("held_pair_exclusion")
+            or probe is None
+            or not isinstance(schedule_binding, Mapping)
+        ):
             continue
         try:
-            _validate_calendar_binding(schedule_binding, ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
+            _validate_calendar_binding(
+                schedule_binding,
+                ticker=str(unit["ticker"]),
+                day=str(unit["calendar_day"]),
+                expiry=str(unit["expiry"]),
+                dte=int(unit["dte"]),
+                calendar_snapshot=calendar_snapshot,
+            )
         except (TypeError, ValueError):
             continue
         if dict(probe["evidence"]["calendar_binding"]) != dict(schedule_binding):
@@ -1178,97 +2259,253 @@ def select_primary_schedule(schedule: Iterable[Mapping[str, Any]], probes: Itera
     return admitted
 
 
-def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fetcher: Callable[[Mapping[str, Any]], Any] | None = None, approval: bool = False, authorization: AcquisitionAuthorization | Mapping[str, Any] | None = None, admission_evidence: Mapping[str, Any] | None = None, registry: Mapping[str, Any] | None = None, dry_run: bool = True, probe_only: bool = False, fail_loud: bool = False, output_dir: str | Path | None = None, probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None, probe_code_version: str = "dealer-exposure-probe-v1", probe_code_hash: str | None = None, generated_at: str | None = None, calendar_snapshot: Any | None = None) -> dict[str, Any]:
-    if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1": raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
+def execute_sequential_acquisition(
+    schedule: Iterable[Mapping[str, Any]],
+    *,
+    fetcher: Callable[[Mapping[str, Any]], Any] | None = None,
+    approval: bool = False,
+    authorization: AcquisitionAuthorization | Mapping[str, Any] | None = None,
+    admission_evidence: Mapping[str, Any] | None = None,
+    registry: Mapping[str, Any] | None = None,
+    dry_run: bool = True,
+    probe_only: bool = False,
+    fail_loud: bool = False,
+    output_dir: str | Path | None = None,
+    probe_fetcher: Callable[[Mapping[str, Any]], Any] | None = None,
+    probe_code_version: str = "dealer-exposure-probe-v1",
+    probe_code_hash: str | None = None,
+    generated_at: str | None = None,
+    calendar_snapshot: Any | None = None,
+) -> dict[str, Any]:
+    if os.environ.get("THETADATA_HIST_CONCURRENCY", "1") != "1":
+        raise AcquisitionGateError("THETADATA_HIST_CONCURRENCY=1 is required")
     if not dry_run and (authorization is None or isinstance(authorization, bool)):
-        raise AcquisitionGateError("validated authorization is required; boolean approval is not authorization")
-    if not dry_run and approval is not True: raise AcquisitionGateError("explicit authorization handoff is required")
+        raise AcquisitionGateError(
+            "validated authorization is required; boolean approval is not authorization"
+        )
+    if not dry_run and approval is not True:
+        raise AcquisitionGateError("explicit authorization handoff is required")
     executor_identity: dict[str, Any] | None = None
     if not dry_run and not probe_only:
-        executor_ok, executor_identity, executor_reason = _authorized_executor(fetcher, authorization)
+        executor_ok, executor_identity, executor_reason = _authorized_executor(
+            fetcher, authorization
+        )
         if not executor_ok:
-            raise AcquisitionGateError(f"authorized executor required: {executor_reason}")
+            raise AcquisitionGateError(
+                f"authorized executor required: {executor_reason}"
+            )
     ordered = sorted((dict(u) for u in schedule), key=lambda x: x["candidate_key"])
     authorization_context = None
     if not dry_run and not probe_only:
-        if not isinstance(admission_evidence, Mapping) or not isinstance(registry, Mapping):
-            raise AcquisitionGateError("evidence and artifact registry are required before probe admission")
-        authorization_context = _preflight_authorization(authorization, authorization.candidate_manifest_projection())
+        if not isinstance(admission_evidence, Mapping) or not isinstance(
+            registry, Mapping
+        ):
+            raise AcquisitionGateError(
+                "evidence and artifact registry are required before probe admission"
+            )
+        if not isinstance(authorization, AcquisitionAuthorization):
+            raise AcquisitionGateError(
+                "typed AcquisitionAuthorization is required at acquisition handoff"
+            )
+        authorization_context = _preflight_authorization(
+            authorization, authorization.candidate_manifest_projection()
+        )
         if authorization_context is None:
-            raise AcquisitionGateError("calendar-enriched manifest and authorization preflight failed")
+            raise AcquisitionGateError(
+                "calendar-enriched manifest and authorization preflight failed"
+            )
         pre_admitted, pre_audit = admit_acquisition(
-            authorization, authorization_context.manifest,
-            admission_evidence.get("probes", ()), admission_evidence, registry,
+            authorization,
+            authorization_context.manifest,
+            admission_evidence.get("probes", ()),
+            admission_evidence,
+            registry,
         )
         if not pre_admitted:
-            raise AcquisitionGateError("acquisition admission failed before probe dispatch")
+            raise AcquisitionGateError(
+                "acquisition admission failed before probe dispatch"
+            )
         probes = list(admission_evidence.get("probes", ()))
     else:
         pre_audit = None
-        probes = run_availability_probes(ordered, probe_fetcher=probe_fetcher, approval=approval, authorization=authorization, authorization_context=authorization_context, dry_run=dry_run, probe_only=probe_only, code_version=probe_code_version, code_hash=probe_code_hash, calendar_snapshot=calendar_snapshot)
+        probes = run_availability_probes(
+            ordered,
+            probe_fetcher=probe_fetcher,
+            approval=approval,
+            authorization=authorization,
+            authorization_context=authorization_context,
+            dry_run=dry_run,
+            probe_only=probe_only,
+            code_version=probe_code_version,
+            code_hash=probe_code_hash,
+            calendar_snapshot=calendar_snapshot,
+        )
     admission_audit = pre_audit
     if not dry_run and not probe_only:
         if not hasattr(authorization, "candidate_manifest_projection"):
-            admission_audit = _immutable({"admitted": False, "stages": (), "admitted_keys": (), "blocked": ["typed AcquisitionAuthorization is required at acquisition handoff"]})
+            admission_audit = _immutable(
+                {
+                    "admitted": False,
+                    "stages": (),
+                    "admitted_keys": (),
+                    "blocked": [
+                        "typed AcquisitionAuthorization is required at acquisition handoff"
+                    ],
+                }
+            )
             primary_schedule = []
         else:
             admitted, admission_audit = admit_acquisition(
-                authorization, authorization.candidate_manifest_projection(), probes,
-                admission_evidence or {}, registry or {},
+                authorization,
+                authorization.candidate_manifest_projection(),
+                probes,
+                admission_evidence or {},
+                registry or {},
             )
             primary_schedule = [dict(unit) for unit in admitted]
     else:
-        primary_schedule = select_primary_schedule(ordered, probes, calendar_snapshot=calendar_snapshot)
+        primary_schedule = select_primary_schedule(
+            ordered, probes, calendar_snapshot=calendar_snapshot
+        )
     primary_keys = {u["candidate_key"] for u in primary_schedule}
     probe_by_key = {p["candidate_key"]: p for p in probes}
     execution: dict[str, Any] | None = None
     response_by_key: dict[str, Mapping[str, Any]] = {}
     if not dry_run and not probe_only and primary_schedule and fetcher is not None:
         from .dealer_exposure_executor import RestrictedExecutor
+
         execution = RestrictedExecutor(fetcher, authorization).run(
-            tuple(_immutable(unit) for unit in primary_schedule), authorization_context, call_kind="heavy"
+            tuple(_immutable(unit) for unit in primary_schedule),
+            authorization_context,
+            call_kind="heavy",
         )
-        response_by_key = {item.get("candidate_key"): item for item in execution.get("results", ()) if isinstance(item, Mapping)}
+        response_by_key = {
+            item.get("candidate_key"): item
+            for item in execution.get("results", ())
+            if isinstance(item, Mapping)
+        }
     units = []
     payloads: dict[str, Any] = {}
     network_executed = False
-    runtime_usage = dict(authorization_context.usage) if isinstance(authorization_context, _AdmissionContext) else {"units": 0, "probe_calls": 0, "heavy_calls": 0, "total_endpoint_calls": 0, "payload_bytes": 0, "wall_seconds": 0.0, "concurrency": 0}
+    runtime_usage = (
+        dict(authorization_context.usage)
+        if isinstance(authorization_context, _AdmissionContext)
+        else {
+            "units": 0,
+            "probe_calls": 0,
+            "heavy_calls": 0,
+            "total_endpoint_calls": 0,
+            "payload_bytes": 0,
+            "wall_seconds": 0.0,
+            "concurrency": 0,
+        }
+    )
     for unit in ordered:
         if unit.get("held_pair_exclusion"):
-            payload, status, reason = {"mode": "held-exclusion", "candidate_key": unit["candidate_key"], "network": False}, "INELIGIBLE", "held_pair_exclusion"
+            payload, status, reason = (
+                {
+                    "mode": "held-exclusion",
+                    "candidate_key": unit["candidate_key"],
+                    "network": False,
+                },
+                "INELIGIBLE",
+                "held_pair_exclusion",
+            )
             item = _unit_from_payload(unit, None)
         elif dry_run or probe_only:
-            payload, status, reason = {"mode": "probe-only", "candidate_key": unit["candidate_key"], "network": False}, "INELIGIBLE", "dry_run_probe_only"
+            payload, status, reason = (
+                {
+                    "mode": "probe-only",
+                    "candidate_key": unit["candidate_key"],
+                    "network": False,
+                },
+                "INELIGIBLE",
+                "dry_run_probe_only",
+            )
             item = _unit_from_payload(unit, None)
         elif unit["candidate_key"] not in primary_keys:
             probe = probe_by_key.get(unit["candidate_key"], {})
-            status = probe.get("status") if probe.get("status") in {"INELIGIBLE", "HARD_GAP"} else "HARD_GAP"
-            reason = probe.get("reason") or ("validated PASS probe required" if status == "HARD_GAP" else "probe_ineligible")
-            payload = {"mode": "not-primary", "candidate_key": unit["candidate_key"], "network": False}
+            status = (
+                probe.get("status")
+                if probe.get("status") in {"INELIGIBLE", "HARD_GAP"}
+                else "HARD_GAP"
+            )
+            reason = probe.get("reason") or (
+                "validated PASS probe required"
+                if status == "HARD_GAP"
+                else "probe_ineligible"
+            )
+            payload = {
+                "mode": "not-primary",
+                "candidate_key": unit["candidate_key"],
+                "network": False,
+            }
             item = _unit_from_payload(unit, None)
         elif fetcher is None:
-            payload, status, reason = {"mode": "acquisition", "candidate_key": unit["candidate_key"], "network": False}, "HARD_GAP", "heavy acquisition requires an injected fetcher"
+            payload, status, reason = (
+                {
+                    "mode": "acquisition",
+                    "candidate_key": unit["candidate_key"],
+                    "network": False,
+                },
+                "HARD_GAP",
+                "heavy acquisition requires an injected fetcher",
+            )
             item = _unit_from_payload(unit, None)
         else:
             try:
                 # This is deliberately immediately before the injected call: a
                 # raised fetcher still proves that acquisition was attempted.
-                _validate_calendar_binding(unit.get("calendar_binding"), ticker=str(unit["ticker"]), day=str(unit["calendar_day"]), expiry=str(unit["expiry"]), dte=int(unit["dte"]), calendar_snapshot=calendar_snapshot)
+                _validate_calendar_binding(
+                    unit.get("calendar_binding"),
+                    ticker=str(unit["ticker"]),
+                    day=str(unit["calendar_day"]),
+                    expiry=str(unit["expiry"]),
+                    dte=int(unit["dte"]),
+                    calendar_snapshot=calendar_snapshot,
+                )
                 network_executed = True
                 if execution is None or execution.get("status") != "SUCCESS":
-                    raise AcquisitionGateError((execution or {}).get("reason", "restricted acquisition executor hard stop"))
+                    raise AcquisitionGateError(
+                        (execution or {}).get(
+                            "reason", "restricted acquisition executor hard stop"
+                        )
+                    )
                 payload = response_by_key.get(unit["candidate_key"])
                 if payload is None:
-                    raise AcquisitionGateError("restricted acquisition executor did not return this admitted unit")
-                runtime_usage = dict(execution.get("audit", {}).get("finalized_usage", runtime_usage))
+                    raise AcquisitionGateError(
+                        "restricted acquisition executor did not return this admitted unit"
+                    )
+                runtime_usage = dict(
+                    execution.get("audit", {}).get("finalized_usage", runtime_usage)
+                )
                 item = _unit_from_payload(unit, payload)
                 status, reason = item["status"], item["reason"]
             except Exception as exc:  # noqa: BLE001 - adapter failures are auditable HARD_GAPs
-                payload, status, reason = {"error": str(exc)}, "HARD_GAP", str(exc)[:200]
+                payload, status, reason = (
+                    {"error": str(exc)},
+                    "HARD_GAP",
+                    str(exc)[:200],
+                )
                 item = _unit_from_payload(unit, payload)
-        item.update({"status": status, "reason": reason, "raw_payload_hash": _hash(payload)})
+        item.update(
+            {"status": status, "reason": reason, "raw_payload_hash": _hash(payload)}
+        )
         payloads[unit["candidate_key"]] = payload
-        manifest = {"candidate_key": unit["candidate_key"], "ticker": unit.get("ticker"), "calendar_day": unit.get("calendar_day"), "expiry": unit.get("expiry"), "dte": unit.get("dte"), "request_identity": _probe_request(unit), "calendar_binding": unit.get("calendar_binding"), "raw_payload_hash": item["raw_payload_hash"], "source_hashes": item.get("source_hashes"), "status": status, "imputed": False, "no_imputation": True}
+        manifest = {
+            "candidate_key": unit["candidate_key"],
+            "ticker": unit.get("ticker"),
+            "calendar_day": unit.get("calendar_day"),
+            "expiry": unit.get("expiry"),
+            "dte": unit.get("dte"),
+            "request_identity": _probe_request(unit),
+            "calendar_binding": unit.get("calendar_binding"),
+            "raw_payload_hash": item["raw_payload_hash"],
+            "source_hashes": item.get("source_hashes"),
+            "status": status,
+            "imputed": False,
+            "no_imputation": True,
+        }
         item["artifact_manifest"] = manifest
         item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
         item["artifact_hash"] = _hash(manifest)
@@ -1280,24 +2517,74 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
         by_day[str(item["calendar_day"])].append(item)
     for day, group in by_day.items():
         tickers = sorted({str(item.get("ticker", "")) for item in group})
-        cluster = {"cluster_id": day, "calendar_day": day, "tickers": tickers,
-                   "n_tickers": len(tickers),
-                   "aggregation_rule": "preserve_ticker_values_v1"}
+        cluster = {
+            "cluster_id": day,
+            "calendar_day": day,
+            "tickers": tickers,
+            "n_tickers": len(tickers),
+            "aggregation_rule": "preserve_ticker_values_v1",
+        }
         for item in group:
             item["same_day_cluster"] = cluster
             if item.get("status") == "PASS":
-                manifest = {key: item[key] for key in (
-                    "candidate_key", "ticker", "calendar_day", "canonical_input_hash", "status", "raw_payload_hash", "endpoint", "request_parameters",
-                    "declared_timezone", "spot_timestamp", "chain_timestamp", "spot_source_identity", "spot_source_hash",
-                    "chain_source_identity", "chain_source_hash", "iv_source_ts",
-                    "breach_window_start_prov", "source_hashes", "pre_window_observations", "same_day_cluster", "iv_before_ts",
-                    "iv_before_value", "iv_source_value", "delta_iv_aggregation",
-                    "delta_iv_aggregation_version", "expiry", "dte", "calendar_binding", "imputed", "no_imputation",
-                    "calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
-                    "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
-                    "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
-                    "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
-                    "timezone", "calendar_binding_hash")}
+                manifest = {
+                    key: item[key]
+                    for key in (
+                        "candidate_key",
+                        "ticker",
+                        "calendar_day",
+                        "canonical_input_hash",
+                        "status",
+                        "raw_payload_hash",
+                        "endpoint",
+                        "request_parameters",
+                        "declared_timezone",
+                        "spot_timestamp",
+                        "chain_timestamp",
+                        "spot_source_identity",
+                        "spot_source_hash",
+                        "chain_source_identity",
+                        "chain_source_hash",
+                        "iv_source_ts",
+                        "breach_window_start_prov",
+                        "source_hashes",
+                        "pre_window_observations",
+                        "same_day_cluster",
+                        "iv_before_ts",
+                        "iv_before_value",
+                        "iv_source_value",
+                        "delta_iv_aggregation",
+                        "delta_iv_aggregation_version",
+                        "expiry",
+                        "dte",
+                        "calendar_binding",
+                        "imputed",
+                        "no_imputation",
+                        "calendar_hash",
+                        "calendar_policy_version",
+                        "resolver_code_hash",
+                        "snapshot_hash",
+                        "as_of",
+                        "event_ids",
+                        "event_types",
+                        "event_overlap",
+                        "event_window_id",
+                        "window_start",
+                        "window_end",
+                        "window_policy",
+                        "nominal_date",
+                        "observed_expiry_date",
+                        "session_id",
+                        "session_status",
+                        "regular_open",
+                        "regular_close",
+                        "early_close",
+                        "settlement_style",
+                        "settlement_timestamp",
+                        "timezone",
+                        "calendar_binding_hash",
+                    )
+                }
                 manifest["request_identity"] = _probe_request(item)
                 item["artifact_manifest"] = manifest
                 item["artifact_basis"] = canonical_json_bytes(manifest).decode("utf-8")
@@ -1320,26 +2607,90 @@ def execute_sequential_acquisition(schedule: Iterable[Mapping[str, Any]], *, fet
             "dte": item.get("dte"),
             "calendar_day": item.get("calendar_day"),
             "canonical_input_hash": item.get("canonical_input_hash"),
-            **{field: item.get(field) for field in (
-                "calendar_hash", "calendar_policy_version", "resolver_code_hash", "snapshot_hash", "as_of",
-                "event_ids", "event_types", "event_overlap", "event_window_id", "window_start", "window_end",
-                "window_policy", "nominal_date", "observed_expiry_date", "session_id", "session_status",
-                "regular_open", "regular_close", "early_close", "settlement_style", "settlement_timestamp",
-                "timezone", "calendar_binding_hash")},
+            **{
+                field: item.get(field)
+                for field in (
+                    "calendar_hash",
+                    "calendar_policy_version",
+                    "resolver_code_hash",
+                    "snapshot_hash",
+                    "as_of",
+                    "event_ids",
+                    "event_types",
+                    "event_overlap",
+                    "event_window_id",
+                    "window_start",
+                    "window_end",
+                    "window_policy",
+                    "nominal_date",
+                    "observed_expiry_date",
+                    "session_id",
+                    "session_status",
+                    "regular_open",
+                    "regular_close",
+                    "early_close",
+                    "settlement_style",
+                    "settlement_timestamp",
+                    "timezone",
+                    "calendar_binding_hash",
+                )
+            },
         }
         for item in units
     }
-    census = build_provenance_census(units, intended_units=len(ordered), fail_loud=fail_loud, generated_at=generated_at, artifact_registry=artifact_registry)
+    census = build_provenance_census(
+        units,
+        intended_units=len(ordered),
+        fail_loud=fail_loud,
+        generated_at=generated_at,
+        artifact_registry=artifact_registry,
+    )
     if isinstance(authorization_context, _AdmissionContext):
         runtime_usage = dict(authorization_context.usage)
-    result = {"mode": "probe-only" if (dry_run or probe_only) else "acquisition", "approval_required": True, "approval_granted": approval, "network_heavy_acquisition_executed": network_executed, "heavy_calls": runtime_usage["heavy_calls"], "runtime_usage": runtime_usage, "network_flag": network_executed, "no_imputation": True, "schedule": ordered, "primary_schedule": primary_schedule, "probes": probes, "units": units, "census": census, "same_day_clusters": cluster_same_day(units), "artifact_registry": artifact_registry, "admission_audit": admission_audit, "executor": executor_identity, "comparison_status": "COMPARISON_VALID" if census["gate_pass"] else "COMPARISON_INVALID", "causal_status": census["causal_status"], "generated_at": generated_at}
+    result = {
+        "mode": "probe-only" if (dry_run or probe_only) else "acquisition",
+        "approval_required": True,
+        "approval_granted": approval,
+        "network_heavy_acquisition_executed": network_executed,
+        "heavy_calls": runtime_usage["heavy_calls"],
+        "runtime_usage": runtime_usage,
+        "network_flag": network_executed,
+        "no_imputation": True,
+        "schedule": ordered,
+        "primary_schedule": primary_schedule,
+        "probes": probes,
+        "units": units,
+        "census": census,
+        "same_day_clusters": cluster_same_day(units),
+        "artifact_registry": artifact_registry,
+        "admission_audit": admission_audit,
+        "executor": executor_identity,
+        "comparison_status": "COMPARISON_VALID"
+        if census["gate_pass"]
+        else "COMPARISON_INVALID",
+        "causal_status": census["causal_status"],
+        "generated_at": generated_at,
+    }
     if output_dir is not None:
         artifact_dir = Path(output_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / "dealer_exposure_acquisition.json"
         result["artifact_path"] = str(artifact_path)
-        artifact_path.write_text(json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        artifact_path.write_text(
+            json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
     return result
 
 
-__all__ = ["NETWORK_ACQUISITION_EXECUTED", "AcquisitionGateError", "admit_acquisition", "build_candidate_schedule", "build_provenance_census", "cluster_same_day", "execute_sequential_acquisition", "run_availability_probes", "select_primary_schedule"]
+__all__ = [
+    "NETWORK_ACQUISITION_EXECUTED",
+    "AcquisitionGateError",
+    "admit_acquisition",
+    "build_candidate_schedule",
+    "build_provenance_census",
+    "cluster_same_day",
+    "execute_sequential_acquisition",
+    "run_availability_probes",
+    "select_primary_schedule",
+]

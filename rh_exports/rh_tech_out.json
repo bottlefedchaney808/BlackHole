@@ -1,0 +1,239 @@
+{
+  "_schemas": {
+    "get_equity_historicals": {
+      "description": "Get OHLCV bars for one or more equity symbols across an explicit time range. Use this for charting, \"recent activity\" questions, and backtesting. The server auto-selects an interval when one is not provided. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nParameter rules:\n- interval is optional; when omitted, the server auto-selects an interval that targets ~2,500 bars across the requested range. Provide an explicit interval only when you need a specific granularity.\n- interval values are fixed; the server does NOT aggregate intermediate bars. For a custom interval (e.g. 3-minute), request the next-finer fixed interval and aggregate client-side.\n- bounds defaults to 'regular' (RTH only). Use 'extended' or '24_5' only when the user explicitly asks about extended-hours activity.\n- adjustment_type defaults to 'split' (split-adjusted, the right default for backtesting). Use 'none' for raw prices, 'all' for split + dividend adjustment.\n- If the range would produce more bars than the upstream allows at the explicitly requested interval, narrow the range or coarsen the interval \u2014 the call is rejected before reaching upstream. The cap does not apply when interval is auto-selected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbols": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "One or more stock symbols (uppercase). Up to 10 per call."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the range (RFC3339 UTC, e.g. '2026-01-01T00:00:00Z'). Required."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the range (RFC3339 UTC). Optional \u2014 when omitted, defaults to the current time."
+          },
+          "interval": {
+            "type": "string",
+            "description": "Bar interval. Optional \u2014 when omitted, the server picks an interval that targets ~2,500 bars across the requested range. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute')."
+          },
+          "bounds": {
+            "type": "string",
+            "description": "Session bounds. One of 'regular' (RTH, default), 'extended', 'trading', '24_5', '24_7', 'hyper_trading'."
+          },
+          "adjustment_type": {
+            "type": "string",
+            "description": "Corporate-action adjustment: 'none' (raw prices), 'split' (default; right for backtesting), or 'all' (split + dividend; intraday only)."
+          }
+        },
+        "required": [
+          "symbols",
+          "start_time"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "get_equity_technical_indicators": {
+      "description": "Compute a technical indicator (RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, and more) over one equity symbol's OHLCV bars across a time range. For the raw OHLCV bars themselves, use get_equity_historicals.\n\nParameter rules:\n- The parameters an indicator accepts depend on type:\n  - period only: ema/sma (default 9); rsi/cci/atr/mfi (default 14); williams_r/adx (default 10); momentum (default 12); roc (default 14); donchian_channels (default 20).\n  - bollinger_bands: period (default 20) + num_std (default 2).\n  - macd: fast_period (12), slow_period (26), signal_period (9).\n  - keltner_channels: period (default 20) + multiplier (default 2).\n  - supertrend: period (default 10) + multiplier (default 3).\n  - pivot_points: method (only 'classic').\n  - vwap, obv: no parameters.\n  Omit a parameter to use its default. Passing a parameter the chosen type does not accept is rejected.\n- interval is REQUIRED \u2014 indicator periods are counted in bars, so there is no auto-selection.\n- adjustment_type defaults to 'split'; 'all' (split + dividend) requires a day-or-coarser interval.\n- If the requested range plus the indicator's warm-up exceeds the per-request bar cap, narrow the range or coarsen the interval.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Stock symbol (uppercase). Exactly one symbol per call."
+          },
+          "type": {
+            "type": "string",
+            "description": "Indicator to compute. One of: ema, sma, rsi, momentum, roc, cci, williams_r, atr, mfi, adx, donchian_channels, bollinger_bands, macd, keltner_channels, supertrend, vwap, obv, pivot_points."
+          },
+          "interval": {
+            "type": "string",
+            "description": "Required bar interval the indicator is computed on. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. The 1-minute bar is named 'minute' (not '1minute')."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the range (RFC3339 UTC, e.g. '2026-01-01T00:00:00Z'). Required."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the range (RFC3339 UTC). Optional \u2014 defaults to the current time when omitted."
+          },
+          "bounds": {
+            "type": "string",
+            "description": "Session bounds. One of 'regular' (RTH, default) or 'extended'."
+          },
+          "adjustment_type": {
+            "type": "string",
+            "description": "Corporate-action adjustment: 'none' (raw prices), 'split' (default), or 'all' (split + dividend; requires a day-or-coarser interval)."
+          },
+          "output": {
+            "type": "string",
+            "description": "How much of the series to return: 'series' (default, full range), 'latest' (most recent bar only), or 'last:N' (most recent N bars). The indicator is always computed over the full range first; this only trims the response."
+          },
+          "period": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "Lookback period in bars. Applies to ema, sma, rsi, momentum, roc, cci, williams_r, atr, mfi, adx, donchian_channels, bollinger_bands, keltner_channels, supertrend. Omit to use the indicator's default."
+          },
+          "num_std": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "Number of standard deviations for the bands. bollinger_bands only (default 2)."
+          },
+          "fast_period": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "Fast EMA period. macd only (default 12)."
+          },
+          "slow_period": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "Slow EMA period. macd only (default 26)."
+          },
+          "signal_period": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "Signal EMA period. macd only (default 9)."
+          },
+          "multiplier": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "Band/offset multiplier. keltner_channels (default 2) and supertrend (default 3) only."
+          },
+          "method": {
+            "type": "string",
+            "description": "Calculation method. pivot_points only; currently only 'classic'."
+          }
+        },
+        "required": [
+          "symbol",
+          "type",
+          "interval",
+          "start_time"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "get_index_historicals": {
+      "description": "Get OHLC value bars for one or more market indexes (by instrument UUID) across an explicit time range. Use this for charting an index's history and \"recent movement\" questions. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nParameter rules:\n- instrument_ids are index instrument UUIDs from get_indexes. Resolve symbols there first; this tool does not accept ticker symbols.\n- interval is required; pick the coarsest interval that answers the question. If the requested interval would produce too many bars for the range, the call is rejected \u2014 narrow the range or coarsen the interval.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instrument_ids": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Index instrument UUIDs (from get_indexes). Up to 10 per call."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the range (RFC3339 UTC, e.g. '2026-01-01T00:00:00Z'). Required."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the range (RFC3339 UTC). Optional \u2014 when omitted, defaults to the current time."
+          },
+          "interval": {
+            "type": "string",
+            "description": "Bar interval. Required \u2014 there is no server auto-select for indexes. Intraday: 5second, 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute')."
+          }
+        },
+        "required": [
+          "instrument_ids",
+          "start_time",
+          "interval"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "get_option_historicals": {
+      "description": "Get OHLC price bars for one or more option contracts (by instrument UUID) across an explicit time range. Use this for charting an option's price history and \"recent activity\" questions. The server auto-selects an interval when one is not provided. If the bar's interpolated field is true, bar was synthesized to fill a gap and carry no new information.\n\nParameter rules:\n- instrument_ids are option contract UUIDs from get_option_instruments. Resolve underlying -> get_option_chains -> get_option_instruments first; this tool does not accept ticker symbols.\n- interval is optional; when omitted the server auto-selects an interval that targets a bounded bar count across the range. Provide an explicit interval only when you need a specific granularity.\n- bounds defaults to 'regular' (regular hours). Use '24_5'/'24_7' only when the user explicitly asks about extended-hours or overnight option activity.\n- If an explicitly requested interval would produce more bars than the upstream allows for the range, the call is rejected \u2014 narrow the range or coarsen the interval. The cap does not apply when interval is auto-selected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instrument_ids": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Option contract instrument UUIDs (from get_option_instruments). Up to 10 per call."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Start of the range (RFC3339 UTC, e.g. '2026-01-01T00:00:00Z'). Required."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End of the range (RFC3339 UTC). Optional \u2014 when omitted, defaults to the current time."
+          },
+          "interval": {
+            "type": "string",
+            "description": "Bar interval. Optional \u2014 when omitted, the server auto-selects an interval that targets a bounded bar count across the range. Intraday: 15second, 30second, minute, 5minute, 10minute, 30minute, hour, 4hour. Interday: day, week, month, 3month, 6month, year, 5year, 10year, 20year, 50year. Note: the 1-minute bar is named 'minute' (not '1minute')."
+          },
+          "bounds": {
+            "type": "string",
+            "description": "Session bounds. One of 'regular' (regular hours, default), '24_5', or '24_7'. Use '24_5'/'24_7' only when the user explicitly asks about extended-hours or overnight option activity (index options, and certain equity options)."
+          }
+        },
+        "required": [
+          "instrument_ids",
+          "start_time"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "TGB": {
+    "get_equity_technical_indicators": "ERROR: invalid params: validating \"arguments\": validating root: required: missing properties: [\"type\" \"interval\" \"start_time\"]",
+    "get_equity_historicals": "ERROR: invalid params: validating \"arguments\": validating root: unexpected additional properties [\"symbol\"]"
+  },
+  "SOUN": {
+    "get_equity_technical_indicators": "ERROR: invalid params: validating \"arguments\": validating root: required: missing properties: [\"type\" \"interval\" \"start_time\"]",
+    "get_equity_historicals": "ERROR: invalid params: validating \"arguments\": validating root: unexpected additional properties [\"symbol\"]"
+  },
+  "UUUU": {
+    "get_equity_technical_indicators": "ERROR: invalid params: validating \"arguments\": validating root: required: missing properties: [\"type\" \"interval\" \"start_time\"]",
+    "get_equity_historicals": "ERROR: invalid params: validating \"arguments\": validating root: unexpected additional properties [\"symbol\"]"
+  },
+  "CRGY": {
+    "get_equity_technical_indicators": "ERROR: invalid params: validating \"arguments\": validating root: required: missing properties: [\"type\" \"interval\" \"start_time\"]",
+    "get_equity_historicals": "ERROR: invalid params: validating \"arguments\": validating root: unexpected additional properties [\"symbol\"]"
+  },
+  "QQQ": {
+    "get_equity_technical_indicators": "ERROR: invalid params: validating \"arguments\": validating root: required: missing properties: [\"type\" \"interval\" \"start_time\"]",
+    "get_equity_historicals": "ERROR: invalid params: validating \"arguments\": validating root: unexpected additional properties [\"symbol\"]"
+  },
+  "SPY": {
+    "get_equity_technical_indicators": "ERROR: invalid params: validating \"arguments\": validating root: required: missing properties: [\"type\" \"interval\" \"start_time\"]",
+    "get_equity_historicals": "ERROR: invalid params: validating \"arguments\": validating root: unexpected additional properties [\"symbol\"]"
+  }
+}

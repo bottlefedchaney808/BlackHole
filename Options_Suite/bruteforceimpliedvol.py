@@ -1,10 +1,15 @@
 import numpy as np
+from american_binomial import (
+    crr_american_price,
+    crr_american_price_batch,
+    leisen_reimer_american_price,
+    leisen_reimer_american_price_batch,
+)
 
-from american_binomial import (crr_american_price, leisen_reimer_american_price,
-                                crr_american_price_batch, leisen_reimer_american_price_batch)
 
-
-def _brute_force_bisect(pricer, c_market, S, K, T, r, cp, q=0.0, steps=200, label="bisection"):
+def _brute_force_bisect(
+    pricer, c_market, S, K, T, r, cp, q=0.0, steps=200, label="bisection"
+):
     """Shared bisection core for the binomial-tree IV solvers below.
 
     Bisects sigma in [1e-4, 5.0] against `pricer(S, K, T, r, sigma, q, cp,
@@ -66,7 +71,9 @@ def brute_force(c_market, S, K, T, r, cp, q=0.0, steps=200):
 
     Raises (no fallback) if c_market is None or the pricer itself errors.
     """
-    return _brute_force_bisect(crr_american_price, c_market, S, K, T, r, cp, q, steps, label="CRR brute_force")
+    return _brute_force_bisect(
+        crr_american_price, c_market, S, K, T, r, cp, q, steps, label="CRR brute_force"
+    )
 
 
 def brute_force_lr(c_market, S, K, T, r, cp, q=0.0, steps=200):
@@ -84,11 +91,34 @@ def brute_force_lr(c_market, S, K, T, r, cp, q=0.0, steps=200):
 
     Raises (no fallback) if c_market is None or the pricer itself errors.
     """
-    return _brute_force_bisect(leisen_reimer_american_price, c_market, S, K, T, r, cp, q, steps, label="LR brute_force")
+    return _brute_force_bisect(
+        leisen_reimer_american_price,
+        c_market,
+        S,
+        K,
+        T,
+        r,
+        cp,
+        q,
+        steps,
+        label="LR brute_force",
+    )
 
 
-def _brute_force_bisect_batch(pricer_batch, c_market, S, K, T, r, cp, q=0.0, steps=200,
-                               max_iter=50, tol=1e-4, label="batched bisection"):
+def _brute_force_bisect_batch(
+    pricer_batch,
+    c_market,
+    S,
+    K,
+    T,
+    r,
+    cp,
+    q=0.0,
+    steps=200,
+    max_iter=50,
+    tol=1e-4,
+    label="batched bisection",
+):
     """Batched counterpart to _brute_force_bisect: bisects sigma for an
     ARRAY of strikes at once against a batched tree pricer
     (crr_american_price_batch / leisen_reimer_american_price_batch), instead
@@ -146,19 +176,22 @@ def _brute_force_bisect_batch(pricer_batch, c_market, S, K, T, r, cp, q=0.0, ste
         if np.any(bad):
             bad_idx = np.nonzero(bad)[0]
             i0 = bad_idx[0]
-            raise RuntimeError(
+            print(
                 f"[{label}] {bad_idx.size} of {n} contract(s) failed to converge after "
-                f"{max_iter} iterations. First failure: row {i0} (K={K[i0]}), residual "
-                f"{residual[i0]:.6e} > tol {tol:.6e}."
+                f"{max_iter} iterations (first: row {i0}, K={K[i0]}, residual "
+                f"{residual[i0]:.6e} > tol {tol:.6e}) -- those rows are returned as nan and "
+                f"dropped by the caller. No substituted values."
             )
+            result = np.where(bad, np.nan, result)
     return result
 
 
 def brute_force_batch(c_market, S, K, T, r, cp, q=0.0, steps=200):
     """Batched counterpart to `brute_force` (CRR) -- solves IV for every
     strike in K at once. See _brute_force_bisect_batch for how/why."""
-    return _brute_force_bisect_batch(crr_american_price_batch, c_market, S, K, T, r, cp, q, steps,
-                                      label="CRR batch")
+    return _brute_force_bisect_batch(
+        crr_american_price_batch, c_market, S, K, T, r, cp, q, steps, label="CRR batch"
+    )
 
 
 def brute_force_lr_batch(c_market, S, K, T, r, cp, q=0.0, steps=200):
@@ -174,11 +207,23 @@ def brute_force_lr_batch(c_market, S, K, T, r, cp, q=0.0, steps=200):
     both curves' values without needing a separate batched-Newton
     implementation.
     """
-    return _brute_force_bisect_batch(leisen_reimer_american_price_batch, c_market, S, K, T, r, cp, q, steps,
-                                      label="LR batch")
+    return _brute_force_bisect_batch(
+        leisen_reimer_american_price_batch,
+        c_market,
+        S,
+        K,
+        T,
+        r,
+        cp,
+        q,
+        steps,
+        label="LR batch",
+    )
 
 
-def brute_force_mc(c_market, S, K, T, r, cp, q=0.0, simulations=20000, steps=100, seed=42, rand=None):
+def brute_force_mc(
+    c_market, S, K, T, r, cp, q=0.0, simulations=20000, steps=100, seed=42, rand=None
+):
     """
     Implied volatility for the "MC" (Monte Carlo / Longstaff-Schwartz LSM)
     method, solved via bisection against AmericanLSMPricer's own simulated
@@ -218,18 +263,38 @@ def brute_force_mc(c_market, S, K, T, r, cp, q=0.0, simulations=20000, steps=100
     from MC import AmericanLSMPricer
 
     if c_market is None:
-        raise ValueError("[MC brute_force_mc] No market price supplied -- cannot solve IV.")
+        raise ValueError(
+            "[MC brute_force_mc] No market price supplied -- cannot solve IV."
+        )
 
     is_call = cp
 
     if rand is None:
-        _seed_pricer = AmericanLSMPricer(S, K, T, r, q, 0.3, simulations=simulations, steps=steps,
-                                          option=('call' if is_call else 'put'))
+        _seed_pricer = AmericanLSMPricer(
+            S,
+            K,
+            T,
+            r,
+            q,
+            0.3,
+            simulations=simulations,
+            steps=steps,
+            option=("call" if is_call else "put"),
+        )
         rand = _seed_pricer._generate_rand(seed=seed)
 
     def _mc_price(sigma):
-        pricer = AmericanLSMPricer(S, K, T, r, q, sigma, simulations=simulations, steps=steps,
-                                    option=('call' if is_call else 'put'))
+        pricer = AmericanLSMPricer(
+            S,
+            K,
+            T,
+            r,
+            q,
+            sigma,
+            simulations=simulations,
+            steps=steps,
+            option=("call" if is_call else "put"),
+        )
         return pricer.price_with_rand(rand)
 
     tol = 1e-3  # MC price has residual simulation noise; a tighter tol than the tree solvers' won't reliably converge

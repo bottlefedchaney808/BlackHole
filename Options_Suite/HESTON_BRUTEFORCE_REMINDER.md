@@ -40,11 +40,9 @@ and the run-all report now shows Heston as an honest `N/A` on failure. The
   being what makes Heston Heston. `heston_all_greeks` (new) does CRN
   bump-and-revalue on the Heston LSM using ALL five calibrated params.
   Vega is chain-ruled from dP/dV0 to dP/dsigma via sigma = sqrt(V0) so
-  units match the other models. Higher-order Greeks (Vanna/Vomma) still
-  fall back to closed-form BS at effective_sigma because 2nd-order sigma
-  FD on LSM is fundamentally noise-limited — CRN cancels shock noise but
-  not regression-fit noise (the LSM continuation-value polynomial is
-  refit at each sigma bump, and that fit shifts discontinuously).
+  units match the other models. Higher-order Greeks (Vanna/Vomma) are
+  Heston-native too: nested CRN bump-and-revalue via
+  `MCHestonLSM.heston_all_greeks`, not a closed-form BS fallback.
 
 - **Heston calibration now uses SABR-style multi-start (2026-07-27).**
   Previously a single Nelder-Mead call from one initial guess — with v0

@@ -12,15 +12,16 @@ Workflow:
 
 Network-free testing is supported via FakeThetaDataController (see tests).
 """
+
 from __future__ import annotations
 
 import json
 import os
-import sys
 import statistics
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional, Tuple
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,12 +34,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 class SignalResult:
     """One sentiment signal paired with its subsequent forward return."""
 
-    date: str                    # pack date YYYY-MM-DD
-    ticker: str                  # symbol
-    cns_score: int               # contested narrative score (0-100)
-    war_score: float             # war score (0-1)
-    forward_5d_return: Optional[float]  # fractional return over 5 trading days
-    forward_10d_return: Optional[float]  # fractional return over 10 trading days
+    date: str  # pack date YYYY-MM-DD
+    ticker: str  # symbol
+    cns_score: int  # contested narrative score (0-100)
+    war_score: float  # war score (0-1)
+    forward_5d_return: float | None  # fractional return over 5 trading days
+    forward_10d_return: float | None  # fractional return over 10 trading days
 
 
 @dataclass
@@ -49,13 +50,15 @@ class SentimentBacktestResult:
     end_date: str
     total_packs_analyzed: int
     total_signals: int
-    top_quartile_cns_names: List[str]     # tickers in top CNS quartile
-    bottom_quartile_cns_names: List[str]  # tickers in bottom CNS quartile
-    hit_rate_top_vs_bottom: float         # top quartile mean return - bottom quartile mean return
-    sharpe_long_only: Optional[float]     # Sharpe of long-only top-quartile strategy
-    cns_return_correlation: Optional[float]  # Pearson corr(CNS, forward return)
-    forward_days: int                     # forward window used
-    details: List[SignalResult] = field(default_factory=list)
+    top_quartile_cns_names: list[str]  # tickers in top CNS quartile
+    bottom_quartile_cns_names: list[str]  # tickers in bottom CNS quartile
+    hit_rate_top_vs_bottom: (
+        float  # top quartile mean return - bottom quartile mean return
+    )
+    sharpe_long_only: float | None  # Sharpe of long-only top-quartile strategy
+    cns_return_correlation: float | None  # Pearson corr(CNS, forward return)
+    forward_days: int  # forward window used
+    details: list[SignalResult] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +71,7 @@ def _compact_datelike(name: str) -> bool:
     return len(name) == 8 and name.isdigit()
 
 
-def _parse_pack_date(pack: dict) -> Optional[str]:
+def _parse_pack_date(pack: dict) -> str | None:
     """Extract pack creation date as YYYY-MM-DD string from ISO timestamp."""
     raw = pack.get("created_at", "")
     if not raw:
@@ -111,8 +114,9 @@ def _normalize_eod_rows(rows: list) -> list[dict]:
     return [{"date": d, "close": c} for d, c in sorted(by_date.items())]
 
 
-def _to_trading_dates(close_rows: list, reference_date: str,
-                      forward_days: int) -> Tuple[Optional[float], Optional[float]]:
+def _to_trading_dates(
+    close_rows: list, reference_date: str, forward_days: int
+) -> tuple[float | None, float | None]:
     """From sorted close_rows (list of dicts with 'date' and 'close'),
     find the forward close *forward_days* and *forward_days+5* trading days
     after *reference_date* and return fractional returns.
@@ -123,13 +127,15 @@ def _to_trading_dates(close_rows: list, reference_date: str,
     """
     # Normalise reference_date to compact YYYYMMDD for comparison
     ref_compact = reference_date.replace("-", "")
-    closes = [r for r in close_rows
-              if r.get("date") and r.get("close") is not None
-              and float(r["close"]) > 0]
+    closes = [
+        r
+        for r in close_rows
+        if r.get("date") and r.get("close") is not None and float(r["close"]) > 0
+    ]
     closes.sort(key=lambda r: str(r["date"]))
 
     # Find index of reference date (or first date >= it)
-    ref_idx: Optional[int] = None
+    ref_idx: int | None = None
     for i, r in enumerate(closes):
         d = str(r["date"]).replace("-", "")
         if d >= ref_compact:
@@ -140,7 +146,7 @@ def _to_trading_dates(close_rows: list, reference_date: str,
 
     ref_close = float(closes[ref_idx]["close"])
 
-    def _forward_return(offset: int) -> Optional[float]:
+    def _forward_return(offset: int) -> float | None:
         idx = ref_idx + offset
         if idx >= len(closes):
             return None
@@ -152,25 +158,30 @@ def _to_trading_dates(close_rows: list, reference_date: str,
     return f5, f10
 
 
-def _compute_quantile_boundaries(cns_values: List[int]) -> Tuple[float, float]:
-    """Return the median and the upper quartile threshold for a list of CNS scores.
+def _compute_quantile_boundaries(cns_values: list[int]) -> tuple[float, float, float]:
+    """Return the lower quartile, median, and upper quartile thresholds for a list of CNS scores.
 
-    Returns (median, q3) where q3 is the 75th percentile.
+    Returns (q1, median, q3) where q1/q3 are the 25th/75th percentiles.
     """
     if not cns_values:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     sorted_vals = sorted(cns_values)
     n = len(sorted_vals)
+    q1_idx = int(n * 0.25)
     q2_idx = n // 2
     q3_idx = int(n * 0.75)
     # Use inclusive nearest-rank for quartiles
-    median_val = float(sorted_vals[q2_idx]) if n % 2 == 1 else (
-        sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2.0
+    median_val = (
+        float(sorted_vals[q2_idx])
+        if n % 2 == 1
+        else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2.0
+    )
+    q1_val = float(sorted_vals[min(q1_idx, n - 1)])
     q3_val = float(sorted_vals[min(q3_idx, n - 1)])
-    return median_val, q3_val
+    return q1_val, median_val, q3_val
 
 
-def _pearson_correlation(xs: List[float], ys: List[float]) -> Optional[float]:
+def _pearson_correlation(xs: list[float], ys: list[float]) -> float | None:
     """Pearson correlation coefficient.  Returns None if insufficient data."""
     if len(xs) < 3:
         return None
@@ -186,8 +197,12 @@ def _pearson_correlation(xs: List[float], ys: List[float]) -> Optional[float]:
     return (n * sxy - sx * sy) / denom
 
 
-def _sharpe_ratio(returns: List[float], rf: float = 0.0) -> Optional[float]:
-    """Annualised Sharpe ratio from a list of fractional returns."""
+def _sharpe_ratio(returns: list[float], rf: float = 0.0) -> float | None:
+    """Non-annualised (per-period) Sharpe ratio from a list of fractional returns.
+
+    The caller is responsible for annualising this using the actual holding
+    period (e.g. periods_per_year ** 0.5).
+    """
     if len(returns) < 2:
         return None
     mean_r = statistics.mean(returns)
@@ -206,7 +221,7 @@ def _sharpe_ratio(returns: List[float], rf: float = 0.0) -> Optional[float]:
 def run_sentiment_backtest(
     data_dir: str,
     forward_days: int = 5,
-    theta_controller_factory: Optional[Callable[[], object]] = None,
+    theta_controller_factory: Callable[[], object] | None = None,
 ) -> SentimentBacktestResult:
     """Scan *data_dir* for historical ticker packs and measure CNS predictive power.
 
@@ -244,7 +259,7 @@ def run_sentiment_backtest(
         )
 
     # Collect all pack JSON files sorted by date
-    pack_files: List[Tuple[str, str]] = []  # (date_dir, file_path)
+    pack_files: list[tuple[str, str]] = []  # (date_dir, file_path)
     for entry in sorted(os.listdir(packs_dir)):
         entry_path = os.path.join(packs_dir, entry)
         if os.path.isdir(entry_path) and _compact_datelike(entry):
@@ -266,7 +281,7 @@ def run_sentiment_backtest(
             forward_days=forward_days,
         )
 
-    details: List[SignalResult] = []
+    details: list[SignalResult] = []
 
     # All signals by (date_dir, ticker) for dedup and CNS quantile computation
     seen: set = set()
@@ -299,6 +314,7 @@ def run_sentiment_backtest(
                 td = theta_controller_factory()
             else:
                 from shared.thetadata import ThetaDataController
+
                 td = ThetaDataController()
 
         for td_entry in tickers_data:
@@ -327,14 +343,16 @@ def run_sentiment_backtest(
             except Exception:
                 f5, f10 = None, None
 
-            details.append(SignalResult(
-                date=pack_date,
-                ticker=symbol,
-                cns_score=cns_val,
-                war_score=war_val,
-                forward_5d_return=f5,
-                forward_10d_return=f10,
-            ))
+            details.append(
+                SignalResult(
+                    date=pack_date,
+                    ticker=symbol,
+                    cns_score=cns_val,
+                    war_score=war_val,
+                    forward_5d_return=f5,
+                    forward_10d_return=f10,
+                )
+            )
 
     # Close controller if it has a close() method
     if td is not None and hasattr(td, "close"):
@@ -360,33 +378,51 @@ def run_sentiment_backtest(
 
     # Use forward_5d_return as the primary return metric (rename to match forward_days)
     all_cns = [s.cns_score for s in details]
-    median_cns, q3_cns = _compute_quantile_boundaries(all_cns)
+    q1_cns, median_cns, q3_cns = _compute_quantile_boundaries(all_cns)
 
-    top_quartile = [s for s in details if s.cns_score >= q3_cns and s.forward_5d_return is not None]
-    bottom_quartile = [s for s in details if s.cns_score < median_cns and s.forward_5d_return is not None]
+    top_quartile = [
+        s for s in details if s.cns_score >= q3_cns and s.forward_5d_return is not None
+    ]
+    bottom_quartile = [
+        s for s in details if s.cns_score < q1_cns and s.forward_5d_return is not None
+    ]
 
-    top_names = list(sorted(set(s.ticker for s in top_quartile)))
-    bottom_names = list(sorted(set(s.ticker for s in bottom_quartile)))
+    top_names = sorted(set(s.ticker for s in top_quartile))
+    bottom_names = sorted(set(s.ticker for s in bottom_quartile))
 
-    top_mean = statistics.mean([s.forward_5d_return for s in top_quartile]) if top_quartile else 0.0
-    bottom_mean = statistics.mean([s.forward_5d_return for s in bottom_quartile]) if bottom_quartile else 0.0
+    top_mean = (
+        statistics.mean([s.forward_5d_return for s in top_quartile])
+        if top_quartile
+        else 0.0
+    )
+    bottom_mean = (
+        statistics.mean([s.forward_5d_return for s in bottom_quartile])
+        if bottom_quartile
+        else 0.0
+    )
     hit_rate = top_mean - bottom_mean
 
     # Long-only Sharpe (top quartile)
     if len(top_quartile) >= 2:
         top_returns = [s.forward_5d_return for s in top_quartile]  # type: ignore[union-attr]
-        daily_sharpe = _sharpe_ratio(top_returns)
-        sharpe_long_only = daily_sharpe * (252 ** 0.5) if daily_sharpe is not None else None
+        period_sharpe = _sharpe_ratio(top_returns)
+        periods_per_year = 252.0 / max(forward_days, 1)
+        sharpe_long_only = (
+            period_sharpe * (periods_per_year**0.5)
+            if period_sharpe is not None
+            else None
+        )
     else:
         sharpe_long_only = None
 
     # CNS-return correlation
-    valid = [(s.cns_score, s.forward_5d_return) for s in details
-             if s.forward_5d_return is not None]
+    valid = [
+        (s.cns_score, s.forward_5d_return)
+        for s in details
+        if s.forward_5d_return is not None
+    ]
     if len(valid) >= 3:
-        cns_corr = _pearson_correlation(
-            [v[0] for v in valid], [v[1] for v in valid]
-        )
+        cns_corr = _pearson_correlation([v[0] for v in valid], [v[1] for v in valid])
     else:
         cns_corr = None
 

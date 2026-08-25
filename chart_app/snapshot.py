@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from chart_app.flow_pane import bin_flow
 from chart_app.flow_stamp import apply_whale, stamp_whale
 from chart_app.score_engine import classic_overlays, gated_markers, price_scores
 
@@ -50,13 +51,16 @@ def build_state(cache, ticker: str, interval: str, rh=None, *, flow_fn=None, flo
                     ticker,
                     records[0].timestamp,
                     records[-1].timestamp,
-                    25_000.0,
+                    0.0,
                 )
             except Exception:  # noqa: BLE001 — one range call; degrade, never fabricate
                 trades = []
             if flow_cache is not None:
                 flow_cache[key] = trades
         apply_whale(rows, stamp_whale(records, trades or []))
+        flow = bin_flow(records, list(trades or [])) if trades else None
+    else:
+        flow = None
     scores = [int(row["score"]) for row in rows]
     last = rows[-1] if rows else None
     last_score = int(last["score"]) if last is not None else 0
@@ -92,4 +96,5 @@ def build_state(cache, ticker: str, interval: str, rh=None, *, flow_fn=None, flo
         },
         "signals": [row["signals"] for row in rows],
         "rh": _rh_payload(rh),
+        **({"flow": flow} if flow is not None else {}),
     }

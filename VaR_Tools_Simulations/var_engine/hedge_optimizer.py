@@ -5,9 +5,10 @@ futures/ETFs.  Uses quadratic programming (scipy.optimize.minimize)
 for multi-instrument hedges and an analytical solution for the
 single-instrument case.
 """
+
+from dataclasses import dataclass
+
 import numpy as np
-from typing import List
-from dataclasses import dataclass, field
 from scipy.optimize import minimize
 from scipy.stats import norm
 
@@ -15,40 +16,41 @@ from scipy.stats import norm
 @dataclass
 class HedgeInstrument:
     """A single hedge instrument (future, ETF, etc.)."""
-    name:                      str
-    volatility:                float         # annualised vol
-    correlation_to_positions:  np.ndarray    # shape (n_positions,)
-    beta:                      float         # beta relative to positions
+
+    name: str
+    volatility: float  # annualised vol
+    correlation_to_positions: np.ndarray  # shape (n_positions,)
+    beta: float  # beta relative to positions
 
 
 @dataclass
 class HedgeOptimizerInputs:
-    positions:                np.ndarray           # shape (n_positions,)
-    cov_matrix:               np.ndarray           # (n_positions, n_positions)
-    hedge_instruments:        List[HedgeInstrument]
-    var_horizon:              float = 1.0          # VaR horizon in trading days
-    trading_days:             float = 252.0
-    confidence:               float = 0.99
+    positions: np.ndarray  # shape (n_positions,)
+    cov_matrix: np.ndarray  # (n_positions, n_positions)
+    hedge_instruments: list[HedgeInstrument]
+    var_horizon: float = 1.0  # VaR horizon in trading days
+    trading_days: float = 252.0
+    confidence: float = 0.99
     # Optional diagonal approx — set True if hedges' mutual correlations are unknown
-    hedge_independent:        bool = True
+    hedge_independent: bool = True
 
 
 @dataclass
 class HedgeOptimizerOutputs:
-    optimal_weights:   np.ndarray       # weights on each hedge instrument
-    base_var:          float            # portfolio VaR before hedging
-    hedged_var:        float            # portfolio VaR after hedging
-    var_reduction_pct: float            # (base - hedged) / base * 100
-    hedge_names:       List[str]
-    base_port_vol:     float            # annualised portfolio vol before hedging
-    hedged_port_vol:   float            # annualised portfolio vol after hedging
+    optimal_weights: np.ndarray  # weights on each hedge instrument
+    base_var: float  # portfolio VaR before hedging
+    hedged_var: float  # portfolio VaR after hedging
+    var_reduction_pct: float  # (base - hedged) / base * 100
+    hedge_names: list[str]
+    base_port_vol: float  # annualised portfolio vol before hedging
+    hedged_port_vol: float  # annualised portfolio vol after hedging
 
 
 def hedge_ratio_single(
-    position_vol:      float,
-    position_weight:   float,
-    hedge_vol:         float,
-    correlation:       float,
+    position_vol: float,
+    position_weight: float,
+    hedge_vol: float,
+    correlation: float,
 ) -> float:
     """Analytical minimum-variance hedge ratio for a single hedge instrument.
 
@@ -72,11 +74,12 @@ def hedge_ratio_single(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_expanded_covariance(
-    n_pos:       int,
-    n_hedge:     int,
-    cov_matrix:  np.ndarray,
-    instruments: List[HedgeInstrument],
+    n_pos: int,
+    n_hedge: int,
+    cov_matrix: np.ndarray,
+    instruments: list[HedgeInstrument],
     independent: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build the cross-covariance and hedge-covariance sub-blocks.
@@ -87,40 +90,41 @@ def _build_expanded_covariance(
     hedge_cov : (n_hedge, n_hedge)
     pos_vols  : (n_pos,)          — sqrt(diag(cov_matrix))
     """
-    pos_vols = np.sqrt(np.diag(cov_matrix))               # (n_pos,)
+    pos_vols = np.sqrt(np.diag(cov_matrix))  # (n_pos,)
 
     cross_cov = np.zeros((n_hedge, n_pos))
     for j, instr in enumerate(instruments):
         cross_cov[j, :] = pos_vols * instr.volatility * instr.correlation_to_positions
 
     if independent:
-        hedge_cov = np.diag(np.array([h.volatility ** 2 for h in instruments]))
+        hedge_cov = np.diag(np.array([h.volatility**2 for h in instruments]))
     else:
         # If correlations between hedges are provided (via correlation_to_positions
         # on other hedges), a full matrix would be needed.  Here we default to
         # identity — users can override hedge_independent=False and provide a
         # custom hedge_cov via subclassing.  For now, diagonal is the default.
-        hedge_cov = np.diag(np.array([h.volatility ** 2 for h in instruments]))
+        hedge_cov = np.diag(np.array([h.volatility**2 for h in instruments]))
 
     return cross_cov, hedge_cov, pos_vols
 
 
 def _compute_var(
-    port_variance:   np.ndarray,   # scalar
-    var_horizon:     float,
-    trading_days:    float,
-    confidence:      float,
+    port_variance: np.ndarray,  # scalar
+    var_horizon: float,
+    trading_days: float,
+    confidence: float,
 ) -> float:
     """Parametric VaR under normal assumption."""
     port_vol = float(np.sqrt(port_variance))
-    scaling  = np.sqrt(var_horizon / trading_days)
-    z        = norm.ppf(confidence)
+    scaling = np.sqrt(var_horizon / trading_days)
+    z = norm.ppf(confidence)
     return float(port_vol * scaling * z)
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
     """Portfolio minimum-variance hedge via quadratic programming.
@@ -132,25 +136,29 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
 
     with Q = 2 * Σ_hedge  and  c = 2 * Σ_cross * w_pos.
     """
-    n_pos   = len(inp.positions)
+    n_pos = len(inp.positions)
     n_hedge = len(inp.hedge_instruments)
 
     # Normalised position weights
     total_pos = float(np.sum(inp.positions))
     if total_pos == 0.0:
         raise ValueError("Total position size is zero — cannot normalise weights.")
-    pos_weights = inp.positions / total_pos                 # (n_pos,)
+    pos_weights = inp.positions / total_pos  # (n_pos,)
 
     # Base (un-hedged) portfolio variance & VaR
     base_variance = float(pos_weights @ inp.cov_matrix @ pos_weights)
-    base_var_val  = _compute_var(base_variance, inp.var_horizon,
-                                 inp.trading_days, inp.confidence)
+    base_var_val = _compute_var(
+        base_variance, inp.var_horizon, inp.trading_days, inp.confidence
+    )
     base_port_vol = float(np.sqrt(base_variance))
 
     # Build expanded covariance blocks
     cross_cov, hedge_cov, _ = _build_expanded_covariance(
-        n_pos, n_hedge, inp.cov_matrix,
-        inp.hedge_instruments, inp.hedge_independent,
+        n_pos,
+        n_hedge,
+        inp.cov_matrix,
+        inp.hedge_instruments,
+        inp.hedge_independent,
     )
 
     # ---------- optimise hedge weights ----------
@@ -163,7 +171,7 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
         h = inp.hedge_instruments[0]
         # cov(P, hedge) = w_pos' Σ_cross'   — cross_cov is (1, n_pos)
         cov_p_h = float((pos_weights @ cross_cov.T).item())
-        optimal_weight = -cov_p_h / (h.volatility ** 2 + 1e-30)
+        optimal_weight = -cov_p_h / (h.volatility**2 + 1e-30)
         optimal_weights = np.array([optimal_weight])
 
         # Hedged variance
@@ -171,8 +179,12 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
         hedged_variance = (
             base_variance
             + 2.0 * optimal_weight * cov_p_h
-            + optimal_weight ** 2 * h.volatility ** 2
+            + optimal_weight**2 * h.volatility**2
         )
+        # Clamp: hedge_cov is treated as diagonal/independent, so the
+        # analytical optimum can imply a negative variance under that
+        # approximation. Floor at zero to keep downstream sqrt/VaR finite.
+        hedged_variance = max(hedged_variance, 0.0)
 
     else:
         # Quadratic programming for multi-instrument
@@ -188,14 +200,12 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
 
         result = minimize(
             objective,
-            x0    = np.zeros(n_hedge),
-            method= "SLSQP",
-            jac   = jacobian,
+            x0=np.zeros(n_hedge),
+            method="SLSQP",
+            jac=jacobian,
         )
         if not result.success:
-            raise RuntimeError(
-                f"Hedge optimisation did not converge: {result.message}"
-            )
+            raise RuntimeError(f"Hedge optimisation did not converge: {result.message}")
         optimal_weights = result.x
 
         # Hedged variance
@@ -204,23 +214,28 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
             + 2.0 * float(pos_weights @ cross_cov.T @ optimal_weights)
             + float(optimal_weights @ hedge_cov @ optimal_weights)
         )
+        # Clamp: hedge_cov is treated as diagonal/independent, so the QP
+        # optimum can imply a negative variance under that approximation.
+        # Floor at zero to keep downstream sqrt/VaR finite.
+        hedged_variance = max(hedged_variance, 0.0)
 
     # ---------- output ----------
-    hedged_var_val = _compute_var(hedged_variance, inp.var_horizon,
-                                  inp.trading_days, inp.confidence)
+    hedged_var_val = _compute_var(
+        hedged_variance, inp.var_horizon, inp.trading_days, inp.confidence
+    )
 
     var_reduction = 0.0
     if abs(base_var_val) > 1e-15:
         var_reduction = (base_var_val - hedged_var_val) / abs(base_var_val) * 100.0
 
     return HedgeOptimizerOutputs(
-        optimal_weights   = optimal_weights,
-        base_var          = base_var_val,
-        hedged_var        = hedged_var_val,
-        var_reduction_pct = var_reduction,
-        hedge_names       = [h.name for h in inp.hedge_instruments],
-        base_port_vol     = base_port_vol,
-        hedged_port_vol   = float(np.sqrt(hedged_variance)),
+        optimal_weights=optimal_weights,
+        base_var=base_var_val,
+        hedged_var=hedged_var_val,
+        var_reduction_pct=var_reduction,
+        hedge_names=[h.name for h in inp.hedge_instruments],
+        base_port_vol=base_port_vol,
+        hedged_port_vol=float(np.sqrt(hedged_variance)),
     )
 
 
@@ -228,13 +243,14 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
 # Demo
 # ---------------------------------------------------------------------------
 
+
 def demo():
     """Quick sanity check with two positions and one hedge."""
     rng = np.random.default_rng(42)
     n = 2
     vols = np.array([0.25, 0.30])
     corr = np.array([[1.0, 0.4], [0.4, 1.0]])
-    cov  = np.diag(vols) @ corr @ np.diag(vols)
+    cov = np.diag(vols) @ corr @ np.diag(vols)
 
     positions = np.array([1_000_000.0, 2_000_000.0])
 
