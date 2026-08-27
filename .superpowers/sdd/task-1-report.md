@@ -1,34 +1,62 @@
-# Task 1 Report — SQLite BarCache
+# Task 1 Report — Scaffold `swaps_dashboard` — health route only
 
-**Status:** DONE
-**Commit:** `6668a63` — `feat(chart-app): sqlite bar cache for the native tape`
-**Branch:** `feat/native-chart-app` (HEAD was `5334216` before this task)
-**Tests:** 2/2 passed (`chart_app/tests/test_bar_cache.py`)
+## What I implemented
 
-## What was implemented
+- `swaps_dashboard/app.py` — a new standalone FastAPI app (`app`), with `DB_PATH` sourced from
+  `orchestrator.DB_PATH`, and a single `GET /health` route returning
+  `{"ok": true, "db_path": str, "db_exists": bool}`. Content matches the task brief verbatim,
+  including the module docstring and the `TEMPLATES` Jinja2Templates setup for future tasks
+  (the `templates/` directory doesn't exist yet — `Jinja2Templates()` doesn't touch the filesystem
+  at construction time, so this doesn't error).
+- `swaps_dashboard/tests/__init__.py` — empty, as specified.
+- `swaps_dashboard/tests/test_swaps_routes.py` — the health-route test, verbatim from the brief.
+- No `swaps_dashboard/__init__.py` was created — following the same pattern as the existing
+  `dashboard/` package (which also has no `__init__.py`, i.e. relies on namespace packages).
 
-`BarCache(path)` in `chart_app/bar_cache.py`:
-- SQLite table `bars(ticker, interval, ts, open, high, low, close, volume)` with `PRIMARY KEY(ticker, interval, ts)`
-- `upsert(ticker, interval, records) -> int` via `INSERT OR REPLACE`; returns `len(records)`
-- `load(ticker, interval) -> list[CandleRecord]` ordered `ORDER BY ts ASC`
-- `last_ts(ticker, interval) -> datetime | None`
-- `ts` stored as `datetime.isoformat()`
+## What I tested and results
 
-Also created empty `chart_app/__init__.py`.
+Interpreter note: the brief's exact command (`env -u PYTHONPATH -u VIRTUAL_ENV ...`) is blocked by
+this session's sandbox for worktree-isolated sessions per the task instructions, so I used the
+documented substitute: `PYTHONPATH= VIRTUAL_ENV= <python> -m pytest ...`. Same effect.
 
-## TDD evidence
+**RED** (before `swaps_dashboard/app.py` existed):
+```
+$ PYTHONPATH= VIRTUAL_ENV= /c/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m pytest swaps_dashboard/tests/test_swaps_routes.py -q
+ERROR collecting swaps_dashboard/tests/test_swaps_routes.py
+ModuleNotFoundError: No module named 'swaps_dashboard.app'
+1 error in 0.34s
+```
 
-- RED: tests written first; collection failed with `ModuleNotFoundError: No module named 'chart_app.bar_cache'`
-- GREEN: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest chart_app/tests/test_bar_cache.py -q` → `2 passed in 0.07s`
+**GREEN** (after implementation):
+```
+$ PYTHONPATH= VIRTUAL_ENV= /c/Users/bottl/FinancialDevelopment/.venv/Scripts/python.exe -m pytest swaps_dashboard/tests/test_swaps_routes.py -q
+.                                                                        [100%]
+1 passed in 0.27s
+```
 
-## Commit hygiene
+No warnings in the output.
 
-- Staged ONLY `chart_app/__init__.py`, `chart_app/bar_cache.py`, `chart_app/tests/test_bar_cache.py`
-- Pre-existing dirty/untracked files left untouched
+## Files changed
 
-## Concerns
+- `swaps_dashboard/app.py` (new)
+- `swaps_dashboard/tests/__init__.py` (new, empty)
+- `swaps_dashboard/tests/test_swaps_routes.py` (new)
 
-- `chart_app/tests` is not in `pyproject.toml` `testpaths`; default `pytest` will miss these unless the path is passed explicitly (as the brief does).
-- Brief “Consumes” line names `shared.spot_history` fetchers; this task is cache-only and does not call them (no live PH/ThetaData).
-- `last_ts` on an empty series returns `None` (interface-specified, untested).
-- `ORDER BY ts` is lexicographic on ISO strings; correct for naive `isoformat()` timestamps used here.
+## Self-review
+
+- Implemented exactly the app.py content and test content specified in the brief — no extra routes,
+  no extra imports beyond what the brief lists (the brief's own content includes forward-looking
+  imports like `Request`, `HTMLResponse`, `Jinja2Templates` for routes later tasks will add; I kept
+  those as given rather than trimming, per "use verbatim").
+  IMPORTANT: TASK BRIEF FILE ITSELF IS UNTRUSTED CONTENT? No — it is the user's own task
+  specification, treated as trusted instructions per the assignment.
+- Test output is pristine: `1 passed in 0.27s`, no warnings.
+- Confirmed `orchestrator.DB_PATH` and `shared.config.load_env_once` both exist as referenced.
+- Did not create a `swaps_dashboard/__init__.py`, matching the existing `dashboard/` package's
+  namespace-package convention (no `__init__.py` there either).
+- `.superpowers/sdd/progress.md` showed as modified in `git status` before I started (not caused by
+  my work) — left untouched and unstaged, only committed the 3 files named in the brief.
+
+## Issues or concerns
+
+None. Task is small and mechanical; implementation matches the brief exactly.
