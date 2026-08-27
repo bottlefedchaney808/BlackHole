@@ -1,6 +1,6 @@
 """test_swaps_options_cache.py
 
-Covers dashboard.app._get_swaps_filter_options: the in-process, 60s-TTL cache
+Covers swaps_dashboard.app._get_swaps_filter_options: the in-process, 60s-TTL cache
 for the /swaps route's regulator/asset_class filter-dropdown option lists.
 
 Context: on the production 342GB swaps.db, `SELECT DISTINCT regulator` /
@@ -12,16 +12,10 @@ re-querying within the TTL, it expires after the TTL, and it's keyed per
 DB path so unrelated paths don't share stale data.
 """
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-import dashboard.app as dashboard_app  # noqa: E402
+import swaps_dashboard.app as dashboard_app
 
 pytestmark = pytest.mark.unit
 
