@@ -26,3 +26,18 @@ def test_swaps_page_launches(monkeypatch, tmp_path):
     r = client.get('/swaps')
     assert r.status_code == 200
     assert 'Swap trades' in r.text
+
+
+def test_trades_route_launches(monkeypatch, tmp_path):
+    # CARL R3-F1: same real-346GB-swaps.db concern as Task 2's /swaps test.
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(tmp_path / 'missing.db'))
+    r = client.get('/trades')
+    assert r.status_code == 200
+    body = r.json()
+    assert 'error' in body
+
+
+def test_analytics_timeseries_route_launches(monkeypatch, tmp_path):
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(tmp_path / 'missing.db'))
+    r = client.get('/analytics/timeseries')
+    assert r.status_code == 200

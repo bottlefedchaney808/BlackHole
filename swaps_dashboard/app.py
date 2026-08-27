@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from fastapi import FastAPI, Request
@@ -228,3 +229,219 @@ def swaps(request: Request,
         'asset_classes': asset_classes,
         'error': error,
     })
+
+
+from shared.query_builder import CrossSourceQueryBuilder  # noqa: E402
+
+
+@app.get('/trades')
+def get_trades(
+    source: Optional[str] = None,
+    days_back: int = 30,
+    limit: int = 1000,
+):
+    """Get swap trades, optionally filtered by data source(s).
+
+    Query params:
+      - source: Comma-separated source names (e.g., 'DTCC,CME'). If omitted, returns all.
+      - days_back: Number of days to look back (default 30)
+      - limit: Maximum rows to return (default 1000)
+
+    Returns:
+        List of trade dicts with data_source field, or error dict
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        sources = []
+        if source:
+            sources = [s.strip().upper() for s in source.split(',') if s.strip()]
+
+        if sources:
+            builder = CrossSourceQueryBuilder(DB_PATH)
+            trades = builder.query_by_sources(sources, days_back=days_back, limit=limit)
+        else:
+            conn = _db()
+            if not conn:
+                return {'error': f'swaps.db not found at {DB_PATH}'}
+            try:
+                rows = [dict(r) for r in conn.execute(
+                    f"""SELECT * FROM swap_trades
+                       WHERE effective_date >= date('now', '-{days_back} days')
+                       ORDER BY effective_date DESC, dissemination_id DESC
+                       LIMIT ?;""", (limit,))]
+                trades = rows
+            finally:
+                conn.close()
+
+        return {
+            'count': len(trades),
+            'sources_requested': sources if sources else ['all'],
+            'days_back': days_back,
+            'trades': trades,
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+@app.get('/instruments/{upi}')
+def get_instrument(upi: str, resolve_cross_source: bool = True):
+    """Resolve an instrument (UPI) across data sources.
+
+    Args:
+        upi: UPI to look up
+        resolve_cross_source: If true, show all occurrences across sources (default true)
+
+    Returns:
+        Dict with instrument info and trades by source
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        builder = CrossSourceQueryBuilder(DB_PATH)
+
+        if resolve_cross_source:
+            trades = builder.resolve_instrument_across_sources(upi)
+        else:
+            trades = builder.resolve_instrument_across_sources(upi, sources=['DTCC'])
+
+        if not trades:
+            return {'upi': upi, 'found': False, 'message': 'UPI not found in any source'}
+
+        by_source = {}
+        for trade in trades:
+            source = trade.get('data_source', 'unknown')
+            if source not in by_source:
+                by_source[source] = []
+            by_source[source].append(trade)
+
+        first_trade = trades[0]
+        return {
+            'upi': upi,
+            'found': True,
+            'underlier_asset_name': first_trade.get('underlying_asset_name'),
+            'asset_class': first_trade.get('asset_class'),
+            'upi_underlier_name': first_trade.get('upi_underlier_name'),
+            'total_trades_across_sources': len(trades),
+            'trades_by_source': {
+                source: len(trade_list)
+                for source, trade_list in by_source.items()
+            },
+            'sources': list(by_source.keys()),
+            'sample_trades': by_source,
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+@app.get('/analytics/cross-source-notional')
+def cross_source_notional(
+    source: Optional[str] = None,
+    days_back: int = 30,
+):
+    """Get total notional aggregated across data sources.
+
+    Query params:
+      - source: Comma-separated source names. If omitted, includes all available sources.
+      - days_back: Number of days to aggregate (default 30)
+
+    Returns:
+        Dict with total notional and per-source breakdown
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        sources = []
+        if source:
+            sources = [s.strip().upper() for s in source.split(',') if s.strip()]
+        else:
+            conn = _db()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('SELECT DISTINCT data_source FROM swap_trades;')
+                    sources = [row[0] for row in cur.fetchall() if row[0]]
+                finally:
+                    conn.close()
+
+        if not sources:
+            return {
+                'total_notional': 0,
+                'by_source': {},
+                'days_back': days_back,
+                'message': 'No sources found in database',
+            }
+
+        builder = CrossSourceQueryBuilder(DB_PATH)
+        total = builder.aggregate_notional_cross_source(sources, days_back=days_back)
+        by_source = builder.aggregate_notional_by_source(sources, days_back=days_back)
+
+        return {
+            'total_notional': total,
+            'by_source': by_source,
+            'sources_included': sources,
+            'days_back': days_back,
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+@app.get('/analytics/timeseries')
+def timeseries_by_source(
+    source: Optional[str] = None,
+    days_back: int = 90,
+):
+    """Get daily time-series data by source.
+
+    Returns daily aggregates (notional, trade count) for each source over the
+    requested period.
+
+    Query params:
+      - source: Comma-separated source names. If omitted, includes all sources.
+      - days_back: Number of days to look back (default 90)
+
+    Returns:
+        Dict mapping source name -> list of daily aggregates
+    """
+    if not os.path.exists(DB_PATH):
+        return {'error': f'swaps.db not found at {DB_PATH}'}
+
+    try:
+        sources = []
+        if source:
+            sources = [s.strip().upper() for s in source.split(',') if s.strip()]
+        else:
+            conn = _db()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('SELECT DISTINCT data_source FROM swap_trades;')
+                    sources = [row[0] for row in cur.fetchall() if row[0]]
+                finally:
+                    conn.close()
+
+        if not sources:
+            return {'timeseries': {}, 'message': 'No sources found'}
+
+        start_date = (datetime.now(timezone.utc).date()
+                     - timedelta(days=days_back))
+        end_date = datetime.now(timezone.utc).date()
+
+        builder = CrossSourceQueryBuilder(DB_PATH)
+        timeseries = builder.timeseries_by_source(sources, start_date=start_date,
+                                                  end_date=end_date)
+
+        return {
+            'timeseries': timeseries,
+            'sources': sources,
+            'period': {
+                'start_date': str(start_date),
+                'end_date': str(end_date),
+                'days': days_back,
+            },
+        }
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
