@@ -1,0 +1,106 @@
+<div class="panel" id="swapCard">
+  <header>
+    <h2>Swap data</h2>
+    <span class="note"><span id="swapLiveBadge" class="pill plain">checking&hellip;</span></span>
+  </header>
+  <div class="body">
+    {% if swaps_snapshot %}
+    {% if swaps_snapshot.stats_error %}<div class="errbox">database stats: {{ swaps_snapshot.stats_error }}</div>{% endif %}
+    {% if swaps_snapshot.top_error %}<div class="errbox">top notional: {{ swaps_snapshot.top_error }}</div>{% endif %}
+    {% if swaps_snapshot.scrape_error %}<div class="errbox">scrape log: {{ swaps_snapshot.scrape_error }}</div>{% endif %}
+    <div class="cards">
+      <div class="card">
+        <div class="k">Swap trades</div>
+        <div class="v">{{ swaps_snapshot.stats.total_records | num }}</div>
+        <div class="x">rows in swap_trades</div>
+      </div>
+      <div class="card">
+        <div class="k">Unique UPIs</div>
+        <div class="v">{{ swaps_snapshot.stats.unique_upis | num }}</div>
+        <div class="x">distinct instruments</div>
+      </div>
+      <div class="card">
+        <div class="k">Date range</div>
+        <div class="v" style="font-size:15px;">
+          {{ swaps_snapshot.stats.earliest_date or '--' }}<span class="muted"> &rarr; </span>{{ swaps_snapshot.stats.latest_date or '--' }}
+        </div>
+        <div class="x">effective_date min/max</div>
+      </div>
+      <div class="card">
+        <div class="k">Top product</div>
+        <div class="v" style="font-size:15px;">
+          {% if swaps_snapshot.top_products %}{{ swaps_snapshot.top_products[0].product or '(unnamed)' }}{% else %}--{% endif %}
+        </div>
+        <div class="x">
+          {% if swaps_snapshot.top_products %}{{ swaps_snapshot.top_products[0].total_notional | usd }} notional{% else %}no swap trades yet{% endif %}
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">Last scrape</div>
+        <div class="v" style="font-size:15px;">
+          {% if swaps_snapshot.last_scrape %}
+            <span class="pill {{ (swaps_snapshot.last_scrape.status or 'plain') | lower }}">{{ swaps_snapshot.last_scrape.status or 'unknown' }}</span>
+          {% else %}--{% endif %}
+        </div>
+        <div class="x">
+          {% if swaps_snapshot.last_scrape %}{{ swaps_snapshot.last_scrape.scrape_date }}{% else %}no scrape_log entries{% endif %}
+        </div>
+      </div>
+    </div>
+    {% if swaps_snapshot.stats.by_regulator_asset_class %}
+    <table style="margin-top:12px;">
+      <thead><tr><th>regulator</th><th>asset_class</th><th class="num">records</th></tr></thead>
+      <tbody>
+      {% for r in (swaps_snapshot.stats.by_regulator_asset_class | sort(attribute='record_count', reverse=true))[:3] %}
+        <tr>
+          <td>{{ r.regulator }}</td>
+          <td>{{ r.asset_class }}</td>
+          <td class="num">{{ r.record_count | num }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if swaps_snapshot.ingestion %}
+    <p class="small muted" style="margin:12px 0 0;">
+      ingestion:
+      {% for s in swaps_snapshot.ingestion %}
+        <span class="pill plain">{{ s.regulator }}/{{ s.asset_class }} &middot; {{ s.last_cumulative_date or '--' }}</span>
+      {% endfor %}
+    </p>
+    {% elif swaps_snapshot.ingestion_error %}
+    <p class="small muted" style="margin:12px 0 0;">ingestion: {{ swaps_snapshot.ingestion_error }}</p>
+    {% endif %}
+    <p class="small muted" style="margin:12px 0 0;">
+      snapshot generated {{ swaps_snapshot.generated_at | ts }}
+      &middot; <a href="{{ swaps_dashboard_url }}/swaps" target="_blank">Open swap browser &rarr;</a>
+    </p>
+    {% else %}
+    <div class="empty">
+      Swap dashboard hasn't been launched yet -- run <code>swaps_dashboard.bat</code> to browse swap trades.
+    </div>
+    <p class="small muted" style="margin:12px 0 0;">
+      <a href="{{ swaps_dashboard_url }}/swaps" target="_blank">Open swap browser &rarr;</a>
+    </p>
+    {% endif %}
+  </div>
+</div>
+<script>
+(function () {
+  var badge = document.getElementById('swapLiveBadge');
+  if (!badge) return;
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 1500);
+  fetch('{{ swaps_dashboard_url }}/health', {mode: 'no-cors', signal: ctrl.signal})
+    .then(function () {
+      clearTimeout(timer);
+      badge.textContent = 'live';
+      badge.className = 'pill ok';
+    })
+    .catch(function () {
+      clearTimeout(timer);
+      badge.textContent = 'not running';
+      badge.className = 'pill plain';
+    });
+})();
+</script>

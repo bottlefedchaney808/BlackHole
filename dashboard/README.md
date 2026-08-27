@@ -39,12 +39,12 @@ for the port. Do not expose it to the internet.
 
 | Route | What it does |
 | --- | --- |
-| `GET /` | Overview: swap DB stats, top notional products, ingestion state, scrape log, last 20 `orchestrator_runs`, and the run trigger form. |
-| `GET /swaps` | Paginated `swap_trades` table. Query params: `regulator`, `asset_class`, `page`, `per_page`. |
+| `GET /` | Overview: a snapshot-backed swap summary card, last 20 `orchestrator_runs`, and the run trigger form. |
 | `POST /run/{suite_or_unified}` | `{suite_or_unified}` is `unified` or one of `options`, `vol`, `var`, `sentiment`. JSON or urlencoded body: `ticker` (required), plus optional `strike`, `expiry` (YYYY-MM-DD), `option_type`, `target_years`, `index`, `timeout`. Returns `202` with a `run_id` immediately. |
 | `GET /runs/{run_id}` | Status + result JSON for one run. Poll this while a run is in flight. |
 | `GET /suites/{suite}` | Newest output file on disk for that suite, parsed and rendered as a table. Empty state if nothing has been produced yet. |
 | `GET /health` | Liveness plus paths and in-flight run ids. |
+| (swaps_dashboard) | Standalone swap browser + JSON API, port 8788 -- see swaps_dashboard.bat. |
 
 Example trigger from the shell:
 

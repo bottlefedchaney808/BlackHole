@@ -9,45 +9,15 @@
   {% if not shared_python_ok %}<span class="pill error">interpreter missing</span>{% endif %}
 </p>
 
-{% if stats_error %}<div class="errbox">database stats: {{ stats_error }}</div>{% endif %}
-
 <div class="cards" style="margin-bottom:18px;">
-  <div class="card">
-    <div class="k">Swap trades</div>
-    <div class="v">{{ stats.total_records | num }}</div>
-    <div class="x">rows in swap_trades</div>
-  </div>
-  <div class="card">
-    <div class="k">Unique UPIs</div>
-    <div class="v">{{ stats.unique_upis | num }}</div>
-    <div class="x">distinct instruments</div>
-  </div>
-  <div class="card">
-    <div class="k">Date range</div>
-    <div class="v" style="font-size:15px;">
-      {{ stats.earliest_date or '--' }}<span class="muted"> &rarr; </span>{{ stats.latest_date or '--' }}
-    </div>
-    <div class="x">effective_date min/max</div>
-  </div>
-  <div class="card">
-    <div class="k">Last scrape</div>
-    <div class="v" style="font-size:15px;">
-      {% if last_scrape %}
-        <span class="pill {{ (last_scrape.status or 'plain') | lower }}">{{ last_scrape.status or 'unknown' }}</span>
-      {% else %}--{% endif %}
-    </div>
-    <div class="x">
-      {% if last_scrape %}
-        {{ last_scrape.scrape_date }} &middot; {{ last_scrape.rows_fetched | num }} fetched
-      {% else %}no scrape_log entries{% endif %}
-    </div>
-  </div>
   <div class="card">
     <div class="k">Orchestrator runs</div>
     <div class="v">{{ runs | length }}{% if runs | length == 20 %}+{% endif %}</div>
     <div class="x">most recent shown below</div>
   </div>
 </div>
+
+{% include "_swap_card.html" %}
 
 <!-- ------------------------------------------------------------------ -->
 <div class="panel">
@@ -138,128 +108,6 @@
           <td class="small mono">{{ r.completed_at | ts }}</td>
           <td><span class="pill {{ (r.status or 'plain') | lower }}">{{ r.status or '--' }}</span></td>
           <td><a href="/runs/{{ r.id }}" target="_blank">JSON</a></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-</div>
-
-<!-- ------------------------------------------------------------------ -->
-<div class="grid2">
-  <div class="panel">
-    <header>
-      <h2>Top notional products</h2>
-      <span class="note">
-        {% if top_products %}effective_date {{ top_products[0].effective_date }}{% else %}most recent effective_date{% endif %}
-      </span>
-    </header>
-    {% if top_error %}<div class="body"><div class="errbox">{{ top_error }}</div></div>
-    {% elif not top_products %}<div class="body"><div class="empty">No swap trades to aggregate yet.</div></div>
-    {% else %}
-    <div class="tablewrap scrollbox">
-      <table>
-        <thead><tr><th>product</th><th class="num">total notional</th><th class="num">trades</th></tr></thead>
-        <tbody>
-        {% for p in top_products %}
-          <tr>
-            <td class="wrap">{{ p.product or '(unnamed)' }}</td>
-            <td class="num">{{ p.total_notional | usd }}</td>
-            <td class="num">{{ p.trade_count | num }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
-
-  <div class="panel">
-    <header>
-      <h2>Records by regulator / asset class</h2>
-      <span class="note">SwapsQuery.get_database_stats()</span>
-    </header>
-    {% if not stats.by_regulator_asset_class %}
-      <div class="body"><div class="empty">No rows yet.</div></div>
-    {% else %}
-    <div class="tablewrap scrollbox">
-      <table>
-        <thead><tr><th>regulator</th><th>asset_class</th><th class="num">records</th></tr></thead>
-        <tbody>
-        {% for r in stats.by_regulator_asset_class %}
-          <tr>
-            <td>{{ r.regulator }}</td>
-            <td>{{ r.asset_class }}</td>
-            <td class="num">{{ r.record_count | num }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
-</div>
-
-<!-- ------------------------------------------------------------------ -->
-<div class="panel">
-  <header>
-    <h2>Ingestion state</h2>
-    <span class="note">SwapsLoader.get_state() per regulator / asset_class</span>
-  </header>
-  {% if ingestion_error %}<div class="body"><div class="errbox">{{ ingestion_error }}</div></div>
-  {% elif not ingestion %}<div class="body"><div class="empty">ingestion_state is empty -- nothing ingested yet.</div></div>
-  {% else %}
-  <div class="tablewrap">
-    <table>
-      <thead><tr>
-        <th>regulator</th><th>asset_class</th><th>last_cumulative_date</th>
-        <th class="num">last_live_slice_id</th><th>updated_at</th>
-      </tr></thead>
-      <tbody>
-      {% for s in ingestion %}
-        <tr>
-          <td><strong>{{ s.regulator }}</strong></td>
-          <td>{{ s.asset_class }}</td>
-          <td class="mono">{{ s.last_cumulative_date or '--' }}</td>
-          <td class="num">{{ s.last_live_slice_id if s.last_live_slice_id is not none else '--' }}</td>
-          <td class="mono small">{{ s.updated_at | ts }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-</div>
-
-<!-- ------------------------------------------------------------------ -->
-<div class="panel">
-  <header>
-    <h2>Scrape log</h2>
-    <span class="note">most recent pipeline activity -- proof the ingest is alive</span>
-  </header>
-  {% if scrape_error %}<div class="body"><div class="errbox">{{ scrape_error }}</div></div>
-  {% elif not scrapes %}<div class="body"><div class="empty">No scrape_log entries yet.</div></div>
-  {% else %}
-  <div class="tablewrap">
-    <table>
-      <thead><tr>
-        <th>scrape_date</th><th>status</th><th class="num">fetched</th>
-        <th class="num">inserted</th><th class="num">updated</th><th class="num">errors</th>
-        <th class="num">secs</th><th>message</th><th>created_at</th>
-      </tr></thead>
-      <tbody>
-      {% for s in scrapes %}
-        <tr>
-          <td class="mono">{{ s.scrape_date }}</td>
-          <td><span class="pill {{ (s.status or 'plain') | lower }}">{{ s.status or '--' }}</span></td>
-          <td class="num">{{ s.rows_fetched | num }}</td>
-          <td class="num">{{ s.rows_inserted | num }}</td>
-          <td class="num">{{ s.rows_updated | num }}</td>
-          <td class="num">{{ s.parse_errors | num }}</td>
-          <td class="num">{{ s.duration_seconds | num }}</td>
-          <td class="wrap small muted">{{ s.error_message or '' }}</td>
-          <td class="mono small">{{ s.created_at | ts }}</td>
         </tr>
       {% endfor %}
       </tbody>

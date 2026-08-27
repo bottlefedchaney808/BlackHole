@@ -3,9 +3,11 @@
 This is a *view* over things that already exist; it does not re-implement any of
 them:
 
-  * swap data       -> swaps_query.SwapsQuery (get_database_stats,
-                       top_notional_products via orchestrator.get_recent_swap_activity)
-  * ingestion state -> db_loader.SwapsLoader.get_state / get_last_scrape_log
+  * swap data       -> lives entirely in swaps_dashboard/app.py (port 8788) now;
+                       this file only reads its periodic JSON snapshot via
+                       _swaps_snapshot() -- a plain file read, no DB connection.
+  * ingestion state -> same as above: surfaced only via the swaps_dashboard
+                       snapshot, not queried directly from this process.
   * runs            -> orchestrator.build_context / run_suite / run_unified,
                        durably logged by orchestrator.log_run into orchestrator_runs
 
@@ -67,8 +69,6 @@ from shared.config import load_env_once  # noqa: E402
 load_env_once()
 
 import orchestrator  # noqa: E402  (path is set immediately above)
-from db_loader import SwapsLoader  # noqa: E402
-from swaps_query import SwapsQuery  # noqa: E402
 from dashboard.auth import get_client_ip  # noqa: E402
 from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable  # noqa: E402
 from shared.logging import setup_logging, get_metrics  # noqa: E402
@@ -93,6 +93,24 @@ logger = setup_logging(
 
 DB_PATH = orchestrator.DB_PATH
 SUITE_ROOTS = orchestrator.SUITE_ROOTS
+
+SWAPS_DASHBOARD_URL = 'http://127.0.0.1:8788'
+SWAPS_DASHBOARD_SNAPSHOT_PATH = os.path.join(ROOT, 'swaps_dashboard', 'cache', 'overview_snapshot.json')
+
+
+def _swaps_snapshot() -> Optional[Dict[str, Any]]:
+    """Read swaps_dashboard's periodic JSON snapshot -- a plain file read, no
+    DB connection, no query. Returns None if the swaps dashboard has never
+    run (or its cache is missing/corrupt); the template degrades to a
+    link-only card in that case, same "never 500" convention as the rest of
+    this file.
+    """
+    try:
+        with open(SWAPS_DASHBOARD_SNAPSHOT_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, 'templates'))
 
@@ -181,88 +199,6 @@ def _fmt_epoch_ts(value: Any) -> str:
 
 
 TEMPLATES.env.filters['epochts'] = _fmt_epoch_ts
-
-
-# --------------------------------------------------------------------------
-# swap data reads
-# --------------------------------------------------------------------------
-
-def _database_stats() -> Tuple[Dict[str, Any], Optional[str]]:
-    """SwapsQuery.get_database_stats(), or an empty shell plus the error text."""
-    empty = {
-        'total_records': 0, 'unique_upis': 0, 'by_regulator_asset_class': [],
-        'earliest_date': None, 'latest_date': None,
-    }
-    if not os.path.exists(DB_PATH):
-        return empty, f'swaps.db not found at {DB_PATH}'
-    try:
-        return SwapsQuery(DB_PATH).get_database_stats(), None
-    except Exception as e:
-        return empty, f'{type(e).__name__}: {e}'
-
-
-def _top_notional() -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """Top notional products for the most recent effective_date present.
-
-    Reuses orchestrator.get_recent_swap_activity, which already anchors on
-    MAX(effective_date) instead of top_notional_products' yesterday default and
-    normalizes the pandas DataFrame path to list[dict].
-    """
-    try:
-        return orchestrator.get_recent_swap_activity(limit=15), None
-    except Exception as e:
-        return [], f'{type(e).__name__}: {e}'
-
-
-def _ingestion_state() -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """One row per (regulator, asset_class) via SwapsLoader.get_state.
-
-    get_state takes a pair, so the pairs themselves come from a distinct scan of
-    ingestion_state and each is then fetched through the real loader API.
-    """
-    conn = _db()
-    if conn is None:
-        return [], f'swaps.db not found at {DB_PATH}'
-    try:
-        pairs = [(r['regulator'], r['asset_class']) for r in conn.execute(
-            'SELECT regulator, asset_class FROM ingestion_state '
-            'ORDER BY regulator, asset_class;')]
-    except Exception as e:
-        return [], f'{type(e).__name__}: {e}'
-    finally:
-        conn.close()
-
-    loader = SwapsLoader(DB_PATH)
-    rows: List[Dict[str, Any]] = []
-    for regulator, asset_class in pairs:
-        try:
-            state = loader.get_state(regulator, asset_class)
-        except Exception:
-            state = None
-        if state:
-            rows.append(state)
-    return rows, None
-
-
-def _scrape_log(limit: int = 8) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str]]:
-    """Last N scrape_log entries plus SwapsLoader.get_last_scrape_log()."""
-    conn = _db()
-    if conn is None:
-        return [], None, f'swaps.db not found at {DB_PATH}'
-    try:
-        rows = [dict(r) for r in conn.execute(
-            'SELECT * FROM scrape_log ORDER BY created_at DESC, id DESC LIMIT ?;',
-            (limit,))]
-    except Exception as e:
-        return [], None, f'{type(e).__name__}: {e}'
-    finally:
-        conn.close()
-
-    try:
-        last = SwapsLoader(DB_PATH).get_last_scrape_log()
-    except Exception:
-        last = rows[0] if rows else None
-    return rows, last, None
 
 
 def _orchestrator_runs(limit: int = 20) -> Tuple[List[Dict[str, Any]], Optional[str]]:
@@ -587,23 +523,12 @@ def _live_writer_exited(suite: str) -> bool:
 
 @app.get('/', response_class=HTMLResponse)
 def home(request: Request):
-    stats, stats_error = _database_stats()
-    top_products, top_error = _top_notional()
-    ingestion, ingestion_error = _ingestion_state()
-    scrapes, last_scrape, scrape_error = _scrape_log(limit=8)
     runs, runs_error = _orchestrator_runs(limit=20)
 
     return TEMPLATES.TemplateResponse(request, 'index.html', {
         'active': 'home',
-        'stats': stats,
-        'stats_error': stats_error,
-        'top_products': top_products,
-        'top_error': top_error,
-        'ingestion': ingestion,
-        'ingestion_error': ingestion_error,
-        'scrapes': scrapes,
-        'last_scrape': last_scrape,
-        'scrape_error': scrape_error,
+        'swaps_snapshot': _swaps_snapshot(),
+        'swaps_dashboard_url': SWAPS_DASHBOARD_URL,
         'runs': runs,
         'runs_error': runs_error,
         'run_kinds': RUN_KINDS,
@@ -1694,6 +1619,8 @@ def tools_index(request: Request):
         'tools': TOOLS,
         'contexts': contexts,
         'contexts_error': contexts_error,
+        'swaps_snapshot': _swaps_snapshot(),
+        'swaps_dashboard_url': SWAPS_DASHBOARD_URL,
     })
 
 
