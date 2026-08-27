@@ -14,7 +14,9 @@ bottleneck — the home page's first request is.
 
 Move everything swap-DB-related into its own FastAPI app/process so the main
 dashboard never touches `swaps.db` on the request path that has to respond
-before you see a page.
+before you see a page. While doing this, the nav slot the swap browser used to
+occupy gets repurposed into a live **Chart** tab (embedding the existing native
+chart app) instead of just disappearing.
 
 ## Current state (verified)
 
@@ -36,6 +38,10 @@ before you see a page.
 - Top nav (`dashboard/templates/base.html:205`) has a "Swap trades" tab linking to
   `/swaps`.
 - No port conflict: grepped the repo for 8788/8789/8790 — none in use.
+- `chart_app/server.py` (FastAPI, port 8791) is the existing native chart app,
+  today launched standalone via `chart_app.bat`/`.sh`: starts uvicorn, waits 2s,
+  opens its own browser tab. It has no port-in-use guard (unlike `dashboard.bat`)
+  and sets no framing-blocking headers, so it iframes without changes.
 
 ## Scope
 
@@ -44,11 +50,16 @@ before you see a page.
 - A background snapshot writer inside that app so the main dashboard can show real
   swap headline numbers without ever querying `swaps.db` itself.
 - Main dashboard changes: drop swap routes/imports, replace Overview's swap widgets
-  with a snapshot-backed card, add a matching card to `/tools`, remove the "Swap
-  trades" nav tab.
+  with a snapshot-backed card, add a matching card to `/tools`, and repurpose the
+  old "Swap trades" nav slot into a new **Chart** tab that embeds the existing
+  native chart app (`chart_app/server.py`, port 8791) via iframe.
+- `dashboard.bat` also auto-launches `chart_app`'s uvicorn server (headless, no
+  browser tab of its own) alongside the main dashboard, so the Chart tab has
+  something to embed without a separate manual launch step.
 - Out of scope: changing `swaps_query.py`/`db_loader.py`/schema; auto-launching the
-  new process from the main dashboard (confirmed: static link + status, not
-  subprocess spawn); auth (neither app has any, unchanged from today).
+  *swaps* dashboard process from the main dashboard (confirmed: static link +
+  status, not subprocess spawn — chart_app is the one exception, per below); auth
+  (none of the three apps has any, unchanged from today).
 
 ## Architecture
 
@@ -87,6 +98,23 @@ An `asyncio` background task, started from the app's lifespan handler, that ever
 This file is the *only* thing the main dashboard ever reads for swap data — a plain
 local file read, no DB connection, no query.
 
+### Chart tab (embeds `chart_app`, :8791)
+
+The old "Swap trades" slot in `base.html`'s nav becomes a **Chart** tab, `/chart`,
+rendering a single full-height `<iframe src="http://127.0.0.1:8791/">`. `chart_app`
+is a separate, already-existing FastAPI app (`chart_app/server.py`) with no
+X-Frame-Options/CSP header set, so it iframes cleanly from `127.0.0.1:8787` (same
+host, different port — no cross-origin restriction applies to iframing itself).
+
+`dashboard.bat` is extended to also start `chart_app`'s uvicorn server headlessly
+(background, no browser tab of its own — the existing `chart_app.bat`/`.sh` still
+work standalone and still open their own tab when run directly) alongside the main
+dashboard, guarded by the same "already listening on this port" check `dashboard.bat`
+already uses for 8787, applied to 8791. Because `chart_app`'s own uvicorn start is
+async, the iframe's first paint can briefly race a few hundred ms of startup; the
+`/chart` page reloads the iframe `src` once, 3 seconds after initial load, as a cheap
+one-shot mitigation (not a polling/retry loop).
+
 ### Main dashboard changes (`dashboard/app.py`)
 
 - Delete `/swaps`, `/trades`, `/instruments/{upi}`, `/analytics/*`, the swap-DB
@@ -106,7 +134,8 @@ local file read, no DB connection, no query.
   "live" vs. "last seen" badge on the card without blocking page render — this
   never gates the initial response.
 - Same card (same partial/include) added to `/tools`.
-- `base.html` nav: drop the "Swap trades" tab.
+- New `/chart` route + template (see above); `base.html` nav's "Swap trades" entry
+  becomes "Chart" pointing at `/chart`.
 - `/suites/{suite}`'s `'swaps'` pseudo-suite label handling is untouched — it groups
   output *files*, not this DB browser.
 
@@ -118,9 +147,11 @@ swaps_dashboard.bat (port 8788)
   -> background task every 5 min -> cache/overview_snapshot.json
 
 dashboard.bat (port 8787)
+  -> also starts chart_app's uvicorn headlessly (port 8791), if not already up
   -> dashboard/app.py: home() reads cache/overview_snapshot.json (file read only)
   -> Overview + Tools cards show real numbers + live/stale badge (client JS)
   -> "Open swap browser" link -> http://127.0.0.1:8788/swaps
+  -> new "Chart" tab (/chart) iframes -> http://127.0.0.1:8791/
 ```
 
 ## Error handling
@@ -134,6 +165,13 @@ dashboard.bat (port 8787)
 - Two `swaps_dashboard.bat` instances: same guard pattern as `dashboard.bat` today
   (checks port 8788, offers to open the existing instance instead of double-launching
   against `swaps.db`).
+- `chart_app` already running (e.g. launched standalone via `chart_app.bat` earlier):
+  `dashboard.bat`'s port-8791 check sees it's up and skips starting a second copy.
+- `chart_app` fails to start, or is slow to bind: the main dashboard's own boot is
+  unaffected (it's launched as a background/`start ""` process, not awaited); the
+  `/chart` tab's one-shot 3s iframe reload covers the common "still binding" case,
+  and a hard failure just leaves the iframe showing the browser's own connection
+  error — no crash, no blocked page.
 
 ## Testing
 
@@ -149,4 +187,8 @@ dashboard.bat (port 8787)
   `/trades`, `/instruments/{upi}`, `/analytics/*` behave identically to before the
   split. After `swaps_dashboard.bat` has run once, the Overview card shows real
   numbers on the next `dashboard.bat` launch, live-badge flips correctly when the
-  swaps process is stopped.
+  swaps process is stopped. `dashboard.bat` launch with 8791 cold → Chart tab shows
+  the live chart within a few seconds (via the one-shot reload); with `chart_app`
+  already running standalone → dashboard skips relaunching it and the tab shows the
+  running instance immediately; `chart_app.bat` run directly still opens its own
+  browser tab exactly as it does today.
