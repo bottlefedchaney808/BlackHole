@@ -184,12 +184,26 @@ git commit -m "feat(swaps-dashboard): scaffold new app with a health route"
 - Modify: `swaps_dashboard/tests/test_swaps_routes.py`
 - Delete: `dashboard/templates/swaps.html`
 - Modify: `dashboard/app.py:675-755` (delete the `/swaps` route)
-- Modify: `dashboard/app.py:154-189` (delete `_get_swaps_filter_options` + its cache globals)
-- Modify: `dashboard/app.py:128-134` (delete `_db()` — nothing else in `dashboard/app.py`
-  uses it after this task; if a later step in this task still needs it before Task 3
-  removes the rest, leave it until Task 3 confirms no callers remain)
+- Modify: `dashboard/app.py:137-189` (delete `_get_swaps_filter_options`, its cache
+  globals, and the explanatory comment block above them — CARL R2-F5: an earlier
+  draft's Files list said `154-189`, which excludes the cache globals at 149-151
+  and the comment at 137-148; the Step 3 instructions below already use the
+  correct `137-189`)
 - Modify: `dashboard/tests/test_swaps_options_cache.py` → delete (superseded by the
   moved copy at `swaps_dashboard/tests/test_swaps_options_cache.py`)
+
+**`dashboard/app.py`'s `_db()` (`dashboard/app.py:128-134`) is NOT deleted, ever, by
+this plan.** An earlier draft of Tasks 2-3 assumed it was swap-only and safe to
+remove once the swap routes moved. It is not: `_orchestrator_runs()`
+(`dashboard/app.py:325-356`, feeds the Overview page's "Orchestrator run history"
+panel) and `_lookup_run()` (`dashboard/app.py:815-847`, backs `GET /runs/{run_id}`,
+`GET /runs/{run_id}/summary`, and the dispatch-worker routes) both call `_db()` to
+read the `orchestrator_runs` table, which lives in the same `swaps.db` file but is
+core run-tracking data, not swap-trade data, and is explicitly out of this split's
+scope. `_db()` stays in `dashboard/app.py` permanently as a general "give me a
+connection to the DB at `DB_PATH`" helper — `swaps_dashboard/app.py` getting its own
+separate copy (below) is intentional duplication across two independent processes,
+not a temporary state to converge back to one copy.
 
 **Interfaces:**
 - Consumes (in `swaps_dashboard/app.py`): `swaps_query.SwapsQuery` (`SEARCH_COUNT_CAP`
@@ -202,10 +216,20 @@ git commit -m "feat(swaps-dashboard): scaffold new app with a health route"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `swaps_dashboard/tests/test_swaps_routes.py`:
+Add `import swaps_dashboard.app as swaps_app` to the top of
+`swaps_dashboard/tests/test_swaps_routes.py`, alongside its existing
+`from swaps_dashboard.app import app` line. Then append:
 
 ```python
-def test_swaps_page_launches():
+def test_swaps_page_launches(monkeypatch, tmp_path):
+    # CARL R3-F1: a real swaps.db exists at the default DB_PATH on this
+    # machine (346GB) -- without this monkeypatch, every run of this test
+    # (including every red/green TDD cycle) queries it directly through
+    # _get_swaps_filter_options(), the exact route the code's own comments
+    # call out as the prior 15s-timeout source. Point at a path that can't
+    # exist so the route's "not found" branch fires instead, and this test
+    # verifies routing/rendering only -- live-data behavior is Task 10's job.
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(tmp_path / 'missing.db'))
     r = client.get('/swaps')
     assert r.status_code == 200
     assert 'Swap trades' in r.text
@@ -563,10 +587,10 @@ def swaps(request: Request,
     })
 ```
 
-`import time` and `from typing import Any, Dict` are already present from Task 1's
-`Dict[str, Any]` usage — check the top of `swaps_dashboard/app.py` and only add
-`sqlite3`, `threading`, `time`, `List`, `Optional`, `Tuple`, and the `SwapsQuery`
-import if not already there.
+`from typing import Any, Dict` is already present from Task 1's `Dict[str, Any]`
+usage — do not add it again. `import time` is NOT already present (CARL R2-F9: an
+earlier draft claimed it was); add it fresh alongside `sqlite3`, `threading`,
+`List`, `Optional`, `Tuple`, and the `SwapsQuery` import.
 
 Now delete the `/swaps` route, `_get_swaps_filter_options`, and its cache globals
 from `dashboard/app.py`:
@@ -575,15 +599,18 @@ from `dashboard/app.py`:
   its closing `})`).
 - Delete `dashboard/app.py:137-189` (the `_swaps_options_cache`/`_swaps_options_lock`
   globals and `_get_swaps_filter_options`).
-- Delete `dashboard/app.py:71-72` (`from db_loader import SwapsLoader` and
-  `from swaps_query import SwapsQuery`) — **do not delete yet if `_database_stats()`,
-  `_ingestion_state()`, or `_scrape_log()` still reference them**; those move in
-  Task 3. For this task, only delete the `SwapsQuery` import if nothing else in
-  `dashboard/app.py` uses `SwapsQuery` after removing `/swaps` and
-  `_get_swaps_filter_options` (grep to confirm: `grep -n "SwapsQuery" dashboard/app.py`
-  should show zero remaining hits before deleting the import).
-- Leave `_db()` (`dashboard/app.py:128-134`) in place for now — `_ingestion_state()`
-  and `_scrape_log()` still call it until Task 3.
+- **Do not delete `dashboard/app.py:71-72` (`from db_loader import SwapsLoader` and
+  `from swaps_query import SwapsQuery`) in this task.** `_database_stats()` still
+  calls `SwapsQuery(DB_PATH).get_database_stats()`, and `_ingestion_state()`/
+  `_scrape_log()` still call `SwapsLoader(...)` — none of those three functions are
+  deleted until Task 6. Confirm before moving on:
+  `grep -n "SwapsQuery\|SwapsLoader" dashboard/app.py` should show hits only inside
+  `_database_stats()`, `_ingestion_state()`, and `_scrape_log()` — if it shows any
+  hit inside the `/swaps` route or `_get_swaps_filter_options`, one of those wasn't
+  fully deleted.
+- `_db()` (`dashboard/app.py:128-134`) is never deleted from `dashboard/app.py` at
+  all — see the note above the file list for why (`_orchestrator_runs()` and
+  `_lookup_run()` need it permanently).
 
 Move the swap-options cache test:
 
@@ -591,12 +618,17 @@ Move the swap-options cache test:
 git mv dashboard/tests/test_swaps_options_cache.py swaps_dashboard/tests/test_swaps_options_cache.py
 ```
 
-Edit `swaps_dashboard/tests/test_swaps_options_cache.py`: change
-`import dashboard.app as dashboard_app` to `import swaps_dashboard.app as dashboard_app`
-(keep the local alias `dashboard_app` — it's only a local name, no need to churn the
-rest of the file) and drop the manual `sys.path` insert block (Task 1's `_get_swaps_filter_options`
-import path already covers `pythonpath = ["."]` via `pyproject.toml`, same as every
-other test in the repo) — keep the file otherwise identical.
+Edit `swaps_dashboard/tests/test_swaps_options_cache.py`:
+- Change `import dashboard.app as dashboard_app` to
+  `import swaps_dashboard.app as dashboard_app` (keep the local alias
+  `dashboard_app` — it's only a local name, no need to churn the rest of the file).
+- Drop the manual `sys.path` insert block — `pythonpath = ["."]` in `pyproject.toml`
+  already resolves `swaps_dashboard` from the repo root, same as every other test
+  in the repo; no per-test path manipulation is needed.
+- Update the module docstring's first line, "Covers dashboard.app._get_swaps_filter_options",
+  to "Covers swaps_dashboard.app._get_swaps_filter_options" (CARL R2-F9: an earlier
+  draft left this pointing at the old module).
+- Otherwise keep the file identical.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -615,6 +647,13 @@ git add swaps_dashboard/app.py swaps_dashboard/templates/base.html swaps_dashboa
 git commit -m "feat(swaps-dashboard): move /swaps browse UI out of the main dashboard"
 ```
 
+**Known intermediate state** (CARL R2-F8): from this commit until Task 8 lands, the
+main dashboard's "Swap trades" nav tab (`dashboard/templates/base.html:205`) points
+at `/swaps`, which now 404s on `dashboard/app.py` — it isn't retargeted to `/chart`
+until Task 8. This is expected and fine for a task-by-task implementation run in one
+sitting; if execution is paused for an extended period between Tasks 2 and 8, the
+nav tab is a known dead link in the meantime, not a sign something went wrong.
+
 ---
 
 ### Task 3: Move `/trades`, `/instruments/{upi}`, `/analytics/*` into `swaps_dashboard`
@@ -622,12 +661,14 @@ git commit -m "feat(swaps-dashboard): move /swaps browse UI out of the main dash
 **Files:**
 - Modify: `swaps_dashboard/app.py`
 - Modify: `swaps_dashboard/tests/test_swaps_routes.py`
-- Modify: `dashboard/app.py:2365-2585` (delete these five routes)
+- Modify: `dashboard/app.py:2365-2585` (delete these four routes — `dashboard/app.py`'s
+  own `/health` at line 2586 is separate and NOT touched, see below)
 - Modify: `dashboard/app.py:73` (delete `CrossSourceQueryBuilder`/`get_cross_source_summary`
   import — `get_cross_source_summary` was already unused dead code before this move;
   don't carry it into `swaps_dashboard/app.py` either)
-- Modify: `dashboard/app.py` (delete `_db()` now that nothing in the file calls it —
-  confirm with `grep -n "_db()" dashboard/app.py` before deleting)
+
+**`_db()` is not touched by this task** — see Task 2's note: `_orchestrator_runs()`
+and `_lookup_run()` (both far outside this split's scope) call it permanently.
 
 **Interfaces:**
 - Consumes: `shared.query_builder.CrossSourceQueryBuilder` (`.query_by_sources`,
@@ -638,17 +679,21 @@ git commit -m "feat(swaps-dashboard): move /swaps browse UI out of the main dash
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `swaps_dashboard/tests/test_swaps_routes.py`:
+Append to `swaps_dashboard/tests/test_swaps_routes.py` (the `swaps_app` import
+added in Task 2 already covers these):
 
 ```python
-def test_trades_route_launches():
+def test_trades_route_launches(monkeypatch, tmp_path):
+    # CARL R3-F1: same real-346GB-swaps.db concern as Task 2's /swaps test.
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(tmp_path / 'missing.db'))
     r = client.get('/trades')
     assert r.status_code == 200
     body = r.json()
-    assert 'count' in body or 'error' in body
+    assert 'error' in body
 
 
-def test_analytics_timeseries_route_launches():
+def test_analytics_timeseries_route_launches(monkeypatch, tmp_path):
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(tmp_path / 'missing.db'))
     r = client.get('/analytics/timeseries')
     assert r.status_code == 200
 ```
@@ -893,19 +938,26 @@ def timeseries_by_source(
         return {'error': f'{type(e).__name__}: {e}'}
 ```
 
-Delete `dashboard/app.py:2365-2585` (the five routes: `/trades`, `/instruments/{upi}`,
-`/analytics/cross-source-notional`, `/analytics/timeseries`, and the blank line before
-`/health`).
+Delete `dashboard/app.py:2365-2585` (the four routes — `/trades`, `/instruments/{upi}`,
+`/analytics/cross-source-notional`, `/analytics/timeseries` — plus the blank line
+before `/health`). **`dashboard/app.py`'s own `/health` at line 2586 is NOT deleted
+or moved** (CARL R2-F6: an earlier draft's "the five routes" phrasing, combined
+with the design spec listing `/health` among the routes moved "verbatim", could
+read as including it). `swaps_dashboard` gets its own, separate `/health` route,
+already added in Task 1.
 
 Delete `dashboard/app.py:73` (`from shared.query_builder import CrossSourceQueryBuilder, get_cross_source_summary`).
 
-Confirm no remaining callers, then delete `_db()`:
+Do **not** delete `_db()` — confirm it's still needed by non-swap code:
 
 ```bash
 grep -n "_db()" dashboard/app.py
 ```
 
-Expected: no matches. Then delete `dashboard/app.py:128-134` (the `_db()` function).
+Expected: matches inside `_ingestion_state()`, `_scrape_log()` (both still present,
+deleted in Task 6), `_orchestrator_runs()`, and `_lookup_run()` (both permanent). If
+this shows zero matches, something upstream deleted `_db()` prematurely — stop and
+investigate before continuing.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -925,79 +977,7 @@ git commit -m "feat(swaps-dashboard): move /trades, /instruments, /analytics out
 
 ---
 
-### Task 4: Regression guard — main dashboard no longer imports swap-DB modules at module scope
-
-**Files:**
-- Create: `dashboard/tests/test_no_swaps_imports.py`
-
-**Interfaces:**
-- None (test-only task; nothing new is produced for later tasks to consume).
-
-- [ ] **Step 1: Write the failing test**
-
-```python
-# dashboard/tests/test_no_swaps_imports.py
-"""Regression guard for the swaps-dashboard split
-(docs/superpowers/specs/2026-08-27-swaps-dashboard-split-design.md).
-
-dashboard/app.py must never import swaps_query, db_loader, or
-shared.query_builder at module scope again -- that's exactly what made
-home() slow (the queries themselves were route-scoped, but the split's whole
-point is that this file has zero swap-DB code path left to regress into).
-"""
-import ast
-from pathlib import Path
-
-import pytest
-
-pytestmark = pytest.mark.unit
-
-APP_PY = Path(__file__).resolve().parent.parent / 'app.py'
-FORBIDDEN_MODULES = {'swaps_query', 'db_loader', 'shared.query_builder'}
-
-
-def _imported_module_names(tree: ast.Module):
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                names.add(alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            names.add(node.module)
-    return names
-
-
-def test_dashboard_app_does_not_import_swap_db_modules():
-    tree = ast.parse(APP_PY.read_text(encoding='utf-8'))
-    imported = _imported_module_names(tree)
-    overlap = imported & FORBIDDEN_MODULES
-    assert not overlap, f'dashboard/app.py imports swap-DB modules: {overlap}'
-```
-
-- [ ] **Step 2: Run test to verify it fails or passes**
-
-Run: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest dashboard/tests/test_no_swaps_imports.py -q`
-Expected: PASS already (Tasks 2-3 removed these imports) — this step is a
-verification, not a red/green cycle; if it fails, Task 2 or 3 left a stray import
-behind and must be fixed before continuing.
-
-- [ ] **Step 3: N/A — implementation already done in Tasks 2-3**
-
-- [ ] **Step 4: Re-run to confirm**
-
-Run: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest dashboard/tests/test_no_swaps_imports.py -q`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add dashboard/tests/test_no_swaps_imports.py
-git commit -m "test(dashboard): guard against swap-DB imports creeping back into app.py"
-```
-
----
-
-### Task 5: Snapshot writer in `swaps_dashboard`
+### Task 4: Snapshot writer in `swaps_dashboard`
 
 **Files:**
 - Modify: `swaps_dashboard/app.py`
@@ -1005,15 +985,22 @@ git commit -m "test(dashboard): guard against swap-DB imports creeping back into
 - Modify: `.gitignore`
 
 **Interfaces:**
-- Consumes: `orchestrator.get_recent_swap_activity(limit: int) -> List[Dict[str, Any]]`.
+- Consumes: `orchestrator.get_recent_swap_activity(limit: int) -> List[Dict[str, Any]]`,
+  `db_loader.SwapsLoader(db_path).get_state(regulator, asset_class) -> Optional[Dict[str, Any]]`.
 - Produces: `swaps_dashboard.app.SNAPSHOT_PATH` (str, absolute path to
   `swaps_dashboard/cache/overview_snapshot.json`), `swaps_dashboard.app._build_snapshot() -> Dict[str, Any]`
   with keys `generated_at` (str, `YYYY-MM-DDTHH:MM:SSZ`), `stats` (dict from
   `SwapsQuery.get_database_stats()` or the empty shell below), `stats_error`
   (`Optional[str]`), `top_products` (`List[Dict[str, Any]]`, capped at 5),
-  `top_error` (`Optional[str]`), `last_scrape` (`Optional[Dict[str, Any]]`),
-  `scrape_error` (`Optional[str]`), `swaps_dashboard.app._write_snapshot() -> None`
-  (writes `SNAPSHOT_PATH` atomically).
+  `top_error` (`Optional[str]`), `ingestion` (`List[Dict[str, Any]]`, one row per
+  regulator/asset_class pair), `ingestion_error` (`Optional[str]`), `last_scrape`
+  (`Optional[Dict[str, Any]]`), `scrape_error` (`Optional[str]`),
+  `swaps_dashboard.app._write_snapshot() -> None` (writes `SNAPSHOT_PATH` atomically).
+  This mirrors the design spec's snapshot schema exactly
+  (`docs/superpowers/specs/2026-08-27-swaps-dashboard-split-design.md`'s "Snapshot
+  writer" section names `ingestion` as one of the four queries carried into the
+  snapshot — an earlier draft of this task dropped it; CARL R1-F1 caught the
+  drift and this is the corrected version).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1035,6 +1022,10 @@ pytestmark = pytest.mark.unit
 
 def test_build_snapshot_degrades_gracefully_with_no_db(monkeypatch):
     monkeypatch.setattr(swaps_app, 'DB_PATH', '/nonexistent/swaps.db')
+    # _top_notional() calls orchestrator.get_recent_swap_activity(), which reads
+    # orchestrator's OWN module-level DB_PATH, not swaps_app.DB_PATH -- patching
+    # only the latter leaves this call hitting the real swaps.db (CARL R2-F3).
+    monkeypatch.setattr(swaps_app.orchestrator, 'get_recent_swap_activity', lambda limit=15: [])
     snapshot = swaps_app._build_snapshot()
     assert snapshot['stats'] == {
         'total_records': 0, 'unique_upis': 0, 'by_regulator_asset_class': [],
@@ -1042,6 +1033,8 @@ def test_build_snapshot_degrades_gracefully_with_no_db(monkeypatch):
     }
     assert snapshot['stats_error'] is not None
     assert snapshot['top_products'] == []
+    assert snapshot['ingestion'] == []
+    assert snapshot['ingestion_error'] is not None
     assert snapshot['last_scrape'] is None
     assert 'generated_at' in snapshot
 
@@ -1051,6 +1044,7 @@ def test_write_snapshot_writes_valid_json(tmp_path, monkeypatch):
     monkeypatch.setattr(swaps_app, 'SNAPSHOT_PATH', str(target))
     monkeypatch.setattr(swaps_app, 'SNAPSHOT_DIR', str(tmp_path / 'cache'))
     monkeypatch.setattr(swaps_app, 'DB_PATH', '/nonexistent/swaps.db')
+    monkeypatch.setattr(swaps_app.orchestrator, 'get_recent_swap_activity', lambda limit=15: [])
 
     swaps_app._write_snapshot()
 
@@ -1064,6 +1058,9 @@ def test_write_snapshot_caps_top_products_at_five(tmp_path, monkeypatch):
     target = tmp_path / 'cache' / 'overview_snapshot.json'
     monkeypatch.setattr(swaps_app, 'SNAPSHOT_PATH', str(target))
     monkeypatch.setattr(swaps_app, 'SNAPSHOT_DIR', str(tmp_path / 'cache'))
+    # _database_stats()/_ingestion_state()/_scrape_log() all key off swaps_app.DB_PATH
+    # directly -- must be patched here too, or they hit the real swaps.db (CARL R2-F3).
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(tmp_path / 'missing.db'))
     monkeypatch.setattr(
         swaps_app.orchestrator, 'get_recent_swap_activity',
         lambda limit=15: [{'product': f'p{i}', 'total_notional': i, 'trade_count': 1} for i in range(20)],
@@ -1073,7 +1070,56 @@ def test_write_snapshot_caps_top_products_at_five(tmp_path, monkeypatch):
 
     data = json.loads(target.read_text(encoding='utf-8'))
     assert len(data['top_products']) == 5
+
+
+def test_write_snapshot_includes_ingestion_rows(tmp_path, monkeypatch):
+    """Regression test for CARL R1-F1: an earlier draft of this task dropped
+    ingestion state from the snapshot entirely, contradicting the design
+    spec's documented schema."""
+    db_path = tmp_path / 'swaps.db'
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('CREATE TABLE ingestion_state (regulator TEXT, asset_class TEXT, '
+                 'last_cumulative_date TEXT, last_live_slice_id INTEGER, updated_at TEXT)')
+    conn.execute("INSERT INTO ingestion_state VALUES ('SEC', 'EQ', '2026-08-20', 4, '2026-08-27T10:00:00Z')")
+    conn.commit()
+    conn.close()
+
+    target = tmp_path / 'cache' / 'overview_snapshot.json'
+    monkeypatch.setattr(swaps_app, 'SNAPSHOT_PATH', str(target))
+    monkeypatch.setattr(swaps_app, 'SNAPSHOT_DIR', str(tmp_path / 'cache'))
+    monkeypatch.setattr(swaps_app, 'DB_PATH', str(db_path))
+    monkeypatch.setattr(
+        swaps_app, 'SwapsLoader',
+        lambda db: type('_L', (), {'get_state': staticmethod(
+            lambda regulator, asset_class: {
+                'regulator': regulator, 'asset_class': asset_class,
+                'last_cumulative_date': '2026-08-20', 'last_live_slice_id': 4,
+                'updated_at': '2026-08-27T10:00:00Z',
+            })})(),
+    )
+    monkeypatch.setattr(swaps_app.orchestrator, 'get_recent_swap_activity', lambda limit=15: [])
+
+    swaps_app._write_snapshot()
+
+    data = json.loads(target.read_text(encoding='utf-8'))
+    assert data['ingestion'] == [{
+        'regulator': 'SEC', 'asset_class': 'EQ',
+        'last_cumulative_date': '2026-08-20', 'last_live_slice_id': 4,
+        'updated_at': '2026-08-27T10:00:00Z',
+    }]
 ```
+
+Add `import sqlite3` to the top of this test file alongside `import json`.
+
+**No test in this file may leave `swaps_app.DB_PATH` *or* `swaps_app.orchestrator.DB_PATH`
+pointing at the real database.** `_top_notional()` goes through
+`orchestrator.get_recent_swap_activity()`, which reads `orchestrator`'s own
+module-level `DB_PATH` global, not `swaps_app.DB_PATH` — the two are independent
+names even though `swaps_app.DB_PATH = orchestrator.DB_PATH` at import time (that's
+a one-time value copy, not a live alias). Every test above patches
+`swaps_app.orchestrator.get_recent_swap_activity` directly for exactly this reason
+(CARL R2-F3: an earlier draft only patched `swaps_app.DB_PATH`, which left three of
+these four tests silently querying the real 342GB `swaps.db`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1082,11 +1128,13 @@ Expected: FAIL (`AttributeError: module 'swaps_dashboard.app' has no attribute '
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to the **end** of `swaps_dashboard/app.py` (after Task 3's routes):
+Add to the **end** of `swaps_dashboard/app.py` (after Task 3's routes). **Do not
+include `contextlib` in this block** — it's added separately below, at the top of
+the file, because it's needed by a decorator evaluated at that earlier point in the
+module, not just inside a function body like these four:
 
 ```python
 import asyncio
-import contextlib
 import json
 import logging
 import tempfile
@@ -1118,8 +1166,56 @@ def _top_notional() -> Tuple[List[Dict[str, Any]], Optional[str]]:
         return [], f'{type(e).__name__}: {e}'
 
 
-def _scrape_log(limit: int = 8) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """SwapsLoader.get_last_scrape_log(), or None plus the error text."""
+def _ingestion_state() -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """One row per (regulator, asset_class) via SwapsLoader.get_state.
+
+    Moved from dashboard/app.py's _ingestion_state() (dashboard/app.py:274-301)
+    unchanged -- it's the only remaining visibility into whether the DTCC live
+    poller (run_scheduler.bat) is advancing per regulator/asset_class pair, so
+    it belongs in the snapshot even though the Overview card only surfaces a
+    summary of it (design spec's documented schema includes the full list;
+    CARL R1-F1 caught this being dropped from an earlier draft of this task).
+    """
+    conn = _db()
+    if conn is None:
+        return [], f'swaps.db not found at {DB_PATH}'
+    try:
+        pairs = [(r['regulator'], r['asset_class']) for r in conn.execute(
+            'SELECT regulator, asset_class FROM ingestion_state '
+            'ORDER BY regulator, asset_class;')]
+    except Exception as e:
+        return [], f'{type(e).__name__}: {e}'
+    finally:
+        conn.close()
+
+    loader = SwapsLoader(DB_PATH)
+    rows: List[Dict[str, Any]] = []
+    for regulator, asset_class in pairs:
+        try:
+            state = loader.get_state(regulator, asset_class)
+        except Exception:
+            state = None
+        if state:
+            rows.append(state)
+    return rows, None
+
+
+def _scrape_log() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """SwapsLoader.get_last_scrape_log(), or None plus the error text.
+
+    This is a deliberately narrower version of dashboard/app.py's original
+    _scrape_log(limit=8) (dashboard/app.py:304-322), which also returned the
+    last N raw scrape_log rows for a full-history table. That table isn't
+    reconstructed anywhere after the split -- it was part of the Overview
+    widget set the user explicitly approved consolidating into one lightweight
+    card (see design spec's "Overview page" brainstorming decision), and the
+    card only ever needed the single latest entry, same as the original
+    "Last scrape" card widget did. If a full scrape-log history view turns out
+    to be wanted later, it belongs as a small new route in swaps_dashboard,
+    not smuggled back into this helper. No `limit` parameter here (CARL R2-F10:
+    an earlier draft kept `limit: int = 8` as a vestige of the original
+    signature even though this version's body never reads it).
+    """
     if not os.path.exists(DB_PATH):
         return None, f'swaps.db not found at {DB_PATH}'
     try:
@@ -1131,6 +1227,7 @@ def _scrape_log(limit: int = 8) -> Tuple[Optional[Dict[str, Any]], Optional[str]
 def _build_snapshot() -> Dict[str, Any]:
     stats, stats_error = _database_stats()
     top_products, top_error = _top_notional()
+    ingestion, ingestion_error = _ingestion_state()
     last_scrape, scrape_error = _scrape_log()
     return {
         'generated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -1138,6 +1235,8 @@ def _build_snapshot() -> Dict[str, Any]:
         'stats_error': stats_error,
         'top_products': top_products[:5],
         'top_error': top_error,
+        'ingestion': ingestion,
+        'ingestion_error': ingestion_error,
         'last_scrape': last_scrape,
         'scrape_error': scrape_error,
     }
@@ -1180,6 +1279,9 @@ app = FastAPI(title='Swaps Dashboard')
 with:
 
 ```python
+import contextlib  # noqa: E402  (mid-file import, same convention Task 1's bootstrap already uses)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     task = asyncio.create_task(_snapshot_loop())
@@ -1201,6 +1303,14 @@ not when it's defined, and by then the whole module has finished importing. The
 routes appended later by Tasks 2-3 still correctly bind to this same `app` object,
 since they're decorated after this line has already executed.
 
+**The `@contextlib.asynccontextmanager` decorator is different from that forward
+reference** (CARL R2-F1): a decorator expression runs immediately, at its own line,
+not at call time — so `contextlib` must already be imported by the time this edit's
+line executes, which is why `import contextlib` is added right here rather than in
+the bulk `import asyncio` / `json` / `logging` / `tempfile` block earlier in this
+task (those four are only ever referenced inside function bodies, which *are*
+resolved at call time, so appending them near the bottom of the file is fine).
+
 Add to `.gitignore` (near the existing `.cache/`/`.shared_cache/` entries):
 
 ```
@@ -1221,7 +1331,7 @@ git commit -m "feat(swaps-dashboard): write an overview snapshot every 5 minutes
 
 ---
 
-### Task 6: `swaps_dashboard.bat` / `.sh` launchers
+### Task 5: `swaps_dashboard.bat` / `.sh` launchers
 
 **Files:**
 - Create: `swaps_dashboard.bat`
@@ -1373,13 +1483,19 @@ git commit -m "feat(swaps-dashboard): add swaps_dashboard.bat/.sh launchers"
 
 ---
 
-### Task 7: Overview + Tools card reading the snapshot file
+### Task 6: Overview + Tools card reading the snapshot file
 
 **Files:**
-- Modify: `dashboard/app.py` (add `_swaps_snapshot()`, update `home()` and `tools_index()`)
+- Modify: `dashboard/app.py` (add `_swaps_snapshot()`, update `home()` and
+  `tools_index()`, delete `_database_stats()`/`_top_notional()`/`_ingestion_state()`/
+  `_scrape_log()` and the now-dead `dashboard/app.py:71-72` `SwapsLoader`/`SwapsQuery`
+  imports, update the module docstring)
 - Create: `dashboard/templates/_swap_card.html`
-- Modify: `dashboard/templates/index.html` (replace the four swap widgets with the include)
+- Modify: `dashboard/templates/index.html` (replace the four swap widgets with the
+  include, preserving the non-swap "Orchestrator runs" card in the same `cards` block)
 - Modify: `dashboard/templates/tools_index.html` (add the include)
+- Modify: `dashboard/README.md` (remove the stale `GET /swaps` row and the Overview
+  row's swap-DB description)
 - Create: `dashboard/tests/test_swap_card.py`
 
 **Interfaces:**
@@ -1431,6 +1547,9 @@ def test_home_page_renders_without_snapshot(monkeypatch, tmp_path):
     r = client.get('/')
     assert r.status_code == 200
     assert "hasn't been launched yet" in r.text
+    # Regression test for CARL R2-F4: the non-swap "Orchestrator runs" card must
+    # survive the template edit that removed the swap-only cards around it.
+    assert 'Orchestrator runs' in r.text
 
 
 def test_tools_page_includes_swap_card(monkeypatch, tmp_path):
@@ -1438,6 +1557,25 @@ def test_tools_page_includes_swap_card(monkeypatch, tmp_path):
     r = client.get('/tools')
     assert r.status_code == 200
     assert 'swapLiveBadge' in r.text
+
+
+def test_home_page_shows_ingestion_pill_from_snapshot(monkeypatch, tmp_path):
+    """Regression test for CARL R1-F1: the snapshot's ingestion rows must
+    actually render, not just exist in the JSON."""
+    snapshot_path = tmp_path / 'overview_snapshot.json'
+    payload = {
+        'generated_at': '2026-08-27T12:00:00Z',
+        'stats': {'total_records': 5, 'unique_upis': 2, 'by_regulator_asset_class': [],
+                   'earliest_date': None, 'latest_date': None},
+        'stats_error': None, 'top_products': [], 'top_error': None,
+        'ingestion': [{'regulator': 'SEC', 'asset_class': 'EQ', 'last_cumulative_date': '2026-08-20'}],
+        'ingestion_error': None, 'last_scrape': None, 'scrape_error': None,
+    }
+    snapshot_path.write_text(json.dumps(payload), encoding='utf-8')
+    monkeypatch.setattr(dashboard_app, 'SWAPS_DASHBOARD_SNAPSHOT_PATH', str(snapshot_path))
+    r = client.get('/')
+    assert r.status_code == 200
+    assert 'SEC/EQ' in r.text
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1447,11 +1585,11 @@ Expected: FAIL (`AttributeError: module 'dashboard.app' has no attribute '_swaps
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `dashboard/app.py`, near the top-level constants (after `DB_PATH = orchestrator.DB_PATH`):
+Add to `dashboard/app.py`, near the top-level constants (after `DB_PATH = orchestrator.DB_PATH`).
+`dashboard/app.py:32` already has `import json` at module scope (CARL R1-F2 caught
+an earlier draft re-importing it here) — do not add it again, just use it:
 
 ```python
-import json
-
 SWAPS_DASHBOARD_URL = 'http://127.0.0.1:8788'
 SWAPS_DASHBOARD_SNAPSHOT_PATH = os.path.join(ROOT, 'swaps_dashboard', 'cache', 'overview_snapshot.json')
 
@@ -1512,7 +1650,23 @@ Delete `_database_stats()`, `_top_notional()`, `_ingestion_state()`, `_scrape_lo
 from `dashboard/app.py:247-323` — nothing calls them after the `home()` rewrite
 above.
 
-Create `dashboard/templates/_swap_card.html`:
+Delete `dashboard/app.py:71-72` (`from db_loader import SwapsLoader`,
+`from swaps_query import SwapsQuery`) — with the four functions above gone, nothing
+in `dashboard/app.py` references either symbol any more (CARL R2-F2: an earlier
+draft of this task deleted the functions but left these two now-dead imports
+behind, which would have made Task 7's regression guard fail). Confirm:
+
+```bash
+grep -n "SwapsQuery\|SwapsLoader" dashboard/app.py
+```
+
+Expected: no hits outside the module docstring's mention of them (which this same
+task's docstring update, below, also removes).
+
+Create `dashboard/templates/_swap_card.html`. Note it surfaces `stats_error`,
+`top_error`, and `scrape_error` as error boxes, not just `ingestion_error` (CARL
+R2-F10: an earlier draft only surfaced the ingestion error, silently swallowing the
+other three even though the original Overview widgets each showed their own error):
 
 ```html
 <div class="panel" id="swapCard">
@@ -1522,6 +1676,9 @@ Create `dashboard/templates/_swap_card.html`:
   </header>
   <div class="body">
     {% if swaps_snapshot %}
+    {% if swaps_snapshot.stats_error %}<div class="errbox">database stats: {{ swaps_snapshot.stats_error }}</div>{% endif %}
+    {% if swaps_snapshot.top_error %}<div class="errbox">top notional: {{ swaps_snapshot.top_error }}</div>{% endif %}
+    {% if swaps_snapshot.scrape_error %}<div class="errbox">scrape log: {{ swaps_snapshot.scrape_error }}</div>{% endif %}
     <div class="cards">
       <div class="card">
         <div class="k">Swap trades</div>
@@ -1575,6 +1732,16 @@ Create `dashboard/templates/_swap_card.html`:
       </tbody>
     </table>
     {% endif %}
+    {% if swaps_snapshot.ingestion %}
+    <p class="small muted" style="margin:12px 0 0;">
+      ingestion:
+      {% for s in swaps_snapshot.ingestion %}
+        <span class="pill plain">{{ s.regulator }}/{{ s.asset_class }} &middot; {{ s.last_cumulative_date or '--' }}</span>
+      {% endfor %}
+    </p>
+    {% elif swaps_snapshot.ingestion_error %}
+    <p class="small muted" style="margin:12px 0 0;">ingestion: {{ swaps_snapshot.ingestion_error }}</p>
+    {% endif %}
     <p class="small muted" style="margin:12px 0 0;">
       snapshot generated {{ swaps_snapshot.generated_at | ts }}
       &middot; <a href="{{ swaps_dashboard_url }}/swaps" target="_blank">Open swap browser &rarr;</a>
@@ -1610,23 +1777,44 @@ Create `dashboard/templates/_swap_card.html`:
 </script>
 ```
 
-Edit `dashboard/templates/index.html`: replace the `<div class="cards" ...>...</div>`
-block (lines 14-50) plus the `stats_error` line above it (line 12), and the entire
-"Top notional products" / "Records by regulator / asset class" `grid2` block
-(lines 150-202), and the "Ingestion state" panel (lines 205-233), and the "Scrape
-log" panel (lines 236-269), with a single include:
+Edit `dashboard/templates/index.html`. **Careful: the `<div class="cards" ...>`
+block (lines 14-50) is not purely swap data** — its last card (lines 45-49,
+"Orchestrator runs", `{{ runs | length }}`) has nothing to do with the swaps split
+and must survive (CARL R2-F4: an earlier draft of this task deleted it along with
+the swap cards, silently breaking an unrelated, working Overview widget). Delete
+only lines 14-44 (the four swap-data cards: "Swap trades", "Unique UPIs",
+"Date range", "Last scrape") plus the `stats_error` line above the block (line 12),
+leaving the `<div class="cards" ...>` wrapper and its "Orchestrator runs" card
+(lines 45-49) in place. Also delete the entire "Top notional products" /
+"Records by regulator / asset class" `grid2` block (lines 150-202), the "Ingestion
+state" panel (lines 205-233), and the "Scrape log" panel (lines 236-269). Add the
+include immediately after the (now-shorter) `<div class="cards">...</div>` block:
 
 ```html
 {% include "_swap_card.html" %}
 ```
 
-Placed where the old `<div class="cards" ...>` block was (right after the
-`{{ db_path }}`/`{{ shared_python }}` `<p class="sub">`), and again nowhere else —
-delete the four listed blocks entirely rather than leaving empty panels behind.
-
 Edit `dashboard/templates/tools_index.html`: add `{% include "_swap_card.html" %}`
 right after the closing `</div>` of the "How to use this" panel (after line 27),
 before the "Installed tools" panel.
+
+Update `dashboard/app.py`'s module docstring (`dashboard/app.py:1-25`, the
+`"""dashboard/app.py -- ..."""` block): it currently claims this file's
+"swap data" and "ingestion state" bullet points route through `swaps_query.SwapsQuery`
+and `db_loader.SwapsLoader` (CARL R1-F4 caught this going stale) — those
+responsibilities no longer live here after Tasks 2, 3, and this task. Rewrite those
+two bullets to instead say swap data now lives entirely in `swaps_dashboard/app.py`
+(port 8788), and this file only reads its periodic JSON snapshot via
+`_swaps_snapshot()`.
+
+Update `dashboard/README.md` (CARL R2-F7: the same staleness as the docstring above,
+one file over). Line 42's `GET /` row currently says "Overview: swap DB stats, top
+notional products, ingestion state, scrape log, last 20 `orchestrator_runs`, and the
+run trigger form." — trim it to "Overview: a snapshot-backed swap summary card, last
+20 `orchestrator_runs`, and the run trigger form." Delete line 43's `GET /swaps` row
+entirely (that route no longer exists on this app) and add a row pointing at the new
+app: `| (swaps_dashboard) | Standalone swap browser + JSON API, port 8788 — see
+swaps_dashboard.bat. |`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1636,8 +1824,88 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add dashboard/app.py dashboard/templates/_swap_card.html dashboard/templates/index.html dashboard/templates/tools_index.html dashboard/tests/test_swap_card.py
+git add dashboard/app.py dashboard/templates/_swap_card.html dashboard/templates/index.html dashboard/templates/tools_index.html dashboard/README.md dashboard/tests/test_swap_card.py
 git commit -m "feat(dashboard): show a snapshot-backed swap card on Overview and Tools"
+```
+
+---
+
+### Task 7: Regression guard — main dashboard no longer imports swap-DB modules at module scope
+
+This task must run after Task 6, not earlier: `_database_stats()`, `_ingestion_state()`,
+and `_scrape_log()` (which import `swaps_query`/`db_loader`) stay in `dashboard/app.py`
+until Task 6 deletes them — an earlier draft of this plan placed this guard right
+after Task 3 and it would have failed immediately, since those three functions (and
+their imports) are still present at that point.
+
+**Files:**
+- Create: `dashboard/tests/test_no_swaps_imports.py`
+
+**Interfaces:**
+- None (test-only task; nothing new is produced for later tasks to consume).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# dashboard/tests/test_no_swaps_imports.py
+"""Regression guard for the swaps-dashboard split
+(docs/superpowers/specs/2026-08-27-swaps-dashboard-split-design.md).
+
+dashboard/app.py must never import swaps_query, db_loader, or
+shared.query_builder at module scope again -- that's exactly what made
+home() slow (the queries themselves were route-scoped, but the split's whole
+point is that this file has zero swap-DB code path left to regress into).
+"""
+import ast
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+APP_PY = Path(__file__).resolve().parent.parent / 'app.py'
+FORBIDDEN_MODULES = {'swaps_query', 'db_loader', 'shared.query_builder'}
+
+
+def _imported_module_names(tree: ast.Module):
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
+
+
+def test_dashboard_app_does_not_import_swap_db_modules():
+    tree = ast.parse(APP_PY.read_text(encoding='utf-8'))
+    imported = _imported_module_names(tree)
+    overlap = imported & FORBIDDEN_MODULES
+    assert not overlap, f'dashboard/app.py imports swap-DB modules: {overlap}'
+```
+
+- [ ] **Step 2: Run test to verify it fails or passes**
+
+Run: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest dashboard/tests/test_no_swaps_imports.py -q`
+Expected: PASS already (Tasks 2, 3, and 6 removed these imports) — this step is a
+verification, not a red/green cycle; if it fails, one of those tasks left a stray
+import behind and must be fixed before continuing. Note `_db()` itself is
+*expected* to remain (see Task 2/3's notes) — this test only forbids the
+`swaps_query`/`db_loader`/`shared.query_builder` module imports, not `_db()`.
+
+- [ ] **Step 3: N/A — implementation already done in Tasks 2, 3, and 6**
+
+- [ ] **Step 4: Re-run to confirm**
+
+Run: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest dashboard/tests/test_no_swaps_imports.py -q`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add dashboard/tests/test_no_swaps_imports.py
+git commit -m "test(dashboard): guard against swap-DB imports creeping back into app.py"
 ```
 
 ---
