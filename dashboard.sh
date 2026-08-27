@@ -56,6 +56,17 @@ if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
     exit 0
 fi
 
+# Also make sure the native chart app (chart_app, :8791) is up, since the
+# Chart tab iframes it -- headless (no browser tab of its own; the
+# dashboard's Chart tab is the tab that shows it). chart_app.sh run directly
+# still opens its own tab exactly as it does today.
+if ! (exec 3<>"/dev/tcp/127.0.0.1/8791") 2>/dev/null; then
+    "$VENV_PYTHON" -m uvicorn chart_app.server:app --host 127.0.0.1 --port 8791 >/dev/null 2>&1 &
+else
+    exec 3<&- 2>/dev/null || true
+    exec 3>&- 2>/dev/null || true
+fi
+
 # Give uvicorn a couple seconds to bind before opening the browser tab,
 # so it doesn't load before anything is listening.
 ( sleep 2; open_url ) &

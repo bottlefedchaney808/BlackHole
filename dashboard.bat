@@ -36,6 +36,14 @@ if not errorlevel 1 (
     pause
     exit /b 0
 )
+REM Also make sure the native chart app (chart_app, :8791) is up, since the
+REM Chart tab iframes it -- headless (no browser tab of its own; the
+REM dashboard's Chart tab is the tab that shows it). chart_app.bat run
+REM directly still opens its own tab exactly as it does today.
+netstat -ano | findstr /C:"127.0.0.1:8791" | findstr "LISTENING" >nul
+if errorlevel 1 (
+    start "" /min cmd /c ".venv\Scripts\python.exe -m uvicorn chart_app.server:app --host 127.0.0.1 --port 8791"
+)
 REM Give uvicorn a couple seconds to bind before opening the browser tab,
 REM so it doesn't load before anything is listening.
 start "" cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:8787"
