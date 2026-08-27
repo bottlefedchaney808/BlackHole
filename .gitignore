@@ -25,6 +25,7 @@ tradingview-mcp/screenshots/
 .shared_cache/
 .pytest_cache/
 .scheduler.lock/
+swaps_dashboard/cache/
 
 # Logs
 *.log

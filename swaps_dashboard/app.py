@@ -39,7 +39,19 @@ DB_PATH = orchestrator.DB_PATH
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(SWAPS_DASHBOARD_DIR, 'templates'))
 
-app = FastAPI(title='Swaps Dashboard')
+import contextlib  # noqa: E402  (mid-file import, same convention Task 1's bootstrap already uses)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    task = asyncio.create_task(_snapshot_loop())
+    yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+app = FastAPI(title='Swaps Dashboard', lifespan=_lifespan)
 
 
 @app.get('/health')
@@ -57,6 +69,7 @@ import time
 from typing import List, Optional, Tuple
 
 from swaps_query import SwapsQuery  # noqa: E402
+from db_loader import SwapsLoader  # noqa: E402
 
 
 def _fmt_num(value: Any) -> str:
@@ -445,3 +458,140 @@ def timeseries_by_source(
         }
     except Exception as e:
         return {'error': f'{type(e).__name__}: {e}'}
+
+
+# --------------------------------------------------------------------------
+# background overview snapshot writer
+# --------------------------------------------------------------------------
+import asyncio
+import json
+import logging
+import tempfile
+
+SNAPSHOT_DIR = os.path.join(SWAPS_DASHBOARD_DIR, 'cache')
+SNAPSHOT_PATH = os.path.join(SNAPSHOT_DIR, 'overview_snapshot.json')
+_SNAPSHOT_INTERVAL_SEC = 300
+
+
+def _database_stats() -> Tuple[Dict[str, Any], Optional[str]]:
+    """SwapsQuery.get_database_stats(), or an empty shell plus the error text."""
+    empty = {
+        'total_records': 0, 'unique_upis': 0, 'by_regulator_asset_class': [],
+        'earliest_date': None, 'latest_date': None,
+    }
+    if not os.path.exists(DB_PATH):
+        return empty, f'swaps.db not found at {DB_PATH}'
+    try:
+        return SwapsQuery(DB_PATH).get_database_stats(), None
+    except Exception as e:
+        return empty, f'{type(e).__name__}: {e}'
+
+
+def _top_notional() -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Top notional products for the most recent effective_date present."""
+    try:
+        return orchestrator.get_recent_swap_activity(limit=15), None
+    except Exception as e:
+        return [], f'{type(e).__name__}: {e}'
+
+
+def _ingestion_state() -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """One row per (regulator, asset_class) via SwapsLoader.get_state.
+
+    Moved from dashboard/app.py's _ingestion_state() (dashboard/app.py:274-301)
+    unchanged -- it's the only remaining visibility into whether the DTCC live
+    poller (run_scheduler.bat) is advancing per regulator/asset_class pair, so
+    it belongs in the snapshot even though the Overview card only surfaces a
+    summary of it (design spec's documented schema includes the full list;
+    CARL R1-F1 caught this being dropped from an earlier draft of this task).
+    """
+    conn = _db()
+    if conn is None:
+        return [], f'swaps.db not found at {DB_PATH}'
+    try:
+        pairs = [(r['regulator'], r['asset_class']) for r in conn.execute(
+            'SELECT regulator, asset_class FROM ingestion_state '
+            'ORDER BY regulator, asset_class;')]
+    except Exception as e:
+        return [], f'{type(e).__name__}: {e}'
+    finally:
+        conn.close()
+
+    loader = SwapsLoader(DB_PATH)
+    rows: List[Dict[str, Any]] = []
+    for regulator, asset_class in pairs:
+        try:
+            state = loader.get_state(regulator, asset_class)
+        except Exception:
+            state = None
+        if state:
+            rows.append(state)
+    return rows, None
+
+
+def _scrape_log() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """SwapsLoader.get_last_scrape_log(), or None plus the error text.
+
+    This is a deliberately narrower version of dashboard/app.py's original
+    _scrape_log(limit=8) (dashboard/app.py:304-322), which also returned the
+    last N raw scrape_log rows for a full-history table. That table isn't
+    reconstructed anywhere after the split -- it was part of the Overview
+    widget set the user explicitly approved consolidating into one lightweight
+    card (see design spec's "Overview page" brainstorming decision), and the
+    card only ever needed the single latest entry, same as the original
+    "Last scrape" card widget did. If a full scrape-log history view turns out
+    to be wanted later, it belongs as a small new route in swaps_dashboard,
+    not smuggled back into this helper. No `limit` parameter here (CARL R2-F10:
+    an earlier draft kept `limit: int = 8` as a vestige of the original
+    signature even though this version's body never reads it).
+    """
+    if not os.path.exists(DB_PATH):
+        return None, f'swaps.db not found at {DB_PATH}'
+    try:
+        return SwapsLoader(DB_PATH).get_last_scrape_log(), None
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
+
+
+def _build_snapshot() -> Dict[str, Any]:
+    stats, stats_error = _database_stats()
+    top_products, top_error = _top_notional()
+    ingestion, ingestion_error = _ingestion_state()
+    last_scrape, scrape_error = _scrape_log()
+    return {
+        'generated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'stats': stats,
+        'stats_error': stats_error,
+        'top_products': top_products[:5],
+        'top_error': top_error,
+        'ingestion': ingestion,
+        'ingestion_error': ingestion_error,
+        'last_scrape': last_scrape,
+        'scrape_error': scrape_error,
+    }
+
+
+def _write_snapshot() -> None:
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    snapshot = _build_snapshot()
+    fd, tmp_path = tempfile.mkstemp(dir=SNAPSHOT_DIR, prefix='.overview_snapshot_', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f)
+        os.replace(tmp_path, SNAPSHOT_PATH)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+_logger = logging.getLogger('swaps_dashboard')
+
+
+async def _snapshot_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(_write_snapshot)
+        except Exception as e:
+            _logger.warning('snapshot write failed: %s', e)
+        await asyncio.sleep(_SNAPSHOT_INTERVAL_SEC)
