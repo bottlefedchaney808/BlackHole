@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Chart -- FinancialDevelopment Dashboard{% endblock %}
+
+{% block content %}
+<h1>Chart</h1>
+<p class="sub">Live native chart app at <code>{{ chart_app_url }}</code></p>
+<iframe
+  src="{{ chart_app_url }}"
+  id="chartFrame"
+  style="width:100%; height:calc(100vh - 160px); border:1px solid var(--border); border-radius:12px; background:var(--panel);"
+></iframe>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// chart_app's own uvicorn start (kicked off headlessly by dashboard.bat) is
+// async and can still be binding when this page first paints -- one-shot
+// reload, not a polling loop, covers the common "still starting" case.
+setTimeout(function () {
+  var f = document.getElementById('chartFrame');
+  if (f) f.src = f.src;
+}, 3000);
+</script>
+{% endblock %}

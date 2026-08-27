@@ -96,6 +96,7 @@ SUITE_ROOTS = orchestrator.SUITE_ROOTS
 
 SWAPS_DASHBOARD_URL = 'http://127.0.0.1:8788'
 SWAPS_DASHBOARD_SNAPSHOT_PATH = os.path.join(ROOT, 'swaps_dashboard', 'cache', 'overview_snapshot.json')
+CHART_APP_URL = 'http://127.0.0.1:8791'
 
 
 def _swaps_snapshot() -> Optional[Dict[str, Any]]:
@@ -537,6 +538,14 @@ def home(request: Request):
         'shared_python': orchestrator.SHARED_PYTHON,
         'shared_python_ok': os.path.exists(orchestrator.SHARED_PYTHON),
         'suites': SUITE_LABELS,
+    })
+
+
+@app.get('/chart', response_class=HTMLResponse)
+def chart(request: Request):
+    return TEMPLATES.TemplateResponse(request, 'chart.html', {
+        'active': 'chart',
+        'chart_app_url': CHART_APP_URL,
     })
 
 
