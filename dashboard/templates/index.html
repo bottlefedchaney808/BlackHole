@@ -4,9 +4,9 @@
 {% block content %}
 <h1>Overview</h1>
 <p class="sub">
-  swaps.db at <code>{{ db_path }}</code>
-  &middot; children launched with <code>{{ shared_python }}</code>
-  {% if not shared_python_ok %}<span class="pill error">interpreter missing</span>{% endif %}
+  Widgets home &middot; run-triggering lives on <a href="/quant">Quant Console</a> now,
+  swap data lives on its own <a href="{{ swaps_dashboard_url }}" target="_blank">swaps dashboard</a>.
+  This page is read-only status widgets -- more coming.
 </p>
 
 <div class="cards" style="margin-bottom:18px;">
@@ -17,219 +17,142 @@
   </div>
 </div>
 
-{% include "_swap_card.html" %}
-
 <!-- ------------------------------------------------------------------ -->
-<div class="panel">
-  <header>
-    <h2>Trigger a run</h2>
-    <span class="note">
-      run_suite / run_unified via BackgroundTasks &middot; per-child timeout
-      {{ default_timeout }}s &middot; returns a run_id immediately, then polls /runs/{run_id}
-    </span>
-  </header>
-  <div class="body">
-    <form class="runform" id="runform" onsubmit="return false;">
-      <div class="field">
-        <label for="ticker">Ticker</label>
-        <input id="ticker" name="ticker" placeholder="NVDA" size="9" autocomplete="off" required>
-      </div>
-      <div class="field">
-        <label for="strike">Strike (optional)</label>
-        <input id="strike" name="strike" placeholder="ATM" size="9" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="expiry">Expiry (optional)</label>
-        <input id="expiry" name="expiry" placeholder="YYYY-MM-DD" size="12" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="option_type">Type</label>
-        <select id="option_type" name="option_type">
-          <option value="call">call</option>
-          <option value="put">put</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="target">Target years</label>
-        <input id="target" name="target_years" value="0.25" size="6" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="varhorizon">VaR horizon (days)</label>
-        <input id="varhorizon" name="var_horizon_days" value="" size="6" placeholder="1" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="kind">Target</label>
-        <select id="kind">
-          <option value="unified">unified (sentiment &rarr; vol &rarr; options + var)</option>
-          {% for k in run_kinds if k != 'unified' %}
-          <option value="{{ k }}">suite: {{ k }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <button id="runbtn" type="button" onclick="startRun()">Start run</button>
-      <button class="ghost" type="button" onclick="location.reload()">Refresh page</button>
-    </form>
-
-    <div id="runpanel" style="display:none; margin-top:16px;">
-      <div class="kv" id="runmeta"></div>
-      <pre class="json" id="runjson" style="margin-top:12px; display:none;"></pre>
+<div class="widget-grid">
+  <div class="panel widget" id="positionsWidget">
+    <header>
+      <h2>Positions</h2>
+      <span class="note">Robinhood accounts A &amp; B &middot; pushed by a scheduled agent every 15-30 min</span>
+    </header>
+    <div class="body">
+      <div id="positionsStalePill" style="margin-bottom:10px;"></div>
+      <div id="positionsContent"><div class="empty">No positions synced yet.</div></div>
     </div>
-    <p class="small muted" style="margin:14px 0 0;">
-      Expiry wins over target years. A unified run can take ~30 minutes -- leave
-      this page open to keep polling, or reload later and read the row in the
-      run history below (that row is the durable record).
-    </p>
   </div>
-</div>
 
-<!-- ------------------------------------------------------------------ -->
-<div class="panel">
-  <header>
-    <h2>Orchestrator run history</h2>
-    <span class="note">last 20 rows of orchestrator_runs &middot; <code>dashboard:*</code> rows are triggered here, <code>suite:*</code> / <code>unified</code> rows are written by orchestrator.log_run</span>
-  </header>
-  {% if runs_error %}<div class="body"><div class="errbox">{{ runs_error }}</div></div>
-  {% elif not runs %}<div class="body"><div class="empty">No orchestrator runs logged yet.</div></div>
-  {% else %}
-  <div class="tablewrap">
-    <table>
-      <thead><tr>
-        <th class="num">id</th><th>run_type</th><th>ticker</th><th>focus</th>
-        <th>started</th><th>completed</th><th>status</th><th>result</th>
-      </tr></thead>
-      <tbody>
-      {% for r in runs %}
-        <tr>
-          <td class="num">{{ r.id }}</td>
-          <td class="mono small">{{ r.run_type }}</td>
-          <td><strong>{{ r.ticker }}</strong></td>
-          <td class="small muted">{{ r.focus_summary }}</td>
-          <td class="small mono">{{ r.started_at | ts }}</td>
-          <td class="small mono">{{ r.completed_at | ts }}</td>
-          <td><span class="pill {{ (r.status or 'plain') | lower }}">{{ r.status or '--' }}</span></td>
-          <td><a href="/runs/{{ r.id }}" target="_blank">JSON</a></td>
-        </tr>
+  <div class="panel widget">
+    <header>
+      <h2>Orchestrator run history</h2>
+      <span class="note">last 20 rows &middot; trigger new runs from <a href="/quant">Quant Console</a></span>
+    </header>
+    {% if runs_error %}<div class="body"><div class="errbox">{{ runs_error }}</div></div>
+    {% elif not runs %}<div class="body"><div class="empty">No orchestrator runs logged yet.</div></div>
+    {% else %}
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th class="num">id</th><th>run_type</th><th>ticker</th><th>focus</th>
+          <th>started</th><th>completed</th><th>status</th><th>result</th>
+        </tr></thead>
+        <tbody>
+        {% for r in runs %}
+          <tr>
+            <td class="num">{{ r.id }}</td>
+            <td class="mono small">{{ r.run_type }}</td>
+            <td><strong>{{ r.ticker }}</strong></td>
+            <td class="small muted">{{ r.focus_summary }}</td>
+            <td class="small mono">{{ r.started_at | ts }}</td>
+            <td class="small mono">{{ r.completed_at | ts }}</td>
+            <td><span class="pill {{ (r.status or 'plain') | lower }}">{{ r.status or '--' }}</span></td>
+            <td><a href="/runs/{{ r.id }}" target="_blank">JSON</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="panel widget">
+    <header><h2>Latest suite output</h2><span class="note">jump to a suite's Output tab</span></header>
+    <div class="body">
+      {% for key, label in suites.items() %}
+        <a href="/suites/{{ key }}" class="pill plain" style="margin-right:8px;">{{ label }}</a>
       {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-</div>
-
-<!-- ------------------------------------------------------------------ -->
-<div class="panel">
-  <header><h2>Latest suite output</h2><span class="note">jump to a suite's Output tab</span></header>
-  <div class="body">
-    {% for key, label in suites.items() %}
-      <a href="/suites/{{ key }}" class="pill plain" style="margin-right:8px;">{{ label }}</a>
-    {% endfor %}
+    </div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Poll /runs/{run_id} while a background orchestrator run is in flight.
-// No framework, no CDN -- this has to work with the machine offline.
-var pollTimer = null;
+// Positions widget (widget 1) -- polls the cache-only /api/widgets/positions
+// endpoint; a scheduled agent job is the only thing that ever writes to it
+// (see POST /api/widgets/positions), this page only reads.
+var POSITIONS_STALE_MS = 45 * 60 * 1000;
 
-function esc(s) {
+function escPositions(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
     return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
   });
 }
 
-function pillFor(status) {
-  var cls = (status || 'plain').toLowerCase();
-  if (['ok', 'partial', 'running', 'queued', 'error', 'timeout', 'failed'].indexOf(cls) < 0) cls = 'plain';
-  return '<span class="pill ' + cls + '">' + esc(status || '--') + '</span>';
+function fmtPositionsMoney(v) {
+  if (v === null || v === undefined) return '--';
+  var n = Number(v);
+  if (Number.isNaN(n)) return '--';
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
 }
 
-function renderRun(data) {
-  var meta = document.getElementById('runmeta');
-  var rows = [
-    ['run_id', esc(data.run_id)],
-    ['target', esc(data.kind || data.run_type || '--')],
-    ['status', pillFor(data.status)],
-    ['queued', esc(data.queued_at || '--')],
-    ['started', esc(data.started_at || '--')],
-    ['completed', esc(data.completed_at || '--')],
-    ['output_dir', esc(data.output_dir || (data.result && data.result.output_dir) || '--')],
-    ['durable row', '<a href="/runs/' + esc(data.run_id) + '" target="_blank">/runs/' + esc(data.run_id) + '</a>']
-  ];
-  meta.innerHTML = rows.map(function (r) {
-    return '<div>' + r[0] + '</div><div class="val">' + r[1] + '</div>';
-  }).join('');
+function renderPositions(data) {
+  var content = document.getElementById('positionsContent');
+  var pillHost = document.getElementById('positionsStalePill');
+  var positions = (data.payload && data.payload.positions) || [];
+  var accounts = (data.payload && data.payload.accounts) || [];
 
-  var pre = document.getElementById('runjson');
-  if (data.result) {
-    pre.style.display = 'block';
-    pre.textContent = JSON.stringify(data.result, null, 2);
+  var ageMs = Date.now() - new Date(data.computed_at).getTime();
+  pillHost.innerHTML = ageMs > POSITIONS_STALE_MS
+    ? '<span class="pill error">stale since ' + escPositions(data.computed_at) + '</span>'
+    : '<span class="pill ok">synced ' + escPositions(data.computed_at) + '</span>';
+
+  if (!positions.length) {
+    content.innerHTML = '<div class="empty">No open positions.</div>';
+    return;
   }
-}
 
-function poll(runId) {
-  fetch('/runs/' + encodeURIComponent(runId))
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      renderRun(data);
-      if (data.done) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        document.getElementById('runbtn').disabled = false;
-        document.getElementById('runbtn').textContent = 'Start run';
-      }
-    })
-    .catch(function (e) { console.error('poll failed', e); });
-}
+  var byAccount = {};
+  positions.forEach(function (p) {
+    var acct = p.account || '?';
+    (byAccount[acct] = byAccount[acct] || []).push(p);
+  });
 
-function startRun() {
-  var btn = document.getElementById('runbtn');
-  var ticker = document.getElementById('ticker').value.trim();
-  if (!ticker) { document.getElementById('ticker').focus(); return; }
-
-  var body = {
-    ticker: ticker,
-    strike: document.getElementById('strike').value.trim(),
-    expiry: document.getElementById('expiry').value.trim(),
-    option_type: document.getElementById('option_type').value,
-    target_years: document.getElementById('target').value.trim(),
-    var_horizon_days: document.getElementById('varhorizon').value.trim()
-  };
-  var kind = document.getElementById('kind').value;
-
-  btn.disabled = true;
-  btn.textContent = 'Starting...';
-  document.getElementById('runpanel').style.display = 'block';
-  document.getElementById('runjson').style.display = 'none';
-  document.getElementById('runmeta').innerHTML = '<div>status</div><div class="val">submitting...</div>';
-
-  fetch('/run/' + encodeURIComponent(kind), {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  })
-    .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, body: j}; }); })
-    .then(function (res) {
-      if (!res.ok) {
-        document.getElementById('runmeta').innerHTML =
-          '<div>error</div><div class="val">' + esc(res.body.error || 'request failed') + '</div>';
-        btn.disabled = false;
-        btn.textContent = 'Start run';
-        return;
-      }
-      btn.textContent = 'Running...';
-      renderRun(res.body);
-      if (pollTimer) clearInterval(pollTimer);
-      poll(res.body.run_id);
-      pollTimer = setInterval(function () { poll(res.body.run_id); }, 4000);
-    })
-    .catch(function (e) {
-      document.getElementById('runmeta').innerHTML =
-        '<div>error</div><div class="val">' + esc(e) + '</div>';
-      btn.disabled = false;
-      btn.textContent = 'Start run';
+  var html = '';
+  Object.keys(byAccount).sort().forEach(function (acct) {
+    var summary = accounts.filter(function (a) { return a.account === acct; })[0];
+    html += '<h3 class="small muted" style="margin:10px 0 4px;">Account ' + escPositions(acct) +
+      (summary && summary.total_value != null
+        ? ' &middot; ' + fmtPositionsMoney(summary.total_value) + ' total'
+        : '') +
+      '</h3>';
+    html += '<div class="tablewrap"><table><thead><tr>' +
+      '<th>ticker</th><th>type</th><th class="num">qty</th><th class="num">avg price</th>' +
+      '<th class="num">current</th><th class="num">value</th><th class="num">unrealized P&amp;L</th>' +
+      '</tr></thead><tbody>';
+    byAccount[acct].forEach(function (p) {
+      var pl = p.unrealized_pl;
+      var plCls = (pl || 0) < 0 ? 'error' : 'ok';
+      html += '<tr><td><strong>' + escPositions(p.ticker) + '</strong></td>' +
+        '<td class="small muted">' + escPositions(p.instrument_type) + '</td>' +
+        '<td class="num">' + escPositions(p.qty) + '</td>' +
+        '<td class="num">' + fmtPositionsMoney(p.avg_price) + '</td>' +
+        '<td class="num">' + fmtPositionsMoney(p.current_price) + '</td>' +
+        '<td class="num">' + fmtPositionsMoney(p.market_value) + '</td>' +
+        '<td class="num"><span class="pill ' + plCls + '">' + fmtPositionsMoney(pl) + '</span></td>' +
+        '</tr>';
     });
+    html += '</tbody></table></div>';
+  });
+  content.innerHTML = html;
 }
+
+function pollPositions() {
+  fetch('/api/widgets/positions')
+    .then(function (r) { return r.status === 404 ? null : r.json(); })
+    .then(function (data) { if (data) renderPositions(data); })
+    .catch(function (e) { console.error('positions widget poll failed', e); });
+}
+
+pollPositions();
+setInterval(pollPositions, 45000);
 </script>
 {% endblock %}
