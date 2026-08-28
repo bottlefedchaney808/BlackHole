@@ -17,6 +17,28 @@ from pathlib import Path
 from typing import Any
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively replace NaN/Infinity/-Infinity with None.
+
+    Python's json.dumps happily writes these as the (non-standard) literals
+    NaN/Infinity/-Infinity by default, so a widget payload containing one
+    (real financial calcs produce these -- e.g. an undefined ratio) writes
+    to the cache without error. But Starlette's JSONResponse renders with
+    allow_nan=False, so GET /api/widgets/{id} 500s the moment it tries to
+    serialize that value back out over HTTP. Sanitizing at write time keeps
+    the cache itself valid JSON and pushes the failure mode from "500 on
+    read" to "null in the payload," which every widget's frontend already
+    treats as a normal missing-value case.
+    """
+    if isinstance(obj, float):
+        return None if (obj != obj or obj in (float("inf"), float("-inf"))) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
+
+
 class WidgetCache:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
@@ -48,7 +70,12 @@ class WidgetCache:
                     status = excluded.status,
                     computed_at = excluded.computed_at
                 """,
-                (widget_id, json.dumps(payload), status, computed_at),
+                (
+                    widget_id,
+                    json.dumps(_sanitize_for_json(payload)),
+                    status,
+                    computed_at,
+                ),
             )
 
     def get(self, widget_id: str) -> dict[str, Any] | None:
