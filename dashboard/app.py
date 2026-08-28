@@ -327,6 +327,7 @@ def _widget_position_analysis_tick() -> None:
     one row per position) is correct here even though a ticker could have
     multiple option legs.
     """
+    from shared.summary import _bundle_distribution
     from Tools.tools import hedge_optimizer_tool, price_dist_tool
 
     cached = _widget_cache().get("positions")
@@ -349,9 +350,11 @@ def _widget_position_analysis_tick() -> None:
             entry["hedge_error"] = f"{type(exc).__name__}: {exc}"
         for mode in ("price_dist", "mc_sim", "corr_sim"):
             try:
-                entry[mode] = price_dist_tool.run(
+                sim_result = price_dist_tool.run(
                     {"ticker": ticker, "focus": {"ticker": ticker}, "mode": mode}
                 )
+                entry[mode] = sim_result
+                entry[f"{mode}_distribution"] = _bundle_distribution(mode, sim_result)
             except Exception as exc:
                 entry[f"{mode}_error"] = f"{type(exc).__name__}: {exc}"
         rows.append(entry)

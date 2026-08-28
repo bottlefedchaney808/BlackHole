@@ -142,6 +142,53 @@ def test_position_analysis_tick_dedupes_tickers_and_runs_all_modes(
     assert entry["price_dist"]["mode"] == "price_dist"
     assert entry["mc_sim"]["mode"] == "mc_sim"
     assert entry["corr_sim"]["mode"] == "corr_sim"
+    # bins=[] carries no terminal_price_histogram -- _bundle_distribution
+    # correctly reports "no usable histogram" rather than fabricating one.
+    assert entry["price_dist_distribution"] is None
+
+
+def test_position_analysis_tick_bundles_chartable_distribution(monkeypatch, tmp_path):
+    monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
+    dashboard_app._widget_cache().set(
+        "positions",
+        {"positions": [{"account": "A", "ticker": "AEO"}], "accounts": []},
+        status="ok",
+    )
+
+    from Tools.tools import hedge_optimizer_tool, price_dist_tool
+
+    monkeypatch.setattr(
+        hedge_optimizer_tool, "run", lambda context: {"mode": "options_hedge"}
+    )
+
+    def fake_sim_run(context):
+        return {
+            "mode": context["mode"],
+            "histogram_unit": "price",
+            "terminal_price_histogram": [
+                {"low": 10.0, "high": 12.0, "count": 3},
+                {"low": 12.0, "high": 14.0, "count": 7},
+            ],
+            "terminal_price_p5": 10.5,
+            "terminal_price_median": 12.5,
+            "terminal_price_p95": 13.8,
+        }
+
+    monkeypatch.setattr(price_dist_tool, "run", fake_sim_run)
+
+    dashboard_app._widget_position_analysis_tick()
+
+    entry = dashboard_app._widget_cache().get("position_analysis")["payload"][
+        "positions"
+    ][0]
+    dist = entry["price_dist_distribution"]
+    assert dist["label"] == "price_dist"
+    assert dist["unit"] == "price"
+    assert dist["bins"] == [
+        {"low": 10.0, "high": 12.0, "count": 3},
+        {"low": 12.0, "high": 14.0, "count": 7},
+    ]
+    assert dist["percentiles"] == {"p5": 10.5, "p50": 12.5, "p95": 13.8}
 
 
 def test_position_analysis_tick_records_per_call_errors(monkeypatch, tmp_path):
