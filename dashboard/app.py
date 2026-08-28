@@ -91,6 +91,37 @@ from shared.summary import build_run_summary
 from Tools.context_loader import list_available_contexts, load_context
 from Tools.registry import TOOLS, get_tool
 
+
+def _ensure_vol_suite_expiry_selector() -> None:
+    """Vol_Suite/expiry_selector.py and Options_Suite/expiry_selector.py share
+    a bare module name. Tools/tools/surface_explorer_tool.py's sys.path
+    insertion order (Vol_Suite, then Options_Suite, then repo root -- each
+    inserted at position 0, imported transitively by the Tools.registry
+    import above) leaves Options_Suite ahead of Vol_Suite, so a bare
+    `import expiry_selector` from Vol_Suite/variance_swap_screener.py (used
+    by widget 2's background job) can silently resolve to Options_Suite's
+    version instead and crash on a missing attribute (DEFAULT_A). Pre-load
+    Vol_Suite's copy into sys.modules under the bare name here, once, at
+    this module's own import time -- before anything else (including this
+    file's own tests) can trigger the ambiguous import first.
+    """
+    import importlib.util
+
+    vol_suite_root = os.path.join(ROOT, "Vol_Suite")
+    existing = sys.modules.get("expiry_selector")
+    existing_file = getattr(existing, "__file__", None)
+    if existing_file and os.path.dirname(existing_file) == vol_suite_root:
+        return
+    spec = importlib.util.spec_from_file_location(
+        "expiry_selector", os.path.join(vol_suite_root, "expiry_selector.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["expiry_selector"] = module
+    spec.loader.exec_module(module)
+
+
+_ensure_vol_suite_expiry_selector()
+
 # Setup structured JSON logging
 logger = setup_logging(
     name="dashboard",
@@ -107,6 +138,28 @@ SWAPS_DASHBOARD_SNAPSHOT_PATH = os.path.join(
 )
 CHART_APP_URL = "http://127.0.0.1:8791"
 WIDGET_CACHE_PATH = os.path.join(ROOT, "artifacts", "widget_cache.db")
+WIDGET_SURFACES_OUTPUT_DIR = os.path.join(ROOT, "artifacts", "widget_surfaces")
+
+# Widget 2's watchlist -- plain list, easy to extend (per Jason: "make it
+# easy to add to").
+OVERVIEW_WATCHLIST = ["SPX", "NDAQ"]
+
+# Background widget jobs are opt-in (default off) -- widgets 2-4 make real,
+# billed ThetaData calls (screener + hedge-optimizer greeks + 3 VaR sims per
+# held ticker + 3 matplotlib surface renders), unlike widget 1 (agent-pushed,
+# no backend network calls at all) or chart_app's cheap bar refresh. Set
+# DASHBOARD_WIDGET_JOBS_ENABLED=1 to turn them on for a real launch; tests
+# never set this, so TestClient(app) never triggers network calls.
+WIDGET_JOBS_ENABLED = os.environ.get("DASHBOARD_WIDGET_JOBS_ENABLED") == "1"
+WIDGET_SIGNALS_INTERVAL_SEC = float(
+    os.environ.get("WIDGET_SIGNALS_INTERVAL_SEC", "600")
+)
+WIDGET_POSITION_ANALYSIS_INTERVAL_SEC = float(
+    os.environ.get("WIDGET_POSITION_ANALYSIS_INTERVAL_SEC", "2400")
+)
+WIDGET_SURFACES_INTERVAL_SEC = float(
+    os.environ.get("WIDGET_SURFACES_INTERVAL_SEC", "2400")
+)
 
 
 def _swaps_snapshot() -> dict[str, Any] | None:
@@ -128,11 +181,39 @@ TEMPLATES = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, "templates"))
 tunnel_manager = TunnelManager()
 
 
+_WIDGET_JOB_TASKS: list[asyncio.Task] = []
+
+
+async def _widget_job_loop(tick_fn, interval_sec: float) -> None:
+    loop = asyncio.get_event_loop()
+    while True:
+        try:
+            await loop.run_in_executor(None, tick_fn)
+        except Exception:
+            pass  # tick_fn already writes status="ok"/"error" per-widget; a
+            # loop-level exception here is only possible from a bug in the
+            # tick function itself, not a data-source failure -- don't kill
+            # the loop over it, just skip this tick and retry next interval.
+        await asyncio.sleep(interval_sec)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
+    if WIDGET_JOBS_ENABLED:
+        for tick_fn, interval_sec in (
+            (_widget_signals_tick, WIDGET_SIGNALS_INTERVAL_SEC),
+            (_widget_position_analysis_tick, WIDGET_POSITION_ANALYSIS_INTERVAL_SEC),
+            (_widget_surfaces_tick, WIDGET_SURFACES_INTERVAL_SEC),
+        ):
+            _WIDGET_JOB_TASKS.append(
+                asyncio.create_task(_widget_job_loop(tick_fn, interval_sec))
+            )
     yield
     # Best-effort cleanup so a tunnel never outlives the dashboard process.
     await tunnel_manager.shutdown()
+    for task in _WIDGET_JOB_TASKS:
+        task.cancel()
+    _WIDGET_JOB_TASKS.clear()
 
 
 app = FastAPI(title="FinancialDevelopment Dashboard", lifespan=_lifespan)
@@ -171,6 +252,153 @@ def _widget_cache() -> WidgetCache:
     same convention as _db() reading DB_PATH, so tests can monkeypatch the
     module-level constant instead of a captured value."""
     return WidgetCache(WIDGET_CACHE_PATH)
+
+
+# --------------------------------------------------------------------------
+# Background widget jobs (widgets 2-4) -- each writes one widget_cache row.
+# All three are synchronous/blocking (real ThetaData calls); the asyncio
+# loops below run them via run_in_executor. Widget 1 (positions) has no job
+# here -- it's written by POST /api/widgets/positions, called by a scheduled
+# agent, not computed in-process.
+# --------------------------------------------------------------------------
+
+
+def _widget_signals_tick() -> None:
+    """Widget 2: a per-ticker screener read (Vol_Suite's variance-swap
+    screener), not full dealer positioning -- _run_production_dealer_positioning
+    makes 5-8+ ThetaData calls per ticker (spot, two option chains, OI,
+    session trades, 10d history) and needs a pre-resolved expiry, too heavy
+    for a periodic Overview poll. screen_ticker is self-contained and cheap
+    by comparison. IV rank has no implementation anywhere in this repo (only
+    Robinhood's own scanner has it, which would reopen the same agent-push
+    problem widget 1 has) -- vrp_pct/score/data_quality substitute for it.
+    """
+    from variance_swap_screener import screen_ticker  # flat import; Vol_Suite is
+    # already on sys.path by the time this runs (Tools.registry, imported at
+    # module load, imports surface_explorer_tool, which inserts it), and
+    # _ensure_vol_suite_expiry_selector() (called at this module's import
+    # time, below) has already fixed the expiry_selector name collision this
+    # module's own bare import would otherwise hit.
+
+    rows: list[dict[str, Any]] = []
+    for ticker in OVERVIEW_WATCHLIST:
+        try:
+            result = screen_ticker(ticker, 0.25)
+        except Exception as exc:
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "signal": "ERROR",
+                    "score": None,
+                    "vrp_pct": None,
+                    "data_quality": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+        if result is None:
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "signal": "NO DATA",
+                    "score": None,
+                    "vrp_pct": None,
+                    "data_quality": "no spot price",
+                }
+            )
+            continue
+        rows.append(
+            {
+                "ticker": ticker,
+                "signal": result.signal,
+                "score": result.score,
+                "vrp_pct": result.vrp_pct,
+                "data_quality": result.data_quality,
+            }
+        )
+    _widget_cache().set("signals", {"tickers": rows}, status="ok")
+
+
+def _widget_position_analysis_tick() -> None:
+    """Widget 3: for each distinct ticker in widget 1's cached position list,
+    run the hedge optimizer and the 3 sim modes price_dist_tool actually
+    wires (price_dist, mc_sim, corr_sim) -- hist_sim isn't exposed through
+    Tools/ yet (see docs/superpowers/specs/2026-08-28-overview-widgets-design.md).
+    Sims are per-underlying, not per-contract, so distinct-ticker dedup (not
+    one row per position) is correct here even though a ticker could have
+    multiple option legs.
+    """
+    from Tools.tools import hedge_optimizer_tool, price_dist_tool
+
+    cached = _widget_cache().get("positions")
+    positions = (cached.get("payload") or {}).get("positions") or [] if cached else []
+    if not positions:
+        _widget_cache().set(
+            "position_analysis", {"positions": []}, status="no_positions"
+        )
+        return
+
+    tickers = sorted({p.get("ticker") for p in positions if p.get("ticker")})
+    rows: list[dict[str, Any]] = []
+    for ticker in tickers:
+        entry: dict[str, Any] = {"ticker": ticker}
+        try:
+            entry["hedge"] = hedge_optimizer_tool.run(
+                {"mode": "options_hedge", "ticker": ticker, "focus": {"ticker": ticker}}
+            )
+        except Exception as exc:
+            entry["hedge_error"] = f"{type(exc).__name__}: {exc}"
+        for mode in ("price_dist", "mc_sim", "corr_sim"):
+            try:
+                entry[mode] = price_dist_tool.run(
+                    {"ticker": ticker, "focus": {"ticker": ticker}, "mode": mode}
+                )
+            except Exception as exc:
+                entry[f"{mode}_error"] = f"{type(exc).__name__}: {exc}"
+        rows.append(entry)
+    _widget_cache().set("position_analysis", {"positions": rows}, status="ok")
+
+
+def _widget_surfaces_tick() -> None:
+    """Widget 4: IV, Vanna, Charm surfaces on SPX, dark-themed, base64-encoded
+    into the cache payload (small enough at one ticker / three PNGs -- no
+    need for a separate asset store)."""
+    import base64
+
+    from Tools.tools import surface_explorer_tool
+
+    ticker = "SPX"
+    specs = (
+        ("iv", {"mode": "iv_surface_market"}),
+        ("vanna", {"mode": "greek_surface", "greek": "vanna"}),
+        ("charm", {"mode": "greek_surface", "greek": "charm"}),
+    )
+    surfaces: dict[str, Any] = {}
+    for key, extra in specs:
+        context = {
+            "focus": {"ticker": ticker},
+            "dark_theme": True,
+            "output_dir": WIDGET_SURFACES_OUTPUT_DIR,
+            **extra,
+        }
+        try:
+            result = surface_explorer_tool.run(context)
+        except Exception as exc:
+            surfaces[key] = {
+                "image_b64": None,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            continue
+        chart_path = result.get("chart_path")
+        if chart_path and os.path.exists(chart_path):
+            with open(chart_path, "rb") as f:
+                image_b64 = base64.b64encode(f.read()).decode("ascii")
+            surfaces[key] = {"image_b64": image_b64, "status": "ok"}
+        else:
+            surfaces[key] = {"image_b64": None, "status": "no_chart"}
+    _widget_cache().set(
+        "surfaces", {"ticker": ticker, "surfaces": surfaces}, status="ok"
+    )
 
 
 def _fmt_num(value: Any) -> str:
