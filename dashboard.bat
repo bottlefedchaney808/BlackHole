@@ -4,6 +4,11 @@ REM and opens it in your default browser. Binds to localhost only.
 cd /d "%~dp0"
 set PYTHONPATH=
 set PYTHONHOME=
+REM Overview widgets 2-4 (vol/quant signals, per-position analysis, surface
+REM showcase) make real ThetaData calls on their own background cadence --
+REM on by default here since a yearly ThetaData strip has no marginal
+REM per-call cost. Set to 0 before launching to disable.
+if not defined DASHBOARD_WIDGET_JOBS_ENABLED set DASHBOARD_WIDGET_JOBS_ENABLED=1
 if not exist ".venv\Scripts\python.exe" (
     echo Shared .venv not found at %~dp0.venv — run: python -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
     echo.

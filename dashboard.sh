@@ -13,6 +13,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$SCRIPT_DIR"
 unset PYTHONPATH
 unset PYTHONHOME
+# Overview widgets 2-4 (vol/quant signals, per-position analysis, surface
+# showcase) make real ThetaData calls on their own background cadence -- on
+# by default here since a yearly ThetaData strip has no marginal per-call
+# cost. Set to 0 before launching to disable.
+export DASHBOARD_WIDGET_JOBS_ENABLED="${DASHBOARD_WIDGET_JOBS_ENABLED:-1}"
 
 VENV_PYTHON=""
 for candidate in "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/.venv/bin/python"; do
