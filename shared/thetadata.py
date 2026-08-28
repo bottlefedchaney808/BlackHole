@@ -36,11 +36,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any
 
 import httpx
 import numpy as _np
-
 from potatohedge.client_v2 import PHClient
 from potatohedge.config import ClientConfig, Credential
 from potatohedge.errors import PHClientError
@@ -88,6 +87,7 @@ def _as_of_date(as_of):
 # v2 transport shims
 # ---------------------------------------------------------------------------
 
+
 class _Credential(Credential):
     pass
 
@@ -101,6 +101,7 @@ def _freeze_to_python(obj):
     dicts/lists so downstream callers see the same shapes they got from
     httpx.Response.json()."""
     from collections.abc import Mapping
+
     if isinstance(obj, Mapping):
         return {k: _freeze_to_python(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -151,6 +152,14 @@ def _map_ph_error(exc: PHClientError):
     mapped.status_code = exc.status or 500
     return mapped
 
+
+# Cash index roots -- these have no equity listing, so the stock-quote
+# endpoints ThetaDataController otherwise routes everything through always
+# come back empty/erroring for one. fetch_spot_price checks this set first
+# and routes to the dedicated index endpoints (index_snapshot_quote /
+# hist_index_eod) instead. Not exhaustive -- add a root here if a caller
+# needs another CBOE-style cash index that isn't listed yet.
+_INDEX_ROOTS = frozenset({"SPX", "SPXW", "NDX", "VIX", "RUT", "DJX", "XSP", "OEX"})
 
 _PATH_ALIASES = {
     # exact match first
@@ -216,6 +225,8 @@ _PATH_ALIASES = {
     "/api/theta/hist/stock/eod/{root}": ("market", "stock_eod", {}),
     "/api/theta/hist/stock/ohlc/{ticker}": ("market", "stock_ohlc", {}),
     "/api/theta/hist/stock/ohlc/{root}": ("market", "stock_ohlc", {}),
+    "/api/theta/snapshot/index/price/{root}": ("market", "last_index_price", {}),
+    "/api/theta/hist/index/eod/{root}": ("market", "index_eod", {}),
     "/api/theta/list/expirations/{root}": ("options", "options_chain", {}),
     "/api/theta/list/strikes/{root}/{exp}": ("options", "options_chain", {}),
     "/api/theta/snapshot/option/quote/{root}/{exp}/{k}/{right}": (
@@ -233,8 +244,8 @@ _PATH_ALIASES = {
 
 _compiled_aliases = {}
 for pattern, (ns, method, defaults) in _PATH_ALIASES.items():
-    regex = '^' + __import__('re').sub(r'\{([^}]+)\}', r'(?P<\1>[^/]+)', pattern) + '$'
-    _compiled_aliases[__import__('re').compile(regex)] = (ns, method, defaults)
+    regex = "^" + __import__("re").sub(r"\{([^}]+)\}", r"(?P<\1>[^/]+)", pattern) + "$"
+    _compiled_aliases[__import__("re").compile(regex)] = (ns, method, defaults)
 
 _PARAM_ALIASES = {
     "root": "root",
@@ -371,51 +382,87 @@ def _translate_path(path: str, params: dict):
             v2_params = _rewrite_params(raw, defaults)
             # Method-specific renames that the generic alias table can't
             # express without breaking other callers.
-            if method == "options_chain" and "root" in v2_params and "ticker" not in v2_params:
+            if (
+                method == "options_chain"
+                and "root" in v2_params
+                and "ticker" not in v2_params
+            ):
                 v2_params["ticker"] = v2_params.pop("root")
-            if method == "options_chain" and "exp" in v2_params and "expiration" not in v2_params:
+            if (
+                method == "options_chain"
+                and "exp" in v2_params
+                and "expiration" not in v2_params
+            ):
                 v2_params["expiration"] = v2_params.pop("exp")
             return ns, method, v2_params
     # option_quote_at_time / option_trade_at_time not yet in v2 client;
     # route to snapshot fallback for now.
     if "/at_time/option/quote/" in p:
-        return ("options", "snapshot_option_quote", _rewrite_params(params, {
-            "root": _param(params, "root"),
-            "exp": _param(params, "exp"),
-            "strike": _param(params, "strike"),
-            "right": _param(params, "right"),
-            "start_date": _param(params, "start_date"),
-            "end_date": _param(params, "end_date"),
-            "ivl": _param(params, "ivl"),
-            "use_csv": False,
-        }))
+        return (
+            "options",
+            "snapshot_option_quote",
+            _rewrite_params(
+                params,
+                {
+                    "root": _param(params, "root"),
+                    "exp": _param(params, "exp"),
+                    "strike": _param(params, "strike"),
+                    "right": _param(params, "right"),
+                    "start_date": _param(params, "start_date"),
+                    "end_date": _param(params, "end_date"),
+                    "ivl": _param(params, "ivl"),
+                    "use_csv": False,
+                },
+            ),
+        )
     if "/at_time/option/trade/" in p:
-        return ("options", "snapshot_option_trade", _rewrite_params(params, {
-            "root": _param(params, "root"),
-            "exp": _param(params, "exp"),
-            "strike": _param(params, "strike"),
-            "right": _param(params, "right"),
-            "start_date": _param(params, "start_date"),
-            "end_date": _param(params, "end_date"),
-            "ivl": _param(params, "ivl"),
-            "use_csv": False,
-        }))
+        return (
+            "options",
+            "snapshot_option_trade",
+            _rewrite_params(
+                params,
+                {
+                    "root": _param(params, "root"),
+                    "exp": _param(params, "exp"),
+                    "strike": _param(params, "strike"),
+                    "right": _param(params, "right"),
+                    "start_date": _param(params, "start_date"),
+                    "end_date": _param(params, "end_date"),
+                    "ivl": _param(params, "ivl"),
+                    "use_csv": False,
+                },
+            ),
+        )
     if "/at_time/stock/quote/" in p:
-        return ("market", "stock_quote_at_time", _rewrite_params(params, {
-            "root": _param(params, "root"),
-            "start_date": _param(params, "start_date"),
-            "end_date": _param(params, "end_date"),
-            "ivl": _param(params, "ivl"),
-            "use_csv": False,
-        }))
+        return (
+            "market",
+            "stock_quote_at_time",
+            _rewrite_params(
+                params,
+                {
+                    "root": _param(params, "root"),
+                    "start_date": _param(params, "start_date"),
+                    "end_date": _param(params, "end_date"),
+                    "ivl": _param(params, "ivl"),
+                    "use_csv": False,
+                },
+            ),
+        )
     if "/at_time/stock/trade/" in p:
-        return ("market", "stock_trade_at_time", _rewrite_params(params, {
-            "root": _param(params, "root"),
-            "start_date": _param(params, "start_date"),
-            "end_date": _param(params, "end_date"),
-            "ivl": _param(params, "ivl"),
-            "use_csv": False,
-        }))
+        return (
+            "market",
+            "stock_trade_at_time",
+            _rewrite_params(
+                params,
+                {
+                    "root": _param(params, "root"),
+                    "start_date": _param(params, "start_date"),
+                    "end_date": _param(params, "end_date"),
+                    "ivl": _param(params, "ivl"),
+                    "use_csv": False,
+                },
+            ),
+        )
     raise ValueError(f"no v2 mapping for legacy path: {path}")
 
 
@@ -431,30 +478,97 @@ def _rewrite_params(params: dict, defaults: dict) -> dict:
     # passthrough anything already in v2 form
     for k, v in params.items():
         if k not in out and k in {
-            "root", "exp", "strike", "right", "start_date", "end_date",
-            "start_datetime", "end_datetime", "date", "interval", "use_csv",
-            "adjusted", "venue", "annual_div", "rate", "rate_value",
-            "under_price", "signal_date", "level", "latest_only",
-            "positioning_days", "max_dte", "interval_type", "ms_of_day",
-            "force_refresh", "data_type", "req", "occ",
-            "mode", "max_contracts", "strike_window_pct",
-            "include_chart_data", "session_date", "tickers",
-            "series_transform", "min_threshold", "method", "metric",
-            "from_date", "lookback_hours", "category", "include_history",
+            "root",
+            "exp",
+            "strike",
+            "right",
+            "start_date",
+            "end_date",
+            "start_datetime",
+            "end_datetime",
+            "date",
+            "interval",
+            "use_csv",
+            "adjusted",
+            "venue",
+            "annual_div",
+            "rate",
+            "rate_value",
+            "under_price",
+            "signal_date",
+            "level",
+            "latest_only",
+            "positioning_days",
+            "max_dte",
+            "interval_type",
+            "ms_of_day",
+            "force_refresh",
+            "data_type",
+            "req",
+            "occ",
+            "mode",
+            "max_contracts",
+            "strike_window_pct",
+            "include_chart_data",
+            "session_date",
+            "tickers",
+            "series_transform",
+            "min_threshold",
+            "method",
+            "metric",
+            "from_date",
+            "lookback_hours",
+            "category",
+            "include_history",
             "expiration",
-            "min_strength", "greek_type", "history_contract_version",
-            "level_type", "as_of_date", "price_range_pct", "horizon_min",
-            "analysis_mode", "baseline_date", "asof_date", "min_history",
-            "positioning_start_date", "positioning_end_date", "rth",
-            "start_time", "end_time", "exclusive", "days_back",
-            "trade_right", "min_ftd_quantity", "min_volume",
-            "include_neutral", "min_premium", "min_size", "max_premium",
-            "max_size", "min_dte", "max_strike_distance", "min_score_delta",
-            "sort_order", "limit", "offset", "lookback", "min_severity",
-            "min_unusual_days", "window", "direction", "lookback_sessions",
-            "source_roots", "signal_type", "aggregate_by",
-            "include_execution_metrics", "include_variants", "include_oi",
-            "normalize", "columns", "use_cache", "use_calculated_greeks",
+            "min_strength",
+            "greek_type",
+            "history_contract_version",
+            "level_type",
+            "as_of_date",
+            "price_range_pct",
+            "horizon_min",
+            "analysis_mode",
+            "baseline_date",
+            "asof_date",
+            "min_history",
+            "positioning_start_date",
+            "positioning_end_date",
+            "rth",
+            "start_time",
+            "end_time",
+            "exclusive",
+            "days_back",
+            "trade_right",
+            "min_ftd_quantity",
+            "min_volume",
+            "include_neutral",
+            "min_premium",
+            "min_size",
+            "max_premium",
+            "max_size",
+            "min_dte",
+            "max_strike_distance",
+            "min_score_delta",
+            "sort_order",
+            "limit",
+            "offset",
+            "lookback",
+            "min_severity",
+            "min_unusual_days",
+            "window",
+            "direction",
+            "lookback_sessions",
+            "source_roots",
+            "signal_type",
+            "aggregate_by",
+            "include_execution_metrics",
+            "include_variants",
+            "include_oi",
+            "normalize",
+            "columns",
+            "use_cache",
+            "use_calculated_greeks",
             "ivl",
         }:
             out[k] = v
@@ -491,10 +605,12 @@ class ThetaDataController:
                 "THETADATA_CF_ACCESS_CLIENT_SECRET as environment variables, or create a "
                 ".env file in the project root (see .env.example)."
             )
-        self._cred = _Credential({
-            "CF-Access-Client-Id": client_id,
-            "CF-Access-Client-Secret": client_secret,
-        })
+        self._cred = _Credential(
+            {
+                "CF-Access-Client-Id": client_id,
+                "CF-Access-Client-Secret": client_secret,
+            }
+        )
         self._v2_config = _ClientConfig(
             base_url=base_url,
             credentials={
@@ -527,7 +643,7 @@ class ThetaDataController:
         # PHClient built from the same config/credentials instead of one shared
         # instance.
         self._v2_local = threading.local()
-        self._v2_all: List[PHClient] = []
+        self._v2_all: list[PHClient] = []
         self._v2_lock = threading.Lock()
         self._v2 = self._get_thread_client()
 
@@ -543,7 +659,7 @@ class ThetaDataController:
 
     # ----- low-level HTTP helpers -----
 
-    def _get(self, path: str, params: Optional[dict] = None) -> "_V2Response":
+    def _get(self, path: str, params: dict | None = None) -> "_V2Response":
         """Route a legacy path/params pair through PHClient."""
         ns, method, v2_params = _translate_path(path, params or {})
         client = getattr(self._get_thread_client(), ns)
@@ -556,7 +672,9 @@ class ThetaDataController:
         return self._get(path, params=params)
 
     def _get_with_retry(
-        self, path: str, params: Optional[dict] = None,
+        self,
+        path: str,
+        params: dict | None = None,
         attempts: int = _RETRY_ATTEMPTS,
     ) -> "_V2Response":
         """GET with bounded retry on transient failures.
@@ -577,9 +695,14 @@ class ThetaDataController:
             try:
                 r = self._get(path, params=params)
             except PHClientError as e:
-                if getattr(e, 'retryable', False) or getattr(e, 'status', None) in _RETRY_STATUSES:
+                if (
+                    getattr(e, "retryable", False)
+                    or getattr(e, "status", None) in _RETRY_STATUSES
+                ):
                     last_exc = e
-                    last_response = _V2Response(None, status_code=getattr(e, 'status', None))
+                    last_response = _V2Response(
+                        None, status_code=getattr(e, "status", None)
+                    )
                     continue
                 raise
             except httpx.TransportError as e:
@@ -640,11 +763,12 @@ class ThetaDataController:
           3. Columnar (EOD w/ use_csv):  {"close":[...], "open":[...], ...}
         """
         # 2) hist nested with an explicit column format
-        if isinstance(data, dict) and isinstance(data.get('response'), list):
-            resp = data['response']
+        if isinstance(data, dict) and isinstance(data.get("response"), list):
+            resp = data["response"]
             fmt = (
-                (data.get('header') or {}).get('format')
-                if isinstance(data.get('header'), dict) else None
+                (data.get("header") or {}).get("format")
+                if isinstance(data.get("header"), dict)
+                else None
             )
             if fmt and resp and isinstance(resp[0], list):
                 return [dict(zip(fmt, row)) for row in resp]
@@ -700,7 +824,7 @@ class ThetaDataController:
     # ----- helpers for historical-data stitching (from Vol_Suite) -----
 
     @staticmethod
-    def _stamp_contract(rows: List[Dict], strike_theta: int, right: str) -> List[Dict]:
+    def _stamp_contract(rows: list[dict], strike_theta: int, right: str) -> list[dict]:
         """Write the contract's own identity onto every row.
 
         Single-contract endpoints (e.g. hist/option/all_greeks) do not echo
@@ -708,48 +832,50 @@ class ThetaDataController:
         consumers that key on (strike, right) don't silently drop rows.
         """
         for row in rows:
-            row.setdefault('strike', strike_theta)
-            row.setdefault('right', right)
+            row.setdefault("strike", strike_theta)
+            row.setdefault("right", right)
         return rows
 
     @staticmethod
-    def _normalize_date(row: Dict) -> Optional[str]:
+    def _normalize_date(row: dict) -> str | None:
         """Pull a YYYYMMDD date out of a row regardless of which date-shaped
         field the route happens to use.
-        
+
         Handles all known ThetaData formats:
           - "date": "20250101" (pure date string)
           - "created": "2025-01-01 12:00:00" (ISO timestamp with dashes)
           - "created": "20250101120000" (compact timestamp without dashes)
           - "datetime": "2025-01-01T12:00:00" (ISO datetime)
         """
-        for key in ('date', 'Date', 'created', 'datetime'):
+        for key in ("date", "Date", "created", "datetime"):
             val = row.get(key)
             if not val:
                 continue
             s = str(val)
             # Strip dashes and colons to normalize separators
-            clean = s.replace('-', '').replace(':', '').replace('T', '').replace(' ', '')
+            clean = (
+                s.replace("-", "").replace(":", "").replace("T", "").replace(" ", "")
+            )
             # Take the first 8 digits if available
             if len(clean) >= 8 and clean[:8].isdigit():
                 return clean[:8]
         return None
 
     @classmethod
-    def _last_bar_per_date(cls, rows: List[Dict]) -> List[Dict]:
+    def _last_bar_per_date(cls, rows: list[dict]) -> list[dict]:
         """Collapse intraday interval bars down to one row per calendar date.
         Keeps the LAST bar of each day (highest ms_of_day)."""
-        best: Dict[str, Dict] = {}
+        best: dict[str, dict] = {}
         for row in rows:
             d = cls._normalize_date(row)
             if not d:
                 continue
-            row['date'] = d
+            row["date"] = d
             try:
-                ms = int(float(row.get('ms_of_day', 0) or 0))
+                ms = int(float(row.get("ms_of_day", 0) or 0))
             except (TypeError, ValueError):
                 ms = 0
-            if d not in best or ms >= int(float(best[d].get('ms_of_day', -1) or -1)):
+            if d not in best or ms >= int(float(best[d].get("ms_of_day", -1) or -1)):
                 best[d] = row
         return list(best.values())
 
@@ -757,7 +883,7 @@ class ThetaDataController:
     # PUBLIC API  —  Options (stock + option endpoints)
     # ======================================================================
 
-    def list_expirations(self, root: str) -> List[str]:
+    def list_expirations(self, root: str) -> list[str]:
         """List available expiration dates (YYYYMMDD) for a given root.
 
         v2 has no direct `list_expirations` endpoint. We route to
@@ -792,8 +918,9 @@ class ThetaDataController:
         exp = str(data.get("expiration", "")).replace("-", "").strip()
         return [exp] if exp else []
 
-    def resolve_longest_history_expiry(self, root: str, lookback_days: int = 150,
-                                       min_dates: Optional[int] = None) -> str:
+    def resolve_longest_history_expiry(
+        self, root: str, lookback_days: int = 150, min_dates: int | None = None
+    ) -> str:
         """Pick the expiry with the LONGEST available option-chain history —
         the right expiry for a full lookback-window backtest (a recently-listed
         expiry like the nearest 0.25-year one has only a few weeks of history).
@@ -814,16 +941,22 @@ class ThetaDataController:
         need = min_dates or int(lookback_days * 0.9)
 
         exps = self.list_expirations(root)
-        far = sorted([e for e in exps if int(e) > int(end_dt.strftime(fmt))],
-                     key=int, reverse=True)
+        far = sorted(
+            [e for e in exps if int(e) > int(end_dt.strftime(fmt))],
+            key=int,
+            reverse=True,
+        )
         best_exp, best_dates = None, 0
         for exp in far[:14]:  # cap probes to avoid proxy churn
             try:
                 path = f"/api/theta/bulk_hist/option/eod_greeks/{root}/{exp}"
-                r = self._get_with_retry(path, params={
-                    "start_date": earliest,
-                    "end_date": probe_end,
-                })
+                r = self._get_with_retry(
+                    path,
+                    params={
+                        "start_date": earliest,
+                        "end_date": probe_end,
+                    },
+                )
                 if r.status_code == 404:
                     continue
                 r.raise_for_status()
@@ -834,11 +967,14 @@ class ThetaDataController:
                 if n >= need:
                     return exp
             except Exception as e:
-                print(f"  [resolve_longest_history_expiry] {root}/{exp}: "
-                      f"{type(e).__name__}: {str(e)[:60]}", flush=True)
+                print(
+                    f"  [resolve_longest_history_expiry] {root}/{exp}: "
+                    f"{type(e).__name__}: {str(e)[:60]}",
+                    flush=True,
+                )
         return best_exp or (far[0] if far else exps[-1])
 
-    def list_strikes(self, root: str, exp: str) -> List[float]:
+    def list_strikes(self, root: str, exp: str) -> list[float]:
         """List available strikes for a given root and expiration.
 
         NOTE: Values are returned as-is (not divided by 1000).
@@ -862,7 +998,7 @@ class ThetaDataController:
             result = []
             for row in data:
                 try:
-                    result.append(float(row['strike']))
+                    result.append(float(row["strike"]))
                 except (KeyError, ValueError, TypeError):
                     pass
             return sorted(set(result))
@@ -870,9 +1006,9 @@ class ThetaDataController:
         rows = self._parse_rows(r)
         result = []
         for row in rows:
-            if 'strike' in row:
+            if "strike" in row:
                 try:
-                    result.append(float(row['strike']))
+                    result.append(float(row["strike"]))
                 except (ValueError, TypeError):
                     pass
         return result
@@ -882,6 +1018,16 @@ class ThetaDataController:
     def stock_snapshot_quote(self, root: str):
         """Latest stock quote snapshot."""
         r = self._get_with_retry(f"/api/theta/snapshot/stock/quote/{root}")
+        r.raise_for_status()
+        rows = self._parse_rows(r)
+        return rows[0] if rows else {}
+
+    def index_snapshot_quote(self, root: str):
+        """Latest index price snapshot (v2 market.last_index_price) -- SPX,
+        NDX, VIX, RUT etc. have no equity listing, so stock_snapshot_quote's
+        /api/theta/snapshot/stock/quote/{root} always returns empty/errors
+        for them; this is the correct endpoint for an index root."""
+        r = self._get_with_retry(f"/api/theta/snapshot/index/price/{root}")
         r.raise_for_status()
         rows = self._parse_rows(r)
         return rows[0] if rows else {}
@@ -897,10 +1043,14 @@ class ThetaDataController:
         rows = self._parse_rows(r)
         return rows[0] if rows else {}
 
-    def option_snapshot_quote(self, root: str, exp: str, strike: float, right: str = "C"):
+    def option_snapshot_quote(
+        self, root: str, exp: str, strike: float, right: str = "C"
+    ):
         """Latest option quote snapshot for a single contract."""
         k = strike_to_theta(strike)
-        r = self._get_with_retry(f"/api/theta/snapshot/option/quote/{root}/{exp}/{k}/{right}")
+        r = self._get_with_retry(
+            f"/api/theta/snapshot/option/quote/{root}/{exp}/{k}/{right}"
+        )
         r.raise_for_status()
         rows = self._parse_rows(r)
         return rows[0] if rows else {}
@@ -909,20 +1059,26 @@ class ThetaDataController:
 
     def option_bulk_greeks(self, root: str, exp: str):
         """Snapshot first-order greeks + IV for all strikes/rights at one expiry."""
-        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/all_greeks/{root}/{exp}")
+        r = self._get_with_retry(
+            f"/api/theta/bulk_snapshot/option/all_greeks/{root}/{exp}"
+        )
         r.raise_for_status()
         return self._parse_rows(r)
 
     def option_bulk_greeks_second_order(self, root: str, exp: str):
         """Snapshot second-order greeks (vanna, charm, vomma, veta, etc.)
         for all strikes/rights at one expiry."""
-        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/greeks_second_order/{root}/{exp}")
+        r = self._get_with_retry(
+            f"/api/theta/bulk_snapshot/option/greeks_second_order/{root}/{exp}"
+        )
         r.raise_for_status()
         return self._parse_rows(r)
 
     def option_bulk_oi(self, root: str, exp: str):
         """Snapshot open interest for all strikes/rights at one expiry."""
-        r = self._get_with_retry(f"/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}")
+        r = self._get_with_retry(
+            f"/api/theta/bulk_snapshot/option/open_interest/{root}/{exp}"
+        )
         r.raise_for_status()
         return self._parse_rows(r)
 
@@ -932,11 +1088,15 @@ class ThetaDataController:
         r.raise_for_status()
         return self._parse_rows(r)
 
-    def option_flow_analysis(self, root: str, date: Optional[str] = None,
-                             exp: Optional[str] = None,
-                             aggregate_by: str = "strike") -> List[Dict]:
+    def option_flow_analysis(
+        self,
+        root: str,
+        date: str | None = None,
+        exp: str | None = None,
+        aggregate_by: str = "strike",
+    ) -> list[dict]:
         """flow.analysis. Do NOT pass exp — v2 500s. Filter expiry client-side."""
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "aggregate_by": aggregate_by,
             "include_execution_metrics": True,
             "use_csv": False,
@@ -952,11 +1112,13 @@ class ThetaDataController:
             out.append(item)
         return out
 
-    def option_session_trades(self, root: str, start_date: str,
-                              end_date: Optional[str] = None) -> List[Dict]:
+    def option_session_trades(
+        self, root: str, start_date: str, end_date: str | None = None
+    ) -> list[dict]:
         """flow.scanner_trades — per-print size/bid/ask/right/expiry (wiki)."""
         env = self._get_thread_client().flow.scanner_trades(
-            root=root, start_date=start_date,
+            root=root,
+            start_date=start_date,
             end_date=end_date or start_date,
         )
         data = env.data
@@ -975,9 +1137,9 @@ class ThetaDataController:
                 out.append(dict(row))
         return out
 
-    def option_bulk_oi_latest(self, root: str, exp: str,
-                               lookback_days: int = 7,
-                               as_of: Optional[str] = None) -> List[Dict]:
+    def option_bulk_oi_latest(
+        self, root: str, exp: str, lookback_days: int = 7, as_of: str | None = None
+    ) -> list[dict]:
         """Fallback OI fetch when the snapshot endpoint 404s.
 
         ``bulk_snapshot/option/open_interest`` sometimes returns 404 for
@@ -1011,15 +1173,20 @@ class ThetaDataController:
     # ----- Per-contract historical data -----
 
     def option_hist_eod_single(
-        self, root: str, exp: str, strike_theta: int, right: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        strike_theta: int,
+        right: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """Per-contract EOD history over a date range — one row per trading
         day in a single request.  Chunked into <=28-day spans."""
         fmt = "%Y%m%d"
         start_dt = datetime.strptime(start_date, fmt)
         end_dt = datetime.strptime(end_date, fmt)
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
@@ -1038,16 +1205,21 @@ class ThetaDataController:
         return self._stamp_contract(all_rows, strike_theta, right)
 
     def option_hist_open_interest_single(
-        self, root: str, exp: str, strike_theta: int, right: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        strike_theta: int,
+        right: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """Single-contract historical open interest.  Chunked into
         <=28-day spans.  404 is retried (flaky proxy) before being
         accepted as a genuine data gap."""
         fmt = "%Y%m%d"
         start_dt = datetime.strptime(start_date, fmt)
         end_dt = datetime.strptime(end_date, fmt)
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
@@ -1066,16 +1238,22 @@ class ThetaDataController:
         return self._stamp_contract(all_rows, strike_theta, right)
 
     def option_hist_all_greeks_single(
-        self, root: str, exp: str, strike_theta: int, right: str,
-        start_date: str, end_date: str, ivl: int = 900000,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        strike_theta: int,
+        right: str,
+        start_date: str,
+        end_date: str,
+        ivl: int = 900000,
+    ) -> list[dict]:
         """Single-contract historical greeks (incl. IV and second-order
         greeks), bucketed into `ivl`-ms intervals (default 900000 = 15 min).
         Chunked into <=28-day spans.  404/502 are retried (flaky proxy)."""
         fmt = "%Y%m%d"
         start_dt = datetime.strptime(start_date, fmt)
         end_dt = datetime.strptime(end_date, fmt)
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
@@ -1084,7 +1262,9 @@ class ThetaDataController:
                 "end_date": chunk_end.strftime(fmt),
                 "ivl": ivl,
             }
-            path = f"/api/theta/hist/option/all_greeks/{root}/{exp}/{strike_theta}/{right}"
+            path = (
+                f"/api/theta/hist/option/all_greeks/{root}/{exp}/{strike_theta}/{right}"
+            )
             r = self._get_with_retry(path, params=params)
             if r.status_code == 404:
                 chunk_start = chunk_end + timedelta(days=1)
@@ -1096,15 +1276,15 @@ class ThetaDataController:
 
     # ----- Whole-chain bulk historical data (thread-pooled) -----
 
-    def _enumerate_contracts(self, root: str, exp: str) -> List[Tuple[int, str]]:
+    def _enumerate_contracts(self, root: str, exp: str) -> list[tuple[int, str]]:
         """Enumerate all (strike_theta, right) pairs for an expiry using
         the snapshot bulk_greeks endpoint."""
         universe = self.option_bulk_greeks(root, exp)
         contracts, seen = [], set()
         for row in universe:
             try:
-                k_theta = int(float(row['strike']))
-                right = row['right']
+                k_theta = int(float(row["strike"]))
+                right = row["right"]
             except (KeyError, TypeError, ValueError):
                 continue
             key = (k_theta, right)
@@ -1114,33 +1294,42 @@ class ThetaDataController:
         return contracts
 
     def option_bulk_hist_eod(
-        self, root: str, exp: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """EOD price history for a whole expiry's chain over a date range."""
         try:
             contracts = self._enumerate_contracts(root, exp)
         except Exception as e:
-            print(f"  [option_bulk_hist_eod] could not enumerate {root}/{exp}'s "
-                  f"contract universe: {type(e).__name__}: {e}")
+            print(
+                f"  [option_bulk_hist_eod] could not enumerate {root}/{exp}'s "
+                f"contract universe: {type(e).__name__}: {e}"
+            )
             raise
 
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         total, done, empty, errored = len(contracts), 0, 0, 0
-        print(f"  [option_bulk_hist_eod] {root}/{exp}: pulling {total} contracts' "
-              f"EOD history for {start_date}-{end_date} "
-              f"({_HIST_GREEKS_CONCURRENCY} concurrent)...")
+        print(
+            f"  [option_bulk_hist_eod] {root}/{exp}: pulling {total} contracts' "
+            f"EOD history for {start_date}-{end_date} "
+            f"({_HIST_GREEKS_CONCURRENCY} concurrent)..."
+        )
 
         def _fetch_one(k_theta, right):
             return self.option_hist_eod_single(
-                root, exp, k_theta, right, start_date, end_date,
+                root,
+                exp,
+                k_theta,
+                right,
+                start_date,
+                end_date,
             )
 
         with ThreadPoolExecutor(max_workers=_HIST_GREEKS_CONCURRENCY) as pool:
-            futures = {
-                pool.submit(_fetch_one, k, rt): (k, rt)
-                for k, rt in contracts
-            }
+            futures = {pool.submit(_fetch_one, k, rt): (k, rt) for k, rt in contracts}
             for future in as_completed(futures):
                 k_theta, right = futures[future]
                 done += 1
@@ -1152,17 +1341,24 @@ class ThetaDataController:
                         empty += 1
                 except Exception as e:
                     errored += 1
-                    print(f"  [option_bulk_hist_eod] {root}/{exp} {k_theta}/{right}: "
-                          f"skipped ({type(e).__name__}: {e})")
+                    print(
+                        f"  [option_bulk_hist_eod] {root}/{exp} {k_theta}/{right}: "
+                        f"skipped ({type(e).__name__}: {e})"
+                    )
                 if done % 50 == 0 or done == total:
-                    print(f"  [option_bulk_hist_eod] {root}/{exp}: {done}/{total} done "
-                          f"({empty} never traded in range, {errored} genuine errors)")
+                    print(
+                        f"  [option_bulk_hist_eod] {root}/{exp}: {done}/{total} done "
+                        f"({empty} never traded in range, {errored} genuine errors)"
+                    )
         return all_rows
 
     def option_bulk_hist_eod_greeks(
-        self, root: str, exp: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """Dense whole-chain EOD OHLC + implied_vol + FULL greeks over a date
         range — the untapped route that avoids local IV inversion.
 
@@ -1184,7 +1380,7 @@ class ThetaDataController:
         fmt = "%Y%m%d"
         start_dt = datetime.strptime(start_date, fmt)
         end_dt = datetime.strptime(end_date, fmt)
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
@@ -1214,9 +1410,12 @@ class ThetaDataController:
         return all_rows
 
     def option_bulk_hist_greeks(
-        self, root: str, exp: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """Daily EOD-equivalent greeks (incl. implied_vol, gamma, and full
         higher-order set) history for a whole expiry's chain.
 
@@ -1226,19 +1425,32 @@ class ThetaDataController:
         try:
             contracts = self._enumerate_contracts(root, exp)
         except Exception as e:
-            print(f"  [option_bulk_hist_greeks] could not enumerate {root}/{exp}'s "
-                  f"contract universe via snapshot bulk_greeks: {type(e).__name__}: {e}")
+            print(
+                f"  [option_bulk_hist_greeks] could not enumerate {root}/{exp}'s "
+                f"contract universe via snapshot bulk_greeks: {type(e).__name__}: {e}"
+            )
             raise
 
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         total, done, empty, errored = len(contracts), 0, 0, 0
-        print(f"  [option_bulk_hist_greeks] {root}/{exp}: pulling {total} contracts' "
-              f"history for {start_date}-{end_date} "
-              f"({_HIST_GREEKS_CONCURRENCY} concurrent)...")
+        print(
+            f"  [option_bulk_hist_greeks] {root}/{exp}: pulling {total} contracts' "
+            f"history for {start_date}-{end_date} "
+            f"({_HIST_GREEKS_CONCURRENCY} concurrent)..."
+        )
 
         def _fetch_one(k_theta, right):
-            return k_theta, right, self.option_hist_all_greeks_single(
-                root, exp, k_theta, right, start_date, end_date,
+            return (
+                k_theta,
+                right,
+                self.option_hist_all_greeks_single(
+                    root,
+                    exp,
+                    k_theta,
+                    right,
+                    start_date,
+                    end_date,
+                ),
             )
 
         with ThreadPoolExecutor(max_workers=_HIST_GREEKS_CONCURRENCY) as pool:
@@ -1257,17 +1469,24 @@ class ThetaDataController:
                         empty += 1
                 except Exception as e:
                     errored += 1
-                    print(f"  [option_bulk_hist_greeks] {root}/{exp} {k_theta}/{right}: "
-                          f"skipped ({type(e).__name__}: {e})")
+                    print(
+                        f"  [option_bulk_hist_greeks] {root}/{exp} {k_theta}/{right}: "
+                        f"skipped ({type(e).__name__}: {e})"
+                    )
                 if done % 50 == 0 or done == total:
-                    print(f"  [option_bulk_hist_greeks] {root}/{exp}: {done}/{total} contracts done "
-                          f"({empty} never traded in range, {errored} genuine errors)")
+                    print(
+                        f"  [option_bulk_hist_greeks] {root}/{exp}: {done}/{total} contracts done "
+                        f"({empty} never traded in range, {errored} genuine errors)"
+                    )
         return all_rows
 
     def option_bulk_hist_oi(
-        self, root: str, exp: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """Daily OI history for a whole expiry's chain.
 
         Enumerates the chain via snapshot bulk_oi, then fans out per-contract
@@ -1276,16 +1495,18 @@ class ThetaDataController:
         try:
             universe = self.option_bulk_oi(root, exp)
         except Exception as e:
-            print(f"  [option_bulk_hist_oi] could not enumerate {root}/{exp}'s "
-                  f"contract universe via snapshot bulk_oi: {type(e).__name__}: {e}")
+            print(
+                f"  [option_bulk_hist_oi] could not enumerate {root}/{exp}'s "
+                f"contract universe via snapshot bulk_oi: {type(e).__name__}: {e}"
+            )
             raise
 
         contracts = []
         seen = set()
         for row in universe:
             try:
-                k_theta = int(float(row['strike']))
-                right = row['right']
+                k_theta = int(float(row["strike"]))
+                right = row["right"]
             except (KeyError, TypeError, ValueError):
                 continue
             key = (k_theta, right)
@@ -1293,15 +1514,26 @@ class ThetaDataController:
                 seen.add(key)
                 contracts.append(key)
 
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         total, done, empty, errored = len(contracts), 0, 0, 0
-        print(f"  [option_bulk_hist_oi] {root}/{exp}: pulling {total} contracts' "
-              f"OI history for {start_date}-{end_date} "
-              f"({_HIST_GREEKS_CONCURRENCY} concurrent)...")
+        print(
+            f"  [option_bulk_hist_oi] {root}/{exp}: pulling {total} contracts' "
+            f"OI history for {start_date}-{end_date} "
+            f"({_HIST_GREEKS_CONCURRENCY} concurrent)..."
+        )
 
         def _fetch_one(k_theta, right):
-            return k_theta, right, self.option_hist_open_interest_single(
-                root, exp, k_theta, right, start_date, end_date,
+            return (
+                k_theta,
+                right,
+                self.option_hist_open_interest_single(
+                    root,
+                    exp,
+                    k_theta,
+                    right,
+                    start_date,
+                    end_date,
+                ),
             )
 
         with ThreadPoolExecutor(max_workers=_HIST_GREEKS_CONCURRENCY) as pool:
@@ -1320,17 +1552,24 @@ class ThetaDataController:
                         empty += 1
                 except Exception as e:
                     errored += 1
-                    print(f"  [option_bulk_hist_oi] {root}/{exp} {k_theta}/{right}: "
-                          f"skipped ({type(e).__name__}: {e})")
+                    print(
+                        f"  [option_bulk_hist_oi] {root}/{exp} {k_theta}/{right}: "
+                        f"skipped ({type(e).__name__}: {e})"
+                    )
                 if done % 50 == 0 or done == total:
-                    print(f"  [option_bulk_hist_oi] {root}/{exp}: {done}/{total} contracts done "
-                          f"({empty} never traded in range, {errored} genuine errors)")
+                    print(
+                        f"  [option_bulk_hist_oi] {root}/{exp}: {done}/{total} contracts done "
+                        f"({empty} never traded in range, {errored} genuine errors)"
+                    )
         return all_rows
 
     def option_bulk_hist_oi_by_day(
-        self, root: str, exp: str,
-        start_date: str, end_date: str,
-    ) -> List[Dict]:
+        self,
+        root: str,
+        exp: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
         """Whole-chain open interest, one request per calendar day.
 
         bulk_hist/option/open_interest returns the entire chain for
@@ -1346,22 +1585,25 @@ class ThetaDataController:
                 days.append(day.strftime(fmt))
             day += timedelta(days=1)
 
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         total, done, empty, errored = len(days), 0, 0, 0
-        print(f"  [option_bulk_hist_oi_by_day] {root}/{exp}: {total} weekdays "
-              f"{start_date}-{end_date} ({_HIST_GREEKS_CONCURRENCY} concurrent)...")
+        print(
+            f"  [option_bulk_hist_oi_by_day] {root}/{exp}: {total} weekdays "
+            f"{start_date}-{end_date} ({_HIST_GREEKS_CONCURRENCY} concurrent)..."
+        )
 
         def _fetch_day(d):
             path = f"/api/theta/bulk_hist/option/open_interest/{root}/{exp}"
             r = self._get_with_retry(
-                path, params={"start_date": d, "end_date": d},
+                path,
+                params={"start_date": d, "end_date": d},
             )
             if r.status_code == 404:
                 return []
             r.raise_for_status()
             rows = self._parse_rows(r)
             for row in rows:
-                row.setdefault('date', d)
+                row.setdefault("date", d)
             return rows
 
         with ThreadPoolExecutor(max_workers=_HIST_GREEKS_CONCURRENCY) as pool:
@@ -1377,11 +1619,15 @@ class ThetaDataController:
                         empty += 1
                 except Exception as e:
                     errored += 1
-                    print(f"  [option_bulk_hist_oi_by_day] {root}/{exp} {d}: "
-                          f"skipped ({type(e).__name__}: {e})")
+                    print(
+                        f"  [option_bulk_hist_oi_by_day] {root}/{exp} {d}: "
+                        f"skipped ({type(e).__name__}: {e})"
+                    )
                 if done % 25 == 0 or done == total:
-                    print(f"  [option_bulk_hist_oi_by_day] {root}/{exp}: {done}/{total} days "
-                          f"({empty} no session, {errored} genuine errors)")
+                    print(
+                        f"  [option_bulk_hist_oi_by_day] {root}/{exp}: {done}/{total} days "
+                        f"({empty} no session, {errored} genuine errors)"
+                    )
         return all_rows
 
     # ======================================================================
@@ -1403,65 +1649,135 @@ class ThetaDataController:
         not `if key in quote and quote[key]` -- the latter treats the STRING
         '0.0000' as truthy (non-empty string) and returns 0.0 as if it were a
         found price.
+
+        A cash index (SPX, NDX, VIX, ...) has no equity listing, so the
+        stock-quote path below always comes back empty/erroring for one --
+        route those through the dedicated index endpoints instead, before
+        any of the stock-specific fallback logic runs.
         """
+        if ticker.strip().upper() in _INDEX_ROOTS:
+            return self._fetch_index_spot_price(ticker.strip().upper())
+
         try:
             quote = self.stock_snapshot_quote(ticker)
-            for key in ['mid', 'bid', 'ask', 'last']:
+            for key in ["mid", "bid", "ask", "last"]:
                 v = quote.get(key)
-                if v not in (None, '') and float(v) > 0:
+                if v not in (None, "") and float(v) > 0:
                     return float(v)
             if not quote:
-                print(f"  [fetch_spot_price] {ticker}: empty quote response "
-                      f"(no rows) -- trying last trade print.")
+                print(
+                    f"  [fetch_spot_price] {ticker}: empty quote response "
+                    f"(no rows) -- trying last trade print."
+                )
             else:
-                print(f"  [fetch_spot_price] {ticker}: live quote has no usable "
-                      f"bid/ask/last (likely outside regular trading hours): "
-                      f"{quote} -- trying last trade print.")
+                print(
+                    f"  [fetch_spot_price] {ticker}: live quote has no usable "
+                    f"bid/ask/last (likely outside regular trading hours): "
+                    f"{quote} -- trying last trade print."
+                )
         except Exception as e:
-            print(f"  [fetch_spot_price] {ticker}: snapshot request failed "
-                  f"({type(e).__name__}: {e}) -- trying last trade print.")
+            print(
+                f"  [fetch_spot_price] {ticker}: snapshot request failed "
+                f"({type(e).__name__}: {e}) -- trying last trade print."
+            )
 
         try:
             trade = self.stock_snapshot_trade(ticker)
-            price = trade.get('price')
-            if price not in (None, '') and float(price) > 0:
-                print(f"  [fetch_spot_price] {ticker}: no live bid/ask quote right now "
-                      f"(outside regular trading hours, most likely) -- using last trade "
-                      f"print {float(price):.4f} instead of a live mid. Not a live quote.")
+            price = trade.get("price")
+            if price not in (None, "") and float(price) > 0:
+                print(
+                    f"  [fetch_spot_price] {ticker}: no live bid/ask quote right now "
+                    f"(outside regular trading hours, most likely) -- using last trade "
+                    f"print {float(price):.4f} instead of a live mid. Not a live quote."
+                )
                 return float(price)
-            print(f"  [fetch_spot_price] {ticker}: no usable last trade print either -- "
-                  f"falling back to last daily close.")
+            print(
+                f"  [fetch_spot_price] {ticker}: no usable last trade print either -- "
+                f"falling back to last daily close."
+            )
         except Exception as e:
-            print(f"  [fetch_spot_price] {ticker}: trade snapshot request failed "
-                  f"({type(e).__name__}: {e}) -- falling back to last daily close.")
+            print(
+                f"  [fetch_spot_price] {ticker}: trade snapshot request failed "
+                f"({type(e).__name__}: {e}) -- falling back to last daily close."
+            )
 
         try:
             end = datetime.now()
             start = end - timedelta(days=7)
             rows = self.hist_stock_eod(
-                ticker, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
+                ticker,
+                start.strftime("%Y%m%d"),
+                end.strftime("%Y%m%d"),
             )
             closes = [
-                float(r['close']) for r in rows
-                if r.get('close') and float(r['close']) > 0
+                float(r["close"])
+                for r in rows
+                if r.get("close") and float(r["close"]) > 0
             ]
             if closes:
                 return closes[-1]
-            print(f"  [fetch_spot_price] {ticker}: daily-close fallback "
-                  f"returned no usable rows either.")
+            print(
+                f"  [fetch_spot_price] {ticker}: daily-close fallback "
+                f"returned no usable rows either."
+            )
         except Exception as e:
-            print(f"  [fetch_spot_price] {ticker}: daily-close fallback also "
-                  f"failed ({type(e).__name__}: {e}).")
+            print(
+                f"  [fetch_spot_price] {ticker}: daily-close fallback also "
+                f"failed ({type(e).__name__}: {e})."
+            )
         return 0.0
 
-    def hist_stock_eod(self, root: str, start_date: str, end_date: str) -> List[Dict]:
+    def _fetch_index_spot_price(self, root: str) -> float:
+        """fetch_spot_price's index path: live index_snapshot_quote, falling
+        back to the last daily close via hist_index_eod. Two layers, not
+        three -- an index has no separate "last trade print" concept
+        distinct from its live price snapshot the way a stock does."""
+        try:
+            quote = self.index_snapshot_quote(root)
+            price = quote.get("price")
+            if price not in (None, "") and float(price) > 0:
+                return float(price)
+            print(
+                f"  [fetch_spot_price] {root}: index snapshot has no usable "
+                f"price ({quote}) -- falling back to last daily close."
+            )
+        except Exception as e:
+            print(
+                f"  [fetch_spot_price] {root}: index snapshot request failed "
+                f"({type(e).__name__}: {e}) -- falling back to last daily close."
+            )
+
+        try:
+            end = datetime.now()
+            start = end - timedelta(days=7)
+            rows = self.hist_index_eod(
+                root, start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+            )
+            closes = [
+                float(r["close"])
+                for r in rows
+                if r.get("close") and float(r["close"]) > 0
+            ]
+            if closes:
+                return closes[-1]
+            print(
+                f"  [fetch_spot_price] {root}: daily-close fallback returned no usable rows."
+            )
+        except Exception as e:
+            print(
+                f"  [fetch_spot_price] {root}: daily-close fallback also failed "
+                f"({type(e).__name__}: {e})."
+            )
+        return 0.0
+
+    def hist_stock_eod(self, root: str, start_date: str, end_date: str) -> list[dict]:
         """Daily OHLCV history.  Paginates into <=28-day chunks to avoid
         proxy-side 502 on long lookbacks."""
         fmt = "%Y%m%d"
         start_dt = datetime.strptime(start_date, fmt)
         end_dt = datetime.strptime(end_date, fmt)
 
-        all_rows: List[Dict] = []
+        all_rows: list[dict] = []
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
@@ -1477,7 +1793,7 @@ class ThetaDataController:
             chunk_start = chunk_end + timedelta(days=1)
         return all_rows
 
-    def hist_stock_ohlc(self, root: str, start_date: str, end_date: str) -> List[Dict]:
+    def hist_stock_ohlc(self, root: str, start_date: str, end_date: str) -> list[dict]:
         """One-minute stock OHLCV history from the verified stock/ohlc route."""
         r = self._get_with_retry(
             f"/api/theta/hist/stock/ohlc/{root}",
@@ -1486,11 +1802,26 @@ class ThetaDataController:
         r.raise_for_status()
         return self._parse_rows(r)
 
+    def hist_index_eod(self, root: str, start_date: str, end_date: str) -> list[dict]:
+        """Daily index close history -- the fetch_spot_price fallback for an
+        index root when index_snapshot_quote has nothing live posted.
+        Unlike hist_stock_eod, no 28-day chunking: only ever called with a
+        short (~7 day) lookback here, so a single request is enough."""
+        r = self._get_with_retry(
+            f"/api/theta/hist/index/eod/{root}",
+            params={"start_date": start_date, "end_date": end_date},
+        )
+        r.raise_for_status()
+        return self._parse_rows(r)
+
     def fetch_option_iv(
-        self, ticker: str, strike: float, T: float,
+        self,
+        ticker: str,
+        strike: float,
+        T: float,
         option_type: str = "call",
-        exp: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
+        exp: str | None = None,
+    ) -> tuple[float | None, float | None, str | None, str | None]:
         """Fetch option IV and price from ThetaData.
 
         Returns (chain_iv, chain_price, expiry_used, data_timestamp).
@@ -1503,7 +1834,9 @@ class ThetaDataController:
             if exp:
                 nearest_exp = str(exp)
             else:
-                expiry_date = (datetime.now() + timedelta(days=int(T * 365))).strftime("%Y%m%d")
+                expiry_date = (datetime.now() + timedelta(days=int(T * 365))).strftime(
+                    "%Y%m%d"
+                )
                 exps = self.list_expirations(ticker)
                 if not exps:
                     return None, None, None, None
@@ -1514,15 +1847,15 @@ class ThetaDataController:
                 ]
                 parsed.sort()
                 nearest_exp = parsed[0][1]
-            right = "C" if option_type == 'call' else "P"
+            right = "C" if option_type == "call" else "P"
 
             greeks = self.option_bulk_greeks(ticker, nearest_exp)
             k_theta = strike_to_theta(strike)
             for row in greeks:
-                if int(row['strike']) == k_theta and row['right'] == right:
-                    iv = row.get('implied_vol')
-                    bid = row.get('bid')
-                    ask = row.get('ask')
+                if int(row["strike"]) == k_theta and row["right"] == right:
+                    iv = row.get("implied_vol")
+                    bid = row.get("bid")
+                    ask = row.get("ask")
                     price = (
                         (float(bid) + float(ask)) / 2.0
                         if bid and ask and float(bid) > 0
@@ -1530,10 +1863,14 @@ class ThetaDataController:
                     )
                     if not price:
                         price = float(bid) if bid and float(bid) > 0 else None
-                    ts = row.get('underlying_timestamp', '')
-                    if not ts and 'date' in row:
-                        ts = str(row['date'])
-                    return (float(iv), price, nearest_exp, ts) if iv else (None, price, nearest_exp, ts)
+                    ts = row.get("underlying_timestamp", "")
+                    if not ts and "date" in row:
+                        ts = str(row["date"])
+                    return (
+                        (float(iv), price, nearest_exp, ts)
+                        if iv
+                        else (None, price, nearest_exp, ts)
+                    )
         except Exception as e:
             print(f"[ThetaData] fetch_option_iv error: {e}")
         return None, None, None, None
@@ -1545,10 +1882,12 @@ class ThetaDataController:
         """
         try:
             today = datetime.now()
-            target = (today + timedelta(days=int(max(T, 0.01) * 365))).strftime("%Y%m%d")
+            target = (today + timedelta(days=int(max(T, 0.01) * 365))).strftime(
+                "%Y%m%d"
+            )
             start = (today - timedelta(days=7)).strftime("%Y%m%d")
             data = self.get_yield_curve(start_date=start, target_date=target)
-            rate = self._first_numeric_field(data, ['risk_free_rate', 'rate', 'yield'])
+            rate = self._first_numeric_field(data, ["risk_free_rate", "rate", "yield"])
             if rate is None:
                 return None
             if rate > 1.0:
@@ -1560,7 +1899,7 @@ class ThetaDataController:
             print(f"[PotatoHedge] yield_curve unavailable ({e}).")
             return None
 
-    def fetch_dividend_yield(self, ticker: str, spot: Optional[float] = None) -> float:
+    def fetch_dividend_yield(self, ticker: str, spot: float | None = None) -> float:
         """Trailing-12-month dividend yield (decimal) from PotatoHedge's stock
         dividend history.  Returns 0.0 when no dividends are found (a real
         answer, not a failure).
@@ -1575,19 +1914,19 @@ class ThetaDataController:
             r = self._get(
                 f"/api/theta/hist/stock/dividend/{ticker}",
                 params={
-                    'start_date': start.strftime("%Y%m%d"),
-                    'end_date': end.strftime("%Y%m%d"),
+                    "start_date": start.strftime("%Y%m%d"),
+                    "end_date": end.strftime("%Y%m%d"),
                 },
             )
             r.raise_for_status()
             rows = self._rows_from_any(r.json())
             total = 0.0
             for row in rows:
-                amt = self._coerce_number(row.get('dividend_amount'))
+                amt = self._coerce_number(row.get("dividend_amount"))
                 if amt is None:
                     for k, v in row.items():
                         kl = str(k).lower()
-                        if 'dividend' in kl and 'amount' in kl:
+                        if "dividend" in kl and "amount" in kl:
                             amt = self._coerce_number(v)
                             break
                 if amt and amt > 0:
@@ -1609,20 +1948,20 @@ class ThetaDataController:
             r = self._get(
                 f"/api/theta/hist/stock/eod/{ticker}",
                 params={
-                    'start_date': start.strftime("%Y%m%d"),
-                    'end_date': end.strftime("%Y%m%d"),
+                    "start_date": start.strftime("%Y%m%d"),
+                    "end_date": end.strftime("%Y%m%d"),
                 },
             )
             r.raise_for_status()
             rows = self._rows_from_any(r.json())
             closes = []
             for row in rows:
-                num = self._coerce_number(row.get('close'))
+                num = self._coerce_number(row.get("close"))
                 if num and num > 0:
                     closes.append(num)
             if len(closes) < 5:
                 return None
-            closes = _np.array(closes[-(window + 1):], dtype=float)
+            closes = _np.array(closes[-(window + 1) :], dtype=float)
             logret = _np.log(closes[1:] / closes[:-1])
             vol = float(_np.std(logret) * _np.sqrt(252))
             if 0.0 < vol < 5.0:
@@ -1632,7 +1971,10 @@ class ThetaDataController:
             return None
 
     def fetch_beta(
-        self, ticker: str, market_proxy: str = 'SPY', window: int = 252,
+        self,
+        ticker: str,
+        market_proxy: str = "SPY",
+        window: int = 252,
     ):
         """Equity beta vs `market_proxy` (default SPY): cov(stock logret,
         market logret) / var(market logret) over the trailing `window`
@@ -1650,15 +1992,15 @@ class ThetaDataController:
                 r = self._get(
                     f"/api/theta/hist/stock/eod/{root}",
                     params={
-                        'start_date': start.strftime("%Y%m%d"),
-                        'end_date': end.strftime("%Y%m%d"),
+                        "start_date": start.strftime("%Y%m%d"),
+                        "end_date": end.strftime("%Y%m%d"),
                     },
                 )
                 r.raise_for_status()
                 rows = self._rows_from_any(r.json())
                 out = []
                 for row in rows:
-                    num = self._coerce_number(row.get('close'))
+                    num = self._coerce_number(row.get("close"))
                     if num and num > 0:
                         out.append(num)
                 return out
@@ -1693,7 +2035,10 @@ class ThetaDataController:
     # ======================================================================
 
     def get_dealer_positioning(
-        self, root: str, start_date: str, end_date: str,
+        self,
+        root: str,
+        start_date: str,
+        end_date: str,
         latest_only: bool = True,
     ):
         """PotatoHedge's own vendor-computed dealer positioning/GEX.
@@ -1701,26 +2046,32 @@ class ThetaDataController:
         This is NOT a raw ThetaData passthrough — it lives under /api/db/,
         PotatoHedge's own value-add analytics layer.
         """
-        r = self._get("/api/db/dealer_positioning", params={
-            'root': root,
-            'start_date': start_date,
-            'end_date': end_date,
-            'latest_only': latest_only,
-            'use_csv': False,
-        })
+        r = self._get(
+            "/api/db/dealer_positioning",
+            params={
+                "root": root,
+                "start_date": start_date,
+                "end_date": end_date,
+                "latest_only": latest_only,
+                "use_csv": False,
+            },
+        )
         r.raise_for_status()
         return r.json()
 
     def get_iv_surface_change(
-        self, root: str, expiration: str,
+        self,
+        root: str,
+        expiration: str,
         baseline_date: str,
-        asof_date: Optional[str] = None,
+        asof_date: str | None = None,
     ):
         """PH v2 volatility.surface_change — vendor ΔIV, no local IV solve.
 
         expiration/baseline/asof are YYYYMMDD or YYYY-MM-DD. Omit asof_date
         to use the vendor EOD-safe prior trading day.
         """
+
         def _iso(d: str) -> str:
             digits = "".join(ch for ch in str(d) if ch.isdigit())
             if len(digits) == 8:
@@ -1735,7 +2086,8 @@ class ThetaDataController:
         if asof_date:
             params["asof_date"] = _iso(asof_date)
         r = self._get_with_retry(
-            f"/api/volatility/surface_change/{root}", params=params,
+            f"/api/volatility/surface_change/{root}",
+            params=params,
         )
         if r.status_code == 404:
             return None
@@ -1743,20 +2095,21 @@ class ThetaDataController:
         return r.json()
 
     def get_yield_curve(
-        self, start_date: str,
-        end_date: Optional[str] = None,
-        target_date: Optional[str] = None,
+        self,
+        start_date: str,
+        end_date: str | None = None,
+        target_date: str | None = None,
     ):
         """PotatoHedge's own Treasury yield curve endpoint.
 
         If target_date is given, returns the closest applicable forward
         risk-free rate for that tenor instead of a full curve.
         """
-        params = {'start_date': start_date, 'use_csv': False}
+        params = {"start_date": start_date, "use_csv": False}
         if end_date is not None:
-            params['end_date'] = end_date
+            params["end_date"] = end_date
         if target_date is not None:
-            params['target_date'] = target_date
+            params["target_date"] = target_date
         r = self._get("/api/db/yield_curve", params=params)
         r.raise_for_status()
         return r.json()

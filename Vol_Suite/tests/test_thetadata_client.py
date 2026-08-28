@@ -19,16 +19,16 @@ No network, no credentials: the controller is built with __new__ and its
 `_get` is replaced with a scripted stub, so these exercise the real retry,
 chunking and parsing code paths without touching api.potatohedge.com.
 """
+
 import httpx
 import pytest
-
 import thetadata_client as tc
 from thetadata_client import ThetaDataController, strike_from_theta, strike_to_theta
-
 
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
+
 
 class FakeResponse:
     """Minimal stand-in for httpx.Response covering what the client uses."""
@@ -45,7 +45,8 @@ class FakeResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise httpx.HTTPStatusError(
-                f"status {self.status_code}", request=None, response=None)
+                f"status {self.status_code}", request=None, response=None
+            )
 
 
 def make_controller(get_impl):
@@ -71,13 +72,13 @@ def greeks_payload(date, ms_of_day, gamma=0.02, iv=0.2):
     hist/option/all_greeks payload: NOTE it carries no strike/right column,
     because those are path segments on that route. That absence is the whole
     point of _stamp_contract."""
-    return [["ms_of_day", "date", "gamma", "implied_vol"],
-            [ms_of_day, date, gamma, iv]]
+    return [["ms_of_day", "date", "gamma", "implied_vol"], [ms_of_day, date, gamma, iv]]
 
 
 # ---------------------------------------------------------------------------
 # Strike scaling
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_strike_scaling_round_trips():
@@ -94,6 +95,7 @@ def test_strike_to_theta_is_integer_thousandths():
 # ---------------------------------------------------------------------------
 # _get_with_retry
 # ---------------------------------------------------------------------------
+
 
 def _scripted(script):
     """Returns a _get that yields script[i] on call i (last item repeats).
@@ -178,6 +180,7 @@ def test_transport_error_then_status_error_returns_the_response():
 # Snapshot / bulk-snapshot / list endpoints must retry like hist_* does
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_option_bulk_oi_retries_a_transient_404():
     """Regression: option_bulk_oi (and the other snapshot/list/bulk_snapshot
@@ -204,7 +207,11 @@ def test_list_expirations_retries_a_transient_404():
 
     def _get(path, params=None):
         calls["n"] += 1
-        return FakeResponse(404) if calls["n"] == 1 else FakeResponse(200, ["20261016", "20261112"])
+        return (
+            FakeResponse(404)
+            if calls["n"] == 1
+            else FakeResponse(200, ["20261016", "20261112"])
+        )
 
     td = make_controller(_get)
     assert td.list_expirations("SMCI") == ["20261016", "20261112"]
@@ -214,6 +221,7 @@ def test_list_expirations_retries_a_transient_404():
 # ---------------------------------------------------------------------------
 # Contract identity stamping -- the silent row-drop bug
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_stamp_contract_adds_identity_absent_from_the_response():
@@ -235,25 +243,31 @@ def test_stamp_contract_does_not_clobber_values_the_api_supplied():
 # Date normalization
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
-@pytest.mark.parametrize("row,expected", [
-    ({"date": "20260710"}, "20260710"),
-    ({"date": "2026-07-10"}, "20260710"),
-    ({"created": "2026-07-10T17:15:06.172"}, "20260710"),   # hist/stock/eod's shape
-    ({"datetime": "2026-07-10"}, "20260710"),
-    ({"gamma": 0.02}, None),
-    ({"date": ""}, None),
-    ({"date": "garbage"}, None),
-])
+@pytest.mark.parametrize(
+    "row,expected",
+    [
+        ({"date": "20260710"}, "20260710"),
+        ({"date": "2026-07-10"}, "20260710"),
+        ({"created": "2026-07-10T17:15:06.172"}, "20260710"),  # hist/stock/eod's shape
+        ({"datetime": "2026-07-10"}, "20260710"),
+        ({"gamma": 0.02}, None),
+        ({"date": ""}, None),
+        ({"date": "garbage"}, None),
+    ],
+)
 def test_normalize_date_handles_every_shape_seen_live(row, expected):
     assert ThetaDataController._normalize_date(row) == expected
 
 
 @pytest.mark.unit
 def test_last_bar_per_date_keeps_the_final_intraday_bar():
-    rows = [{"ms_of_day": 100, "date": "20260710", "gamma": 0.1},
-            {"ms_of_day": 900, "date": "20260710", "gamma": 0.9},
-            {"ms_of_day": 500, "date": "20260710", "gamma": 0.5}]
+    rows = [
+        {"ms_of_day": 100, "date": "20260710", "gamma": 0.1},
+        {"ms_of_day": 900, "date": "20260710", "gamma": 0.9},
+        {"ms_of_day": 500, "date": "20260710", "gamma": 0.5},
+    ]
     out = ThetaDataController._last_bar_per_date(rows)
     assert len(out) == 1
     assert out[0]["gamma"] == 0.9
@@ -264,7 +278,8 @@ def test_last_bar_per_date_normalizes_and_writes_back_the_date():
     """Downstream consumers each re-derive the date and each silently drop
     rows in a format they don't recognize -- so normalize once, here."""
     out = ThetaDataController._last_bar_per_date(
-        [{"ms_of_day": 50, "created": "2026-07-11T16:00:00", "gamma": 0.5}])
+        [{"ms_of_day": 50, "created": "2026-07-11T16:00:00", "gamma": 0.5}]
+    )
     assert out[0]["date"] == "20260711"
 
 
@@ -277,6 +292,7 @@ def test_last_bar_per_date_drops_undated_rows():
 # Chunking + the per-chunk 404 data-loss regression
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_single_contract_history_chunks_into_28_day_spans():
     seen = []
@@ -286,13 +302,14 @@ def test_single_contract_history_chunks_into_28_day_spans():
         return FakeResponse(200, greeks_payload(params["start_date"], 57600000))
 
     make_controller(_get).option_hist_all_greeks_single(
-        "SPY", "20261016", 745000, "C", "20260101", "20260401")
+        "SPY", "20261016", 745000, "C", "20260101", "20260401"
+    )
 
     assert len(seen) == 4, seen
     assert seen[0] == ("20260101", "20260129")
-    assert seen[-1][1] == "20260401"          # never overruns the end date
+    assert seen[-1][1] == "20260401"  # never overruns the end date
     starts = [s for s, _ in seen]
-    assert starts == sorted(starts)           # no gaps, no repeats
+    assert starts == sorted(starts)  # no gaps, no repeats
 
 
 @pytest.mark.unit
@@ -304,13 +321,15 @@ def test_a_404_chunk_does_not_discard_data_from_later_chunks():
     raise_for_status() per chunk, so one early 404 killed the entire pull for
     that contract and threw away real rows it had yet to fetch.
     """
+
     def _get(path, params=None):
         if params["start_date"] == "20260101":
             return FakeResponse(404)
         return FakeResponse(200, greeks_payload(params["start_date"], 57600000))
 
     rows = make_controller(_get).option_hist_all_greeks_single(
-        "SPY", "20261016", 745000, "C", "20260101", "20260401")
+        "SPY", "20261016", 745000, "C", "20260101", "20260401"
+    )
 
     assert len(rows) == 3, "later chunks must survive an early 404"
     assert all(r["strike"] == 745000 and r["right"] == "C" for r in rows)
@@ -320,9 +339,11 @@ def test_a_404_chunk_does_not_discard_data_from_later_chunks():
 def test_all_chunks_404_yields_no_rows_rather_than_an_error():
     """A contract that genuinely never traded in the window is an empty
     result, not a failure."""
-    rows = make_controller(lambda p, params=None: FakeResponse(404)) \
-        .option_hist_all_greeks_single("SPY", "20261016", 745000, "C",
-                                       "20260101", "20260201")
+    rows = make_controller(
+        lambda p, params=None: FakeResponse(404)
+    ).option_hist_all_greeks_single(
+        "SPY", "20261016", 745000, "C", "20260101", "20260201"
+    )
     assert rows == []
 
 
@@ -331,9 +352,11 @@ def test_a_real_error_status_still_raises():
     """Only the known-transient statuses get swallowed. A 400 means the
     request itself is wrong and must not be reported as 'no data'."""
     with pytest.raises(httpx.HTTPStatusError):
-        make_controller(lambda p, params=None: FakeResponse(400)) \
-            .option_hist_all_greeks_single("SPY", "20261016", 745000, "C",
-                                           "20260101", "20260201")
+        make_controller(
+            lambda p, params=None: FakeResponse(400)
+        ).option_hist_all_greeks_single(
+            "SPY", "20261016", 745000, "C", "20260101", "20260201"
+        )
 
 
 @pytest.mark.unit
@@ -361,17 +384,20 @@ def test_hist_stock_eod_retries_transient_502_before_succeeding():
 def test_open_interest_history_is_also_stamped_and_chunked():
     def _get(path, params=None):
         assert "ivl" not in (params or {}), "OI is daily, not interval-bucketed"
-        return FakeResponse(200, [["date", "open_interest"],
-                                  [params["start_date"], 1234]])
+        return FakeResponse(
+            200, [["date", "open_interest"], [params["start_date"], 1234]]
+        )
 
     rows = make_controller(_get).option_hist_open_interest_single(
-        "SPY", "20261016", 745000, "P", "20260101", "20260201")
+        "SPY", "20261016", 745000, "P", "20260101", "20260201"
+    )
     assert rows and all(r["strike"] == 745000 and r["right"] == "P" for r in rows)
 
 
 # ---------------------------------------------------------------------------
 # Whole-chain fan-out: enumeration failures must not look like empty results
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_greeks_enumeration_failure_raises_instead_of_returning_empty():
@@ -381,7 +407,8 @@ def test_greeks_enumeration_failure_raises_instead_of_returning_empty():
     reported upward as a clean empty result."""
     td = make_controller(lambda p, params=None: FakeResponse(200))
     td.option_bulk_greeks = lambda root, exp: (_ for _ in ()).throw(
-        httpx.HTTPStatusError("502", request=None, response=None))
+        httpx.HTTPStatusError("502", request=None, response=None)
+    )
 
     with pytest.raises(httpx.HTTPStatusError):
         td.option_bulk_hist_greeks("SPY", "20261016", "20260101", "20260201")
@@ -391,7 +418,8 @@ def test_greeks_enumeration_failure_raises_instead_of_returning_empty():
 def test_oi_enumeration_failure_raises_instead_of_returning_empty():
     td = make_controller(lambda p, params=None: FakeResponse(200))
     td.option_bulk_oi = lambda root, exp: (_ for _ in ()).throw(
-        httpx.HTTPStatusError("502", request=None, response=None))
+        httpx.HTTPStatusError("502", request=None, response=None)
+    )
 
     with pytest.raises(httpx.HTTPStatusError):
         td.option_bulk_hist_oi("SPY", "20261016", "20260101", "20260201")
@@ -402,21 +430,30 @@ def test_whole_chain_pull_covers_every_contract_and_keys_them_correctly():
     """End-to-end over the fan-out: enumerate the universe, pull each
     contract, and come back with rows that are attributable to a specific
     (strike, right) -- which is the whole reason the stamping exists."""
-    universe = [{"strike": 740000, "right": "C"}, {"strike": 740000, "right": "P"},
-                {"strike": 745000, "right": "C"}, {"strike": 745000, "right": "P"}]
+    universe = [
+        {"strike": 740000, "right": "C"},
+        {"strike": 740000, "right": "P"},
+        {"strike": 745000, "right": "C"},
+        {"strike": 745000, "right": "P"},
+    ]
     td = make_controller(lambda p, params=None: FakeResponse(200))
     td.option_bulk_greeks = lambda root, exp: universe
 
     def _one(root, exp, k_theta, right, start, end, ivl=900000):
         return ThetaDataController._stamp_contract(
-            [{"ms_of_day": 57600000, "date": "20260115", "gamma": 0.02}], k_theta, right)
+            [{"ms_of_day": 57600000, "date": "20260115", "gamma": 0.02}], k_theta, right
+        )
 
     td.option_hist_all_greeks_single = _one
     rows = td.option_bulk_hist_greeks("SPY", "20261016", "20260101", "20260201")
 
     assert len(rows) == 4
-    assert {(r["strike"], r["right"]) for r in rows} == \
-           {(740000, "C"), (740000, "P"), (745000, "C"), (745000, "P")}
+    assert {(r["strike"], r["right"]) for r in rows} == {
+        (740000, "C"),
+        (740000, "P"),
+        (745000, "C"),
+        (745000, "P"),
+    }
 
 
 @pytest.mark.unit
@@ -446,7 +483,8 @@ def test_one_contract_failing_does_not_abort_the_whole_chain():
         if k_theta == 740000:
             raise httpx.RemoteProtocolError("Server disconnected")
         return ThetaDataController._stamp_contract(
-            [{"ms_of_day": 1, "date": "20260115"}], k_theta, right)
+            [{"ms_of_day": 1, "date": "20260115"}], k_theta, right
+        )
 
     td.option_hist_all_greeks_single = _one
     rows = td.option_bulk_hist_greeks("SPY", "20261016", "20260101", "20260201")
@@ -456,6 +494,7 @@ def test_one_contract_failing_does_not_abort_the_whole_chain():
 # ---------------------------------------------------------------------------
 # Response-shape parsing
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_parse_rows_handles_thetadatas_headers_first_convention():
@@ -472,21 +511,34 @@ def test_parse_rows_returns_empty_for_payloads_with_no_data_rows(payload):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("data,expected_len", [
-    ([["a", "b"], [1, 2]], 1),                                       # list-of-lists
-    ({"header": {"format": ["a", "b"]}, "response": [[1, 2]]}, 1),   # nested (dividends)
-    ({"close": [1, 2], "open": [3, 4]}, 2),                          # columnar
-    ([{"a": 1}], 1),                                                 # already dicts
-    ("nonsense", 0),
-])
+@pytest.mark.parametrize(
+    "data,expected_len",
+    [
+        ([["a", "b"], [1, 2]], 1),  # list-of-lists
+        (
+            {"header": {"format": ["a", "b"]}, "response": [[1, 2]]},
+            1,
+        ),  # nested (dividends)
+        ({"close": [1, 2], "open": [3, 4]}, 2),  # columnar
+        ([{"a": 1}], 1),  # already dicts
+        ("nonsense", 0),
+    ],
+)
 def test_rows_from_any_normalizes_all_three_live_response_shapes(data, expected_len):
     assert len(ThetaDataController._rows_from_any(data)) == expected_len
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("value,expected", [
-    ("1.5", 1.5), (2, 2.0), (None, None), ("abc", None), (float("nan"), None),
-])
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1.5", 1.5),
+        (2, 2.0),
+        (None, None),
+        ("abc", None),
+        (float("nan"), None),
+    ],
+)
 def test_coerce_number_rejects_junk_and_nan(value, expected):
     assert ThetaDataController._coerce_number(value) == expected
 
@@ -503,12 +555,17 @@ def test_coerce_number_rejects_junk_and_nan(value, expected):
 # merge into shared/thetadata.py must not silently reintroduce this.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_fetch_spot_price_rejects_the_stringified_zero_quote_bug():
     """The '0.0000' string must NOT be treated as a valid price."""
     td = make_controller(lambda p, params=None: FakeResponse(200))
-    td.stock_snapshot_quote = lambda root: {"mid": "0.0000", "bid": "0.0000",
-                                             "ask": "0.0000", "last": "0.0000"}
+    td.stock_snapshot_quote = lambda root: {
+        "mid": "0.0000",
+        "bid": "0.0000",
+        "ask": "0.0000",
+        "last": "0.0000",
+    }
     td.stock_snapshot_trade = lambda root: {"price": "123.45"}
     assert td.fetch_spot_price("SPY") == pytest.approx(123.45)
 
@@ -532,10 +589,14 @@ def test_fetch_spot_price_falls_back_to_trade_when_quote_is_empty():
 def test_fetch_spot_price_falls_back_to_daily_close_when_quote_and_trade_fail():
     td = make_controller(lambda p, params=None: FakeResponse(200))
     td.stock_snapshot_quote = lambda root: (_ for _ in ()).throw(
-        httpx.HTTPStatusError("502", request=None, response=None))
+        httpx.HTTPStatusError("502", request=None, response=None)
+    )
     td.stock_snapshot_trade = lambda root: {}
     td.hist_stock_eod = lambda root, start, end: [
-        {"close": "10.0"}, {"close": "0"}, {"close": "11.5"}]
+        {"close": "10.0"},
+        {"close": "0"},
+        {"close": "11.5"},
+    ]
     assert td.fetch_spot_price("SPY") == pytest.approx(11.5)
 
 
@@ -549,8 +610,112 @@ def test_fetch_spot_price_returns_zero_when_every_layer_fails():
 
 
 # ---------------------------------------------------------------------------
+# fetch_spot_price -- cash index routing (SPX/NDX/VIX/...)
+#
+# A cash index has no equity listing, so stock_snapshot_quote's
+# /api/theta/snapshot/stock/quote/{root} always comes back empty/erroring
+# for one. fetch_spot_price must route a known index root to the dedicated
+# index endpoints (index_snapshot_quote -> hist_index_eod) instead of ever
+# reaching the stock-quote path at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_routes_a_known_index_to_the_index_path():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.stock_snapshot_quote = lambda root: (_ for _ in ()).throw(
+        AssertionError("must not call the stock path for an index root")
+    )
+    td.index_snapshot_quote = lambda root: {"price": "7711.76"}
+    assert td.fetch_spot_price("SPX") == pytest.approx(7711.76)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_index_is_case_insensitive_and_trims_whitespace():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.index_snapshot_quote = lambda root: {"price": "100.0"}
+    assert td.fetch_spot_price(" spx ") == pytest.approx(100.0)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_index_falls_back_to_daily_close():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.index_snapshot_quote = lambda root: (_ for _ in ()).throw(
+        httpx.HTTPStatusError("502", request=None, response=None)
+    )
+    td.hist_index_eod = lambda root, start, end: [{"close": "0"}, {"close": "7700.5"}]
+    assert td.fetch_spot_price("NDX") == pytest.approx(7700.5)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_index_zero_price_falls_through_to_daily_close():
+    """Same '0.0000'-string trap as the stock path -- an index quote with a
+    zero/blank price must not be treated as a found price."""
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.index_snapshot_quote = lambda root: {"price": "0.0000"}
+    td.hist_index_eod = lambda root, start, end: [{"close": "22.5"}]
+    assert td.fetch_spot_price("VIX") == pytest.approx(22.5)
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_index_returns_zero_when_both_layers_fail():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.index_snapshot_quote = lambda root: {}
+    td.hist_index_eod = lambda root, start, end: []
+    assert td.fetch_spot_price("RUT") == 0.0
+
+
+@pytest.mark.unit
+def test_fetch_spot_price_non_index_ticker_never_touches_index_path():
+    td = make_controller(lambda p, params=None: FakeResponse(200))
+    td.index_snapshot_quote = lambda root: (_ for _ in ()).throw(
+        AssertionError("must not call the index path for a regular ticker")
+    )
+    td.stock_snapshot_quote = lambda root: {"mid": "450.10"}
+    assert td.fetch_spot_price("SPY") == pytest.approx(450.10)
+
+
+@pytest.mark.unit
+def test_index_snapshot_quote_parses_the_first_row():
+    td = make_controller(
+        lambda p, params=None: FakeResponse(
+            200,
+            rows=[["ms_of_day", "date", "price"], ["57881000", "20260828", "7711.76"]],
+        )
+    )
+    assert td.index_snapshot_quote("SPX") == {
+        "ms_of_day": "57881000",
+        "date": "20260828",
+        "price": "7711.76",
+    }
+
+
+@pytest.mark.unit
+def test_index_snapshot_quote_returns_empty_dict_for_no_rows():
+    td = make_controller(lambda p, params=None: FakeResponse(200, rows=[]))
+    assert td.index_snapshot_quote("SPX") == {}
+
+
+@pytest.mark.unit
+def test_hist_index_eod_parses_multiple_rows():
+    td = make_controller(
+        lambda p, params=None: FakeResponse(
+            200,
+            rows=[
+                ["date", "close"],
+                ["20260827", "7730.99"],
+                ["20260828", "7711.76"],
+            ],
+        )
+    )
+    rows = td.hist_index_eod("SPX", "20260821", "20260828")
+    assert [r["close"] for r in rows] == ["7730.99", "7711.76"]
+
+
+# ---------------------------------------------------------------------------
 # Credentials
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_missing_credentials_fails_immediately_and_says_so(monkeypatch):
@@ -566,10 +731,12 @@ def test_missing_credentials_fails_immediately_and_says_so(monkeypatch):
 
     # Patch both places load_env_once could be called from
     import shared.thetadata as _st
+
     monkeypatch.setattr(_st, "load_env_once", lambda: None)
 
     # Verify they're gone
     import os
+
     assert os.environ.get("THETADATA_CF_ACCESS_CLIENT_ID") is None
     assert os.environ.get("THETADATA_CF_ACCESS_CLIENT_SECRET") is None
 
