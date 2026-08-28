@@ -26,6 +26,15 @@ class BarCache:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    ticker TEXT NOT NULL,
+                    interval TEXT NOT NULL
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path)
@@ -92,3 +101,21 @@ class BarCache:
         if row is None:
             return None
         return datetime.fromisoformat(row[0])
+
+    def get_session(self) -> tuple[str, str] | None:
+        """Last ticker/interval the user was viewing, so a restart reopens there."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT ticker, interval FROM session WHERE id = 1"
+            ).fetchone()
+        return (row[0], row[1]) if row else None
+
+    def set_session(self, ticker: str, interval: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session (id, ticker, interval) VALUES (1, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET ticker = excluded.ticker, interval = excluded.interval
+                """,
+                (ticker, interval),
+            )

@@ -9,6 +9,8 @@ Phase 1 semantics (honest):
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +25,25 @@ from chart_app.bar_cache import BarCache
 from chart_app.ingest import refresh_cache
 from chart_app.snapshot import build_state
 from shared.chart_data import SUPPORTED_INTERVALS, ChartDataError
-from shared.spot_history import fetch_daily_candles, fetch_intraday_candles, validate_ticker
+from shared.spot_history import (
+    fetch_daily_candles,
+    fetch_intraday_candles,
+    validate_ticker,
+)
+
+# Mirrors the LOOKBACK map in static/index.html -- how much history to pull
+# per interval so a background refresh keeps enough bars to backfill any gap
+# since the last poll, not just a rolling window.
+_LOOKBACK = {
+    "3m": "5d",
+    "5m": "5d",
+    "10m": "10d",
+    "15m": "5d",
+    "30m": "20d",
+    "1h": "60d",
+    "4h": "1y",
+    "1d": "1y",
+}
 
 
 class _SymbolBody(BaseModel):
@@ -55,14 +75,29 @@ def create_app(
     daily_fn=fetch_daily_candles,
     intrad_fn=fetch_intraday_candles,
     flow_fn=None,
+    background_refresh_seconds: float | None = None,
 ) -> FastAPI:
     app = FastAPI()
+    saved_session = cache.get_session()
     session: dict[str, Any] = {
-        "ticker": default_ticker,
-        "interval": default_interval,
+        "ticker": saved_session[0] if saved_session else default_ticker,
+        "interval": saved_session[1] if saved_session else default_interval,
         "rh": None,
         "flow_cache": {},
     }
+    _refresh_task: asyncio.Task | None = None
+
+    def _refresh_now() -> None:
+        interval = session["interval"]
+        refresh_cache(
+            cache,
+            session["ticker"],
+            interval,
+            _LOOKBACK.get(interval, "5d"),
+            daily_fn=daily_fn,
+            intrad_fn=intrad_fn,
+        )
+        session["flow_cache"].clear()
 
     @app.get("/api/state")
     def get_state() -> dict[str, Any]:
@@ -88,13 +123,17 @@ def create_app(
         session["ticker"] = ticker
         session["interval"] = body.interval
         session["flow_cache"].clear()
+        cache.set_session(ticker, body.interval)
         return {"ok": True}
 
     @app.post("/api/rh")
     def post_rh(body: _RhBody) -> dict[str, bool]:
         position = None
         if body.position is not None:
-            position = {"qty": float(body.position.qty), "avg_price": float(body.position.avg_price)}
+            position = {
+                "qty": float(body.position.qty),
+                "avg_price": float(body.position.avg_price),
+            }
         session["rh"] = {"position": position, "fills": list(body.fills)}
         return {"ok": True}
 
@@ -116,6 +155,44 @@ def create_app(
         return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+    if background_refresh_seconds:
+        # Opt-in only (param is None by default) so plain create_app() calls
+        # in tests never hit the network -- only the module-level `app`
+        # instance below, used by the actual uvicorn process, enables this.
+
+        def _next_delay() -> float:
+            # Daily bars don't move intrabar the way intraday ones do --
+            # polling them every ~45s would just burn ThetaData calls for no
+            # new information, so back off hard whenever "1d" is selected.
+            if session["interval"] == "1d":
+                return max(background_refresh_seconds, 900.0)
+            return background_refresh_seconds
+
+        async def _refresh_loop() -> None:
+            loop = asyncio.get_event_loop()
+            while True:
+                try:
+                    await loop.run_in_executor(None, _refresh_now)
+                except Exception:
+                    pass  # transient data-source failure; retry next tick
+                await asyncio.sleep(_next_delay())
+
+        @app.on_event("startup")
+        async def _on_startup() -> None:
+            nonlocal _refresh_task
+            loop = asyncio.get_event_loop()
+            try:
+                await loop.run_in_executor(None, _refresh_now)
+            except Exception:
+                pass
+            _refresh_task = asyncio.create_task(_refresh_loop())
+
+        @app.on_event("shutdown")
+        async def _on_shutdown() -> None:
+            if _refresh_task is not None:
+                _refresh_task.cancel()
+
     return app
 
 
@@ -128,8 +205,8 @@ def _production_flow_fn(root, start_dt, end_dt, min_premium):
     """
     from datetime import datetime, timedelta
 
-    from Direction.indicator import _thread_client
     from chart_app.flow_stamp import rows_from_flow_payload
+    from Direction.indicator import _thread_client
 
     def _as_dt(value):
         if isinstance(value, datetime):
@@ -174,6 +251,20 @@ def _production_flow_fn(root, start_dt, end_dt, min_premium):
     return rows
 
 
+def _refresh_seconds_from_env(default: float = 45.0) -> float:
+    raw = os.environ.get("CHART_APP_REFRESH_SECONDS")
+    if not raw:
+        return default
+    try:
+        return max(5.0, float(raw))
+    except ValueError:
+        return default
+
+
 _DEFAULT_CACHE = Path("artifacts/chart_app_bars.db")
 _DEFAULT_CACHE.parent.mkdir(parents=True, exist_ok=True)
-app = create_app(BarCache(_DEFAULT_CACHE), flow_fn=_production_flow_fn)
+app = create_app(
+    BarCache(_DEFAULT_CACHE),
+    flow_fn=_production_flow_fn,
+    background_refresh_seconds=_refresh_seconds_from_env(),
+)
