@@ -61,12 +61,9 @@
    path data, only the spread of terminal outcomes across n_sims draws -- so
    this charts that terminal distribution rather than a (fabricated) path fan.
    The bars are drawn as inline SVG: no chart library is loaded on this page,
-   and the dashboard is deliberately offline/localhost-only. */
-.dist-chart { margin: 10px 0 0; }
-.dist-chart-title { color: var(--muted); margin-bottom: 2px; }
-.dist-chart svg { display: block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
-.dist-bar { fill: var(--accent); }
-.dist-percentiles { margin-top: 3px; color: var(--muted); }
+   and the dashboard is deliberately offline/localhost-only.
+   (.dist-chart/.dist-bar/etc. now live in base.html -- shared with index.html's
+   widget 3, which draws the same shape of chart.) */
 
 /* Worker dispatch (Quant Console Task 12) -- a completed dispatch job's
    report is a Claude worker's *interpretation* of a module's already-run

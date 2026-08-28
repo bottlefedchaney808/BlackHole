@@ -95,6 +95,15 @@ h2 { font-size: 15px; margin: 0; letter-spacing: -0.01em; }
 .widget-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; }
 .widget-grid .widget { margin-bottom: 0; }
 
+/* Terminal-distribution histograms -- shared between quant.html (module sims)
+   and index.html (widget 3's per-position sims). Small inline-SVG bars, no
+   chart library. */
+.dist-chart { margin: 10px 0 0; }
+.dist-chart-title { color: var(--muted); margin-bottom: 2px; }
+.dist-chart svg { display: block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; }
+.dist-bar { fill: var(--accent); }
+.dist-percentiles { margin-top: 3px; color: var(--muted); }
+
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 .card {
   background: var(--panel); border: 1px solid var(--border);
