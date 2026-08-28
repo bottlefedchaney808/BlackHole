@@ -98,7 +98,38 @@ def _resolve_ticker(context: dict[str, Any]) -> str:
 # chart in this repo uses). Best-effort: a plotting failure never discards an
 # already-computed grid.
 # ---------------------------------------------------------------------------
-def _plot_surface_3d(grid_result, x_key, y_key, z_label, title, path) -> str | None:
+# Dashboard dark-theme palette (dashboard/templates/base.html's CSS custom
+# properties) -- kept here rather than imported so this module has no
+# dependency on the dashboard package; duplicated intentionally, small.
+_DARK_BG = "#070a14"
+_DARK_PANEL = "#0c1122"
+_DARK_TEXT = "#f8fafc"
+_DARK_MUTED = "#a389ad"
+_DARK_ACCENT_CMAP = "plasma"
+
+
+def _apply_dark_theme(fig, ax) -> None:
+    fig.patch.set_facecolor(_DARK_BG)
+    ax.set_facecolor(_DARK_PANEL)
+    ax.xaxis.label.set_color(_DARK_MUTED)
+    ax.yaxis.label.set_color(_DARK_MUTED)
+    if hasattr(ax, "zaxis"):
+        ax.zaxis.label.set_color(_DARK_MUTED)
+    ax.title.set_color(_DARK_TEXT)
+    ax.tick_params(colors=_DARK_MUTED)
+    for pane in (
+        getattr(ax, "xaxis", None),
+        getattr(ax, "yaxis", None),
+        getattr(ax, "zaxis", None),
+    ):
+        if pane is not None and hasattr(pane, "pane"):
+            pane.pane.set_facecolor(_DARK_PANEL)
+            pane.pane.set_alpha(1.0)
+
+
+def _plot_surface_3d(
+    grid_result, x_key, y_key, z_label, title, path, *, dark_theme: bool = False
+) -> str | None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -113,15 +144,20 @@ def _plot_surface_3d(grid_result, x_key, y_key, z_label, title, path) -> str | N
 
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
-    surf = ax.plot_surface(XX, YY, Z, cmap="viridis", edgecolor="none", alpha=0.92)
+    cmap = _DARK_ACCENT_CMAP if dark_theme else "viridis"
+    surf = ax.plot_surface(XX, YY, Z, cmap=cmap, edgecolor="none", alpha=0.92)
     ax.set_xlabel("Strike ($)")
     ax.set_ylabel(y_key.replace("_", " "))
     ax.set_zlabel(z_label)
     ax.set_title(title)
-    fig.colorbar(surf, ax=ax, shrink=0.6, aspect=20, label=z_label)
+    cbar = fig.colorbar(surf, ax=ax, shrink=0.6, aspect=20, label=z_label)
+    if dark_theme:
+        _apply_dark_theme(fig, ax)
+        cbar.ax.yaxis.label.set_color(_DARK_MUTED)
+        cbar.ax.tick_params(colors=_DARK_MUTED)
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     return path
 
@@ -206,6 +242,7 @@ def _chart_path(out_dir: str, ticker: str, tag: str) -> str:
 def _run_greek_surface(context, sg, ticker, out_dir):
     greek = str(context.get("greek") or DEFAULT_GREEK).strip().lower()
     max_expiries = int(context.get("max_expiries") or 12)
+    dark_theme = bool(context.get("dark_theme"))
     result = sg.build_greek_surface(ticker, greek, max_expiries=max_expiries)
 
     chart_path = None
@@ -219,6 +256,7 @@ def _run_greek_surface(context, sg, ticker, out_dir):
                 f"{greek} exposure ({result.get('units', '')})",
                 f"{ticker} dealer-frame {greek} surface (strike x DTE)",
                 path,
+                dark_theme=dark_theme,
             )
         except Exception:
             chart_path = None
@@ -229,6 +267,7 @@ def _run_greek_surface(context, sg, ticker, out_dir):
 
 
 def _run_iv_surface_market(context, sg, ticker, out_dir):
+    dark_theme = bool(context.get("dark_theme"))
     result = sg.build_market_iv_surface(ticker)
 
     chart_path = None
@@ -242,6 +281,7 @@ def _run_iv_surface_market(context, sg, ticker, out_dir):
                 "Implied vol",
                 f"{ticker} market IV surface (strike x tenor)",
                 path,
+                dark_theme=dark_theme,
             )
         except Exception:
             chart_path = None

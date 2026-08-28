@@ -221,7 +221,7 @@ def test_chart_written_when_output_dir_present(monkeypatch, tmp_path):
     _install(monkeypatch)
     written = {}
 
-    def fake_plot(result, x_key, y_key, z_label, title, path):
+    def fake_plot(result, x_key, y_key, z_label, title, path, **kwargs):
         written["path"] = path
         return path
 
@@ -239,13 +239,55 @@ def test_chart_written_when_output_dir_present(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_dark_theme_flag_reaches_plot_surface_3d(monkeypatch, tmp_path):
+    _install(monkeypatch)
+    seen = {}
+
+    def fake_plot(result, x_key, y_key, z_label, title, path, **kwargs):
+        seen["dark_theme"] = kwargs.get("dark_theme")
+        return path
+
+    monkeypatch.setattr(se_tool, "_plot_surface_3d", fake_plot)
+    se_tool.run(
+        {
+            "focus": {"ticker": "AAPL"},
+            "mode": "greek_surface",
+            "greek": "vanna",
+            "output_dir": str(tmp_path),
+            "dark_theme": True,
+        }
+    )
+    assert seen["dark_theme"] is True
+
+
+@pytest.mark.unit
+def test_dark_theme_defaults_false(monkeypatch, tmp_path):
+    _install(monkeypatch)
+    seen = {}
+
+    def fake_plot(result, x_key, y_key, z_label, title, path, **kwargs):
+        seen["dark_theme"] = kwargs.get("dark_theme")
+        return path
+
+    monkeypatch.setattr(se_tool, "_plot_surface_3d", fake_plot)
+    se_tool.run(
+        {
+            "focus": {"ticker": "AAPL"},
+            "mode": "iv_surface_market",
+            "output_dir": str(tmp_path),
+        }
+    )
+    assert seen["dark_theme"] is False
+
+
+@pytest.mark.unit
 def test_output_dir_override_takes_priority(monkeypatch, tmp_path):
     _install(monkeypatch)
     written = {}
     monkeypatch.setattr(
         se_tool,
         "_plot_surface_3d",
-        lambda result, x_key, y_key, z_label, title, path: (
+        lambda result, x_key, y_key, z_label, title, path, **kwargs: (
             written.setdefault("path", path) or path
         ),
     )
