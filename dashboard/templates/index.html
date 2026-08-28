@@ -322,10 +322,10 @@ function renderPositionAnalysis(data) {
     h3.textContent = entry.ticker;
     section.appendChild(h3);
 
-    if (entry.hedge && entry.hedge.headline) {
+    if (entry.hedge_headline) {
       var headline = document.createElement('div');
       headline.className = 'small';
-      headline.textContent = 'hedge: ' + entry.hedge.headline;
+      headline.textContent = 'hedge: ' + entry.hedge_headline;
       section.appendChild(headline);
     } else if (entry.hedge_error) {
       var herr = document.createElement('div');

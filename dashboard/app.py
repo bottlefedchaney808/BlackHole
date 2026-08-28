@@ -318,6 +318,66 @@ def _widget_signals_tick() -> None:
     _widget_cache().set("signals", {"tickers": rows}, status="ok")
 
 
+def _hedge_position_payload(
+    ticker: str, positions: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Build hedge_optimizer_tool's context['position'] from the real held
+    equity positions for `ticker`, so it hedges the actual size (which can be
+    fractional, e.g. 0.028 sh) instead of silently defaulting to an assumed
+    100 shares (its behavior when context['position'] is omitted). Held
+    option legs aren't included -- widget 1's position schema doesn't carry
+    strike/expiry/right, so there's nothing to build an options leg from."""
+    stocks = []
+    for p in positions:
+        if p.get("ticker") != ticker or p.get("instrument_type") != "equity":
+            continue
+        qty = p.get("qty")
+        price = p.get("current_price") or p.get("avg_price")
+        if qty in (None, 0) or price in (None, 0):
+            continue
+        stocks.append(
+            {
+                "ticker": ticker,
+                "shares": abs(float(qty)),
+                "price": float(price),
+                "side": 1.0 if float(qty) >= 0 else -1.0,
+            }
+        )
+    if not stocks:
+        return None
+    return {"stocks": stocks, "options": []}
+
+
+def _hedge_headline(hedge_result: dict[str, Any]) -> str | None:
+    """hedge_optimizer_tool's raw result has no headline field -- derive a
+    short one from the numbers it actually returns (net delta + the
+    stock+ATM-call recipe), rather than fabricating language the tool
+    itself doesn't provide."""
+    position = hedge_result.get("position") or {}
+    recipes = hedge_result.get("recipes") or {}
+    parts = []
+    net_delta = position.get("net_delta")
+    if isinstance(net_delta, (int, float)):
+        parts.append(f"net delta {net_delta:+.1f}")
+    recipe = recipes.get("stock_atm_call")
+    if isinstance(recipe, dict):
+        shares = recipe.get("stock_shares")
+        direction = recipe.get("stock_direction")
+        calls = recipe.get("atm_call_contracts")
+        if (
+            isinstance(shares, (int, float))
+            and direction
+            and isinstance(calls, (int, float))
+        ):
+            parts.append(
+                f"{direction} {abs(shares):.0f} sh + {calls:+.2f} ATM calls to flatten"
+            )
+    note = position.get("note")
+    if note:
+        parts.append(note)
+    return "; ".join(parts) if parts else None
+
+
 def _widget_position_analysis_tick() -> None:
     """Widget 3: for each distinct ticker in widget 1's cached position list,
     run the hedge optimizer and the 3 sim modes price_dist_tool actually
@@ -343,16 +403,43 @@ def _widget_position_analysis_tick() -> None:
     for ticker in tickers:
         entry: dict[str, Any] = {"ticker": ticker}
         try:
-            entry["hedge"] = hedge_optimizer_tool.run(
-                {"mode": "options_hedge", "ticker": ticker, "focus": {"ticker": ticker}}
-            )
+            hedge_context: dict[str, Any] = {
+                "mode": "options_hedge",
+                "ticker": ticker,
+                "focus": {"ticker": ticker},
+            }
+            real_position = _hedge_position_payload(ticker, positions)
+            if real_position is not None:
+                hedge_context["position"] = real_position
+            hedge_result = hedge_optimizer_tool.run(hedge_context)
+            entry["hedge"] = hedge_result
+            entry["hedge_headline"] = _hedge_headline(hedge_result)
         except Exception as exc:
             entry["hedge_error"] = f"{type(exc).__name__}: {exc}"
-        for mode in ("price_dist", "mc_sim", "corr_sim"):
+
+        # corr_sim needs at least one basket peer distinct from the focus
+        # ticker -- use the other distinct tickers actually held as the
+        # peer universe (a real basket, not a fabricated one). Skip the
+        # mode entirely, with a clear reason, when nothing else is held.
+        peers = [t for t in tickers if t != ticker][:2]
+        sim_modes = ("price_dist", "mc_sim")
+        if peers:
+            sim_modes = sim_modes + ("corr_sim",)
+        else:
+            entry["corr_sim_error"] = (
+                "skipped: needs at least one other held ticker as a basket peer"
+            )
+
+        for mode in sim_modes:
             try:
-                sim_result = price_dist_tool.run(
-                    {"ticker": ticker, "focus": {"ticker": ticker}, "mode": mode}
-                )
+                sim_context: dict[str, Any] = {
+                    "ticker": ticker,
+                    "focus": {"ticker": ticker},
+                    "mode": mode,
+                }
+                if mode == "corr_sim":
+                    sim_context["basket"] = {"tickers": peers}
+                sim_result = price_dist_tool.run(sim_context)
                 entry[mode] = sim_result
                 entry[f"{mode}_distribution"] = _bundle_distribution(mode, sim_result)
             except Exception as exc:

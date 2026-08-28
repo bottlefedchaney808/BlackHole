@@ -118,7 +118,7 @@ def test_position_analysis_tick_dedupes_tickers_and_runs_all_modes(
 
     def fake_hedge_run(context):
         hedge_calls.append(context)
-        return {"mode": "options_hedge", "provenance": {}}
+        return {"mode": "options_hedge", "position": {"net_delta": 12.0}, "recipes": {}}
 
     def fake_sim_run(context):
         sim_calls.append(context["mode"])
@@ -132,19 +132,109 @@ def test_position_analysis_tick_dedupes_tickers_and_runs_all_modes(
     # NVDA held in both accounts -- must be analyzed once, not twice.
     assert len(hedge_calls) == 1
     assert hedge_calls[0]["ticker"] == "NVDA"
-    assert sim_calls == ["price_dist", "mc_sim", "corr_sim"]
+    # Only one distinct held ticker -- corr_sim has no basket peer, so it's
+    # skipped rather than attempted and failed.
+    assert sim_calls == ["price_dist", "mc_sim"]
 
     row = dashboard_app._widget_cache().get("position_analysis")
     assert row["status"] == "ok"
     entry = row["payload"]["positions"][0]
     assert entry["ticker"] == "NVDA"
     assert entry["hedge"]["mode"] == "options_hedge"
+    assert entry["hedge_headline"] == "net delta +12.0"
     assert entry["price_dist"]["mode"] == "price_dist"
     assert entry["mc_sim"]["mode"] == "mc_sim"
-    assert entry["corr_sim"]["mode"] == "corr_sim"
+    assert "corr_sim" not in entry
+    assert "basket peer" in entry["corr_sim_error"]
     # bins=[] carries no terminal_price_histogram -- _bundle_distribution
     # correctly reports "no usable histogram" rather than fabricating one.
     assert entry["price_dist_distribution"] is None
+
+
+def test_position_analysis_tick_runs_corr_sim_with_real_basket_peers(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
+    dashboard_app._widget_cache().set(
+        "positions",
+        {
+            "positions": [
+                {"account": "A", "ticker": "NVDA", "instrument_type": "equity"},
+                {"account": "A", "ticker": "AMD", "instrument_type": "equity"},
+            ],
+            "accounts": [],
+        },
+        status="ok",
+    )
+
+    from Tools.tools import hedge_optimizer_tool, price_dist_tool
+
+    corr_sim_contexts = []
+
+    def fake_hedge_run(context):
+        return {"mode": "options_hedge"}
+
+    def fake_sim_run(context):
+        if context["mode"] == "corr_sim":
+            corr_sim_contexts.append(context)
+        return {"mode": context["mode"], "bins": []}
+
+    monkeypatch.setattr(hedge_optimizer_tool, "run", fake_hedge_run)
+    monkeypatch.setattr(price_dist_tool, "run", fake_sim_run)
+
+    dashboard_app._widget_position_analysis_tick()
+
+    # Two distinct tickers -- each one's corr_sim uses the OTHER as its peer.
+    assert len(corr_sim_contexts) == 2
+    tickers_and_peers = {c["ticker"]: c["basket"]["tickers"] for c in corr_sim_contexts}
+    assert tickers_and_peers["NVDA"] == ["AMD"]
+    assert tickers_and_peers["AMD"] == ["NVDA"]
+
+    row = dashboard_app._widget_cache().get("position_analysis")
+    for entry in row["payload"]["positions"]:
+        assert "corr_sim_error" not in entry
+        assert entry["corr_sim"]["mode"] == "corr_sim"
+
+
+def test_hedge_position_payload_uses_real_held_quantity(monkeypatch, tmp_path):
+    monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
+    dashboard_app._widget_cache().set(
+        "positions",
+        {
+            "positions": [
+                {
+                    "account": "A",
+                    "ticker": "NVDA",
+                    "instrument_type": "equity",
+                    "qty": 0.028,
+                    "avg_price": 211.94,
+                    "current_price": 215.0,
+                }
+            ],
+            "accounts": [],
+        },
+        status="ok",
+    )
+
+    from Tools.tools import hedge_optimizer_tool, price_dist_tool
+
+    hedge_calls = []
+
+    def fake_hedge_run(context):
+        hedge_calls.append(context)
+        return {"mode": "options_hedge"}
+
+    monkeypatch.setattr(hedge_optimizer_tool, "run", fake_hedge_run)
+    monkeypatch.setattr(
+        price_dist_tool, "run", lambda context: {"mode": context["mode"], "bins": []}
+    )
+
+    dashboard_app._widget_position_analysis_tick()
+
+    assert hedge_calls[0]["position"] == {
+        "stocks": [{"ticker": "NVDA", "shares": 0.028, "price": 215.0, "side": 1.0}],
+        "options": [],
+    }
 
 
 def test_position_analysis_tick_bundles_chartable_distribution(monkeypatch, tmp_path):
@@ -217,7 +307,10 @@ def test_position_analysis_tick_records_per_call_errors(monkeypatch, tmp_path):
     assert "no listed options" in entry["hedge_error"]
     assert "sim blew up" in entry["price_dist_error"]
     assert "sim blew up" in entry["mc_sim_error"]
-    assert "sim blew up" in entry["corr_sim_error"]
+    # Only one distinct ticker held ("TGB") -- corr_sim is skipped before it
+    # ever reaches price_dist_tool.run, so its error is the skip reason, not
+    # the sim exception.
+    assert "basket peer" in entry["corr_sim_error"]
 
 
 # --------------------------------------------------------------------------
