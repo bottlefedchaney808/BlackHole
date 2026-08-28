@@ -1,54 +1,56 @@
-# X.com Fintwit Buzz — power-hour — 2026-08-21
-asof_et: 2026-08-21T15:15:00-04:00 | lookback: 2026-08-21T12:00:00-04:00 → 2026-08-21T15:15:00-04:00 | source: x_search | n_posts: 9 | quality: partial
+# X.com Fintwit Buzz — power-hour — 2026-08-27
+asof_et: 2026-08-27T15:15:01-04:00 | lookback: 2026-08-27T12:00:00-04:00 → 2026-08-27T15:15:00-04:00 | source: x_search | n_posts: 12 | quality: partial
 
 ## 1. Top buzz topics
 | rank | topic | n | sum_B | net_skew |
 |---:|---|---:|---:|---:|
-| 1 | $NVDA | 4 | 13673.7 | -25 |
-| 2 | untagged | 3 | 9679.5 | +33 |
-| 3 | $QQQ | 1 | 3685.5 | +0 |
-| 4 | $SPY | 1 | 2565.0 | +0 |
+| 1 | $NVDA | 10 | 126262.8 | -10 |
+| 2 | untagged | 2 | 31617.0 | +0 |
 
 ## 2. Notable posts (top 10 by B)
 | B | C | EV | @handle | created_et | L/R/RT | text (≤140) | url |
 |---:|---:|---:|---|---|---|---|---|
-| 3967.2 | 0.8 | 45.6 | unusual_whales | 15:15 | 183/0/15 | es, 15 reposts  
-   URL: https://x.com/unusual_whales/status/2090847658214822309[[7]](https://x.com/unusual_whales/status/209084765821482230 | https://x.com/unusual_whales/status/2090847658214822309 |
-| 3942.0 | 0.5 | 58.4 | Mr_Derivatives | 15:15 | 274/0/6 | kes, 6 reposts  
-   URL: https://x.com/Mr_Derivatives/status/2090807439893708803[[1]](https://x.com/Mr_Derivatives/status/209080743989370880 | https://x.com/Mr_Derivatives/status/2090807439893708803 |
-| 3685.5 | 0.5 | 54.6 | StockSavvyShay | 15:15 | 228/0/15 | es, 15 reposts  
-   URL: https://x.com/StockSavvyShay/status/2090822461713686571[[4]](https://x.com/StockSavvyShay/status/209082246171368657 | https://x.com/StockSavvyShay/status/2090822461713686571 |
-| 3429.0 | 0.5 | 50.8 | CheddarFlow | 15:15 | 224/0/10 | likes, 10 reposts  
-   URL: https://x.com/CheddarFlow/status/2090831656609255754[[5]](https://x.com/CheddarFlow/status/2090831656609255754)
- | https://x.com/CheddarFlow/status/2090831656609255754 |
-| 3375.0 | 0.5 | 50.0 | Mr_Derivatives | 15:15 | 238/0/4 | kes, 4 reposts  
-   URL: https://x.com/Mr_Derivatives/status/2090760641216954825[[2]](https://x.com/Mr_Derivatives/status/209076064121695482 | https://x.com/Mr_Derivatives/status/2090760641216954825 |
-| 3361.5 | 0.5 | 49.8 | Mr_Derivatives | 15:15 | 231/0/6 | kes, 6 reposts  
-   URL: https://x.com/Mr_Derivatives/status/2090813281925726671[[3]](https://x.com/Mr_Derivatives/status/209081328192572667 | https://x.com/Mr_Derivatives/status/2090813281925726671 |
-| 2970.0 | 0.5 | 44.0 | warbirddotcom | 15:15 | 187/0/11 | kes, 11 reposts  
-   URL: https://x.com/warbirddotcom/status/2090807608131174458[[6]](https://x.com/warbirddotcom/status/2090807608131174458 | https://x.com/warbirddotcom/status/2090807608131174458 |
-| 2565.0 | 0.5 | 38.0 | Mr_Derivatives | 15:15 | 169/0/7 | kes, 7 reposts  
-   URL: https://x.com/Mr_Derivatives/status/2090811448704573781[[8]](https://x.com/Mr_Derivatives/status/209081144870457378 | https://x.com/Mr_Derivatives/status/2090811448704573781 |
-| 2308.5 | 0.5 | 34.2 | Mr_Derivatives | 15:15 | 141/0/10 | ast trading days green] So why not last trading in August?!  
-   Approx. likes/reposts: 141 likes, 10 reposts  
-   URL: https://x.com/Mr_Der | https://x.com/Mr_Derivatives/status/2090766347953455196 |
+| 36018.0 | 0.8 | 414.0 | KobeissiLetter | 15:15 | 0/0/690 | likes, ~690 reposts  
+   https://x.com/KobeissiLetter/status/2092709284161155412[[1]](https://x.com/KobeissiLetter/status/209270928416115541 | https://x.com/KobeissiLetter/status/2092709284161155412 |
+| 18387.0 | 0.5 | 272.4 | kashyap286 | 15:15 | 750/0/204 | 50 likes, ~204 reposts  
+    https://x.com/kashyap286/status/2092849896701473275[[11]](https://x.com/kashyap286/status/2092849896701473275)
+ | https://x.com/kashyap286/status/2092849896701473275 |
+| 17901.0 | 0.5 | 265.2 | 4ki4 | 15:15 | 960/0/122 | ~960 likes, ~122 reposts  
+    https://x.com/4ki4/status/2092750468397334965[[10]](https://x.com/4ki4/status/2092750468397334965)
+
+11. **@ka | https://x.com/4ki4/status/2092750468397334965 |
+| 17253.0 | 0.5 | 255.6 | munster_gene | 15:15 | 960/0/106 | k likes, ~106 reposts  
+   https://x.com/munster_gene/status/2092779241930735761[[8]](https://x.com/munster_gene/status/2092779241930735761) | https://x.com/munster_gene/status/2092779241930735761 |
+| 14499.0 | 0.5 | 214.8 | amitisinvesting | 15:15 | 960/0/38 | likes, ~38 reposts  
+   https://x.com/amitisinvesting/status/2093017173014757661[[9]](https://x.com/amitisinvesting/status/20930171730147576 | https://x.com/amitisinvesting/status/2093017173014757661 |
+| 13716.0 | 0.5 | 203.2 | StockSavvyShay | 15:15 | 680/0/112 | re infrastructure layer behind the fastest capital spending cycle in tech history.  
+    ~680 likes, ~112 reposts  
+    https://x.com/StockS | https://x.com/StockSavvyShay/status/2093026737265504706 |
+| 11623.5 | 0.5 | 172.2 | munster_gene | 15:15 | 0/0/287 | k likes, ~287 reposts  
+   https://x.com/munster_gene/status/2092719913047609736[[3]](https://x.com/munster_gene/status/2092719913047609736) | https://x.com/munster_gene/status/2092719913047609736 |
+| 9922.5 | 0.5 | 147.0 | TW_trades_ | 15:15 | 0/0/245 | .7k likes, ~245 reposts  
+   https://x.com/TW_trades_/status/2092429052758147333[[2]](https://x.com/TW_trades_/status/2092429052758147333)
+
+ | https://x.com/TW_trades_/status/2092429052758147333 |
+| 6733.8 | 0.8 | 77.4 | KobeissiLetter | 15:15 | 0/0/129 | likes, ~129 reposts  
+   https://x.com/KobeissiLetter/status/2092996810620932170[[6]](https://x.com/KobeissiLetter/status/209299681062093217 | https://x.com/KobeissiLetter/status/2092996810620932170 |
+| 5953.5 | 0.5 | 88.2 | HeroDividend | 15:15 | 0/0/147 | k likes, ~147 reposts  
+   https://x.com/HeroDividend/status/2092708769155223634[[4]](https://x.com/HeroDividend/status/2092708769155223634) | https://x.com/HeroDividend/status/2092708769155223634 |
 
 ## 3. Sentiment skew
-bull 11% | bear 11% | neutral 78% | net_skew +0
-Drivers: bullish: untagged; bearish: $NVDA
+bull 0% | bear 8% | neutral 92% | net_skew -8
+Drivers: bearish: $NVDA
 
 ## 4. Spikes vs baseline
-baseline warming (n=1/5), no spike test
+baseline warming (n=3/5), no spike test
 
 ## 5. Extracted cashtags (watchlist)
 | ticker | n | sum_B | skew |
 |---|---:|---:|---:|
-| $NVDA | 4 | 13673.7 | -25 |
-| $QQQ | 2 | 7652.7 | -50 |
-| $SPY | 1 | 2565.0 | +0 |
+| $NVDA | 10 | 126262.8 | -10 |
 
 ## 6. Data quality
 partial: true
-reason: source returned 9 posts
+reason: source returned 12 posts
 source: x_search
-n_posts: 9
+n_posts: 12

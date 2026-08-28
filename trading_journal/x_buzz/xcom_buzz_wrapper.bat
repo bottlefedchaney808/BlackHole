@@ -19,9 +19,9 @@ set "LOG_FILE=%OUT_DIR%\run.log"
 REM ── Discord delivery (default sink for every run) ─────────────────────────
 REM Set DELIVER_TO_DISCORD=0 in the environment to disable. Bare "discord"
 REM target routes to the gateway's Discord home channel (configured under
-REM ~/.hermes). HERMES_HOME must point at the root hermes home, NOT a per
-REM profile dir, or `hermes send` fails to find the platform config.
-if not defined HERMES_HOME set "HERMES_HOME=%LOCALAPPDATA%\hermes"
+REM the profile's hermes dir). HERMES_HOME must point at the profile hermes
+REM home (personal-bot) that owns the Discord platform config.
+if not defined HERMES_HOME set "HERMES_HOME=%LOCALAPPDATA%\hermes\profiles\personal-bot"
 REM Use the absolute hermes launcher so delivery works under Task Scheduler's
 REM minimal PATH (no reliance on `hermes` being on PATH).
 if not defined HERMES_BIN set "HERMES_BIN=%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\hermes.exe"

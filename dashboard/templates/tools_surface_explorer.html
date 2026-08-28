@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Surface Explorer -- FinancialDevelopment Dashboard{% endblock %}
+{% block content %}
+<h1>Surface Explorer</h1>
+<p class="sub">
+  3D strike x expiry surfaces for dealer-frame Greeks and market IV, plus options-flow heatmaps.
+  Rotate/zoom the surface below, or use the saved PNG (<code>chart_path</code> in the raw result) for a static copy.
+  <a href="/tools">&larr; back to Tools</a>
+</p>
+{% if error %}<div class="errbox">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <header><h2>Run</h2></header>
+  <div class="body">
+    <form class="runform" method="post" action="/tools/surface-explorer">
+      <div class="field">
+        <label for="ticker">Ticker</label>
+        <input id="ticker" name="ticker" value="{{ ticker }}" placeholder="SPY" size="10" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode" onchange="onModeChange()">
+          <option value="greek_surface" {{ 'selected' if selected_mode == 'greek_surface' else '' }}>Greek surface (strike x expiry)</option>
+          <option value="iv_surface_market" {{ 'selected' if selected_mode == 'iv_surface_market' else '' }}>Market IV surface (strike x tenor)</option>
+          <option value="flow_strike_time" {{ 'selected' if selected_mode == 'flow_strike_time' else '' }}>Flow heatmap (strike x time)</option>
+          <option value="flow_strike_expiry" {{ 'selected' if selected_mode == 'flow_strike_expiry' else '' }}>Flow heatmap (strike x expiry)</option>
+          <option value="iv_smile_by_model" {{ 'selected' if selected_mode == 'iv_smile_by_model' else '' }}>IV smile by model (single expiry)</option>
+        </select>
+      </div>
+      <div class="field" id="se-greek-field">
+        <label for="greek">Greek</label>
+        <select id="greek" name="greek">
+          {% for g in ('delta','gamma','vega','vanna','charm','volga') %}
+          <option value="{{ g }}" {{ 'selected' if selected_greek == g else '' }}>{{ g }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" id="se-maxexp-field">
+        <label for="max_expiries">Max expiries</label>
+        <input id="max_expiries" name="max_expiries" value="{{ max_expiries }}" size="4" autocomplete="off">
+      </div>
+      <div class="field" id="se-session-field">
+        <label for="session">Session (YYYYMMDD, optional)</label>
+        <input id="session" name="session" value="{{ session }}" placeholder="latest completed session" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="se-expiry-field">
+        <label for="expiry">Expiry (YYYYMMDD, optional)</label>
+        <input id="expiry" name="expiry" value="{{ expiry }}" placeholder="nearest listed if blank" size="12" autocomplete="off">
+      </div>
+      <div class="field" id="se-strike-field">
+        <label for="strike">Strike (optional)</label>
+        <input id="strike" name="strike" value="{{ strike }}" placeholder="ATM if blank" size="8" autocomplete="off">
+      </div>
+      <div class="field" id="se-optiontype-field">
+        <label for="option_type">Option type</label>
+        <select id="option_type" name="option_type">
+          <option value="call" {{ 'selected' if selected_option_type == 'call' else '' }}>call</option>
+          <option value="put" {{ 'selected' if selected_option_type == 'put' else '' }}>put</option>
+        </select>
+      </div>
+      <div class="field" id="se-includemc-field">
+        <label for="include_mc"><input type="checkbox" id="include_mc" name="include_mc" value="1" {{ 'checked' if include_mc else '' }}> Include MC</label>
+      </div>
+      <div class="field" id="se-includeheston-field">
+        <label for="include_heston"><input type="checkbox" id="include_heston" name="include_heston" value="1" {{ 'checked' if include_heston else '' }}> Include Heston</label>
+      </div>
+      <button type="submit">Run</button>
+    </form>
+    <script>
+      var seModeSel = document.getElementById('mode');
+      function seToggle() {
+        var show = function (id, on) {
+          var el = document.getElementById(id);
+          if (el) el.style.display = on ? '' : 'none';
+        };
+        var mode = seModeSel ? seModeSel.value : 'greek_surface';
+        show('se-greek-field', mode === 'greek_surface');
+        show('se-maxexp-field', mode === 'greek_surface' || mode === 'flow_strike_expiry');
+        show('se-session-field', mode === 'flow_strike_time' || mode === 'flow_strike_expiry');
+        show('se-expiry-field', mode === 'iv_smile_by_model');
+        show('se-strike-field', mode === 'iv_smile_by_model');
+        show('se-optiontype-field', mode === 'iv_smile_by_model');
+        show('se-includemc-field', mode === 'iv_smile_by_model');
+        show('se-includeheston-field', mode === 'iv_smile_by_model');
+      }
+      function onModeChange() { seToggle(); }
+      if (seModeSel) { seModeSel.addEventListener('change', onModeChange); seToggle(); }
+    </script>
+  </div>
+</div>
+
+{% if result %}
+<div class="panel">
+  <header><h2>{{ result.ticker }} &middot; {{ result.mode }}{% if result.greek %} &middot; {{ result.greek }}{% endif %}</h2></header>
+  <div class="body">
+    <div id="se-chart" style="width:100%;height:640px;"></div>
+    {% if result.chart_path %}
+    <p class="small muted">Static PNG also saved to: <span class="mono">{{ result.chart_path }}</span></p>
+    {% endif %}
+  </div>
+</div>
+<div class="panel">
+  <header><h2>Raw result</h2></header>
+  <div class="body"><pre class="json">{{ result_json }}</pre></div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if result %}
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/vendor/echarts-gl.min.js"></script>
+<script>
+(function () {
+  var el = document.getElementById('se-chart');
+  if (!el || typeof echarts === 'undefined') return;
+  var chart = echarts.init(el);
+  var result = {{ result_json | safe }};
+  var option = null;
+
+  function surfacePoints(xs, ys, grid) {
+    // grid[i][j] -> point (x=xs[j], y=ys[i], z=grid[i][j])
+    var pts = [];
+    for (var i = 0; i < grid.length; i++) {
+      for (var j = 0; j < grid[i].length; j++) {
+        pts.push([xs[j], ys[i], grid[i][j]]);
+      }
+    }
+    return pts;
+  }
+
+  if (result.mode === 'greek_surface' || result.mode === 'iv_surface_market') {
+    var xs = result.strikes;
+    var ys = result.mode === 'greek_surface' ? result.dtes : result.tenors_years;
+    var yLabel = result.mode === 'greek_surface' ? 'DTE' : 'Tenor (years)';
+    var zLabel = result.mode === 'greek_surface' ? (result.greek + ' exposure') : 'Implied vol';
+    option = {
+      tooltip: {},
+      visualMap: {
+        show: true,
+        dimension: 2,
+        min: Math.min.apply(null, result.grid.flat()),
+        max: Math.max.apply(null, result.grid.flat()),
+        inRange: { color: ['#313695','#4575b4','#74add1','#abd9e9','#e0f3f8','#ffffbf','#fee090','#fdae61','#f46d43','#d73027','#a50026'] }
+      },
+      xAxis3D: { type: 'value', name: 'Strike ($)' },
+      yAxis3D: { type: 'value', name: yLabel },
+      zAxis3D: { type: 'value', name: zLabel },
+      grid3D: { viewControl: { autoRotate: false } },
+      series: [{
+        type: 'surface',
+        shading: 'realistic',
+        wireframe: { show: false },
+        data: surfacePoints(xs, ys, result.grid)
+      }]
+    };
+  } else if (result.mode === 'flow_strike_time' || result.mode === 'flow_strike_expiry') {
+    var edges = result.strike_edges;
+    var centers = [];
+    for (var k = 0; k < edges.length - 1; k++) centers.push(((edges[k] + edges[k+1]) / 2).toFixed(2));
+    var rowLabels = result.mode === 'flow_strike_time' ? result.time_labels : result.expiries;
+    var heat = [];
+    for (var r = 0; r < result.grid.length; r++) {
+      for (var c = 0; c < result.grid[r].length; c++) {
+        heat.push([c, r, result.grid[r][c]]);
+      }
+    }
+    var absmax = Math.max.apply(null, result.grid.flat().map(Math.abs)) || 1;
+    option = {
+      tooltip: { position: 'top' },
+      xAxis: { type: 'category', data: centers, name: 'Strike ($)' },
+      yAxis: { type: 'category', data: rowLabels },
+      visualMap: {
+        min: -absmax, max: absmax, calculable: true, orient: 'horizontal', left: 'center', bottom: 0,
+        inRange: { color: ['#a50026','#f46d43','#fee090','#e6f5d0','#74add1','#313695'].reverse() }
+      },
+      series: [{ type: 'heatmap', data: heat, emphasis: { itemStyle: { shadowBlur: 10 } } }]
+    };
+  } else if (result.mode === 'iv_smile_by_model') {
+    var series = [];
+    var curves = result.curves || {};
+    for (var label in curves) {
+      if (!curves.hasOwnProperty(label)) continue;
+      var curve = curves[label];
+      var data = [];
+      for (var i = 0; i < curve.strikes.length; i++) {
+        data.push([curve.strikes[i], curve.ivs[i]]);
+      }
+      series.push({ name: label, type: 'line', data: data, symbolSize: 5 });
+    }
+    var market = result.market || {};
+    var mdata = [];
+    for (var j = 0; j < (market.strikes || []).length; j++) {
+      mdata.push([market.strikes[j], market.ivs[j]]);
+    }
+    series.push({ name: 'Market', type: 'scatter', data: mdata, symbolSize: 8 });
+    option = {
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0 },
+      xAxis: { type: 'value', name: 'Strike ($)', scale: true },
+      yAxis: { type: 'value', name: 'Implied vol', scale: true },
+      series: series
+    };
+  }
+
+  if (option) chart.setOption(option);
+  window.addEventListener('resize', function () { chart.resize(); });
+})();
+</script>
+{% endif %}
+{% endblock %}

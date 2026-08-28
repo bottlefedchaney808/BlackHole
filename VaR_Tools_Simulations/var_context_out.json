@@ -1,0 +1,12 @@
+{
+  "suite": "var",
+  "status": "ok",
+  "module": "corr_sim",
+  "var": 169290.32137928432,
+  "cvar": 194043.3803029511,
+  "confidence": 0.99,
+  "horizon_days": 252,
+  "timestamp": "2026-08-27T19:09:43.068982Z",
+  "positions_source": "derived",
+  "notes": "weights were normalized to sum to 1.0. | positions missing; derived proportional notionals from weights with total notional = 1,000,000. | correlation matrix missing; used identity matrix. | volatilities missing; used default annual volatility 0.25 for each asset. | live spot unavailable for NVDA,AAPL,MSFT,AMZN,GOOGL,AVGO,MU,META,TSLA,BRK.B; used fallback price 100.0."
+}

@@ -1,0 +1,404 @@
+commit c42dd244e6b87df71bf2b32f1936114e42105c05
+Author: Zinko83 <64378030+bottlefedchaney808@users.noreply.github.com>
+Date:   Tue Aug 25 06:58:30 2026 -0500
+
+    feat(chart_app): add options-flow pane binning trade premium onto bars
+
+diff --git a/chart_app/flow_pane.py b/chart_app/flow_pane.py
+new file mode 100644
+index 0000000..29bbfb9
+--- /dev/null
++++ b/chart_app/flow_pane.py
+@@ -0,0 +1,86 @@
++"""Pure function to bin options flow (from scanner_trades full tape) onto bars.
++
++Implements call/put/net premium series for the third chart pane.
++No I/O. Uses identical (prev_ts, ts] binning rule (first bar [ts0, ts0])
++and timestamp/premium parsers as flow_stamp.py (kept unchanged).
++"""
++
++from __future__ import annotations
++
++from datetime import datetime, timedelta
++from typing import Any
++
++from shared.chart_data import CandleRecord
++
++from chart_app.flow_stamp import _premium, _trade_ts
++
++# Bars closer than this are intraday-continuous; a larger gap is a session
++# boundary (overnight/weekend). A trade in the gap belongs to the next
++# session's first bar, not the previous session's last bar.
++_GAP_MAX = timedelta(minutes=45)
++
++
++def _bar_start(records: list[CandleRecord], index: int) -> tuple[datetime, bool]:
++    """(interval_start, is_first_of_session) for bar ``index``.
++
++    First bar: [ts0, ts0]. Later bars: (prev_ts, ts] — but when the gap from
++    the previous bar exceeds _GAP_MAX (session boundary), the bar starts at
++    its own ts and trades in the gap attribute here.
++    """
++    if index == 0:
++        return records[0].timestamp, True
++    prev = records[index - 1].timestamp
++    if records[index].timestamp - prev > _GAP_MAX:
++        return records[index].timestamp, True
++    return prev, False
++
++
++def bin_flow(
++    records: list[CandleRecord], trades: list[dict[str, Any]]
++) -> dict[str, list[float]]:
++    """Return per-bar aggregates aligned 1:1 with records.
++
++    {"call": [float, ...], "put": [...], "net": [...]}
++    - call += premium for trade_right=="C"
++    - put += premium for "P"
++    - net = call - put
++    - zero fill for bars with no matching trades
++    - trades with no parsable timestamp attributed to first bar
++      (trust-the-window fallback, same as stamp_whale)
++    """
++    n = len(records)
++    calls: list[float] = [0.0] * n
++    puts: list[float] = [0.0] * n
++    if not records or not trades:
++        return {"call": calls[:], "put": puts[:], "net": [0.0] * n}
++
++    for row in trades:
++        if not isinstance(row, dict):
++            continue
++        prem = _premium(row)
++        if prem <= 0:
++            continue
++        ts = _trade_ts(row)
++        if ts is None:
++            # same fallback as flow_stamp
++            if n > 0:
++                tr = str(row.get("trade_right", "")).strip().upper()
++                if tr == "C":
++                    calls[0] += prem
++                elif tr == "P":
++                    puts[0] += prem
++            continue
++        for index, record in enumerate(records):
++            start, is_first = _bar_start(records, index)
++            end = record.timestamp
++            inside = start <= ts <= end if is_first else start < ts <= end
++            if inside:
++                tr = str(row.get("trade_right", "")).strip().upper()
++                if tr == "C":
++                    calls[index] += prem
++                elif tr == "P":
++                    puts[index] += prem
++                break
++
++    nets = [c - p for c, p in zip(calls, puts)]
++    return {"call": calls, "put": puts, "net": nets}
+diff --git a/chart_app/server.py b/chart_app/server.py
+index 36c9f1b..e98ecf1 100644
+--- a/chart_app/server.py
++++ b/chart_app/server.py
+@@ -120,11 +120,11 @@ def create_app(
+ 
+ 
+ def _production_flow_fn(root, start_dt, end_dt, min_premium):
+-    """One scanner_trades call per session date — not per bar.
++    """One scanner_trades call (paginated) per session date — not per bar.
+ 
+-    ``scanner_trades_in_time_range`` 400s/times out on multi-hour windows.
+-    A single calendar day returns in-process (~500 rows). Cap at 5 days so
+-    a 1y daily chart does not fan out.
++    Always full tape (min_premium=0 internally; passed arg ignored).
++    Date-only calls (start_date/end_date). Pagination limit=10000 + offset loop
++    until short/empty page per day. 5-day cap. except:continue (degrade).
+     """
+     from datetime import datetime, timedelta
+ 
+@@ -149,18 +149,28 @@ def _production_flow_fn(root, start_dt, end_dt, min_premium):
+         return []
+     client = _thread_client()
+     rows: list = []
++    LIMIT = 10000
+     for day in days:
+         ymd = day.strftime("%Y%m%d")
+-        try:
+-            env = client.flow.scanner_trades(
+-                root=root,
+-                start_date=ymd,
+-                end_date=ymd,
+-                min_premium=min_premium,
+-            )
+-            rows.extend(rows_from_flow_payload(getattr(env, "data", None)))
+-        except Exception:
+-            continue
++        offset = 0
++        while True:
++            try:
++                env = client.flow.scanner_trades(
++                    root=root,
++                    start_date=ymd,
++                    end_date=ymd,
++                    min_premium=0,  # full tape always (ignore the passed arg)
++                    limit=LIMIT,
++                    offset=offset,
++                )
++                page = rows_from_flow_payload(getattr(env, "data", None))
++                rows.extend(page)
++                if len(page) < LIMIT:
++                    break
++                offset += LIMIT
++            except Exception:
++                # per-day degrade (keep existing contract); do not raise
++                break
+     return rows
+ 
+ 
+diff --git a/chart_app/snapshot.py b/chart_app/snapshot.py
+index 337d9b9..613526e 100644
+--- a/chart_app/snapshot.py
++++ b/chart_app/snapshot.py
+@@ -4,6 +4,7 @@ from __future__ import annotations
+ 
+ from typing import Any
+ 
++from chart_app.flow_pane import bin_flow
+ from chart_app.flow_stamp import apply_whale, stamp_whale
+ from chart_app.score_engine import classic_overlays, gated_markers, price_scores
+ 
+@@ -50,13 +51,16 @@ def build_state(cache, ticker: str, interval: str, rh=None, *, flow_fn=None, flo
+                     ticker,
+                     records[0].timestamp,
+                     records[-1].timestamp,
+-                    25_000.0,
++                    0.0,
+                 )
+             except Exception:  # noqa: BLE001 — one range call; degrade, never fabricate
+                 trades = []
+             if flow_cache is not None:
+                 flow_cache[key] = trades
+         apply_whale(rows, stamp_whale(records, trades or []))
++        flow = bin_flow(records, list(trades or [])) if trades else None
++    else:
++        flow = None
+     scores = [int(row["score"]) for row in rows]
+     last = rows[-1] if rows else None
+     last_score = int(last["score"]) if last is not None else 0
+@@ -92,4 +96,5 @@ def build_state(cache, ticker: str, interval: str, rh=None, *, flow_fn=None, flo
+         },
+         "signals": [row["signals"] for row in rows],
+         "rh": _rh_payload(rh),
++        **({"flow": flow} if flow is not None else {}),
+     }
+diff --git a/chart_app/static/index.html b/chart_app/static/index.html
+index c27bc3c..079be5c 100644
+--- a/chart_app/static/index.html
++++ b/chart_app/static/index.html
+@@ -91,12 +91,12 @@
+ 
+     const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
+ 
+-    function line(name, data, color, width, dash) {
++    function line(name, data, color, width, dash, xIdx, yIdx) {
+       return {
+         name: name,
+         type: "line",
+-        xAxisIndex: 0,
+-        yAxisIndex: 0,
++        xAxisIndex: xIdx != null ? xIdx : 0,
++        yAxisIndex: yIdx != null ? yIdx : 0,
+         data: data,
+         showSymbol: false,
+         connectNulls: false,
+@@ -178,6 +178,11 @@
+         itemStyle: { color: b.close >= b.open ? UP : DOWN },
+       }));
+ 
++      const hasFlow = !!state.flow;
++      const flowCall = hasFlow ? (state.flow.call || []) : [];
++      const flowPut = hasFlow ? (state.flow.put || []) : [];
++      const flowNet = hasFlow ? (state.flow.net || []) : [];
++
+       const key = ticker + "|" + interval + "|" + bars.length;
+       const resetZoom = key !== lastKey;
+       lastKey = key;
+@@ -194,22 +199,42 @@
+           itemHeight: 6,
+           textStyle: { color: MUTED, fontSize: 10 },
+           inactiveColor: "#334155",
+-          data: ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
++          data: hasFlow
++            ? ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale", "call", "put", "net"]
++            : ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
+         },
+         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+-        axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+-        grid: [
+-          { left: 56, right: 16, top: 8, height: "62%" },
+-          { left: 56, right: 16, top: "72%", height: "12%" },
+-        ],
+-        xAxis: [
+-          { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+-          { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
+-        ],
+-        yAxis: [
+-          { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
+-          { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
+-        ],
++        axisPointer: { link: [{ xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1] }] },
++        grid: hasFlow
++          ? [
++              { left: 56, right: 16, top: 8, height: "52%" },
++              { left: 56, right: 16, top: "62%", height: "9%" },
++              { left: 56, right: 16, top: "73%", height: "15%" },
++            ]
++          : [
++              { left: 56, right: 16, top: 8, height: "62%" },
++              { left: 56, right: 16, top: "72%", height: "12%" },
++            ],
++        xAxis: hasFlow
++          ? [
++              { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
++              { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
++              { type: "category", data: cats, gridIndex: 2, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
++            ]
++          : [
++              { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
++              { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
++            ],
++        yAxis: hasFlow
++          ? [
++              { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
++              { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
++              { scale: true, gridIndex: 2, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
++            ]
++          : [
++              { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
++              { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
++            ],
+         series: [
+           {
+             name: "ohlc",
+@@ -239,6 +264,11 @@
+             yAxisIndex: 1,
+             data: volumes,
+           },
++          ...(hasFlow ? [
++            line("call", flowCall, "#34d399", 1.2, null, 2, 2),
++            line("put", flowPut, "#f87171", 1.2, null, 2, 2),
++            line("net", flowNet, "#F4F7FF", 1.1, null, 2, 2),
++          ] : []),
+         ],
+         textStyle: { color: TEXT },
+       };
+@@ -246,7 +276,7 @@
+         opt.dataZoom = [
+           {
+             type: "inside",
+-            xAxisIndex: [0, 1],
++            xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
+             filterMode: "none",
+             zoomOnMouseWheel: true,
+             moveOnMouseMove: true,
+@@ -254,7 +284,7 @@
+           },
+           {
+             type: "slider",
+-            xAxisIndex: [0, 1],
++            xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
+             height: 22,
+             bottom: 6,
+             start: startPct,
+diff --git a/chart_app/tests/test_flow_pane.py b/chart_app/tests/test_flow_pane.py
+new file mode 100644
+index 0000000..14ca9ba
+--- /dev/null
++++ b/chart_app/tests/test_flow_pane.py
+@@ -0,0 +1,86 @@
++from datetime import datetime, timedelta
++
++from shared.chart_data import CandleRecord
++from chart_app.flow_pane import bin_flow
++
++
++def _bars():
++    t0 = datetime(2026, 8, 18, 9, 30)
++    return [
++        CandleRecord(t0, 1, 1, 1, 1, 1),
++        CandleRecord(t0 + timedelta(minutes=15), 1, 1, 1, 1, 1),
++        CandleRecord(t0 + timedelta(minutes=30), 1, 1, 1, 1, 1),
++    ]
++
++
++def _trade(right, premium, ts):
++    return {"trade_right": right, "premium": premium, "datetime": ts}
++
++
++def test_bin_flow_splits_call_put_net_per_bar():
++    records = _bars()
++    trades = [
++        _trade("C", 1000.0, "2026-08-18T09:30:00"),
++        _trade("P", 500.0, "2026-08-18T09:30:00"),
++        _trade("C", 2000.0, "2026-08-18T09:45:00"),
++    ]
++    out = bin_flow(records, trades)
++    assert out["call"] == [1000.0, 2000.0, 0.0]
++    assert out["put"] == [500.0, 0.0, 0.0]
++    assert out["net"] == [500.0, 2000.0, 0.0]
++
++
++def test_bin_flow_boundary_lands_in_bar():
++    # Trade exactly at a bar's ts lands in THAT bar, not the next.
++    records = _bars()
++    trades = [_trade("C", 100.0, "2026-08-18T09:45:00")]
++    out = bin_flow(records, trades)
++    assert out["call"] == [0.0, 100.0, 0.0]
++
++
++def test_bin_flow_zero_fill_and_empty():
++    records = _bars()
++    assert bin_flow(records, []) == {"call": [0.0, 0.0, 0.0], "put": [0.0, 0.0, 0.0], "net": [0.0, 0.0, 0.0]}
++    assert bin_flow(records, None) == {"call": [0.0, 0.0, 0.0], "put": [0.0, 0.0, 0.0], "net": [0.0, 0.0, 0.0]}
++    assert bin_flow([], []) == {"call": [], "put": [], "net": []}
++
++
++def test_bin_flow_skips_unknown_right_and_nonpositive_premium():
++    records = _bars()
++    trades = [
++        _trade("X", 500.0, "2026-08-18T09:30:00"),
++        _trade("C", -10.0, "2026-08-18T09:30:00"),
++        {"trade_right": "C", "datetime": "2026-08-18T09:30:00"},  # no premium
++    ]
++    out = bin_flow(records, trades)
++    assert out["call"] == [0.0, 0.0, 0.0]
++
++
++def test_bin_flow_missing_ts_goes_to_first_bar():
++    records = _bars()
++    trades = [{"trade_right": "P", "premium": 75.0}]
++    out = bin_flow(records, trades)
++    assert out["put"] == [75.0, 0.0, 0.0]
++    assert out["net"] == [-75.0, 0.0, 0.0]
++
++
++def test_bin_flow_gap_aware_multi_day():
++    # Overnight gap: 8/17 bars then 8/18 bars. A trade on 8/17 must bin to
++    # 8/17 bars, never the 8/18 first bar.
++    d17 = datetime(2026, 8, 17)
++    d18 = datetime(2026, 8, 18)
++    records = [
++        CandleRecord(d17.replace(hour=9, minute=30), 1, 1, 1, 1, 1),
++        CandleRecord(d17.replace(hour=9, minute=45), 1, 1, 1, 1, 1),
++        CandleRecord(d18.replace(hour=9, minute=30), 1, 1, 1, 1, 1),
++        CandleRecord(d18.replace(hour=9, minute=45), 1, 1, 1, 1, 1),
++    ]
++    trades = [
++        _trade("C", 100.0, "2026-08-17T09:30:00"),  # 8/17 bar 0
++        _trade("P", 200.0, "2026-08-17T09:45:00"),  # 8/17 bar 1
++        _trade("C", 300.0, "2026-08-18T09:30:00"),  # 8/18 bar 2
++    ]
++    out = bin_flow(records, trades)
++    assert out["call"] == [100.0, 0.0, 300.0, 0.0]
++    assert out["put"] == [0.0, 200.0, 0.0, 0.0]
++    assert out["net"] == [100.0, -200.0, 300.0, 0.0]

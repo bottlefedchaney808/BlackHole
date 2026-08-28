@@ -28,10 +28,12 @@ HOW TO ADD TOOL #3 (or #4, #5, ...)
    either, since every tool only ever depends on the shared context schema.
 --------------------------------------------------------------------------
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -47,23 +49,27 @@ class ToolSpec:
                  caller; the returned dict is the tool's result artifact,
                  always JSON-serializable.
     """
+
     name: str
     slug: str
     description: str
-    run: Callable[[Dict[str, Any]], Dict[str, Any]]
+    run: Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def _load_tools() -> List[ToolSpec]:
+def _load_tools() -> list[ToolSpec]:
     # Imported lazily inside a function (rather than at module import time)
     # so that a broken/incomplete tool module raises at TOOLS-construction
     # time with a clear traceback, rather than silently failing to import
     # and shrinking the registry with no error at all.
-    from Tools.tools import options_strategy_tool
-    from Tools.tools import backtesting_tool
-    from Tools.tools import direction_signal_tool
-    from Tools.tools import hedge_optimizer_tool
-    from Tools.tools import vrp_term_structure_tool
-    from Tools.tools import price_dist_tool
+    from Tools.tools import (
+        backtesting_tool,
+        direction_signal_tool,
+        hedge_optimizer_tool,
+        options_strategy_tool,
+        price_dist_tool,
+        surface_explorer_tool,
+        vrp_term_structure_tool,
+    )
 
     return [
         options_strategy_tool.TOOL_SPEC,
@@ -72,11 +78,12 @@ def _load_tools() -> List[ToolSpec]:
         hedge_optimizer_tool.TOOL_SPEC,
         vrp_term_structure_tool.TOOL_SPEC,
         price_dist_tool.TOOL_SPEC,
+        surface_explorer_tool.TOOL_SPEC,
         # Add new tools' TOOL_SPEC here -- see module docstring above.
     ]
 
 
-TOOLS: List[ToolSpec] = _load_tools()
+TOOLS: list[ToolSpec] = _load_tools()
 
 
 def get_tool(slug: str) -> ToolSpec:

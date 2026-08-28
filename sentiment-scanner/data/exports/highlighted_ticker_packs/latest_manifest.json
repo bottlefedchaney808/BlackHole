@@ -1,7 +1,62 @@
 {
   "version": 1,
-  "updated_at": "2026-08-20T14:29:07.697817+00:00",
+  "updated_at": "2026-08-27T19:03:47.666228+00:00",
   "packs": [
+    {
+      "group_id": "cns-threshold-alerts-4366db715a11",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "4366db715a11",
+      "created_at": "2026-08-27T19:03:47.663719+00:00",
+      "last_updated_at": "2026-08-27T19:03:47.663719+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260827T183233Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "MCD",
+        "CCL",
+        "PATH"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260827\\cns-threshold-alerts-4366db715a11.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260827\\cns-threshold-alerts-4366db715a11.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-ae1694f61186",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "ae1694f61186",
+      "created_at": "2026-08-26T22:46:39.754681+00:00",
+      "last_updated_at": "2026-08-26T22:46:39.754681+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260826T222327Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "WEN",
+        "ANF",
+        "DJT"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260826\\cns-threshold-alerts-ae1694f61186.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260826\\cns-threshold-alerts-ae1694f61186.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-07474b3714d5",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "07474b3714d5",
+      "created_at": "2026-08-25T18:59:59.112626+00:00",
+      "last_updated_at": "2026-08-25T18:59:59.112626+00:00",
+      "ticker_count": 4,
+      "priority": "high",
+      "source_run_id": "20260825T184753Z",
+      "thesis_summary": "4 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "MBLY",
+        "INTU",
+        "TSLA",
+        "DKS"
+      ],
+      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260825\\cns-threshold-alerts-07474b3714d5.json",
+      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260825\\cns-threshold-alerts-07474b3714d5.csv"
+    },
     {
       "group_id": "cns-threshold-alerts-148cc7b9ea1a",
       "group_name": "cns-threshold-alerts",
@@ -791,27 +846,6 @@
       ],
       "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260814\\cns-threshold-alerts-ad2b5e2de6dd.json",
       "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260814\\cns-threshold-alerts-ad2b5e2de6dd.csv"
-    },
-    {
-      "group_id": "cns-threshold-alerts-373c5608d19a",
-      "group_name": "cns-threshold-alerts",
-      "fingerprint": "373c5608d19a",
-      "created_at": "2026-08-13T07:15:18.763674+00:00",
-      "last_updated_at": "2026-08-13T07:15:18.763674+00:00",
-      "ticker_count": 6,
-      "priority": "high",
-      "source_run_id": "20260813T065230Z",
-      "thesis_summary": "6 highlighted tickers crossing CNS threshold",
-      "tickers": [
-        "VST",
-        "NKE",
-        "NBIS",
-        "LUNR",
-        "CSCO",
-        "DELL"
-      ],
-      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260813\\cns-threshold-alerts-373c5608d19a.json",
-      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260813\\cns-threshold-alerts-373c5608d19a.csv"
     }
   ]
 }

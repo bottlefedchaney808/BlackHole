@@ -46,6 +46,7 @@ from urllib.parse import parse_qs
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -126,6 +127,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title='FinancialDevelopment Dashboard', lifespan=_lifespan)
+app.mount('/static', StaticFiles(directory=os.path.join(DASHBOARD_DIR, 'static')), name='static')
 
 # Rate limiter: max 1 run per 60s per IP, max 10 concurrent
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
@@ -2011,6 +2013,80 @@ async def tools_hedge_optimizer_run(request: Request):
         'selected_path': context_path, 'selected_mode': mode,
         'ticker': ticker, 'expiry': expiry,
         'position_json': position_raw,
+        'result': result, 'result_json': result_json, 'error': error,
+    })
+
+
+@app.get('/tools/surface-explorer', response_class=HTMLResponse)
+def tools_surface_explorer_form(request: Request):
+    return TEMPLATES.TemplateResponse(request, 'tools_surface_explorer.html', {
+        'active': 'tools',
+        'ticker': '', 'selected_mode': 'greek_surface', 'selected_greek': 'gamma',
+        'max_expiries': '12', 'session': '',
+        'expiry': '', 'strike': '', 'selected_option_type': 'call',
+        'include_mc': True, 'include_heston': True,
+        'result': None, 'result_json': None, 'error': None,
+    })
+
+
+@app.post('/tools/surface-explorer', response_class=HTMLResponse)
+async def tools_surface_explorer_run(request: Request):
+    body = await _parse_body(request)
+
+    ticker = str(body.get('ticker') or '').strip()
+    mode = str(body.get('mode') or 'greek_surface').strip().lower()
+    greek = str(body.get('greek') or 'gamma').strip().lower()
+    max_expiries_raw = str(body.get('max_expiries') or '12').strip()
+    session = str(body.get('session') or '').strip()
+    expiry = str(body.get('expiry') or '').strip()
+    strike_raw = str(body.get('strike') or '').strip()
+    option_type = str(body.get('option_type') or 'call').strip().lower()
+    include_mc = bool(body.get('include_mc'))
+    include_heston = bool(body.get('include_heston'))
+
+    result = None
+    error = None
+    if not ticker:
+        error = 'a ticker is required'
+    else:
+        context = {'ticker': ticker, 'mode': mode}
+        if mode == 'greek_surface':
+            context['greek'] = greek
+        if mode in ('greek_surface', 'flow_strike_expiry'):
+            try:
+                context['max_expiries'] = int(max_expiries_raw)
+            except ValueError:
+                error = f'max_expiries must be an integer, got {max_expiries_raw!r}'
+        if session:
+            context['session'] = session
+        if mode == 'iv_smile_by_model':
+            if expiry:
+                context['expiry'] = expiry
+            if strike_raw:
+                try:
+                    context['strike'] = float(strike_raw)
+                except ValueError:
+                    error = f'strike must be a number, got {strike_raw!r}'
+            context['option_type'] = option_type
+            context['include_mc'] = include_mc
+            context['include_heston'] = include_heston
+        # Every generated PNG lands under one dedicated directory (no suite
+        # context required -- this tool only ever needs a ticker).
+        out_dir = os.path.join(DASHBOARD_DIR, 'outputs', 'surface_explorer')
+        os.makedirs(out_dir, exist_ok=True)
+        context['_output_dir_override'] = out_dir
+        if error is None:
+            result, run_error = _run_tool_safe('surface-explorer', context)
+            if run_error:
+                error = run_error
+
+    result_json = json.dumps(result, indent=2, default=str) if result is not None else None
+    return TEMPLATES.TemplateResponse(request, 'tools_surface_explorer.html', {
+        'active': 'tools',
+        'ticker': ticker, 'selected_mode': mode, 'selected_greek': greek,
+        'max_expiries': max_expiries_raw, 'session': session,
+        'expiry': expiry, 'strike': strike_raw, 'selected_option_type': option_type,
+        'include_mc': include_mc, 'include_heston': include_heston,
         'result': result, 'result_json': result_json, 'error': error,
     })
 
