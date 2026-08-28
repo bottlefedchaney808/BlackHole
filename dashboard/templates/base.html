@@ -89,6 +89,12 @@ h2 { font-size: 15px; margin: 0; letter-spacing: -0.01em; }
 .panel .body { padding: 14px 16px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 18px; }
 
+/* Shared widget-grid: Overview's customizable widgets, and later the empty
+   side space on the Chart tab -- one grid class both pages can drop cards
+   into rather than each inventing its own layout. */
+.widget-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; }
+.widget-grid .widget { margin-bottom: 0; }
+
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 .card {
   background: var(--panel); border: 1px solid var(--border);
