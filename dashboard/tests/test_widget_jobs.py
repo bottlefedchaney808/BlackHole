@@ -341,7 +341,9 @@ def test_surfaces_tick_encodes_chart_png_as_base64(monkeypatch, tmp_path):
 
     row = dashboard_app._widget_cache().get("surfaces")
     assert row["status"] == "ok"
-    assert row["payload"]["ticker"] == "SPX"
+    # SPXW, not SPX -- see _widget_surfaces_tick's docstring: SPX's actual
+    # listed options chain on this ThetaData feed is rooted under SPXW.
+    assert row["payload"]["ticker"] == "SPXW"
     surfaces = row["payload"]["surfaces"]
     assert set(surfaces) == {"iv", "vanna", "charm"}
     for key in ("iv", "vanna", "charm"):

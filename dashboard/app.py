@@ -141,8 +141,14 @@ WIDGET_CACHE_PATH = os.path.join(ROOT, "artifacts", "widget_cache.db")
 WIDGET_SURFACES_OUTPUT_DIR = os.path.join(ROOT, "artifacts", "widget_surfaces")
 
 # Widget 2's watchlist -- plain list, easy to extend (per Jason: "make it
-# easy to add to").
-OVERVIEW_WATCHLIST = ["SPX", "NDAQ"]
+# easy to add to"). "SPXW" not "SPX": on this ThetaData feed, SPX's actual
+# listed/quoted options chain (option_bulk_greeks etc.) is rooted under
+# SPXW -- plain "SPX" resolves a real index price but has no options chain
+# data behind it (confirmed live: option_bulk_greeks("SPX", ...) returns
+# "v2 payload is None" for every expiry; SPXW returns real rows). SPXW is
+# genuinely SPX's own listed options (the standard daily/weekly-expiring
+# ones), not a different underlying.
+OVERVIEW_WATCHLIST = ["SPXW", "NDAQ"]
 
 # Background widget jobs are opt-in (default off) -- widgets 2-4 make real,
 # billed ThetaData calls (screener + hedge-optimizer greeks + 3 VaR sims per
@@ -451,12 +457,17 @@ def _widget_position_analysis_tick() -> None:
 def _widget_surfaces_tick() -> None:
     """Widget 4: IV, Vanna, Charm surfaces on SPX, dark-themed, base64-encoded
     into the cache payload (small enough at one ticker / three PNGs -- no
-    need for a separate asset store)."""
+    need for a separate asset store).
+
+    Uses root "SPXW", not "SPX" -- see OVERVIEW_WATCHLIST's comment: SPX's
+    actual listed options chain on this ThetaData feed is rooted under
+    SPXW, confirmed live (plain "SPX" has a real index price but no
+    options-chain data behind it)."""
     import base64
 
     from Tools.tools import surface_explorer_tool
 
-    ticker = "SPX"
+    ticker = "SPXW"
     specs = (
         ("iv", {"mode": "iv_surface_market"}),
         ("vanna", {"mode": "greek_surface", "greek": "vanna"}),
