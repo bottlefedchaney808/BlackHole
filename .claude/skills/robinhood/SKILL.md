@@ -75,6 +75,11 @@ Call `get_scanner_filter_specs` before constructing/editing any filter (`create_
 `update_scan_filters`) — don't guess `filter_type_enum` values. Cortex-managed scans can be `run_scan`'d
 but not modified; clone into a new scan via `create_scan` instead.
 
+`run_scan` on a broad/unfiltered scan can exceed the tool-result token limit (seen live: 52,685/88,697
+characters over the max) — the harness falls back to saving the output to a side file rather than
+returning it. Prefer scans with tighter filters, or check for a results-limit param, before running a
+scan you expect to return a large universe.
+
 ## Tool map (by task)
 
 - **Account/portfolio**: `get_accounts`, `get_portfolio`, `get_limited_margin_upgrade_info`,
