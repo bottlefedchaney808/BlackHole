@@ -206,8 +206,14 @@ class TestVannaVolga:
         batch = get_vol_batch(S, strikes, T, r, q, atm_vol, rr25, bf25)
 
         assert len(scalar) == len(batch)
+        # rel=1e-6, not 1e-10: get_vol's final IV inversion is a local
+        # scalar Newton (tol=1e-6), get_vol_batch's is MCHestonLSM's shared
+        # vectorized Newton (tol=1e-4, max_iter=50) -- same Castagna-
+        # Mercurio price target, two different solvers/stopping criteria
+        # converging to it, so they agree to solver precision, not bit-
+        # for-bit.
         for sk, bk in zip(scalar, batch):
-            assert sk == pytest.approx(bk, rel=1e-10)
+            assert sk == pytest.approx(bk, rel=1e-6)
 
 
 # ---------------------------------------------------------------------------

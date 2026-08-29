@@ -16,6 +16,52 @@ except Exception:
     _THETADATA_AVAILABLE = False
 
 
+def _bs_call_price(S, K, T, r, q, sigma):
+    """Plain European BS call price -- the reference pricer the
+    Castagna-Mercurio Vanna-Volga correction (get_vol/get_vol_batch) prices
+    every pillar and every target strike against. sigma<=0 or T<=0
+    degenerates to discounted intrinsic (the T->0/sigma->0 limit of BS)."""
+    if sigma <= 0 or T <= 0:
+        return max(S * np.exp(-q * T) - K * np.exp(-r * T), 0.0)
+    d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+
+
+def _bs_vega(S, K, T, r, q, sigma):
+    """d(call price)/d(sigma). 0 (not 1.0) when degenerate -- unlike the
+    old bs_vega/_vega closures this replaces, callers here need a genuine
+    zero to correctly zero out a pillar's Lagrange weight (see get_vol),
+    not a nonzero placeholder."""
+    if sigma <= 0 or T <= 0:
+        return 0.0
+    d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    return S * np.exp(-q * T) * np.sqrt(T) * norm.pdf(d1)
+
+
+def _bs_iv_newton(price, S, K, T, r, q, seed=0.2, tol=1e-6, max_iter=100):
+    """Scalar Newton BS-IV inversion -- the last step of get_vol's
+    Castagna-Mercurio correction: turn the replicated VV price back into
+    the vol number the smile chart plots. Falls back to the seed if Newton
+    can't make progress (vega collapses to ~0), same convention as this
+    file's other solvers -- an imprecise point is preferable to a raised
+    exception breaking the whole curve over one hard strike."""
+    sigma = max(seed, 1e-4)
+    floor = max(S * np.exp(-q * T) - K * np.exp(-r * T), 0.0)
+    if price <= floor + 1e-10:
+        return 1e-4  # at-or-below-intrinsic: no positive vol reproduces this price
+    for _ in range(max_iter):
+        p = _bs_call_price(S, K, T, r, q, sigma)
+        diff = p - price
+        if abs(diff) < tol:
+            break
+        vega = _bs_vega(S, K, T, r, q, sigma)
+        if vega < 1e-10:
+            break
+        sigma = max(sigma - diff / vega, 1e-4)
+    return sigma
+
+
 def _forward_delta_strike(F, sigma, T, target_delta):
     """
     Compute the strike K such that forward call delta = target_delta.
@@ -179,54 +225,115 @@ def get_vol(S, K, T, r, q, atm_vol, rr25, bf25, S_atm=None, S_pillars=None):
     # pre-bump spot when called from vv_all_greeks's finite-difference Greek
     # stencils via S_atm (see docstring above) to avoid a moving smile kink.
 
-    # Step 3: exact quadratic through the 3 pillars, in log-strike space.
+    # Step 3: the actual Vanna-Volga smile construction (Castagna &
+    # Mercurio, "Consistent pricing and hedging of an FX options book",
+    # 2007) -- a PRICE-space correction weighted by vega and Lagrange
+    # log-strike weights, not a vol-space average or a bare polynomial fit.
     #
-    # BUG FIX: this used to be a vega-weighted inverse-distance CONVEX
-    # COMBINATION of the 3 pillar vols (weights always positive, always
-    # normalized to sum to 1). That's a real, structural limitation, not
-    # just an unlucky parameterization: a convex combination of 3 fixed
-    # numbers is mathematically GUARANTEED to stay within
-    # [min, max](sigma_ATM, sigma_25P, sigma_25C) for every strike, no
-    # matter how far from the pillars -- confirmed live (SPY/QQQ calls):
-    # VannaVolga sat nearly flat across the WHOLE chain while CRR/LR/NR/MC/
-    # Market all kept curving into the wings, because the pillar vols
-    # themselves are close together and the weighted average can never
-    # exceed them. That is not how a real Vanna-Volga smile behaves (see
-    # e.g. Castagna & Mercurio's smile-consistent VV, or any live FX/equity
-    # desk's VV curve) -- it continues to curve past the pillars just like
-    # every other smile model, because the underlying construction is a
-    # genuine SMILE FUNCTION fit to the 3 market inputs, not an average of
-    # them. The standard, widely-used closed-form shortcut for this is a
-    # QUADRATIC fit through the 3 (log-strike, vol) pillar points -- 3
-    # points exactly determine a parabola's 3 coefficients, and unlike a
-    # convex combination, a parabola is NOT bounded by its control points:
-    # it keeps curving upward/downward past them exactly like the market's
-    # own smile does. This is the same quadratic-in-log-moneyness form
-    # Vol_Suite/vol_surface_2d.py already fits to raw market data elsewhere
-    # in this repo -- same idea, exact 3-point fit instead of a
-    # least-squares fit over many points.
-    x = np.log(K)
-    x_atm = np.log(K_atm)
-    x_25P = np.log(K_25P)
-    x_25C = np.log(K_25C)
-    a, b, c = np.polyfit([x_25P, x_atm, x_25C], [sigma_25P, sigma_ATM, sigma_25C], 2)
-    sigma = a * x * x + b * x + c
+    # BUG FIX #2: an earlier pass here replaced a vega-weighted convex
+    # combination (mathematically bounded within [min,max] of the 3 pillar
+    # vols -- see the first bug fix this comment used to describe) with a
+    # bare quadratic fit through the 3 (log-strike, vol) points. That
+    # curves, but it isn't real Vanna-Volga either -- it's an arbitrary
+    # parabola with no connection to the option's own vega/vanna/volga, so
+    # it can (and did, confirmed live) swing to unrealistic values far from
+    # the pillars since nothing constrains its curvature beyond 3 points.
+    # VV is "smile-aware" precisely because it solves for a NEW STRIKE'S
+    # vol from the market's actual price data at the 3 pillars via a
+    # replication argument, not by extrapolating a fitted curve through
+    # vol values. The real construction:
+    #   1. Price a call at each pillar strike (K1=25dP, K2=ATM, K3=25dC)
+    #      twice: once at the FLAT reference vol sigma_ATM (C0_i), once at
+    #      that pillar's OWN market vol (Cmkt_i). K2's correction is
+    #      trivially zero (K2==K_atm, sigma==sigma_ATM by construction).
+    #   2. For the TARGET strike K, compute weights x1(K)/x3(K) -- a
+    #      vega-ratio-scaled Lagrange interpolation in log-strike space
+    #      (the standard closed-form simplification of the full vanna/volga
+    #      replication weights; K2's weight is unneeded since its term is
+    #      zero regardless).
+    #   3. C_VV(K) = C_BS(K, sigma_ATM) + x1(K)*(Cmkt_1-C0_1) +
+    #      x3(K)*(Cmkt_3-C0_3) -- the flat-vol price PLUS the market's own
+    #      observed wing/skew information, weighted by how much this
+    #      strike's vega resembles each pillar's.
+    #   4. Invert C_VV(K) back to an implied vol via Black-Scholes Newton
+    #      (this IS the "solve for IV at this strike" step the other
+    #      models on the smile chart also do -- VV just solves against its
+    #      OWN replicated price instead of a live market quote).
+    K1, K3 = K_25P, K_25C
+    logK1, logK2, logK3, logK = (
+        np.log(K1),
+        np.log(K_atm),
+        np.log(K3),
+        np.log(K),
+    )
+
+    def _bs_call(K_, sigma_):
+        return _bs_call_price(S, K_, T, r, q, sigma_)
+
+    def _vega(K_, sigma_):
+        return _bs_vega(S, K_, T, r, q, sigma_)
+
+    C0_1, C0_3 = _bs_call(K1, sigma_ATM), _bs_call(K3, sigma_ATM)
+    Cmkt_1, Cmkt_3 = _bs_call(K1, sigma_25P), _bs_call(K3, sigma_25C)
+
+    vega_K = _vega(K, sigma_ATM)
+    vega_1, vega_3 = _vega(K1, sigma_ATM), _vega(K3, sigma_ATM)
+    x1 = (
+        (vega_K / vega_1)
+        * (logK2 - logK)
+        * (logK3 - logK)
+        / ((logK2 - logK1) * (logK3 - logK1))
+        if vega_1 > 1e-12
+        else 0.0
+    )
+    x3 = (
+        (vega_K / vega_3)
+        * (logK - logK1)
+        * (logK - logK2)
+        / ((logK3 - logK1) * (logK3 - logK2))
+        if vega_3 > 1e-12
+        else 0.0
+    )
+
+    C_VV = _bs_call(K, sigma_ATM) + x1 * (Cmkt_1 - C0_1) + x3 * (Cmkt_3 - C0_3)
+    sigma = _bs_iv_newton(C_VV, S, K, T, r, q, seed=sigma_ATM)
 
     # Final sanity check: never return negative or zero vol
     return max(float(sigma), 0.001)
 
 
 def get_vol_batch(S, K, T, r, q, atm_vol, rr25, bf25):
-    """Vectorized version of get_vol -- same formula, evaluated for an array
-    of strikes K at once instead of one Python-level call per strike.
+    """Vectorized version of get_vol's Castagna-Mercurio price-space
+    correction (see get_vol's docstring for the full derivation) -- same
+    formula, evaluated for an array of strikes K at once instead of one
+    Python-level call per strike.
 
-    The three pillars (ATM/25P/25C) and their vegas depend only on
-    S/T/r/q/atm_vol/rr25/bf25, NOT on K, so they're computed exactly once
-    here regardless of how many strikes are passed in -- the old call site
-    (main.py's smile chart, `[get_vol(S, k, T, r, q, ...) for k in grid]`)
-    recomputed all of that from scratch on every one of ~100 strikes. Returns
-    an array of implied vols, one per strike in K.
+    The three pillars (ATM/25P/25C), their reference-vol vegas, and their
+    price corrections depend only on S/T/r/q/atm_vol/rr25/bf25, NOT on K,
+    so they're computed exactly once here regardless of how many strikes
+    are passed in.
+
+    Returns NaN for strikes where the correction is numerically
+    unidentifiable: the Lagrange weights are scaled by vega_K/vega_pillar,
+    both evaluated at the FLAT reference sigma_ATM -- and reference vega
+    genuinely collapses to ~0 for strikes far from the pillars in dollar
+    terms (a deep ITM/OTM option has near-zero vega under a LOW assumed
+    vol, even though its true required vol could be large). Confirmed
+    live on SPY: strikes below ~460 (spot ~769, ~1 month expiry) had
+    essentially zero reference vega, so the correction vanished and the
+    reconstructed price reverted to pure intrinsic -- not a code bug, the
+    same numerical-identifiability limit MCHestonLSM._bs_iv_batch's
+    min_vega_frac already handles for Heston's smile, reused here rather
+    than reinventing it. This is the honest domain boundary of the
+    simplified vega-weighted VV approximation (designed for FX-style
+    narrow delta bands, not a full equity dollar-strike chain) -- dropping
+    those points is more honest than returning a fabricated near-zero vol.
     """
+    from MCHestonLSM import _bs_iv_batch  # local import: avoids importing
+    # MCHestonLSM's heavier dependency surface at VannaVolga's own import
+    # time for callers (e.g. main.py's interactive prompts) that never
+    # touch the smile chart at all.
+
     K = np.asarray(K, dtype=float)
 
     # Same RR/BF symmetry fix as get_vol -- see that function's comment.
@@ -241,18 +348,43 @@ def get_vol_batch(S, K, T, r, q, atm_vol, rr25, bf25):
     K_25C = F * np.exp(-d1_call * sigma_25C * np.sqrt(T) + 0.5 * sigma_25C**2 * T)
     K_atm = S
 
-    # Exact quadratic through the 3 pillars in log-strike space -- same fix
-    # as get_vol's non-batch version (see its comment for the full
-    # rationale: a convex/weighted average of 3 fixed vols is bounded by
-    # them and can never curve into the wings the way a real VV smile, or
-    # this repo's own vol_surface_2d.py quadratic fit, does).
-    x = np.log(K)
-    x_atm = np.log(K_atm)
-    x_25P = np.log(K_25P)
-    x_25C = np.log(K_25C)
-    a, b, c = np.polyfit([x_25P, x_atm, x_25C], [sigma_25P, sigma_ATM, sigma_25C], 2)
-    sigma = a * x * x + b * x + c
-    return np.maximum(sigma, 0.001)
+    K1, K3 = K_25P, K_25C
+    logK1, logK2, logK3 = np.log(K1), np.log(K_atm), np.log(K3)
+    logK = np.log(K)
+
+    C0_1 = _bs_call_price(S, K1, T, r, q, sigma_ATM)
+    C0_3 = _bs_call_price(S, K3, T, r, q, sigma_ATM)
+    Cmkt_1 = _bs_call_price(S, K1, T, r, q, sigma_25P)
+    Cmkt_3 = _bs_call_price(S, K3, T, r, q, sigma_25C)
+
+    vega_K = _bs_vega(S, K, T, r, q, sigma_ATM)
+    vega_1 = _bs_vega(S, K1, T, r, q, sigma_ATM)
+    vega_3 = _bs_vega(S, K3, T, r, q, sigma_ATM)
+
+    x1 = np.where(
+        vega_1 > 1e-12,
+        (vega_K / max(vega_1, 1e-12))
+        * (logK2 - logK)
+        * (logK3 - logK)
+        / ((logK2 - logK1) * (logK3 - logK1)),
+        0.0,
+    )
+    x3 = np.where(
+        vega_3 > 1e-12,
+        (vega_K / max(vega_3, 1e-12))
+        * (logK - logK1)
+        * (logK - logK2)
+        / ((logK3 - logK1) * (logK3 - logK2)),
+        0.0,
+    )
+
+    C_VV = (
+        _bs_call_price(S, K, T, r, q, sigma_ATM)
+        + x1 * (Cmkt_1 - C0_1)
+        + x3 * (Cmkt_3 - C0_3)
+    )
+    seed = np.full(K.shape, sigma_ATM)
+    return _bs_iv_batch(C_VV, S, K, T, r, q, seed_vols=seed, min_vega_frac=1e-3)
 
 
 def calculate_weight(K, K_atm, K_rr, K_bf, sigma_atm, sigma_rr, sigma_bf):

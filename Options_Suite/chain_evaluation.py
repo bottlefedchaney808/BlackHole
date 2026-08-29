@@ -362,15 +362,26 @@ def _build_smile_curves(
 
         try:
             if atm_vol_vv:
-                # Vectorized -- see VannaVolga.get_vol_batch. Also picks
-                # up the RR/BF symmetry fix (get_vol used to apply BF
-                # anti-symmetrically and RR symmetrically -- backwards --
-                # which made the curve nearly flat regardless of how
-                # strong the real 25-delta risk reversal was).
+                # Vectorized Castagna-Mercurio price-space correction --
+                # see VannaVolga.get_vol_batch. Returns NaN for strikes
+                # where the correction is numerically unidentifiable (far
+                # from the pillars in dollar terms -- see that function's
+                # docstring); drop those rather than plot a fabricated
+                # near-zero vol, same convention as the Heston curve below.
                 vv_curve = vanna_volga_vol_batch(
                     S, grid, T, r, q, atm_vol_vv, rr25, bf25
                 )
-                smile_curves["VannaVolga"] = (grid, vv_curve)
+                _vv_valid = np.isfinite(vv_curve)
+                if np.sum(_vv_valid) >= 3:
+                    smile_curves["VannaVolga"] = (
+                        np.asarray(grid, dtype=float)[_vv_valid],
+                        vv_curve[_vv_valid],
+                    )
+                else:
+                    print(
+                        f"[Smile Chart] VannaVolga curve produced only "
+                        f"{np.sum(_vv_valid)} identifiable point(s) -- skipping curve."
+                    )
         except Exception as e:
             print(f"[Smile Chart] VannaVolga curve failed: {e}")
 
