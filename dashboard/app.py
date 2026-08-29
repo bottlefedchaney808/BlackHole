@@ -50,6 +50,7 @@ from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable
@@ -356,28 +357,42 @@ def _hedge_position_payload(
 
 def _hedge_headline(hedge_result: dict[str, Any]) -> str | None:
     """hedge_optimizer_tool's raw result has no headline field -- derive a
-    short one from the numbers it actually returns (net delta + the
-    stock+ATM-call recipe), rather than fabricating language the tool
-    itself doesn't provide."""
+    short one from the numbers it actually returns (net delta + one hedge
+    recipe), rather than fabricating language the tool itself doesn't
+    provide.
+
+    hedge_optimizer_tool computes two independent recipes: "atm_call_put"
+    (pure options, no stock leg) and "stock_atm_call" (stock + ATM call).
+    Prefer the pure-options recipe so the headline reads as one coherent
+    hedge instrument, not a share count stapled to a contract count; fall
+    back to the stock+call recipe only when the options-only solve wasn't
+    produced (e.g. no usable ATM put candidate)."""
     position = hedge_result.get("position") or {}
     recipes = hedge_result.get("recipes") or {}
     parts = []
     net_delta = position.get("net_delta")
     if isinstance(net_delta, (int, float)):
         parts.append(f"net delta {net_delta:+.1f}")
-    recipe = recipes.get("stock_atm_call")
-    if isinstance(recipe, dict):
-        shares = recipe.get("stock_shares")
-        direction = recipe.get("stock_direction")
-        calls = recipe.get("atm_call_contracts")
-        if (
-            isinstance(shares, (int, float))
-            and direction
-            and isinstance(calls, (int, float))
-        ):
+
+    options_recipe = recipes.get("atm_call_put")
+    if isinstance(options_recipe, dict):
+        calls = options_recipe.get("atm_call_contracts")
+        puts = options_recipe.get("atm_put_contracts")
+        if isinstance(calls, (int, float)) and isinstance(puts, (int, float)):
             parts.append(
-                f"{direction} {abs(shares):.0f} sh + {calls:+.2f} ATM calls to flatten"
+                f"{calls:+.2f} ATM calls + {puts:+.2f} ATM puts to flatten (options-only)"
             )
+    else:
+        stock_recipe = recipes.get("stock_atm_call")
+        if isinstance(stock_recipe, dict):
+            shares = stock_recipe.get("stock_shares")
+            direction = stock_recipe.get("stock_direction")
+            if isinstance(shares, (int, float)) and direction:
+                parts.append(
+                    f"{direction} {abs(shares):.0f} sh to flatten (stock-only; "
+                    f"no usable ATM put candidate for an options-only hedge)"
+                )
+
     note = position.get("note")
     if note:
         parts.append(note)
@@ -2681,6 +2696,7 @@ def tools_surface_explorer_form(request: Request):
             "selected_option_type": "call",
             "include_mc": True,
             "include_heston": True,
+            "exclude_front_week": False,
             "result": None,
             "result_json": None,
             "error": None,
@@ -2702,6 +2718,7 @@ async def tools_surface_explorer_run(request: Request):
     option_type = str(body.get("option_type") or "call").strip().lower()
     include_mc = bool(body.get("include_mc"))
     include_heston = bool(body.get("include_heston"))
+    exclude_front_week = bool(body.get("exclude_front_week"))
 
     result = None
     error = None
@@ -2729,13 +2746,35 @@ async def tools_surface_explorer_run(request: Request):
             context["option_type"] = option_type
             context["include_mc"] = include_mc
             context["include_heston"] = include_heston
+        if mode == "iv_surface_market":
+            # Toggle, not a fix: front-week (0-2 DTE) wings are genuinely
+            # 5-8x every other tenor's amplitude (real market behavior --
+            # see vol_surface_2d.NEAR_ATM_BAND's docstring), so including
+            # them dominates the shared z-axis/color scale. Both views are
+            # legitimate; let the user pick per-request instead of only
+            # ever showing one.
+            context["min_dte"] = 14 if exclude_front_week else 0
         # Every generated PNG lands under one dedicated directory (no suite
         # context required -- this tool only ever needs a ticker).
         out_dir = os.path.join(DASHBOARD_DIR, "outputs", "surface_explorer")
         os.makedirs(out_dir, exist_ok=True)
         context["_output_dir_override"] = out_dir
         if error is None:
-            result, run_error = _run_tool_safe("surface-explorer", context)
+            # iv_smile_by_model always calibrates every pricing model
+            # including Heston (37 multi-start restarts) regardless of the
+            # include_mc/include_heston flags -- those only trim the
+            # *output*, not the calibration cost (see
+            # Options_Suite/smile_by_model.py's docstring). Confirmed live:
+            # 50-90+ seconds for a single request. Running that inline in
+            # this `async def` route would block the whole single-process
+            # event loop for the duration -- every other widget tick, poll,
+            # and websocket update on the dashboard stalls too, which is
+            # what makes this look like "doesn't work at all" rather than
+            # "is slow". Offload to a worker thread so the event loop stays
+            # responsive while it runs.
+            result, run_error = await run_in_threadpool(
+                _run_tool_safe, "surface-explorer", context
+            )
             if run_error:
                 error = run_error
 
@@ -2757,6 +2796,7 @@ async def tools_surface_explorer_run(request: Request):
             "selected_option_type": option_type,
             "include_mc": include_mc,
             "include_heston": include_heston,
+            "exclude_front_week": exclude_front_week,
             "result": result,
             "result_json": result_json,
             "error": error,

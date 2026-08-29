@@ -142,10 +142,34 @@ def _plot_surface_3d(
     Z = np.array(grid_result["grid"])
     YY, XX = np.meshgrid(Y, X, indexing="ij")
 
+    # A real vol/greek surface routinely has one row (e.g. the front-week
+    # tenor on a market IV surface) whose amplitude is 5-8x every other
+    # row's -- confirmed live on SPXW: front-week wings hit ~0.9 IV while
+    # every other tenor out to ~10 months stayed within 0.10-0.24, all
+    # genuinely curved. Auto-scaling the z-axis (and color map) to that one
+    # outlier's range doesn't make it wrong, but it crushes every other
+    # row's real, visible curvature into a sliver of the vertical axis --
+    # which reads as "the surface is flat" even though it isn't. Clip the
+    # RENDERED z-range (data returned to the caller is untouched) to a
+    # percentile band so one extreme row can't flatten everyone else; the
+    # outlier row still pokes out the top/bottom of the frame rather than
+    # being hidden.
+    z_lo, z_hi = np.nanpercentile(Z, [2, 92])
+    if z_hi > z_lo:
+        pad = (z_hi - z_lo) * 0.1
+        z_lo, z_hi = z_lo - pad, z_hi + pad
+        Z_render = np.clip(Z, z_lo, z_hi)
+    else:
+        z_lo, z_hi = None, None
+        Z_render = Z
+
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
     cmap = _DARK_ACCENT_CMAP if dark_theme else "viridis"
-    surf = ax.plot_surface(XX, YY, Z, cmap=cmap, edgecolor="none", alpha=0.92)
+    surf = ax.plot_surface(XX, YY, Z_render, cmap=cmap, edgecolor="none", alpha=0.92)
+    if z_lo is not None:
+        surf.set_clim(z_lo, z_hi)
+        ax.set_zlim3d(z_lo, z_hi)
     ax.set_xlabel("Strike ($)")
     ax.set_ylabel(y_key.replace("_", " "))
     ax.set_zlabel(z_label)
@@ -268,7 +292,12 @@ def _run_greek_surface(context, sg, ticker, out_dir):
 
 def _run_iv_surface_market(context, sg, ticker, out_dir):
     dark_theme = bool(context.get("dark_theme"))
-    result = sg.build_market_iv_surface(ticker)
+    min_dte_raw = context.get("min_dte")
+    try:
+        min_dte = int(min_dte_raw) if min_dte_raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        min_dte = 0
+    result = sg.build_market_iv_surface(ticker, min_dte=min_dte)
 
     chart_path = None
     if out_dir:
@@ -415,9 +444,11 @@ TOOL_SPEC = ToolSpec(
         "vega/vanna/charm/volga) and market IV, plus options-flow heatmaps "
         "(strike x time, strike x expiry), plus a single-expiry multi-model "
         "IV smile comparison. mode='greek_surface' (+context['greek']), "
-        "'iv_surface_market', 'flow_strike_time', 'flow_strike_expiry', "
-        "'iv_smile_by_model' (+context['strike'], 'option_type', "
-        "'include_mc', 'include_heston')."
+        "'iv_surface_market' (+context['min_dte'], default 0 -- pass e.g. "
+        "14 to drop expiries inside 2 weeks for a term-structure view "
+        "instead of the front-week-inclusive default), 'flow_strike_time', "
+        "'flow_strike_expiry', 'iv_smile_by_model' (+context['strike'], "
+        "'option_type', 'include_mc', 'include_heston')."
     ),
     run=run,
 )

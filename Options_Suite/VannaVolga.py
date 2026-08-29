@@ -1,6 +1,8 @@
-import numpy as np
 from datetime import datetime
+
+import numpy as np
 from scipy.stats import norm
+
 try:
     from .MC import AmericanLSMPricer
 except ImportError:
@@ -8,6 +10,7 @@ except ImportError:
 
 try:
     from thetadata_controller import ThetaDataController
+
     _THETADATA_AVAILABLE = True
 except Exception:
     _THETADATA_AVAILABLE = False
@@ -47,10 +50,15 @@ def get_auto_rr_bf(ticker, expiry_date):
             if not exps:
                 return 0.0, 0.0, 0.0
             target = datetime.strptime(expiry_date, "%Y-%m-%d")
-            parsed = sorted((abs((datetime.strptime(str(e), "%Y%m%d") - target).days), str(e))
-                            if str(e).isdigit() and len(str(e)) == 8
-                            else (abs((datetime.strptime(str(e), "%Y-%m-%d") - target).days), str(e))
-                            for e in exps)
+            parsed = sorted(
+                (abs((datetime.strptime(str(e), "%Y%m%d") - target).days), str(e))
+                if str(e).isdigit() and len(str(e)) == 8
+                else (
+                    abs((datetime.strptime(str(e), "%Y-%m-%d") - target).days),
+                    str(e),
+                )
+                for e in exps
+            )
             nearest = parsed[0][1]
             rows = td.option_bulk_greeks(ticker, nearest)
         finally:
@@ -59,16 +67,17 @@ def get_auto_rr_bf(ticker, expiry_date):
         calls, puts = [], []  # each: (strike, iv, delta)
         for row in rows:
             try:
-                right = str(row.get('right', '')).upper()
-                strike = float(row.get('strike')) / 1000.0
-                iv = row.get('implied_vol') or row.get('impliedVolatility')
-                delta = row.get('delta')
+                right = str(row.get("right", "")).upper()
+                strike = float(row.get("strike")) / 1000.0
+                iv = row.get("implied_vol") or row.get("impliedVolatility")
+                delta = row.get("delta")
                 if iv is None or delta is None:
                     continue
-                iv = float(iv); delta = float(delta)
+                iv = float(iv)
+                delta = float(delta)
                 if iv <= 0 or iv > 5.0:
                     continue
-                (calls if right == 'C' else puts).append((strike, iv, delta))
+                (calls if right == "C" else puts).append((strike, iv, delta))
             except Exception:
                 continue
         if not calls or not puts:
@@ -152,71 +161,59 @@ def get_vol(S, K, T, r, q, atm_vol, rr25, bf25, S_atm=None, S_pillars=None):
 
     # Step 2: Compute actual 25-delta strikes using forward delta formula
     F = (S if S_pillars is None else S_pillars) * np.exp((r - q) * T)
-    
+
     # For forward delta: delta_call = N(d1), target = 0.25
     # For forward delta: delta_put = -N(-d1), target = -0.25 => N(-d1) = 0.25
-    K_25P = _forward_delta_strike(F, sigma_25P, T, 0.25)  # put: N(d1) maps to 0.25 for the negative
+    K_25P = _forward_delta_strike(
+        F, sigma_25P, T, 0.25
+    )  # put: N(d1) maps to 0.25 for the negative
     # Actually for a put at -0.25 forward delta:
     # delta_put = -N(-d1) = -0.25 => N(-d1) = 0.25 => -d1 = N^{-1}(0.25) => d1 = -0.6745
     d1_put = -norm.ppf(0.25)  # -0.6745
     K_25P = F * np.exp(-d1_put * sigma_25P * np.sqrt(T) + 0.5 * sigma_25P**2 * T)
-    
+
     d1_call = norm.ppf(0.25)  # 0.6745
     K_25C = F * np.exp(-d1_call * sigma_25C * np.sqrt(T) + 0.5 * sigma_25C**2 * T)
-    
+
     K_atm = S if S_atm is None else S_atm  # ATM anchor strike; frozen at the
     # pre-bump spot when called from vv_all_greeks's finite-difference Greek
     # stencils via S_atm (see docstring above) to avoid a moving smile kink.
-    
-    # Step 3: Vega-weighted positive convex interpolation
-    # Compute Black-Scholes Vegas at the three pillars
-    def bs_vega(S, K, T, r, q, sigma):
-        if sigma <= 0 or T <= 0:
-            return 1.0
-        d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-        return S * np.sqrt(T) * norm.pdf(d1) * np.exp(-q * T)
-    
-    vega_atm = bs_vega(S, K_atm, T, r, q, sigma_ATM)
-    vega_25P = bs_vega(S, K_25P, T, r, q, sigma_25P)
-    vega_25C = bs_vega(S, K_25C, T, r, q, sigma_25C)
-    
-    # Log-strike distances
+
+    # Step 3: exact quadratic through the 3 pillars, in log-strike space.
+    #
+    # BUG FIX: this used to be a vega-weighted inverse-distance CONVEX
+    # COMBINATION of the 3 pillar vols (weights always positive, always
+    # normalized to sum to 1). That's a real, structural limitation, not
+    # just an unlucky parameterization: a convex combination of 3 fixed
+    # numbers is mathematically GUARANTEED to stay within
+    # [min, max](sigma_ATM, sigma_25P, sigma_25C) for every strike, no
+    # matter how far from the pillars -- confirmed live (SPY/QQQ calls):
+    # VannaVolga sat nearly flat across the WHOLE chain while CRR/LR/NR/MC/
+    # Market all kept curving into the wings, because the pillar vols
+    # themselves are close together and the weighted average can never
+    # exceed them. That is not how a real Vanna-Volga smile behaves (see
+    # e.g. Castagna & Mercurio's smile-consistent VV, or any live FX/equity
+    # desk's VV curve) -- it continues to curve past the pillars just like
+    # every other smile model, because the underlying construction is a
+    # genuine SMILE FUNCTION fit to the 3 market inputs, not an average of
+    # them. The standard, widely-used closed-form shortcut for this is a
+    # QUADRATIC fit through the 3 (log-strike, vol) pillar points -- 3
+    # points exactly determine a parabola's 3 coefficients, and unlike a
+    # convex combination, a parabola is NOT bounded by its control points:
+    # it keeps curving upward/downward past them exactly like the market's
+    # own smile does. This is the same quadratic-in-log-moneyness form
+    # Vol_Suite/vol_surface_2d.py already fits to raw market data elsewhere
+    # in this repo -- same idea, exact 3-point fit instead of a
+    # least-squares fit over many points.
     x = np.log(K)
     x_atm = np.log(K_atm)
     x_25P = np.log(K_25P)
     x_25C = np.log(K_25C)
-    
-    eps = 1e-8
-    # Inverse distance weights (p=1)
-    w_atm = vega_atm / (abs(x - x_atm) + eps)
-    w_25P = vega_25P / (abs(x - x_25P) + eps)
-    w_25C = vega_25C / (abs(x - x_25C) + eps)
-    
-    # Normalize so they sum to 1
-    total = w_atm + w_25P + w_25C
-    w_atm /= total
-    w_25P /= total
-    w_25C /= total
-
-    # BUG FIX (was "nuts" in the smile chart -- confirmed live on an AMD
-    # call): this used to hard-clamp K <= K_25P / K >= K_25C to the FLAT
-    # sigma_25P/sigma_25C pillar value, discarding the interior weighted
-    # formula entirely outside the pillar range. That's not numerically
-    # necessary -- the inverse-distance weights above are well-defined
-    # (always positive, always normalized to sum to 1) for ANY K, including
-    # far outside [K_25P, K_25C], so the convex combination below is already
-    # guaranteed to stay between min/max(sigma_ATM, sigma_25P, sigma_25C) with
-    # no singularity risk. The old clamp instead froze ~40% of a typical
-    # chain's strikes (everything below K_25P) at one constant number, which
-    # is why VannaVolga's wing looked flat/disconnected next to every other
-    # model (CRR/LR/NR/MC/Market) continuing to rise into the same wing on a
-    # live comparison chart. Removing the clamp lets the same convex-
-    # combination formula extrapolate smoothly and continuously past the
-    # pillars instead of truncating.
-    sigma = w_atm * sigma_ATM + w_25P * sigma_25P + w_25C * sigma_25C
+    a, b, c = np.polyfit([x_25P, x_atm, x_25C], [sigma_25P, sigma_ATM, sigma_25C], 2)
+    sigma = a * x * x + b * x + c
 
     # Final sanity check: never return negative or zero vol
-    return max(sigma, 0.001)
+    return max(float(sigma), 0.001)
 
 
 def get_vol_batch(S, K, T, r, q, atm_vol, rr25, bf25):
@@ -244,31 +241,17 @@ def get_vol_batch(S, K, T, r, q, atm_vol, rr25, bf25):
     K_25C = F * np.exp(-d1_call * sigma_25C * np.sqrt(T) + 0.5 * sigma_25C**2 * T)
     K_atm = S
 
-    def _vega(K_pillar, sigma_pillar):
-        if sigma_pillar <= 0 or T <= 0:
-            return 1.0
-        d1 = (np.log(S / K_pillar) + (r - q + 0.5 * sigma_pillar**2) * T) / (sigma_pillar * np.sqrt(T))
-        return S * np.sqrt(T) * norm.pdf(d1) * np.exp(-q * T)
-
-    vega_atm = _vega(K_atm, sigma_ATM)
-    vega_25P = _vega(K_25P, sigma_25P)
-    vega_25C = _vega(K_25C, sigma_25C)
-
+    # Exact quadratic through the 3 pillars in log-strike space -- same fix
+    # as get_vol's non-batch version (see its comment for the full
+    # rationale: a convex/weighted average of 3 fixed vols is bounded by
+    # them and can never curve into the wings the way a real VV smile, or
+    # this repo's own vol_surface_2d.py quadratic fit, does).
     x = np.log(K)
     x_atm = np.log(K_atm)
     x_25P = np.log(K_25P)
     x_25C = np.log(K_25C)
-
-    eps = 1e-8
-    w_atm = vega_atm / (np.abs(x - x_atm) + eps)
-    w_25P = vega_25P / (np.abs(x - x_25P) + eps)
-    w_25C = vega_25C / (np.abs(x - x_25C) + eps)
-    total = w_atm + w_25P + w_25C
-    w_atm = w_atm / total
-    w_25P = w_25P / total
-    w_25C = w_25C / total
-
-    sigma = w_atm * sigma_ATM + w_25P * sigma_25P + w_25C * sigma_25C
+    a, b, c = np.polyfit([x_25P, x_atm, x_25C], [sigma_25P, sigma_ATM, sigma_25C], 2)
+    sigma = a * x * x + b * x + c
     return np.maximum(sigma, 0.001)
 
 
@@ -314,9 +297,9 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
     get_auto_rr_bf provides, passed through main.py's VannaVolga branch.
     """
     try:
-        from .american_binomial import leisen_reimer_american_price, _bs_rho
+        from .american_binomial import _bs_rho, leisen_reimer_american_price
     except ImportError:
-        from american_binomial import leisen_reimer_american_price, _bs_rho
+        from american_binomial import _bs_rho, leisen_reimer_american_price
 
     def smile_sigma(S_, T_, r_, atm_vol_=None, freeze_pillars=False):
         av = atm_vol if atm_vol_ is None else atm_vol_
@@ -342,8 +325,20 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
         # pillars respond to a bumped spot. Only Speed's stencil (wide +/-3%
         # outer bump, wide enough to straddle K_25P/K_25C themselves, not
         # just K_atm) passes freeze_pillars=True.
-        sig = float(get_vol(S_, K, T_, r_, q, av, rr25, bf25, S_atm=S,
-                             S_pillars=(S if freeze_pillars else None)))
+        sig = float(
+            get_vol(
+                S_,
+                K,
+                T_,
+                r_,
+                q,
+                av,
+                rr25,
+                bf25,
+                S_atm=S,
+                S_pillars=(S if freeze_pillars else None),
+            )
+        )
         return max(sig, 0.001)
 
     def price(S_=S, T_=T, r_=r, atm_vol_=None, freeze_pillars=False):
@@ -353,9 +348,21 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
     sigma_here = smile_sigma(S, T, r)
 
     if T <= 0 or sigma_here <= 1e-6:
-        return {'delta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'rho': 0.0, 'theta': 0.0,
-                'vanna': 0.0, 'vomma': 0.0, 'speed': 0.0, 'charm': 0.0, 'color': 0.0,
-                'rho_euro': 0.0, 'rho_ee_premium': 0.0, 'sigma': sigma_here}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "vega": 0.0,
+            "rho": 0.0,
+            "theta": 0.0,
+            "vanna": 0.0,
+            "vomma": 0.0,
+            "speed": 0.0,
+            "charm": 0.0,
+            "color": 0.0,
+            "rho_euro": 0.0,
+            "rho_ee_premium": 0.0,
+            "sigma": sigma_here,
+        }
 
     dS = S * 0.01
     d_atm = max(atm_vol * 0.02, 1e-4)
@@ -369,7 +376,9 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
     gamma = (price(S_=S + dS) - 2 * p0 + price(S_=S - dS)) / (dS * dS)
     # Vega: dP / d(atm_vol) directly. atm_vol IS the vol convention here
     # (no alpha-to-sigma conversion needed like SABR).
-    vega = (price(atm_vol_=atm_vol + d_atm) - price(atm_vol_=atm_vol - d_atm)) / (2 * d_atm)
+    vega = (price(atm_vol_=atm_vol + d_atm) - price(atm_vol_=atm_vol - d_atm)) / (
+        2 * d_atm
+    )
     rho_am = (price(r_=r + dR) - price(r_=r - dR)) / (2 * dR)
     theta = -(price(T_=T + dT) - price(T_=T_dn)) / T_span / 365.0
 
@@ -391,23 +400,27 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
         return (price(S_=S_ + dS, T_=T_) - price(S_=S_ - dS, T_=T_)) / (2 * dS)
 
     def _gamma_at(S_, T_, freeze_pillars=False):
-        return (price(S_=S_ + dS, T_=T_, freeze_pillars=freeze_pillars)
-                - 2 * price(S_=S_, T_=T_, freeze_pillars=freeze_pillars)
-                + price(S_=S_ - dS, T_=T_, freeze_pillars=freeze_pillars)) / (dS * dS)
+        return (
+            price(S_=S_ + dS, T_=T_, freeze_pillars=freeze_pillars)
+            - 2 * price(S_=S_, T_=T_, freeze_pillars=freeze_pillars)
+            + price(S_=S_ - dS, T_=T_, freeze_pillars=freeze_pillars)
+        ) / (dS * dS)
 
     def _vega_at(S_, atm_center):
-        return (price(S_=S_, atm_vol_=atm_center + d_atm)
-                - price(S_=S_, atm_vol_=atm_center - d_atm)) / (2 * d_atm)
+        return (
+            price(S_=S_, atm_vol_=atm_center + d_atm)
+            - price(S_=S_, atm_vol_=atm_center - d_atm)
+        ) / (2 * d_atm)
 
     # Vanna = dVega/dS. Bump spot, re-interpolate the smile, re-vega.
     dS_vanna = max(S * 0.01, 0.01)
-    vanna = (_vega_at(S + dS_vanna, atm_vol)
-             - _vega_at(S - dS_vanna, atm_vol)) / (2 * dS_vanna)
+    vanna = (_vega_at(S + dS_vanna, atm_vol) - _vega_at(S - dS_vanna, atm_vol)) / (
+        2 * dS_vanna
+    )
 
     # Vomma = dVega/dATM_vol. Bump ATM vol only; RR/BF held fixed so the
     # smile shape rides along the way a real ATM-vol move would.
-    vomma = (_vega_at(S, atm_vol + d_atm)
-             - _vega_at(S, atm_vol - d_atm)) / (2 * d_atm)
+    vomma = (_vega_at(S, atm_vol + d_atm) - _vega_at(S, atm_vol - d_atm)) / (2 * d_atm)
 
     # Speed = dGamma/dS. Wider outer bump than the inner dS so the nested
     # difference doesn't collapse into binomial lattice noise.
@@ -417,8 +430,10 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
     # and Speed comes out unstable/sign-flipping, same failure mode S_atm
     # fixes for K_atm.
     dS_speed = max(S * 0.03, 0.03)
-    speed = (_gamma_at(S + dS_speed, T, freeze_pillars=True)
-             - _gamma_at(S - dS_speed, T, freeze_pillars=True)) / (2 * dS_speed)
+    speed = (
+        _gamma_at(S + dS_speed, T, freeze_pillars=True)
+        - _gamma_at(S - dS_speed, T, freeze_pillars=True)
+    ) / (2 * dS_speed)
 
     # Charm / Color share the same maturity bumps.
     dT_2nd = max(T * 0.01, 1.0 / 365.0)
@@ -441,6 +456,18 @@ def vv_all_greeks(S, K, T, r, q, cp, atm_vol, rr25, bf25, steps=401):
     rho_euro = _bs_rho(S, K, T, r, q, sigma_here, cp)
     rho_ee_premium = rho_am - rho_euro
 
-    return {'delta': delta, 'gamma': gamma, 'vega': vega, 'rho': rho_am, 'theta': theta,
-            'vanna': vanna, 'vomma': vomma, 'speed': speed, 'charm': charm, 'color': color,
-            'rho_euro': rho_euro, 'rho_ee_premium': rho_ee_premium, 'sigma': sigma_here}
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "vega": vega,
+        "rho": rho_am,
+        "theta": theta,
+        "vanna": vanna,
+        "vomma": vomma,
+        "speed": speed,
+        "charm": charm,
+        "color": color,
+        "rho_euro": rho_euro,
+        "rho_ee_premium": rho_ee_premium,
+        "sigma": sigma_here,
+    }

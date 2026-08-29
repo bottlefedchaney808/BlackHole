@@ -161,6 +161,16 @@ def _map_ph_error(exc: PHClientError):
 # needs another CBOE-style cash index that isn't listed yet.
 _INDEX_ROOTS = frozenset({"SPX", "SPXW", "NDX", "VIX", "RUT", "DJX", "XSP", "OEX"})
 
+# Vendor quirk (confirmed live, commit 43b7c6a): some of the roots above are
+# options-chain-only aliases of a "real" index root -- SPXW is how this feed
+# lists SPX's PM-settled weekly OPTIONS CHAIN, but it has no separate index
+# PRICE series of its own; /snapshot/index/price/SPXW and
+# /hist/index/eod/SPXW both come back empty. Any caller pricing an SPXW
+# position (e.g. an options-suite context whose ticker is the chain root)
+# needs its spot resolved under "SPX" instead. Map here, at the source,
+# rather than patching every call site individually.
+_INDEX_PRICE_ROOT_ALIASES = {"SPXW": "SPX"}
+
 _PATH_ALIASES = {
     # exact match first
     "/api/db/dealer_positioning": ("dealer", "positioning", {"use_csv": True}),
@@ -978,8 +988,25 @@ class ThetaDataController:
         """List available strikes for a given root and expiration.
 
         NOTE: Values are returned as-is (not divided by 1000).
+
+        Same v2 options_chain route as list_expirations() -- and the same
+        default-page-size trap: without an explicit max_contracts, a wide,
+        densely-struck chain (SPX/SPXW spans 2600-8900+ in spots as fine as
+        $5 near the money) gets silently truncated ascending from the low
+        end, so the returned list can cap out well BELOW the real spot and
+        never include an actual ATM strike. Confirmed live: SPXW 20260831
+        returned 325 strikes topping out at 7550 while spot was 7711.76 --
+        every strike within ~2% of spot was simply missing. A caller that
+        picks "nearest listed strike to spot" from this (e.g.
+        Options_Suite/smile_by_model.py) then silently anchors ~14% away
+        from ATM, which fails much later and confusingly (VolManager "No
+        usable market price") instead of here. Pass the same max_contracts
+        list_expirations() already uses to avoid the truncation outright.
         """
-        r = self._get_with_retry(f"/api/theta/list/strikes/{root}/{exp}")
+        r = self._get_with_retry(
+            f"/api/theta/list/strikes/{root}/{exp}",
+            params={"max_contracts": 2000},
+        )
         r.raise_for_status()
         data = r.json()
         # v2/v3 maps this legacy route to options_chain. A single-expiration
@@ -1732,6 +1759,7 @@ class ThetaDataController:
         back to the last daily close via hist_index_eod. Two layers, not
         three -- an index has no separate "last trade print" concept
         distinct from its live price snapshot the way a stock does."""
+        root = _INDEX_PRICE_ROOT_ALIASES.get(root, root)
         try:
             quote = self.index_snapshot_quote(root)
             price = quote.get("price")

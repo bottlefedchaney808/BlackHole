@@ -43,8 +43,8 @@ class _FakeSurfaceGrids:
             "meta": {},
         }
 
-    def build_market_iv_surface(self, ticker):
-        self.calls.append(("build_market_iv_surface", ticker))
+    def build_market_iv_surface(self, ticker, min_dte=0):
+        self.calls.append(("build_market_iv_surface", ticker, min_dte))
         return {
             "ticker": ticker,
             "spot": 100.0,
@@ -155,7 +155,15 @@ def test_iv_surface_market_mode(monkeypatch):
     fake = _install(monkeypatch)
     result = se_tool.run({"ticker": "SPY", "mode": "iv_surface_market"})
     assert result["mode"] == "iv_surface_market"
-    assert fake.calls == [("build_market_iv_surface", "SPY")]
+    assert fake.calls == [("build_market_iv_surface", "SPY", 0)]
+
+
+@pytest.mark.unit
+def test_iv_surface_market_mode_min_dte(monkeypatch):
+    fake = _install(monkeypatch)
+    result = se_tool.run({"ticker": "SPY", "mode": "iv_surface_market", "min_dte": 14})
+    assert result["mode"] == "iv_surface_market"
+    assert fake.calls == [("build_market_iv_surface", "SPY", 14)]
 
 
 @pytest.mark.unit

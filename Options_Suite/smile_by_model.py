@@ -193,33 +193,55 @@ def build_iv_smile_by_model(
     if not math.isfinite(spot) or spot <= 0:
         raise ValueError(f"no usable spot price for {ticker!r}")
 
+    try:
+        listed = td.list_expirations(ticker) or []
+    except Exception as exc:
+        raise ValueError(f"could not list expirations for {ticker!r}: {exc}") from exc
+    exps = sorted(str(e).replace("-", "") for e in listed)
+    if not exps:
+        raise ValueError(f"no listed expiries for {ticker!r}")
+
     if expiry:
         resolved_exp = str(expiry).replace("-", "")
-    else:
-        try:
-            listed = td.list_expirations(ticker) or []
-        except Exception as exc:
+        if resolved_exp not in exps:
             raise ValueError(
-                f"could not list expirations for {ticker!r}: {exc}"
-            ) from exc
-        exps = sorted(str(e).replace("-", "") for e in listed)
-        if not exps:
-            raise ValueError(f"no listed expiries for {ticker!r}")
+                f"{resolved_exp!r} is not a listed expiry for {ticker!r} -- "
+                f"nearest listed expiries: {exps[:5]}"
+            )
+    else:
         resolved_exp = exps[0]
 
     if strike is not None:
         K = float(strike)
     else:
-        K = spot
+        # A caller-supplied strike is trusted as-is (may deliberately be an
+        # off-grid smile center). Absent that, K MUST resolve to an actual
+        # listed strike for resolved_exp -- falling back to raw spot here
+        # used to silently hand VolManager a strike that (almost certainly)
+        # isn't a real contract, which then failed several calls later with
+        # a confusing "No usable market price" instead of the real problem
+        # (this expiry has no listed strikes at all, which -- now that
+        # resolved_exp is validated against exps above -- means something
+        # deeper is wrong with the chain, not a bad user input).
         list_strikes = getattr(td, "list_strikes", None)
-        if callable(list_strikes):
-            try:
-                strikes = list_strikes(ticker, resolved_exp) or []
-                if strikes:
-                    K = float(min(strikes, key=lambda s: abs(float(s) - spot)))
-            except Exception:
-                pass  # K stays spot -- the smile CENTER, not a strike that
-                # must exactly match a listed one.
+        if not callable(list_strikes):
+            raise ValueError(
+                f"{type(td).__name__} has no list_strikes -- cannot resolve "
+                f"an ATM strike for {ticker!r} @ {resolved_exp} without one "
+                f"(pass context['strike'] explicitly to bypass)."
+            )
+        try:
+            strikes = list_strikes(ticker, resolved_exp) or []
+        except Exception as exc:
+            raise ValueError(
+                f"could not list strikes for {ticker!r} @ {resolved_exp}: {exc}"
+            ) from exc
+        if not strikes:
+            raise ValueError(
+                f"no listed strikes for {ticker!r} @ {resolved_exp} -- "
+                f"cannot resolve an ATM strike."
+            )
+        K = float(min(strikes, key=lambda s: abs(float(s) - spot)))
 
     try:
         exp_date = _parse_yyyymmdd(resolved_exp)

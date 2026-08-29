@@ -377,6 +377,38 @@ def _build_smile_curves(
         try:
             calib_h = models.get("Heston", {}).get("calib") or {}
             if calib_h:
+                # Seed _bs_iv_batch's per-strike Newton solve from the
+                # market's own smile shape instead of the function's
+                # default (a single flat ATM vol repeated for every
+                # strike). Confirmed live on SPY: with the flat-ATM
+                # default, deep wing strikes start Newton's iteration
+                # ~50+ vol points from the true root with a vanishingly
+                # small BS vega there (vega ~ phi(d1), and d1 is huge at
+                # that distance from a low seed sigma) -- `step` in
+                # _bs_iv_batch is gated on vega, so those strikes barely
+                # move off the seed and the curve reads as a near-zero
+                # flat line everywhere except right around ATM (where
+                # vega is large enough for Newton to actually converge),
+                # exactly the two-spike-then-flat shape on the chart. A
+                # market-IV-shaped seed starts Newton within one
+                # calibration-error's distance of the true root
+                # everywhere, where vega is still meaningful, so it
+                # actually converges across the whole grid.
+                _seed_mask = (
+                    np.isfinite(np.asarray(m_strikes, dtype=float))
+                    & np.isfinite(np.asarray(chain["ivs"], dtype=float))
+                    & (np.asarray(chain["ivs"], dtype=float) > 0)
+                )
+                if np.sum(_seed_mask) >= 2:
+                    _seed_k = np.asarray(m_strikes, dtype=float)[_seed_mask]
+                    _seed_iv = np.asarray(chain["ivs"], dtype=float)[_seed_mask]
+                    _order = np.argsort(_seed_k)
+                    heston_seed = np.interp(grid, _seed_k[_order], _seed_iv[_order])
+                else:
+                    heston_seed = (
+                        None  # falls back to heston_iv_smile_batch's flat-ATM default
+                    )
+
                 # Vectorized -- one shared Gauss-Legendre quadrature
                 # over all strikes (heston_call_prices_batch) plus one
                 # vectorized Newton pass (_bs_iv_batch), instead of
@@ -395,8 +427,25 @@ def _build_smile_curves(
                     calib_h["theta"],
                     calib_h["xi"],
                     calib_h["rho"],
+                    seed_vols=heston_seed,
                 )
-                smile_curves["Heston"] = (grid, heston_curve)
+                # heston_iv_smile_batch returns NaN for strikes where the
+                # BS-IV inversion is fundamentally unidentifiable (price
+                # numerically at intrinsic value -- see
+                # _bs_iv_batch's min_vega_frac docstring), same "don't fake
+                # a number the data can't support" convention every other
+                # curve here already applies via its own masking.
+                _heston_valid = np.isfinite(heston_curve)
+                if np.sum(_heston_valid) >= 3:
+                    smile_curves["Heston"] = (
+                        np.asarray(grid, dtype=float)[_heston_valid],
+                        heston_curve[_heston_valid],
+                    )
+                else:
+                    print(
+                        f"[Smile Chart] Heston curve produced only "
+                        f"{np.sum(_heston_valid)} identifiable point(s) -- skipping curve."
+                    )
         except Exception as e:
             print(f"[Smile Chart] Heston curve failed: {e}")
 

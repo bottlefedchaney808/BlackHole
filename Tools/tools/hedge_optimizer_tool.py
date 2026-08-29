@@ -25,13 +25,14 @@ strike, or a degenerate (near-singular) greeks matrix raises a structured
 ``ValueError`` rather than silently falling back to another model. The result
 carries explicit units and provenance (the dealer-model-adoption contract).
 """
+
 from __future__ import annotations
 
 import importlib.util
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 _TOOLS_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _TOOLS_DIR.parent
@@ -41,13 +42,13 @@ for _p in (str(_VAR_SUITE_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from Tools.registry import ToolSpec  # noqa: E402
+from Tools.registry import ToolSpec
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-def _resolve_output_dir(context: Dict[str, Any]):
+def _resolve_output_dir(context: dict[str, Any]):
     override = context.get("_output_dir_override")
     raw = override or context.get("output_dir")
     return str(raw) if raw else None
@@ -65,7 +66,8 @@ def _import_var_main():
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(
-        module_name, str(_VAR_SUITE_ROOT / "main.py"))
+        module_name, str(_VAR_SUITE_ROOT / "main.py")
+    )
     var_main = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = var_main
     spec.loader.exec_module(var_main)
@@ -99,10 +101,10 @@ def _finite(x: Any) -> bool:
 
 
 def compute_position_greeks(
-    stocks: List[Dict[str, Any]],
-    option_legs: List[Dict[str, Any]],
+    stocks: list[dict[str, Any]],
+    option_legs: list[dict[str, Any]],
     contract_multiplier: float = CONTRACT_MULTIPLIER,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Aggregate a position into net delta / net vega / total value.
 
     ``stocks`` entries: ``{shares, price?, side?}`` (side default +1 long).
@@ -140,8 +142,12 @@ def compute_position_greeks(
 
 
 def _cramer2(
-    a11: float, a12: float, a21: float, a22: float,
-    b1: float, b2: float,
+    a11: float,
+    a12: float,
+    a21: float,
+    a22: float,
+    b1: float,
+    b2: float,
 ) -> tuple:
     """Solve [[a11,a12],[a21,a22]] [x1,x2] = [b1,b2]. Fail-closed on singular."""
     det = a11 * a22 - a12 * a21
@@ -157,10 +163,10 @@ def _cramer2(
 
 
 def solve_stock_plus_atm_call(
-    position: Dict[str, Any],
-    atm_call: Dict[str, Any],
+    position: dict[str, Any],
+    atm_call: dict[str, Any],
     contract_multiplier: float = CONTRACT_MULTIPLIER,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Recipe A: ATM call as the vega driver, stock covers residual delta.
 
     ``position``: output of :func:`compute_position_greeks`.
@@ -193,18 +199,20 @@ def solve_stock_plus_atm_call(
         "description": "ATM call as vega driver; underlying stock closes residual delta",
         "atm_call_contracts": n_call,
         "stock_shares": stock_shares,
-        "stock_direction": "buy" if stock_shares > 0 else ("sell" if stock_shares < 0 else "none"),
+        "stock_direction": "buy"
+        if stock_shares > 0
+        else ("sell" if stock_shares < 0 else "none"),
         "post_hedge": {"net_delta": post_delta, "net_vega": post_vega},
         "units": GREEKS_UNITS,
     }
 
 
 def solve_atm_call_put(
-    position: Dict[str, Any],
-    atm_call: Dict[str, Any],
-    atm_put: Dict[str, Any],
+    position: dict[str, Any],
+    atm_call: dict[str, Any],
+    atm_put: dict[str, Any],
     contract_multiplier: float = CONTRACT_MULTIPLIER,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Recipe B: ATM call + ATM put (no stock), 2x2 Cramer solve.
 
     Solves for contract counts (nC, nP) such that the added delta and vega
@@ -241,10 +249,11 @@ def solve_atm_call_put(
 # ---------------------------------------------------------------------------
 def _import_thetadata():
     from shared.thetadata import ThetaDataController
+
     return ThetaDataController
 
 
-def _parse_chain(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _parse_chain(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Normalize raw ``option_bulk_greeks`` rows into candidate dicts.
 
     Each row carries ``strike`` (theta-scaled int = dollar*1000), ``right``
@@ -252,7 +261,8 @@ def _parse_chain(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ``implied_vol``/``bid``/``ask``. Strike is converted back to dollars.
     """
     from shared.thetadata import strike_from_theta
-    cands: List[Dict[str, Any]] = []
+
+    cands: list[dict[str, Any]] = []
     for row in rows or []:
         try:
             k_theta = int(float(row["strike"]))
@@ -270,28 +280,41 @@ def _parse_chain(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         bid_v = float(bid) if _finite(bid) else float("nan")
         ask_v = float(ask) if _finite(ask) else float("nan")
-        mid = (bid_v + ask_v) / 2.0 if (math.isfinite(bid_v) and math.isfinite(ask_v)
-                                       and bid_v > 0 and ask_v > 0) else float("nan")
+        mid = (
+            (bid_v + ask_v) / 2.0
+            if (
+                math.isfinite(bid_v)
+                and math.isfinite(ask_v)
+                and bid_v > 0
+                and ask_v > 0
+            )
+            else float("nan")
+        )
         iv_v = float(iv) if _finite(iv) else 0.0
-        cands.append({
-            "strike": strike_from_theta(k_theta),
-            "right": right,
-            "delta": float(delta),
-            "vega": float(vega),
-            "gamma": float(row.get("gamma", 0) or 0) if _finite(row.get("gamma")) else 0.0,
-            "iv": iv_v,
-            "mid": mid,
-        })
+        cands.append(
+            {
+                "strike": strike_from_theta(k_theta),
+                "right": right,
+                "delta": float(delta),
+                "vega": float(vega),
+                "gamma": float(row.get("gamma", 0) or 0)
+                if _finite(row.get("gamma"))
+                else 0.0,
+                "iv": iv_v,
+                "mid": mid,
+            }
+        )
     return cands
 
 
-def _nearest(cands: List[Dict[str, Any]], spot: float, right: str) -> Dict[str, Any]:
+def _nearest(cands: list[dict[str, Any]], spot: float, right: str) -> dict[str, Any]:
     """Pick the candidate nearest ``spot`` for a given ``right`` with IV>0.
 
     Fail-closed: raises ``ValueError`` if none exists.
     """
-    pool = [c for c in cands
-            if c["right"] == right and c["iv"] > 0 and _finite(c["vega"])]
+    pool = [
+        c for c in cands if c["right"] == right and c["iv"] > 0 and _finite(c["vega"])
+    ]
     if not pool:
         raise ValueError(
             f"no usable ATM {right} candidate (strike near spot={spot:.2f}) "
@@ -319,10 +342,12 @@ def _side_sign(side: Any) -> float:
         return 1.0
     if word in ("short", "sell", "s", "-", "-1", "false", "no"):
         return -1.0
-    raise ValueError(f"unrecognized position side {side!r} (expected long/short or +/-1).")
+    raise ValueError(
+        f"unrecognized position side {side!r} (expected long/short or +/-1)."
+    )
 
 
-def _build_position(context: Dict[str, Any], ticker: str, spot: float):
+def _build_position(context: dict[str, Any], ticker: str, spot: float):
     """Read the position from context, or default to a long 100-share stock
     position in the focus ticker (clearly flagged as an assumption).
 
@@ -349,12 +374,14 @@ def _build_position(context: Dict[str, Any], ticker: str, spot: float):
     return stocks, options, "explicit position from context"
 
 
-def run_options_hedge(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_options_hedge(context: dict[str, Any]) -> dict[str, Any]:
     """Live delta+vega neutral hedge for ``context``'s focus ticker."""
     focus = context.get("focus") or {}
     ticker = (context.get("ticker") or focus.get("ticker") or "").strip()
     if not ticker:
-        raise ValueError("options_hedge requires a ticker (context['ticker'] or focus.ticker).")
+        raise ValueError(
+            "options_hedge requires a ticker (context['ticker'] or focus.ticker)."
+        )
 
     td_cls = _import_thetadata()
     td = td_cls()
@@ -391,7 +418,13 @@ def run_options_hedge(context: Dict[str, Any]) -> Dict[str, Any]:
     position = compute_position_greeks(stocks, options)
 
     recipe_a = solve_stock_plus_atm_call(position, atm_call)
-    recipe_b = solve_atm_call_put(position, atm_call, atm_put)
+    try:
+        recipe_b = solve_atm_call_put(position, atm_call, atm_put)
+    except ValueError:
+        # Degenerate call/put greeks matrix -- no unique pure-options
+        # solution exists for this strike pair. Leave recipe_b out rather
+        # than failing the whole hedge; callers fall back to recipe_a.
+        recipe_b = None
 
     return {
         "ticker": ticker,
@@ -426,7 +459,7 @@ def run_options_hedge(context: Dict[str, Any]) -> Dict[str, Any]:
 _OPTIONS_HEDGE_MODES = {"options_hedge", "options", "options-hedge", "option_hedge"}
 
 
-def run(context: Dict[str, Any]) -> Dict[str, Any]:
+def run(context: dict[str, Any]) -> dict[str, Any]:
     """Dispatch on ``context['mode']``.
 
     ``min_var`` (default): stocks-only min-variance hedge via the VaR engine.

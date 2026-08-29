@@ -44,6 +44,17 @@ from expiry_book_production import (
 N_MONEYNESS = 41
 MONEYNESS_BAND = 0.30  # +-30% of spot, log-moneyness
 
+# build_market_iv_surface's grid is pure in-process math (VolSurface.iv()
+# evaluates an already-fitted quadratic + a total-variance interpolation --
+# no network calls), so its resolution isn't network-cost-bound the way the
+# other builders in this module are. Confirmed live: at the shared
+# N_MONEYNESS=41 x 30 default the plotted mesh looked visibly faceted/
+# low-poly, especially across the steep near-dated skew. A denser grid here
+# is essentially free (a few thousand extra Python-level calls, still
+# comfortably sub-second) and renders a visibly smoother surface.
+IV_SURFACE_N_STRIKES = 121
+IV_SURFACE_N_TENORS = 60
+
 
 def _client():
     from shared.thetadata import ThetaDataController
@@ -192,19 +203,45 @@ def build_greek_surface(
 def build_market_iv_surface(
     ticker,
     td=None,
-    n_strikes=N_MONEYNESS,
-    n_tenors=30,
-    moneyness_band=MONEYNESS_BAND,
+    n_strikes=IV_SURFACE_N_STRIKES,
+    n_tenors=IV_SURFACE_N_TENORS,
+    moneyness_band=None,
+    min_dte=0,
 ):
     """Dense strike x tenor grid of vendor implied vol, via
     vol_surface_2d.build_surface's quadratic-per-expiry + total-variance
     tenor interpolation (unchanged -- this only adds a JSON grid view of it,
-    alongside its existing static-PNG plot())."""
+    alongside its existing static-PNG plot()).
+
+    Unlike the other builders in this module, this one does NOT default its
+    strike axis to the module-wide +-30% MONEYNESS_BAND: vol_surface_2d's
+    per-expiry quadratic is only ever FIT on strikes within
+    vol_surface_2d.NEAR_ATM_BAND (+-15%) of spot (see
+    vol_surface_2d._fit_quadratic_smile), and VolSurface.iv() clamps any
+    evaluation outside that band to the fitted boundary value. Plotting a
+    +-30% axis against a model only trusted to +-15% doesn't reproduce the
+    old blow-up bug (the clamp prevents that), but it does render two flat,
+    unrealistic plateaus/walls from 15%-30% moneyness on both sides where
+    the model has nothing new to say -- confirmed live, this is what made
+    the surface look "completely flat" beyond the ATM dip instead of a
+    proper skew shape. Default the axis to the model's own trusted domain
+    instead, so every plotted point reflects an actual per-expiry fit.
+
+    min_dte: forwarded to vol_surface_2d.build_surface -- 0 (default)
+    includes every listed expiry (front-week wings included, which will
+    dominate the shared z-axis/color scale on a rendered plot -- that's
+    real market behavior, not a bug, see vol_surface_2d.NEAR_ATM_BAND's
+    module docstring). Pass e.g. 14 to drop anything inside 2 weeks for a
+    term-structure-focused view instead -- both are legitimate, just
+    answering different questions; this is a toggle, not a fix."""
     import vol_surface_2d as vs2d
+
+    if moneyness_band is None:
+        moneyness_band = vs2d.NEAR_ATM_BAND
 
     td = td or _client()
     ticker = str(ticker).upper()
-    surface = vs2d.build_surface(ticker, td)
+    surface = vs2d.build_surface(ticker, td, min_dte=min_dte)
     if surface is None:
         raise ValueError(
             f"could not build an IV surface for {ticker!r} (fewer than "
@@ -215,9 +252,25 @@ def build_market_iv_surface(
     tenors = surface.fitted_params["tenors"]
     min_t = max(0.0, min(tenors))
     max_t = max(tenors) * 1.05 + 1e-6
-    strikes_axis = spot * np.exp(
-        np.linspace(-moneyness_band, moneyness_band, n_strikes)
-    )
+
+    # A real listed chain's strike range is NOT symmetric in log-moneyness
+    # around spot -- confirmed live on SPY/QQQ: the widest expiries list
+    # strikes from about -1.2 to +0.5 log-moneyness (equity/index chains
+    # list further below spot than above it). A symmetric +-moneyness_band
+    # axis formula either cuts off real downside strikes or, if widened
+    # enough to reach them, extrapolates the upside axis deep into strikes
+    # that were never actually listed (confirmed live: a symmetric +-1.5
+    # band put the axis out past $3400 on a $769 SPY, 4.5x spot, well past
+    # anything tradeable). Derive the axis from the REAL observed strike
+    # range in surface.points instead (1st/99th percentile, so one rare
+    # far-wing print from a single expiry can't drag the axis) -- this
+    # naturally reflects the chain's actual asymmetric shape and never asks
+    # VolSurface.iv() to evaluate a strike beyond what real data supports.
+    raw_strikes = np.array([p.strike for p in surface.points], dtype=float)
+    lo_k, hi_k = np.percentile(raw_strikes, [1, 99])
+    if lo_k <= 0 or hi_k <= lo_k:
+        lo_k, hi_k = spot * np.exp(-moneyness_band), spot * np.exp(moneyness_band)
+    strikes_axis = np.exp(np.linspace(np.log(lo_k), np.log(hi_k), n_strikes))
     tenor_axis = np.linspace(min_t, max_t, n_tenors)
 
     grid = [[surface.iv(float(k), float(t)) for k in strikes_axis] for t in tenor_axis]

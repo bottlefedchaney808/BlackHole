@@ -46,10 +46,54 @@ import numpy as np
 
 EXPIRY_DATE_FMT = "%Y%m%d"
 DAYS_PER_YEAR = 365.0
-NEAR_ATM_BAND = 0.15  # log-moneyness band for quadratic fit (±15 %)
+NEAR_ATM_BAND = 1.2  # log-moneyness band for quadratic fit -- wide enough to
+# include essentially the whole real listed chain (confirmed live: SPY/QQQ's
+# widest expiries list strikes from about -1.2 to +0.5 log-moneyness, an
+# asymmetric range -- see surface_grids.build_market_iv_surface's own
+# strike-axis derivation for why the PLOTTED axis doesn't just mirror this
+# symmetric fit band).
 MIN_FIT_POINTS = 5  # min near-ATM points to trust a per-expiry fit
 MIN_TENORS = 2  # need at least 2 tenors for any interp
 MAX_EXPIRIES = 48  # safety cap on how many expiries we fetch
+
+# A quote this wide (or with no real bid at all) is untrustworthy enough
+# that its vendor implied_vol shouldn't feed the smile fit -- same
+# mechanism, same threshold, as Options_Suite/smile_utils.py's
+# MAX_RELATIVE_SPREAD (confirmed live there: a thin/no-market strike with a
+# wide or zero bid produces nonsensical "implied vol" prints, e.g. 50%-480%
+# on a name that never trades above 30%). Confirmed live HERE too: SPXW
+# near-ATM (within the +-15% NEAR_ATM_BAND this module fits on) routinely
+# has $0.00-bid rows reporting IV of 0.40-0.69 sitting right next to real
+# ~0.10-0.12 quotes one strike over -- those zero-bid rows were the actual
+# cause of the sharp near-edge spikes the plotted surface showed (an
+# unweighted np.polyfit is very sensitive to a handful of such outliers).
+# Unlike smile_utils's version, a bid of exactly 0 IS rejected here rather
+# than passed through: this filter only ever runs on strikes already known
+# to be within +-15% of spot, where a live 2-sided market should exist if
+# the vendor's IV print is to be trusted at all -- smile_utils additionally
+# covers genuinely worthless deep-OTM wings, which don't apply in this band.
+MAX_RELATIVE_SPREAD = 0.60  # (ask - bid) / mid
+
+
+def _quote_is_liquid(row: dict) -> bool:
+    """True unless *row* carries an actual bid/ask that says this quote
+    shouldn't be trusted. A row with no bid/ask fields at all (e.g. a
+    synthetic/test fixture, or a vendor payload shape that doesn't include
+    them) can't be judged on this basis and passes through -- only a
+    PRESENT bid of exactly 0 (or an unreasonably wide spread) rejects."""
+    bid_raw, ask_raw = row.get("bid"), row.get("ask")
+    if bid_raw in (None, "") or ask_raw in (None, ""):
+        return True
+    try:
+        bid, ask = float(bid_raw), float(ask_raw)
+    except (TypeError, ValueError):
+        return True
+    if bid <= 0 or ask <= 0:
+        return False
+    mid = (bid + ask) / 2.0
+    if mid <= 0:
+        return False
+    return ((ask - bid) / mid) <= MAX_RELATIVE_SPREAD
 
 
 @dataclass
@@ -141,7 +185,14 @@ class VolSurface:
         if self._tenor_array is None or len(self._tenor_array) < MIN_TENORS:
             return 0.0
 
-        log_m = math.log(strike / spot)
+        # Each per-tenor quadratic was fit only on strikes within
+        # +-NEAR_ATM_BAND log-moneyness of spot (see _fit_quadratic_smile).
+        # Evaluating it further out extrapolates a polynomial and blows up
+        # fast, producing spurious IV spikes at the far edges of the
+        # strike grid. Clamp the *evaluation* moneyness to the fitted
+        # domain, matching the nearest-neighbour clamping already used
+        # for tenor extrapolation (see module docstring).
+        log_m = max(-NEAR_ATM_BAND, min(NEAR_ATM_BAND, math.log(strike / spot)))
         t_arr = self._tenor_array
         c_arr = self._coeff_array
 
@@ -223,6 +274,7 @@ def build_surface(
     td: "ThetaDataController",  # noqa: F821  (quoted for forward compat)
     ref_date: datetime | None = None,
     spot_override: float | None = None,
+    min_dte: int = 0,
 ) -> VolSurface | None:
     """Build a 2D implied-vol surface for *ticker* by fetching every available
     expiry from ThetaData, fitting a quadratic smile per expiry, and storing
@@ -239,6 +291,18 @@ def build_surface(
     spot_override : float or None
         If given, use this as the spot price instead of fetching it from
         ThetaData.
+    min_dte : int
+        Drop expiries closer than this many days out before fitting.
+        Default 0 (every unexpired listed expiry, including 0-2 DTE
+        weeklies). A very short-dated tenor's near-ATM skew is a genuinely
+        more extreme regime than the rest of the term structure (confirmed
+        live: a ~1 DTE SPXW smile's wings ran 5-8x the amplitude of every
+        other tenor out to ~10 months) -- callers building a term-structure
+        view rather than a front-week view can set e.g. min_dte=14 to drop
+        that regime entirely instead of just visually de-emphasizing it.
+        This is a caller-facing toggle, not a "fix": both views are valid,
+        just answering different questions (see
+        Tools/tools/surface_explorer_tool.py's min_dte context option).
 
     Returns
     -------
@@ -260,10 +324,11 @@ def build_surface(
     all_exps = td.list_expirations(ticker)
     if not all_exps:
         return None
-    # Drop expired/past dates BEFORE sorting + truncating, so a stale
-    # expiry never occupies one of the MAX_EXPIRIES slots ahead of a
-    # valid future one.
-    all_exps = [e for e in all_exps if _expiry_to_tenor(e, ref) > 0]
+    # Drop expired/past dates and anything inside min_dte BEFORE sorting +
+    # truncating, so neither occupies one of the MAX_EXPIRIES slots ahead
+    # of a valid, in-scope expiry.
+    min_tenor = max(min_dte, 0) / DAYS_PER_YEAR
+    all_exps = [e for e in all_exps if _expiry_to_tenor(e, ref) > max(min_tenor, 0.0)]
     if not all_exps:
         return None
     # Keep the nearest N (cap to avoid excessive network calls)
@@ -287,6 +352,7 @@ def build_surface(
 
         strikes: list[float] = []
         ivs: list[float] = []
+        n_dropped_illiquid = 0
         for row in greeks:
             try:
                 k = float(row.get("strike", 0)) / 1000.0  # theta int → dollar
@@ -295,9 +361,19 @@ def build_surface(
                 continue
             if k <= 0 or iv <= 0:
                 continue
+            if not _quote_is_liquid(row):
+                n_dropped_illiquid += 1
+                continue
             strikes.append(k)
             ivs.append(iv)
             all_points.append(VolSurfacePoint(strike=k, tenor=tenor, iv=iv))
+
+        if n_dropped_illiquid:
+            print(
+                f"  [vol_surface_2d] {ticker} {exp_str}: dropped "
+                f"{n_dropped_illiquid} illiquid quote(s) (no bid, or spread "
+                f"> {MAX_RELATIVE_SPREAD:.0%} of mid) before fitting the smile."
+            )
 
         if len(strikes) < MIN_FIT_POINTS:
             continue

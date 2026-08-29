@@ -1029,7 +1029,9 @@ def heston_call_prices_batch(
     return np.maximum(call, intrinsic)
 
 
-def _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols, tol=1e-4, max_iter=50):
+def _bs_iv_batch(
+    prices, S, strikes, T, r, q, seed_vols, tol=1e-4, max_iter=50, min_vega_frac=None
+):
     """Vectorized Newton-Raphson Black-Scholes implied vol across an array of
     (price, strike) pairs at once -- same purpose as looping
     implied_volatility_nr per strike (what HestonCalibrator.calibrate() used
@@ -1044,6 +1046,20 @@ def _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols, tol=1e-4, max_iter=50):
     C = np.asarray(prices, dtype=float)
     sigma = np.clip(np.asarray(seed_vols, dtype=float).copy(), 0.01, 5.0)
     sqrtT = np.sqrt(T)
+    # Deep ITM/OTM strikes have small-but-not-negligible vega (unlike the
+    # vega<=1e-8 case below, which just freezes), so an undamped Newton step
+    # (diff/vega) there can massively overshoot the root and start
+    # oscillating between two sigma values instead of converging -- confirmed
+    # live on a SPY Heston smile: deep-ITM strikes (300-700 on a ~770 spot)
+    # sawtoothed between roughly 0.2 and 0.7 instead of settling on a value,
+    # because each iteration's jump was itself larger than the distance to
+    # the root. Clipping the per-iteration step to a fixed vol-point bound is
+    # the standard fix for Newton-Raphson IV solvers on ill-conditioned
+    # (low-vega) points -- it trades a few extra iterations for guaranteed
+    # monotonic-ish progress instead of divergent oscillation, and does
+    # nothing to well-conditioned points (their natural step is already
+    # smaller than the bound).
+    max_step = 0.25
     for _ in range(max_iter):
         d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrtT)
         d2 = d1 - sigma * sqrtT
@@ -1051,9 +1067,32 @@ def _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols, tol=1e-4, max_iter=50):
         vega = S * np.exp(-q * T) * sqrtT * norm.pdf(d1)
         diff = price - C
         step = np.where(vega > 1e-8, diff / np.maximum(vega, 1e-8), 0.0)
+        step = np.clip(step, -max_step, max_step)
         sigma = np.clip(sigma - step, 0.001, 5.0)
         if np.max(np.abs(diff)) < tol:
             break
+
+    if min_vega_frac is not None:
+        # A point this deep ITM/OTM that the price is numerically
+        # indistinguishable from pure intrinsic value has no invertible
+        # information left: MANY different sigma values reproduce that same
+        # near-intrinsic price to floating-point precision (BS price vs
+        # sigma is essentially flat there), so there's no single well-
+        # defined root for Newton to find -- damping the step (above) stops
+        # it from diverging, but it still oscillates between several
+        # similarly-plausible-looking sigma values with no true winner.
+        # Confirmed live on a SPY Heston 20261016 call smile: strikes below
+        # ~460 (spot ~769) had time value under $0.02 out of $300+ prices,
+        # and every one of them sawtoothed across the whole chart instead
+        # of settling. Recomputing the FINAL vega and dropping (NaN) any
+        # point below a floor is the same "don't fake a number the data
+        # can't support" convention smile_utils.py already applies via its
+        # own spread/moneyness filters -- an unidentifiable point should be
+        # missing from the curve, not plotted as a plausible-looking value.
+        d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrtT)
+        vega = S * np.exp(-q * T) * sqrtT * norm.pdf(d1)
+        floor = min_vega_frac * S * sqrtT
+        sigma = np.where(vega >= floor, sigma, np.nan)
     return sigma
 
 
@@ -1079,7 +1118,9 @@ def heston_iv_smile_batch(
         if seed_vols.shape != strikes.shape:
             seed_vols = np.full(strikes.shape, float(np.mean(seed_vols)))
     prices = heston_call_prices_batch(S, strikes, T, r, q, v0, kappa, theta, xi, rho)
-    return _bs_iv_batch(prices, S, strikes, T, r, q, seed_vols=seed_vols)
+    return _bs_iv_batch(
+        prices, S, strikes, T, r, q, seed_vols=seed_vols, min_vega_frac=1e-3
+    )
 
 
 def run_heston_full(
