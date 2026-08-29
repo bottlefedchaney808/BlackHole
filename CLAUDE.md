@@ -262,6 +262,15 @@ localhost without adding real auth back first.
   identical check inside `backtest_stage3.py`'s multi-day loop aborts the whole run on one bad day.
   Read `Vol_Suite/docs/Dealer posistioning notes/HANDOFF_dealer_exposure_dev_20260814.md` and
   distinguish the live-render case from the backtest-loop case before resubmitting this pattern.
+- **SPX must be queried under two different root symbols depending on what you're asking for.** On
+  this ThetaData feed, SPX's real listed *options chain* (`option_bulk_greeks`, `option_bulk_oi`, etc.)
+  is rooted under `"SPXW"` — `option_bulk_greeks("SPX", ...)` returns `"v2 payload is None"` for every
+  expiry. SPX's *index price* (`fetch_spot_price`, `index_snapshot_quote`) stays correctly rooted under
+  plain `"SPX"` — `shared/thetadata.py::_INDEX_PRICE_ROOT_ALIASES` maps `"SPXW"` back to `"SPX"` for
+  price lookups at the source (`63382cf`, `43b7c6a`), but a new caller that resolves its own ticker
+  string instead of going through `fetch_spot_price` can still reintroduce this. Known still-open gap:
+  `Vol_Suite/correlation_engine.py::fetch_price_history` has the same root mismatch for its own
+  stock-EOD endpoint, used broadly across Vol_Suite's realized-vol inputs — unfixed as of `43b7c6a`.
 
 ## Notable env vars
 
