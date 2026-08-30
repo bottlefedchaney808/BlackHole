@@ -130,7 +130,7 @@ def test_kou_calibration_recovers_known_params():
 def test_vg_calibration_recovers_known_params():
     S0, T, r, q = 100.0, 0.5, 0.03, 0.0
     strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
-    true_model = VarianceGammaModel(sigma=0.19, nu=0.25, theta_vg=-0.12)
+    true_model = VarianceGammaModel(sigma=0.26, nu=0.25, theta_vg=-0.12)
     chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
     result = calibrate(VarianceGammaModel, chain, S0, T)
     assert result.rmse_iv < 0.01
