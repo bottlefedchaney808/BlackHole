@@ -9,15 +9,16 @@ context should fail at the moment it's built -- while the operator is still
 sitting at the prompt that produced it -- not several minutes later inside a
 subprocess whose stdout is captured and hidden.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import re
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
-
+from typing import Any
 
 # Sibling-suite locations, resolved RELATIVE to this file's parent directory
 # (FinancialDevelopment/) rather than hardcoded to one machine's absolute
@@ -28,11 +29,14 @@ from typing import Any, Dict, Optional, Sequence
 _SIBLING_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_OPTIONS_SUITE_ROOT = os.environ.get(
-    "OPTIONS_SUITE_ROOT", str(_SIBLING_ROOT / "Options_Suite"))
+    "OPTIONS_SUITE_ROOT", str(_SIBLING_ROOT / "Options_Suite")
+)
 DEFAULT_VAR_SUITE_ROOT = os.environ.get(
-    "VAR_SUITE_ROOT", str(_SIBLING_ROOT / "VaR_Tools_Simulations"))
+    "VAR_SUITE_ROOT", str(_SIBLING_ROOT / "VaR_Tools_Simulations")
+)
 DEFAULT_SENTIMENT_SUITE_ROOT = os.environ.get(
-    "SENTIMENT_SUITE_ROOT", str(_SIBLING_ROOT / "sentiment-scanner"))
+    "SENTIMENT_SUITE_ROOT", str(_SIBLING_ROOT / "sentiment-scanner")
+)
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COMPACT_DATE = re.compile(r"^\d{8}$")
@@ -85,12 +89,13 @@ def _normalize_expiration(value: str) -> str:
     """
     raw = str(value).strip()
     if _ISO_DATE.match(raw):
-        datetime.strptime(raw, "%Y-%m-%d")   # reject e.g. 2026-13-45
+        datetime.strptime(raw, "%Y-%m-%d")  # reject e.g. 2026-13-45
         return raw
     if _COMPACT_DATE.match(raw):
         return datetime.strptime(raw, "%Y%m%d").strftime("%Y-%m-%d")
     raise ValueError(
-        f"focus.expiration_date must be YYYY-MM-DD or YYYYMMDD, got {value!r}")
+        f"focus.expiration_date must be YYYY-MM-DD or YYYYMMDD, got {value!r}"
+    )
 
 
 def _to_abs_path_str(path_value: str) -> str:
@@ -98,7 +103,7 @@ def _to_abs_path_str(path_value: str) -> str:
 
 
 def _iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -112,30 +117,33 @@ def build_suite_context(
     run_id: str,
     ticker: str,
     option_type: str,
-    strike: Optional[float],
+    strike: float | None,
     target_years: float,
     expiration_date: str,
     index_ticker: str,
     basket_tickers: Sequence[str],
     basket_weights: Sequence[float],
     sentiment_manifest_path: str,
-    sentiment_pack_json_path: Optional[str] = None,
-    sentiment_group_id: Optional[str] = None,
-    sentiment_ranked_tickers: Optional[Sequence[str]] = None,
+    sentiment_pack_json_path: str | None = None,
+    sentiment_group_id: str | None = None,
+    sentiment_ranked_tickers: Sequence[str] | None = None,
     var_horizon_days: int = 1,
     var_confidence: float = 0.99,
-    var_positions: Optional[Sequence[Dict[str, Any]]] = None,
-    garch_conditional_vol: Optional[float] = None,
-    expected_return: Optional[float] = None,
+    var_positions: Sequence[dict[str, Any]] | None = None,
+    garch_conditional_vol: float | None = None,
+    expected_return: float | None = None,
+    jump_diffusion: dict[str, Any] | None = None,
     run_options_suite: bool = False,
     run_var_suite: bool = False,
     compile_pdf: bool = False,
     options_suite_root: str = DEFAULT_OPTIONS_SUITE_ROOT,
     var_suite_root: str = DEFAULT_VAR_SUITE_ROOT,
     sentiment_suite_root: str = DEFAULT_SENTIMENT_SUITE_ROOT,
-    data_sources: Optional[Sequence[str]] = None,
-) -> Dict[str, Any]:
-    ranked = [str(t).upper() for t in (sentiment_ranked_tickers or []) if str(t).strip()]
+    data_sources: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    ranked = [
+        str(t).upper() for t in (sentiment_ranked_tickers or []) if str(t).strip()
+    ]
     sources = [str(s).upper() for s in (data_sources or []) if str(s).strip()]
     context = {
         "schema_version": 1,
@@ -152,7 +160,9 @@ def build_suite_context(
             # fraction, or None when the GARCH module did not run/failed.
             # Consumers (VaR Monte Carlo) prefer this over re-fitting.
             "garch_conditional_vol": (
-                float(garch_conditional_vol) if garch_conditional_vol is not None else None
+                float(garch_conditional_vol)
+                if garch_conditional_vol is not None
+                else None
             ),
             # Annualized expected/geometric return (decimal fraction) for the
             # focus ticker, or None when no drift estimate is available.
@@ -169,7 +179,9 @@ def build_suite_context(
         },
         "sentiment": {
             "manifest_path": _to_abs_path_str(sentiment_manifest_path),
-            "pack_json_path": _to_abs_path_str(sentiment_pack_json_path) if sentiment_pack_json_path else None,
+            "pack_json_path": _to_abs_path_str(sentiment_pack_json_path)
+            if sentiment_pack_json_path
+            else None,
             "group_id": str(sentiment_group_id) if sentiment_group_id else None,
             "ranked_tickers": ranked,
         },
@@ -202,67 +214,151 @@ def build_suite_context(
         },
         "data_sources": sources,  # Multi-source support: list of enabled sources (DTCC, CME, OTC, etc.)
         "strategies": [],  # Strategies recommended by chain scanner (populated from artifacts)
+        # Jump-diffusion model-zoo result (Phase 1 of the AIGamma steal-list,
+        # docs/superpowers/specs/2026-08-30-jump-diffusion-model-zoo-design.md).
+        # None when calibration was skipped or failed -- every downstream
+        # consumer (dealer positioning, VRP, strategy recommender) must treat
+        # None as "feature unavailable this run" and fall back to pre-Phase-1
+        # behavior, matching the null-safe discipline var.positions already
+        # documents.
+        "jump_diffusion": jump_diffusion,
     }
     validate_suite_context(context)
     return context
 
 
-def validate_suite_context(context: Dict[str, Any]) -> None:
+def validate_suite_context(context: dict[str, Any]) -> None:
     _require(isinstance(context, dict), "suite_context must be a JSON object")
-    for key in ("schema_version", "run_id", "created_at_utc", "output_dir", "focus", "basket", "sentiment", "var", "controls", "paths"):
+    for key in (
+        "schema_version",
+        "run_id",
+        "created_at_utc",
+        "output_dir",
+        "focus",
+        "basket",
+        "sentiment",
+        "var",
+        "controls",
+        "paths",
+    ):
         _require(key in context, f"Missing required field: {key}")
 
     _require(context["schema_version"] == 1, "schema_version must be 1")
-    _require(isinstance(context["run_id"], str) and context["run_id"].strip(), "run_id must be a non-empty string")
-    _require(isinstance(context["created_at_utc"], str) and context["created_at_utc"].strip(), "created_at_utc must be a non-empty string")
-    _require(_is_absolute_any_os(context["output_dir"]), "output_dir must be an absolute path")
+    _require(
+        isinstance(context["run_id"], str) and context["run_id"].strip(),
+        "run_id must be a non-empty string",
+    )
+    _require(
+        isinstance(context["created_at_utc"], str)
+        and context["created_at_utc"].strip(),
+        "created_at_utc must be a non-empty string",
+    )
+    _require(
+        _is_absolute_any_os(context["output_dir"]),
+        "output_dir must be an absolute path",
+    )
 
     focus = context["focus"]
     _require(isinstance(focus, dict), "focus must be an object")
     for key in ("ticker", "option_type", "strike", "target_years", "expiration_date"):
         _require(key in focus, f"Missing required field: focus.{key}")
-    _require(isinstance(focus["ticker"], str) and focus["ticker"].strip(), "focus.ticker must be a non-empty string")
-    _require(focus["option_type"] in {"call", "put"}, "focus.option_type must be 'call' or 'put'")
-    _require(focus["strike"] is None or isinstance(focus["strike"], (int, float)), "focus.strike must be null or number")
-    _require(isinstance(focus["target_years"], (int, float)), "focus.target_years must be numeric")
-    _require(isinstance(focus["expiration_date"], str) and focus["expiration_date"].strip(), "focus.expiration_date must be a non-empty string")
+    _require(
+        isinstance(focus["ticker"], str) and focus["ticker"].strip(),
+        "focus.ticker must be a non-empty string",
+    )
+    _require(
+        focus["option_type"] in {"call", "put"},
+        "focus.option_type must be 'call' or 'put'",
+    )
+    _require(
+        focus["strike"] is None or isinstance(focus["strike"], (int, float)),
+        "focus.strike must be null or number",
+    )
+    _require(
+        isinstance(focus["target_years"], (int, float)),
+        "focus.target_years must be numeric",
+    )
+    _require(
+        isinstance(focus["expiration_date"], str) and focus["expiration_date"].strip(),
+        "focus.expiration_date must be a non-empty string",
+    )
     # Optional: contexts written before Vol_Suite published the GARCH
     # conditional vol are still valid, so only type-check it when present.
     if "garch_conditional_vol" in focus:
-        _require(focus["garch_conditional_vol"] is None
-                 or (isinstance(focus["garch_conditional_vol"], (int, float))
-                     and not isinstance(focus["garch_conditional_vol"], bool)),
-                 "focus.garch_conditional_vol must be numeric or null")
+        _require(
+            focus["garch_conditional_vol"] is None
+            or (
+                isinstance(focus["garch_conditional_vol"], (int, float))
+                and not isinstance(focus["garch_conditional_vol"], bool)
+            ),
+            "focus.garch_conditional_vol must be numeric or null",
+        )
     # Optional: contexts written before an expected-return was published are
     # still valid, so only type-check it when present.
     if "expected_return" in focus:
-        _require(focus["expected_return"] is None
-                 or (isinstance(focus["expected_return"], (int, float))
-                     and not isinstance(focus["expected_return"], bool)),
-                 "focus.expected_return must be numeric or null")
+        _require(
+            focus["expected_return"] is None
+            or (
+                isinstance(focus["expected_return"], (int, float))
+                and not isinstance(focus["expected_return"], bool)
+            ),
+            "focus.expected_return must be numeric or null",
+        )
 
     basket = context["basket"]
     _require(isinstance(basket, dict), "basket must be an object")
     for key in ("index_ticker", "tickers", "weights"):
         _require(key in basket, f"Missing required field: basket.{key}")
-    _require(isinstance(basket["index_ticker"], str) and basket["index_ticker"].strip(), "basket.index_ticker must be a non-empty string")
-    _require(isinstance(basket["tickers"], list) and len(basket["tickers"]) > 0, "basket.tickers must be a non-empty list")
-    _require(isinstance(basket["weights"], list) and len(basket["weights"]) == len(basket["tickers"]), "basket.weights must match basket.tickers length")
+    _require(
+        isinstance(basket["index_ticker"], str) and basket["index_ticker"].strip(),
+        "basket.index_ticker must be a non-empty string",
+    )
+    _require(
+        isinstance(basket["tickers"], list) and len(basket["tickers"]) > 0,
+        "basket.tickers must be a non-empty list",
+    )
+    _require(
+        isinstance(basket["weights"], list)
+        and len(basket["weights"]) == len(basket["tickers"]),
+        "basket.weights must match basket.tickers length",
+    )
     # VaR_Tools_Simulations divides by the weight sum to normalize, so a
     # non-positive total is a divide-by-zero waiting to happen inside a
     # subprocess. Catch it here, where the error is still attributable.
-    _require(all(isinstance(w, (int, float)) and not isinstance(w, bool) for w in basket["weights"]),
-             "basket.weights must all be numeric")
-    _require(sum(float(w) for w in basket["weights"]) > 0, "basket.weights must sum to a positive value")
+    _require(
+        all(
+            isinstance(w, (int, float)) and not isinstance(w, bool)
+            for w in basket["weights"]
+        ),
+        "basket.weights must all be numeric",
+    )
+    _require(
+        sum(float(w) for w in basket["weights"]) > 0,
+        "basket.weights must sum to a positive value",
+    )
 
     sentiment = context["sentiment"]
     _require(isinstance(sentiment, dict), "sentiment must be an object")
     for key in ("manifest_path", "pack_json_path", "group_id", "ranked_tickers"):
         _require(key in sentiment, f"Missing required field: sentiment.{key}")
-    _require(isinstance(sentiment["manifest_path"], str) and sentiment["manifest_path"].strip(), "sentiment.manifest_path must be a non-empty string")
-    _require(sentiment["pack_json_path"] is None or isinstance(sentiment["pack_json_path"], str), "sentiment.pack_json_path must be null or string")
-    _require(sentiment["group_id"] is None or isinstance(sentiment["group_id"], str), "sentiment.group_id must be null or string")
-    _require(isinstance(sentiment["ranked_tickers"], list), "sentiment.ranked_tickers must be a list")
+    _require(
+        isinstance(sentiment["manifest_path"], str)
+        and sentiment["manifest_path"].strip(),
+        "sentiment.manifest_path must be a non-empty string",
+    )
+    _require(
+        sentiment["pack_json_path"] is None
+        or isinstance(sentiment["pack_json_path"], str),
+        "sentiment.pack_json_path must be null or string",
+    )
+    _require(
+        sentiment["group_id"] is None or isinstance(sentiment["group_id"], str),
+        "sentiment.group_id must be null or string",
+    )
+    _require(
+        isinstance(sentiment["ranked_tickers"], list),
+        "sentiment.ranked_tickers must be a list",
+    )
 
     var = context["var"]
     _require(isinstance(var, dict), "var must be an object")
@@ -270,25 +366,38 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
         _require(key in var, f"Missing required field: var.{key}")
     # `not isinstance(..., bool)` because bool subclasses int in Python, so
     # horizon_days=True would otherwise sail through as "a positive integer".
-    _require(isinstance(var["horizon_days"], int) and not isinstance(var["horizon_days"], bool)
-             and var["horizon_days"] > 0, "var.horizon_days must be a positive integer")
-    _require(isinstance(var["confidence"], (int, float)) and not isinstance(var["confidence"], bool),
-             "var.confidence must be numeric")
+    _require(
+        isinstance(var["horizon_days"], int)
+        and not isinstance(var["horizon_days"], bool)
+        and var["horizon_days"] > 0,
+        "var.horizon_days must be a positive integer",
+    )
+    _require(
+        isinstance(var["confidence"], (int, float))
+        and not isinstance(var["confidence"], bool),
+        "var.confidence must be numeric",
+    )
     # Range-check, not just type-check: 99 instead of 0.99 is the obvious
     # slip, it's numeric, and it produces confident-looking nonsense rather
     # than an error. VaR rejects it downstream, but there's no reason to
     # spend a subprocess launch discovering that.
-    _require(0.0 < float(var["confidence"]) < 1.0,
-             "var.confidence must be a probability strictly between 0 and 1 (e.g. 0.99, not 99)")
+    _require(
+        0.0 < float(var["confidence"]) < 1.0,
+        "var.confidence must be a probability strictly between 0 and 1 (e.g. 0.99, not 99)",
+    )
     # null means "not supplied -- let VaR derive notionals from the basket
     # weights". A list must line up with the basket, since that's precisely
     # the check VaR applies to it.
-    _require(var["positions"] is None or isinstance(var["positions"], list),
-             "var.positions must be null or a list")
+    _require(
+        var["positions"] is None or isinstance(var["positions"], list),
+        "var.positions must be null or a list",
+    )
     if isinstance(var["positions"], list):
-        _require(len(var["positions"]) == len(basket["tickers"]),
-                 "var.positions must be null or match basket.tickers length "
-                 f"({len(basket['tickers'])}); got {len(var['positions'])}")
+        _require(
+            len(var["positions"]) == len(basket["tickers"]),
+            "var.positions must be null or match basket.tickers length "
+            f"({len(basket['tickers'])}); got {len(var['positions'])}",
+        )
 
     controls = context["controls"]
     _require(isinstance(controls, dict), "controls must be an object")
@@ -300,73 +409,120 @@ def validate_suite_context(context: Dict[str, Any]) -> None:
     _require(isinstance(paths, dict), "paths must be an object")
     for key in ("options_suite_root", "var_suite_root", "sentiment_suite_root"):
         _require(key in paths, f"Missing required field: paths.{key}")
-        _require(isinstance(paths[key], str) and paths[key].strip(), f"paths.{key} must be a non-empty string")
+        _require(
+            isinstance(paths[key], str) and paths[key].strip(),
+            f"paths.{key} must be a non-empty string",
+        )
 
     # Validate optional strategies field (populated from chain scan)
     if "strategies" in context:
-        _require(isinstance(context["strategies"], list), "strategies must be a list if present")
+        _require(
+            isinstance(context["strategies"], list),
+            "strategies must be a list if present",
+        )
         for i, strategy in enumerate(context["strategies"]):
             _require(isinstance(strategy, dict), f"strategies[{i}] must be an object")
             # Required strategy fields
             for key in ("strategy_type", "legs", "vol_regime", "rationale"):
-                _require(key in strategy, f"strategies[{i}] missing required field: {key}")
+                _require(
+                    key in strategy, f"strategies[{i}] missing required field: {key}"
+                )
 
             # strategy_type must be a string
-            _require(isinstance(strategy["strategy_type"], str) and strategy["strategy_type"].strip(),
-                     f"strategies[{i}].strategy_type must be a non-empty string")
+            _require(
+                isinstance(strategy["strategy_type"], str)
+                and strategy["strategy_type"].strip(),
+                f"strategies[{i}].strategy_type must be a non-empty string",
+            )
 
             # vol_regime must be one of RICH, CHEAP, FAIR
-            _require(strategy["vol_regime"] in ("RICH", "CHEAP", "FAIR"),
-                     f"strategies[{i}].vol_regime must be 'RICH', 'CHEAP', or 'FAIR', got {strategy['vol_regime']}")
+            _require(
+                strategy["vol_regime"] in ("RICH", "CHEAP", "FAIR"),
+                f"strategies[{i}].vol_regime must be 'RICH', 'CHEAP', or 'FAIR', got {strategy['vol_regime']}",
+            )
 
             # rationale must be a string
-            _require(isinstance(strategy["rationale"], str),
-                     f"strategies[{i}].rationale must be a string")
+            _require(
+                isinstance(strategy["rationale"], str),
+                f"strategies[{i}].rationale must be a string",
+            )
 
             # legs must be a non-empty list
             legs = strategy["legs"]
-            _require(isinstance(legs, list) and len(legs) > 0,
-                     f"strategies[{i}].legs must be a non-empty list")
+            _require(
+                isinstance(legs, list) and len(legs) > 0,
+                f"strategies[{i}].legs must be a non-empty list",
+            )
 
             for j, leg in enumerate(legs):
-                _require(isinstance(leg, dict), f"strategies[{i}].legs[{j}] must be an object")
+                _require(
+                    isinstance(leg, dict),
+                    f"strategies[{i}].legs[{j}] must be an object",
+                )
                 # Required leg fields
                 for key in ("instrument_type", "strike", "quantity"):
-                    _require(key in leg, f"strategies[{i}].legs[{j}] missing required field: {key}")
+                    _require(
+                        key in leg,
+                        f"strategies[{i}].legs[{j}] missing required field: {key}",
+                    )
 
                 # instrument_type must be 'call' or 'put'
-                _require(leg["instrument_type"] in ("call", "put"),
-                         f"strategies[{i}].legs[{j}].instrument_type must be 'call' or 'put', got {leg['instrument_type']}")
+                _require(
+                    leg["instrument_type"] in ("call", "put"),
+                    f"strategies[{i}].legs[{j}].instrument_type must be 'call' or 'put', got {leg['instrument_type']}",
+                )
 
                 # strike must be numeric
-                _require(isinstance(leg["strike"], (int, float)) and not isinstance(leg["strike"], bool),
-                         f"strategies[{i}].legs[{j}].strike must be numeric")
+                _require(
+                    isinstance(leg["strike"], (int, float))
+                    and not isinstance(leg["strike"], bool),
+                    f"strategies[{i}].legs[{j}].strike must be numeric",
+                )
 
                 # quantity must be an integer
-                _require(isinstance(leg["quantity"], int) and not isinstance(leg["quantity"], bool),
-                         f"strategies[{i}].legs[{j}].quantity must be an integer")
+                _require(
+                    isinstance(leg["quantity"], int)
+                    and not isinstance(leg["quantity"], bool),
+                    f"strategies[{i}].legs[{j}].quantity must be an integer",
+                )
 
             # Optional fields validation
             if "edge_strikes_used" in strategy:
-                _require(isinstance(strategy["edge_strikes_used"], list),
-                         f"strategies[{i}].edge_strikes_used must be a list")
+                _require(
+                    isinstance(strategy["edge_strikes_used"], list),
+                    f"strategies[{i}].edge_strikes_used must be a list",
+                )
                 for k, strike in enumerate(strategy["edge_strikes_used"]):
-                    _require(isinstance(strike, (int, float)) and not isinstance(strike, bool),
-                             f"strategies[{i}].edge_strikes_used[{k}] must be numeric")
+                    _require(
+                        isinstance(strike, (int, float))
+                        and not isinstance(strike, bool),
+                        f"strategies[{i}].edge_strikes_used[{k}] must be numeric",
+                    )
 
             if "greeks_summary" in strategy:
-                _require(isinstance(strategy["greeks_summary"], dict),
-                         f"strategies[{i}].greeks_summary must be an object")
+                _require(
+                    isinstance(strategy["greeks_summary"], dict),
+                    f"strategies[{i}].greeks_summary must be an object",
+                )
                 for greek_name, greek_value in strategy["greeks_summary"].items():
-                    _require(greek_value is None or (isinstance(greek_value, (int, float)) and not isinstance(greek_value, bool)),
-                             f"strategies[{i}].greeks_summary.{greek_name} must be numeric or null")
+                    _require(
+                        greek_value is None
+                        or (
+                            isinstance(greek_value, (int, float))
+                            and not isinstance(greek_value, bool)
+                        ),
+                        f"strategies[{i}].greeks_summary.{greek_name} must be numeric or null",
+                    )
 
             if "rank_score" in strategy:
-                _require(isinstance(strategy["rank_score"], (int, float)) and not isinstance(strategy["rank_score"], bool),
-                         f"strategies[{i}].rank_score must be numeric")
+                _require(
+                    isinstance(strategy["rank_score"], (int, float))
+                    and not isinstance(strategy["rank_score"], bool),
+                    f"strategies[{i}].rank_score must be numeric",
+                )
 
 
-def write_suite_context(context: Dict[str, Any], path: str) -> str:
+def write_suite_context(context: dict[str, Any], path: str) -> str:
     validate_suite_context(context)
     out_path = Path(path).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -376,7 +532,7 @@ def write_suite_context(context: Dict[str, Any], path: str) -> str:
     return str(out_path)
 
 
-def read_suite_context(path: str) -> Dict[str, Any]:
+def read_suite_context(path: str) -> dict[str, Any]:
     in_path = Path(path).expanduser().resolve()
     if not in_path.exists():
         raise FileNotFoundError(f"suite_context.json not found: {in_path}")

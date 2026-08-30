@@ -24,17 +24,17 @@ this mode existed:
    where all of that came back empty is reported as status='error', not as a
    success with an empty payload.
 """
+
 import builtins
 import json
 import math
 import os
-from typing import List
 
 import pytest
-
 import volatility_suite as vsuite
-from shared.schemas import validate_vol_result
 from suite_context import build_suite_context
+
+from shared.schemas import validate_vol_result
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +55,7 @@ def _clear_noninteractive_overrides():
 # ---------------------------------------------------------------------------
 # stubs
 # ---------------------------------------------------------------------------
+
 
 class FakeTD:
     def fetch_spot_price(self, ticker):
@@ -122,9 +123,11 @@ class FakeDealerResult:
         ]
 
 
-def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
-                   variance_result=True):
+def _install_stubs(
+    monkeypatch, calls: dict, *, dealer_result=None, variance_result=True
+):
     import thetadata_client
+
     monkeypatch.setattr(thetadata_client, "ThetaDataController", lambda: FakeTD())
 
     import correlation_engine as ce
@@ -135,8 +138,9 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
         individual_betas = {"TSLA": 1.4, "INTC": 0.8, "SPCX": 1.1}
         dispersion_score = 0.42
 
-    def fake_run_correlation_engine(tickers, weights=None, market="SPY",
-                                    period="2y", output_dir=None, save_csv=True):
+    def fake_run_correlation_engine(
+        tickers, weights=None, market="SPY", period="2y", output_dir=None, save_csv=True
+    ):
         calls["correlation_tickers"] = list(tickers)
         calls["correlation_weights"] = list(weights) if weights is not None else None
         calls["correlation_market"] = market
@@ -146,41 +150,48 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
 
     import variance_swap_live as vsl
 
-    def fake_run_variance_swap_live(ticker, target_years, output_dir=None, expiration=None):
+    def fake_run_variance_swap_live(
+        ticker, target_years, output_dir=None, expiration=None
+    ):
         calls.setdefault("variance_swap_tickers", []).append(ticker)
         calls.setdefault("variance_swap_expirations", []).append(expiration)
         if not variance_result:
             raise RuntimeError(f"no chain for {ticker}")
-        return [], f"{ticker} variance swap", {
-            "S0": 250.0,
-            "F": 251.0,
-            "T_years": 0.4,
-            "fair_variance_annualized": 0.09,
-            "fair_variance_swap_strike_vol": 0.30,
-            "fair_variance_swap_strike_vol_pct": 30.0 if ticker != "SPY" else 18.0,
-            "atm_strike": 250.0,
-            "atm_implied_vol": 0.29,
-            "atm_implied_vol_pct": 29.0,
-            "convexity_premium_vol_pct": 1.0,
-            "num_strikes_used": 41,
-            "K_min": 100.0,
-            "K_max": 400.0,
-            # Dropped on purpose by _variance_leg_summary: parallel arrays over
-            # every strike, already exported to CSV.
-            "strike_table": {"strikes": [1, 2, 3]},
-        }
+        return (
+            [],
+            f"{ticker} variance swap",
+            {
+                "S0": 250.0,
+                "F": 251.0,
+                "T_years": 0.4,
+                "fair_variance_annualized": 0.09,
+                "fair_variance_swap_strike_vol": 0.30,
+                "fair_variance_swap_strike_vol_pct": 30.0 if ticker != "SPY" else 18.0,
+                "atm_strike": 250.0,
+                "atm_implied_vol": 0.29,
+                "atm_implied_vol_pct": 29.0,
+                "convexity_premium_vol_pct": 1.0,
+                "num_strikes_used": 41,
+                "K_min": 100.0,
+                "K_max": 400.0,
+                # Dropped on purpose by _variance_leg_summary: parallel arrays over
+                # every strike, already exported to CSV.
+                "strike_table": {"strikes": [1, 2, 3]},
+            },
+        )
 
     monkeypatch.setattr(vsl, "run_variance_swap_live", fake_run_variance_swap_live)
 
     import garch_analysis as ga
-    monkeypatch.setattr(ga, "run_garch_module",
-                        lambda ticker, output_dir=None: ([], "GARCH done", 0.31))
+
+    monkeypatch.setattr(
+        ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31)
+    )
 
     import variance_swap_screener as vss
 
     def fake_screen_ticker(ticker, target_years, expiration=None):
         calls.setdefault("screen_ticker_calls", []).append(ticker)
-        return None
 
     def fake_run_variance_screener(tickers, target_years, output_dir=None):
         calls["group_screener_tickers"] = list(tickers)
@@ -189,15 +200,24 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
     monkeypatch.setattr(vss, "screen_ticker", fake_screen_ticker)
     monkeypatch.setattr(vss, "run_variance_screener", fake_run_variance_screener)
 
-    def fake_run_dealer_positioning(ticker, target_years, output_dir=None,
-                                    save_csv=True, expiration=None, sign_model=None):
+    def fake_run_dealer_positioning(
+        ticker,
+        target_years,
+        output_dir=None,
+        save_csv=True,
+        expiration=None,
+        sign_model=None,
+    ):
         calls["dealer_positioning_sign_model"] = sign_model
         calls["dealer_positioning_expiration"] = expiration
-        csv_path = os.path.join(output_dir or ".", f"{ticker}_gamma_records_20261218_000000.csv")
+        csv_path = os.path.join(
+            output_dir or ".", f"{ticker}_gamma_records_20261218_000000.csv"
+        )
         return [csv_path], "Dealer positioning done", dealer_result
 
-    monkeypatch.setattr(vsuite, "_run_production_dealer_positioning",
-                        fake_run_dealer_positioning)
+    monkeypatch.setattr(
+        vsuite, "_run_production_dealer_positioning", fake_run_dealer_positioning
+    )
 
     import options_chain_scanner as ocs
 
@@ -236,10 +256,13 @@ def _install_stubs(monkeypatch, calls: dict, *, dealer_result=None,
 
 def _no_stdin(monkeypatch):
     """Any input() in the context path is a bug, not an EOFError."""
+
     def _boom(prompt: str = "") -> str:
         raise AssertionError(
             f"context mode read stdin -- prompt was {prompt!r}. The orchestrator "
-            f"launches this with stdin closed, so this would hang or EOF.")
+            f"launches this with stdin closed, so this would hang or EOF."
+        )
+
     monkeypatch.setattr(builtins, "input", _boom)
 
 
@@ -268,6 +291,7 @@ def _write_context(tmp_path, out_dir, **overrides) -> str:
 # ---------------------------------------------------------------------------
 # tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_context_mode_runs_the_pipeline_without_stdin(monkeypatch, tmp_path):
@@ -323,7 +347,7 @@ def test_vol_result_is_schema_valid_and_json_strict(monkeypatch, tmp_path):
     assert "NaN" not in raw and "Infinity" not in raw
     payload = json.loads(raw)
 
-    validate_vol_result(payload)          # raises on violation
+    validate_vol_result(payload)  # raises on violation
 
     assert payload["suite"] == "vol"
     assert payload["status"] == "ok"
@@ -352,7 +376,7 @@ def test_vol_result_is_schema_valid_and_json_strict(monkeypatch, tmp_path):
     assert len(records) == 12
     assert payload["gamma_records_total"] == 12
     assert payload["gamma_records_truncated"] is False
-    assert records[0]["delta"] is None            # NaN greek -> null
+    assert records[0]["delta"] is None  # NaN greek -> null
     assert all(r["strike"] is not None for r in records)
 
 
@@ -397,7 +421,9 @@ def test_total_failure_is_reported_as_error_not_as_empty_success(monkeypatch, tm
     def exploding_dealer_positioning(*a, **kw):
         raise RuntimeError("ThetaData unavailable")
 
-    monkeypatch.setattr(vsuite, "_run_production_dealer_positioning", exploding_dealer_positioning)
+    monkeypatch.setattr(
+        vsuite, "_run_production_dealer_positioning", exploding_dealer_positioning
+    )
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -408,7 +434,7 @@ def test_total_failure_is_reported_as_error_not_as_empty_success(monkeypatch, tm
     assert rc == 1
 
     payload = json.loads(out_json.read_text(encoding="utf-8"))
-    validate_vol_result(payload)                   # error shape is still valid
+    validate_vol_result(payload)  # error shape is still valid
     assert payload["status"] == "error"
     assert payload["error"]
     steps = {e["step"] for e in payload["errors"]}
@@ -455,9 +481,18 @@ def test_main_selects_context_mode_from_flags_and_from_env(monkeypatch, tmp_path
     out_dir.mkdir()
     ctx_path = _write_context(tmp_path, out_dir)
 
-    assert vsuite.main(["--context", ctx_path,
-                        "--context-out", str(tmp_path / "a.json"),
-                        "--no-loop"]) == 0
+    assert (
+        vsuite.main(
+            [
+                "--context",
+                ctx_path,
+                "--context-out",
+                str(tmp_path / "a.json"),
+                "--no-loop",
+            ]
+        )
+        == 0
+    )
     assert (tmp_path / "a.json").exists()
 
     monkeypatch.setenv("SUITE_CONTEXT_MODE", "1")
@@ -467,7 +502,9 @@ def test_main_selects_context_mode_from_flags_and_from_env(monkeypatch, tmp_path
 
 
 @pytest.mark.unit
-def test_vrp_term_structure_runs_by_default_in_context_mode(monkeypatch, tmp_path, capsys):
+def test_vrp_term_structure_runs_by_default_in_context_mode(
+    monkeypatch, tmp_path, capsys
+):
     """VS_RUN_VRP_TERM_STRUCTURE used to default to False, so a normal
     unified run never produced a VRP term structure at all -- vol_result.json
     always carried {"available": False} and nothing said why. It is now
@@ -500,7 +537,7 @@ def test_vrp_term_structure_runs_by_default_in_context_mode(monkeypatch, tmp_pat
     out = capsys.readouterr().out
     assert "VRP Term Structure" in out
     assert "1mo" in out and "6mo" in out
-    assert "+5.00" in out          # the 6mo VRP value
+    assert "+5.00" in out  # the 6mo VRP value
     assert "upward" in out
 
 
@@ -533,4 +570,49 @@ def test_json_safe_handles_nan_and_numpy(monkeypatch):
     assert vsuite._json_safe(np.array([1.0, 2.0])) == [1.0, 2.0]
     assert vsuite._json_safe(np.array([float("nan"), 2.0])) == [None, 2.0]
     assert vsuite._json_safe({"a": np.int64(3)}) == {"a": 3}
-    assert math.isnan(float("nan"))   # sanity: the input really was NaN
+    assert math.isnan(float("nan"))  # sanity: the input really was NaN
+
+
+def test_build_suite_context_includes_jump_diffusion_block():
+    from suite_context import build_suite_context
+
+    jd = {
+        "model_name": "Bates",
+        "params": {"kappa": 2.0},
+        "rmse_iv": 0.008,
+        "jump_variance_share": 0.35,
+    }
+    ctx = build_suite_context(
+        output_dir=".",
+        run_id="test-run",
+        ticker="SPY",
+        option_type="call",
+        strike=None,
+        target_years=0.5,
+        expiration_date="20270101",
+        index_ticker="SPY",
+        basket_tickers=["SPY"],
+        basket_weights=[1.0],
+        sentiment_manifest_path=".",
+        jump_diffusion=jd,
+    )
+    assert ctx["jump_diffusion"] == jd
+
+
+def test_build_suite_context_jump_diffusion_defaults_to_none():
+    from suite_context import build_suite_context
+
+    ctx = build_suite_context(
+        output_dir=".",
+        run_id="test-run",
+        ticker="SPY",
+        option_type="call",
+        strike=None,
+        target_years=0.5,
+        expiration_date="20270101",
+        index_ticker="SPY",
+        basket_tickers=["SPY"],
+        basket_weights=[1.0],
+        sentiment_manifest_path=".",
+    )
+    assert ctx["jump_diffusion"] is None
