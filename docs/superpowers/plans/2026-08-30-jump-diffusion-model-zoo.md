@@ -24,9 +24,12 @@ changes behavior when the new value is `None`.
 - Every new/changed downstream call site must remain backward-compatible when the new parameter
   is omitted or `None` — existing callers and existing tests must keep passing unmodified.
 - `suite_context.json` stays `schema_version: 1` (additive field, matching precedent set by
-  `garch_conditional_vol`) — but both `shared/schemas.py::validate_suite_context` AND
-  `Vol_Suite/suite_context.py`'s own `validate_suite_context` must accept the new key (these are
-  two different functions with the same name — CLAUDE.md-documented gotcha).
+  `garch_conditional_vol`). Neither `shared/schemas.py::validate_suite_context` nor
+  `Vol_Suite/suite_context.py`'s own same-named function rejects unrecognized top-level keys today
+  (verified — see Task 9's CARL note), so no validator change is required for this specific
+  addition; the CLAUDE.md-documented two-validator gotcha still applies to any *behavioral* schema
+  check (e.g. a future None-vs-`[]` distinction on `jump_diffusion`'s contents), so re-check both
+  functions before adding one.
 - Never let a calibration failure abort `_run_core_analysis` or a unified run — match the existing
   `GarchModuleResult.error` null-safe pattern (`Vol_Suite/garch_analysis.py:326-347`).
 - Run tests via `pytest Vol_Suite/tests/` (or the specific test file) from the repo root, per
@@ -133,7 +136,7 @@ is identical for every model. See the "Reference: characteristic functions"
 section of the design spec for the exact formulas and their derivation.
 """
 
-from dataclasses import dataclass, astuple, fields
+from dataclasses import dataclass, astuple
 from typing import ClassVar
 
 import numpy as np
@@ -496,8 +499,11 @@ class VarianceGammaModel:
 
 
 #: Registry used by comparison.py and calibration.py to iterate "all 5 models"
-#: without a hardcoded import list at every call site.
-ALL_MODELS: ClassVar = (MertonModel, HestonModel, BatesModel, KouModel, VarianceGammaModel)
+#: without a hardcoded import list at every call site. (Plain tuple, not
+#: typing.ClassVar -- ClassVar is only valid as a class-body annotation;
+#: using it on a module-level name is a static-analysis error under ruff/
+#: pyright even though it doesn't fail at runtime.)
+ALL_MODELS = (MertonModel, HestonModel, BatesModel, KouModel, VarianceGammaModel)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -544,9 +550,16 @@ from variance_swap_live import ChainData
 
 def _synthetic_chain(model, S0, T, r, q, strikes):
     """Price a synthetic chain from *known* model params, invert to IV --
-    the standard 'calibrate what you priced' round-trip fixture."""
+    the standard 'calibrate what you priced' round-trip fixture.
+
+    implied_vol() returns Optional[float] (None on an uninvertible price,
+    not NaN -- see implied_vol.py:120) -- guard with `or np.nan` so
+    np.array(...) stays float dtype. Without this guard a single None makes
+    the array object-dtype, and calibrate()'s `~np.isnan(chain.call_iv)`
+    filter raises TypeError instead of skipping the point.
+    """
     call_prices = np.array([lewis_price(model, S0, k, T, r, q, "call") for k in strikes])
-    call_ivs = np.array([implied_vol(p, S0, k, T, r, q, "call") for p, k in zip(call_prices, strikes)])
+    call_ivs = np.array([implied_vol(p, S0, k, T, r, q, "call") or np.nan for p, k in zip(call_prices, strikes)])
     return ChainData(
         expiry="20270101", strikes=strikes, call_mid=call_prices,
         put_mid=call_prices, r=r, q=q, call_iv=call_ivs, put_iv=call_ivs,
@@ -686,28 +699,38 @@ from jump_diffusion.models import HestonModel, BatesModel, KouModel, VarianceGam
 
 
 def test_heston_calibration_recovers_known_params():
+    """True params deliberately offset from _DEFAULT_SEEDS['Heston'] on
+    every dimension (kappa/theta/xi/rho/v0 all differ 20-50%) -- a seed
+    planted at (or one param away from) the true answer would let a broken
+    characteristic function pass this test by never having to move. See
+    CARL R1-F4."""
     S0, T, r, q = 100.0, 0.5, 0.03, 0.0
     strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
-    true_model = HestonModel(kappa=2.0, theta=0.04, xi=0.5, rho=-0.6, v0=0.045)
+    true_model = HestonModel(kappa=3.2, theta=0.06, xi=0.9, rho=-0.75, v0=0.05)
     chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
     result = calibrate(HestonModel, chain, S0, T)
     assert result.rmse_iv < 0.01
 
 
 def test_bates_calibration_recovers_known_params():
+    """True params offset from _DEFAULT_SEEDS['Bates'] on every dimension --
+    see the Heston test's docstring; same rationale, 7-param version."""
     S0, T, r, q = 100.0, 0.5, 0.03, 0.0
     strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
-    true_model = BatesModel(kappa=2.0, theta=0.04, xi=0.5, rho=-0.6, v0=0.04,
-                             lam=0.6, mu_j=-0.06, sigma_j=0.1)
+    true_model = BatesModel(kappa=3.0, theta=0.06, xi=0.8, rho=-0.7, v0=0.05,
+                             lam=0.9, mu_j=-0.09, sigma_j=0.15)
     chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
     result = calibrate(BatesModel, chain, S0, T)
     assert result.rmse_iv < 0.015  # 7-param fit -- slightly looser tolerance
 
 
 def test_kou_calibration_recovers_known_params():
+    """sigma deliberately offset from _DEFAULT_SEEDS['Kou']['sigma'] (0.18)
+    -- the original draft had sigma matching the seed exactly, which is the
+    same weak-test pattern as Heston/Bates above."""
     S0, T, r, q = 100.0, 0.5, 0.03, 0.0
     strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
-    true_model = KouModel(sigma=0.18, lam=0.8, p=0.35, eta1=12.0, eta2=6.0)
+    true_model = KouModel(sigma=0.24, lam=0.8, p=0.35, eta1=12.0, eta2=6.0)
     chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
     result = calibrate(KouModel, chain, S0, T)
     assert result.rmse_iv < 0.01
@@ -859,6 +882,19 @@ git commit -m "feat(vol-suite): add all-5-model comparison mode with jump-contri
 
 ## Task 7: GARCH tie 1 — Merton-informed jump-day filter
 
+> **CARL note (R1-F1, critical, fixed here + Task 8 + Task 10):** the original draft of this plan
+> built `jump_filtered_returns`/`adjust_garch_forecast` as pure, unit-tested-in-isolation
+> functions but never actually called them from `garch_analysis.py` or from
+> `_run_core_analysis`'s real GARCH call site — a worker following the original tasks literally
+> would produce a `suite_context.json` with a `jump_diffusion` block, but the live GARCH
+> conditional vol (a documented fragile surface feeding VaR) would be byte-for-byte unchanged.
+> This revision wires both ties into the real call path: `run_garch_analysis` now accepts
+> `merton_sigma` and filters returns before fitting (tie 1), `run_garch_module` accepts
+> `jump_variance_share` and scales the real `garch_conditional_vol` variable (tie 2, and note the
+> corrected variable name — the original draft invented `annualized_conditional_vol`, which does
+> not exist in `garch_analysis.py`; see R1-F3), and Task 10 now calibrates jump models *before*
+> calling `run_garch_module`, not after.
+
 **Files:**
 - Create: `Vol_Suite/jump_diffusion/garch_bridge.py`
 - Test: `Vol_Suite/tests/test_garch_bridge.py`
@@ -867,7 +903,8 @@ git commit -m "feat(vol-suite): add all-5-model comparison mode with jump-contri
 - Produces: `jump_filtered_returns(log_returns: np.ndarray, merton_sigma: float, k: float = 4.0) -> tuple[np.ndarray, np.ndarray]`
   returning `(filtered_returns, jump_day_mask)` — a Lee-Mykland-style statistical jump test using
   the *options-implied* diffusive vol (`merton_sigma`, from a Merton calibration) as the threshold
-  scale, rather than a naive rolling-std threshold that jumps themselves would contaminate.
+  scale, rather than a naive rolling-std threshold that jumps themselves would contaminate. This
+  task only builds and unit-tests the function; Task 8 wires it into the real GARCH fit.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -968,74 +1005,192 @@ git commit -m "feat(vol-suite): add Merton jump-day filter for GARCH input"
 
 ---
 
-## Task 8: GARCH tie 2 — jump-variance-share forecast adjustment test + integration point
+## Task 8: GARCH tie 2 — wire both ties into the real `garch_analysis.py` call path
 
 **Files:**
 - Modify: `Vol_Suite/tests/test_garch_bridge.py`
-- Modify: `Vol_Suite/garch_analysis.py`
+- Modify: `Vol_Suite/garch_analysis.py:69` (`run_garch_analysis`, tie 1)
+- Modify: `Vol_Suite/garch_analysis.py:349-410` (`run_garch_module`, tie 2 — full range, not just
+  349-380; the real `garch_conditional_vol` assignment and `return GarchModuleResult(...)` are at
+  lines 383 and 410, both past where the original draft of this task stopped reading)
 
 **Interfaces:**
-- Consumes: `garch_bridge.adjust_garch_forecast` (Task 7).
-- Produces: `garch_analysis.run_garch_module` gains an optional keyword
-  `jump_variance_share: float | None = None`; when provided, the returned annualized conditional
-  vol (3rd tuple element) is passed through `adjust_garch_forecast` before being returned. `None`
-  (default) leaves current behavior byte-for-byte identical.
+- Consumes: `garch_bridge.jump_filtered_returns`, `garch_bridge.adjust_garch_forecast` (Task 7).
+- Produces: `run_garch_analysis` gains an optional keyword `merton_sigma: float | None = None`
+  (tie 1 — filters the return series before the `arch_model` fit). `run_garch_module` gains
+  `merton_sigma: float | None = None` (passed straight through to `run_garch_analysis`) and
+  `jump_variance_share: float | None = None` (tie 2 — scales the real `garch_conditional_vol`
+  variable, not an invented name, before the function returns). Both default `None`, leaving
+  current behavior byte-for-byte identical when omitted.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
+
+These are real integration tests against `run_garch_module` — not just re-asserting
+`adjust_garch_forecast`'s own math (already covered by Task 7), which is what the original draft
+of this task tested and is why R1-F2 called it zero-coverage for the actual wiring:
 
 ```python
 # append to Vol_Suite/tests/test_garch_bridge.py
-from jump_diffusion.garch_bridge import adjust_garch_forecast
+import pandas as pd
+import garch_analysis
 
 
-def test_adjust_garch_forecast_scales_up_with_jump_share():
-    base = 0.20
-    assert adjust_garch_forecast(base, jump_variance_share=0.0) == base
-    adjusted = adjust_garch_forecast(base, jump_variance_share=1.0, gamma=0.25)
-    assert np.isclose(adjusted, base * 1.25)
+class _FakeGarchResult:
+    """Stand-in for the arch_model fit result run_garch_analysis returns --
+    only the two attributes run_garch_module actually reads."""
+
+    def __init__(self, vol_pct: float):
+        self.conditional_volatility = pd.Series([vol_pct])
+        self.params = {"alpha[1]": 0.05, "beta[1]": 0.90, "nu": 6.0}
+        self.aic = 100.0
+        self.bic = 105.0
+
+
+def test_run_garch_module_applies_jump_variance_share_scaling(monkeypatch, tmp_path):
+    """End-to-end: stub the actual fit run_garch_module calls internally,
+    and assert the jump_variance_share kwarg measurably changes the
+    returned conditional vol via adjust_garch_forecast -- not just that
+    adjust_garch_forecast works in isolation (that's Task 7's test)."""
+    daily_vol_pct = 20.0 / (garch_analysis.ANNUALIZE ** 0.5) * 100  # back out a known annualized vol
+
+    def _fake_run_garch_analysis(ticker, start=None, end=None, merton_sigma=None):
+        return _FakeGarchResult(daily_vol_pct)
+
+    monkeypatch.setattr(garch_analysis, "run_garch_analysis", _fake_run_garch_analysis)
+
+    baseline = garch_analysis.run_garch_module("SPY", output_dir=str(tmp_path))
+    with_jump = garch_analysis.run_garch_module(
+        "SPY", output_dir=str(tmp_path), jump_variance_share=1.0
+    )
+
+    assert with_jump[2] > baseline[2]  # 3rd tuple element is garch_conditional_vol
+    assert np.isclose(with_jump[2], baseline[2] * 1.25)  # gamma=0.25 default from Task 7
+
+
+def test_run_garch_module_passes_merton_sigma_through(monkeypatch, tmp_path):
+    """merton_sigma must reach run_garch_analysis's own kwarg -- proves tie 1
+    is actually wired, not just tie 2."""
+    received = {}
+
+    def _fake_run_garch_analysis(ticker, start=None, end=None, merton_sigma=None):
+        received["merton_sigma"] = merton_sigma
+        return _FakeGarchResult(20.0)
+
+    monkeypatch.setattr(garch_analysis, "run_garch_analysis", _fake_run_garch_analysis)
+
+    garch_analysis.run_garch_module("SPY", output_dir=str(tmp_path), merton_sigma=0.22)
+
+    assert received["merton_sigma"] == 0.22
+
+
+def test_jump_filtered_returns_actually_called_inside_run_garch_analysis(monkeypatch):
+    """Unit-level check that run_garch_analysis calls jump_filtered_returns
+    on its log-return series when merton_sigma is given -- isolates tie 1
+    from the ADF/ARCH pre-tests and the real arch_model fit, which this
+    plan does not want to mock end-to-end."""
+    import jump_diffusion.garch_bridge as garch_bridge
+
+    calls = []
+    original = garch_bridge.jump_filtered_returns
+
+    def _spy(log_returns, merton_sigma, k=4.0):
+        calls.append(merton_sigma)
+        return original(log_returns, merton_sigma, k)
+
+    monkeypatch.setattr(garch_bridge, "jump_filtered_returns", _spy)
+
+    prices = pd.Series(
+        100 * np.cumprod(1 + np.random.default_rng(3).normal(0, 0.01, 300)),
+        index=pd.date_range("2025-01-01", periods=300, freq="B"),
+    )
+    monkeypatch.setattr(garch_analysis, "fetch_price_history", lambda tickers, period: pd.DataFrame({"SPY": prices}))
+
+    try:
+        garch_analysis.run_garch_analysis("SPY", merton_sigma=0.20)
+    except Exception:
+        pass  # the real ADF/ARCH/arch_model pipeline may still fail on this synthetic series -- irrelevant to this test
+
+    assert calls == [0.20]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd Vol_Suite && ..\.venv\Scripts\python.exe -m pytest tests/test_garch_bridge.py -v`
-Expected: FAIL — `adjust_garch_forecast` already exists from Task 7, but this asserts its exact
-scaling behavior for the first time; if it fails, the bug is in Task 7's formula, not new code.
+Expected: FAIL — `run_garch_module`/`run_garch_analysis` don't accept these kwargs yet (`TypeError:
+run_garch_module() got an unexpected keyword argument 'jump_variance_share'`, etc).
 
-- [ ] **Step 3: Wire the optional kwarg into `run_garch_module`**
+- [ ] **Step 3: Wire tie 1 into `run_garch_analysis`**
 
-Read `Vol_Suite/garch_analysis.py:349-380` (`run_garch_module`) first — the change is additive at
-the return point only, not to the fit itself:
+`run_garch_analysis`'s signature is at `garch_analysis.py:69`
+(`def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None):`); its
+log-return computation is at line 91 (`log_returns = np.log(prices / prices.shift(1)).dropna() *
+100`). Add the `merton_sigma` kwarg and filter the *unscaled* returns (the jump-detection
+threshold in `garch_bridge.jump_filtered_returns` is calibrated against an annualized decimal vol,
+which only makes sense against raw log-returns, not the `*100`-scaled series `arch_model` wants):
 
 ```python
-# Vol_Suite/garch_analysis.py -- modify run_garch_module's signature and return
-def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None,
-                      output_dir: str = None, jump_variance_share: float = None) -> tuple:
-    # ... existing body unchanged up through computing `annualized_conditional_vol` ...
-    # immediately before the final `return GarchModuleResult(files, interp, annualized_conditional_vol)`:
-    if jump_variance_share is not None and annualized_conditional_vol is not None:
-        from jump_diffusion.garch_bridge import adjust_garch_forecast
-        annualized_conditional_vol = adjust_garch_forecast(annualized_conditional_vol, jump_variance_share)
-    return GarchModuleResult(files, interp, annualized_conditional_vol)
+# Vol_Suite/garch_analysis.py:69 -- add merton_sigma to the signature
+def run_garch_analysis(ticker: str, start: str = DEFAULT_START, end: str = None, merton_sigma: float = None):
+    ...
+    # garch_analysis.py:91 -- replace the existing single line with:
+    log_returns_raw = np.log(prices / prices.shift(1)).dropna()
+    if merton_sigma is not None:
+        from jump_diffusion.garch_bridge import jump_filtered_returns
+        filtered_vals, jump_mask = jump_filtered_returns(log_returns_raw.values, merton_sigma)
+        log_returns_raw = pd.Series(filtered_vals, index=log_returns_raw.index)
+        print(f"  [jump_diffusion] filtered {int(jump_mask.sum())} jump day(s) from GARCH input")
+    log_returns = log_returns_raw * 100
+    # ... rest of the function (mean_ret, std_ret, ADF/ARCH tests, arch_model fit) unchanged,
+    # operating on this `log_returns` exactly as before.
 ```
 
-(The import is deliberately local to `run_garch_module`, not top-of-file, to avoid a hard
-`jump_diffusion` import in `garch_analysis.py` for the common case where no jump result exists yet
-— matches the codebase's existing pattern of narrow, call-site-local imports for optional
-integrations.)
+- [ ] **Step 4: Wire tie 2 into `run_garch_module`, using the real variable name**
 
-- [ ] **Step 4: Run tests to verify they pass, and existing GARCH tests still pass**
+`run_garch_module`'s signature is at line 349; its actual conditional-vol variable is
+`garch_conditional_vol` (assigned at line 383, referenced at line 405), and its real return
+statement is `return GarchModuleResult(files, interp, garch_conditional_vol)` at **line 410** —
+not the invented `annualized_conditional_vol` name or the truncated line range an earlier draft
+of this task used:
+
+```python
+# Vol_Suite/garch_analysis.py:349 -- add merton_sigma and jump_variance_share to the signature
+def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None,
+                      output_dir: str = None, merton_sigma: float = None,
+                      jump_variance_share: float = None) -> tuple:
+    ...
+    # garch_analysis.py:369 -- pass merton_sigma through to the real fit call:
+    try:
+        res = run_garch_analysis(ticker, start=start, end=end, merton_sigma=merton_sigma)
+    except Exception as e:
+        ...  # unchanged
+    ...
+    # garch_analysis.py:383-410 -- unchanged through the garch_conditional_vol assignment and
+    # interpretation-text block; insert this immediately before line 410's return:
+    if jump_variance_share is not None and garch_conditional_vol is not None:
+        from jump_diffusion.garch_bridge import adjust_garch_forecast
+        garch_conditional_vol = adjust_garch_forecast(garch_conditional_vol, jump_variance_share)
+    return GarchModuleResult(files, interp, garch_conditional_vol)
+```
+
+(Both imports stay local to their functions, not top-of-file, matching this codebase's pattern of
+narrow, call-site-local imports for optional integrations — and avoiding a hard `jump_diffusion`
+import cost in `garch_analysis.py` for the common case where no jump result exists.)
+
+- [ ] **Step 5: Run tests to verify they pass, and existing GARCH tests still pass**
 
 Run: `cd Vol_Suite && ..\.venv\Scripts\python.exe -m pytest tests/test_garch_bridge.py -v`
-Expected: PASS (3 tests total)
+Expected: PASS (5 tests total: 2 from Task 7, 3 new here)
 
 Run: `cd Vol_Suite && ..\.venv\Scripts\python.exe -m pytest tests/ -k garch -v`
-Expected: PASS — all pre-existing GARCH tests unaffected (new kwarg defaults to `None`).
+Expected: PASS — all pre-existing GARCH tests unaffected (both new kwargs default to `None`, and
+Step 3's replacement of the `log_returns` line is behaviorally identical to the original when
+`merton_sigma is None`).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add Vol_Suite/garch_analysis.py Vol_Suite/tests/test_garch_bridge.py
-git commit -m "feat(vol-suite): wire jump-variance-share GARCH forecast adjustment into run_garch_module"
+git commit -m "feat(vol-suite): wire jump-filtered returns and jump-variance-share scaling into the real GARCH fit"
 ```
 
 ---
@@ -1044,8 +1199,8 @@ git commit -m "feat(vol-suite): wire jump-variance-share GARCH forecast adjustme
 
 **Files:**
 - Modify: `Vol_Suite/suite_context.py:109-207` (`build_suite_context`)
-- Modify: `Vol_Suite/suite_context.py:210` (`validate_suite_context`, the Vol_Suite-local one)
-- Modify: `shared/schemas.py:107` (`validate_suite_context`, the shared/consumer-facing one)
+- No changes needed to either `validate_suite_context` (`Vol_Suite/suite_context.py:210-308` or
+  `shared/schemas.py:107-307`) — see CARL note in Step 3 below for why.
 - Test: `Vol_Suite/tests/test_context_mode.py` (existing file — add a case)
 
 **Interfaces:**
@@ -1113,14 +1268,22 @@ And inside the `context = {...}` dict literal, after the `"strategies": []` line
         "jump_diffusion": jump_diffusion,
 ```
 
-Then update `Vol_Suite/suite_context.py`'s own `validate_suite_context` (line 210) to accept the
-new top-level key — read that function first to match its existing key-checking style (likely a
-set of required/optional top-level keys) before adding `"jump_diffusion"` to whatever
-optional-keys collection it uses.
+**CARL note (R1-F7):** an earlier draft of this step claimed both `validate_suite_context`
+functions needed updating to "accept" the new key, framing it as required work analogous to the
+CLAUDE.md-documented two-validator gotcha. Verified against the actual bodies of both functions
+(`Vol_Suite/suite_context.py:210-308` and `shared/schemas.py:107-307`): neither rejects unknown
+top-level keys today — both only assert *required* keys are present and type-check a fixed
+allowlist of already-known optional ones (`garch_conditional_vol`, `expected_return`,
+`strategies`), with no `additionalProperties: false`-style catch-all. A new `"jump_diffusion"` key
+passes both validators unmodified, exactly as `garch_conditional_vol` did when it was added — so
+**no validator change is required for backward-compatibility**, and this step does not make one.
+This is different from the real two-validator gotcha (which is about behavioral checks like
+`var.positions`'s None-vs-[] distinction, not about accepting new unlisted keys) — don't conflate
+them in future edits to this file.
 
-Then update `shared/schemas.py::validate_suite_context` (line 107) the same way — read it first,
-since its checking style may differ from the Vol_Suite-local copy (this is the CLAUDE.md-flagged
-same-name-different-function gotcha; both must be updated, neither implies the other).
+If defense-in-depth shape validation for `jump_diffusion`'s contents (`model_name`/`params`/
+`rmse_iv`/`jump_variance_share`/`merton_sigma`) is wanted later, that is new scope, not a gap this
+task is closing — track it separately rather than folding it in here silently.
 
 - [ ] **Step 4: Run tests to verify they pass, plus the full existing context-mode suite**
 
@@ -1134,7 +1297,7 @@ repo root) — Expected: PASS, unaffected by an additive optional field.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Vol_Suite/suite_context.py shared/schemas.py Vol_Suite/tests/test_context_mode.py
+git add Vol_Suite/suite_context.py Vol_Suite/tests/test_context_mode.py
 git commit -m "feat(vol-suite): add jump_diffusion block to suite_context.json schema"
 ```
 
@@ -1142,19 +1305,31 @@ git commit -m "feat(vol-suite): add jump_diffusion block to suite_context.json s
 
 ## Task 10: Wire into `_run_core_analysis` — `JUMP_MODEL_DEFAULT` config + default-model calibration
 
+> **CARL note (R1-F1, critical):** the original draft of this task placed the jump-diffusion
+> calibration call *after* the existing GARCH block (`artifacts["garch_conditional_vol"] =
+> garch_conditional_vol` at line 1281), which made it structurally impossible for Task 8's
+> `merton_sigma`/`jump_variance_share` kwargs to ever reach `ga.run_garch_module` — the GARCH fit
+> had already run and returned by the time a jump result existed. This revision moves jump
+> calibration *before* the GARCH call and threads its result into it.
+
 **Files:**
-- Modify: `Vol_Suite/volatility_suite.py:948-1300` (`_run_core_analysis`, near the existing GARCH
-  call site at `:1258-1281`)
+- Modify: `Vol_Suite/volatility_suite.py:948-1300` (`_run_core_analysis`) — specifically, the
+  block immediately preceding the existing GARCH call at line 1261
+  (`garch_result = ga.run_garch_module(ticker, output_dir=out_root)`), which this task now also
+  modifies to pass the new kwargs
 - Modify: `Vol_Suite/volatility_suite.py:1644` (the `build_suite_context(...)` call)
 - Test: `Vol_Suite/tests/test_jump_diffusion_default_calibration.py`
 
 **Interfaces:**
 - Consumes: `variance_swap_live.fetch_chain_thetadata(td, ticker, expiration, r, q) -> ChainData`
-  (`variance_swap_live.py:104`), `calibrate` (Task 4), `BatesModel` (Task 3, for
-  `.jump_variance_share(T)`).
+  (`variance_swap_live.py:104`), `calibrate` (Task 4), `BatesModel`/`MertonModel` (Task 3, for
+  `.jump_variance_share(T)`), `garch_analysis.run_garch_module(ticker, output_dir=..., merton_sigma=...,
+  jump_variance_share=...)` (Task 8's new signature).
 - Produces: config value `JUMP_MODEL_DEFAULT` (module-level constant in `volatility_suite.py`,
   reads `os.getenv("JUMP_MODEL_DEFAULT", "Bates")`); `artifacts["jump_diffusion"]` populated with
-  the same shape as Task 9's `jump_diffusion` dict, or `None` on any failure.
+  the same shape as Task 9's `jump_diffusion` dict (now including a `merton_sigma` key used to
+  drive the GARCH tie), or `None` on any failure; the existing `ga.run_garch_module(...)` call
+  site now receives `merton_sigma`/`jump_variance_share` from that result.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1207,15 +1382,18 @@ JUMP_MODEL_DEFAULT = os.getenv("JUMP_MODEL_DEFAULT", "Bates")
 
 def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: float):
     """Calibrate JUMP_MODEL_DEFAULT against the focus ticker's chain at
-    *expiration*. Returns a dict shaped for suite_context.json's
-    jump_diffusion key, or None on any failure -- never raises (matches the
-    GARCH call site's error-swallowing discipline at this same call level).
-    Self-contained: fetches its own spot/rate/dividend/chain data, the same
-    way garch_analysis.run_garch_module fetches its own price history,
-    rather than depending on _run_core_analysis's internal variable soup.
+    *expiration*, plus a cheap Merton fit for the GARCH jump-day filter
+    (Task 7/8's tie 1 wants Merton specifically, independent of whichever
+    model JUMP_MODEL_DEFAULT names -- see the design spec's model guide).
+    Returns a dict shaped for suite_context.json's jump_diffusion key, or
+    None on any failure -- never raises (matches the GARCH call site's
+    error-swallowing discipline at this same call level). Self-contained:
+    fetches its own spot/rate/dividend/chain data, the same way
+    garch_analysis.run_garch_module fetches its own price history, rather
+    than depending on _run_core_analysis's internal variable soup.
     """
     from jump_diffusion.calibration import calibrate
-    from jump_diffusion.models import ALL_MODELS, BatesModel
+    from jump_diffusion.models import ALL_MODELS, BatesModel, MertonModel
     from variance_swap_live import fetch_chain_thetadata
     from thetadata_client import ThetaDataController
 
@@ -1227,28 +1405,57 @@ def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: fl
         q = float(td.fetch_dividend_yield(ticker, spot))
         chain = fetch_chain_thetadata(td, ticker, expiration, r, q)
         result = calibrate(model_cls, chain, spot, target_years)
+
         jump_variance_share = None
         if model_cls is BatesModel:
             jump_variance_share = model_cls.from_array(
                 [result.params[p] for p in model_cls.param_names]
             ).jump_variance_share(target_years)
+
+        if model_cls is MertonModel:
+            merton_sigma = result.params["sigma"]  # already fit, avoid a redundant calibration
+        else:
+            merton_result = calibrate(MertonModel, chain, spot, target_years)
+            merton_sigma = merton_result.params["sigma"]
+
         return {
             "model_name": result.model_name,
             "params": result.params,
             "rmse_iv": result.rmse_iv,
             "jump_variance_share": jump_variance_share,
+            "merton_sigma": merton_sigma,
         }
     except Exception as exc:
         print(f"  [jump_diffusion] {JUMP_MODEL_DEFAULT} calibration failed: {exc}")
         return None
 ```
 
-In `_run_core_analysis`, immediately after the existing GARCH block (`:1258-1281`, right after
-`artifacts["garch_conditional_vol"] = garch_conditional_vol` at line 1281), add:
+In `_run_core_analysis`, the change spans the GARCH block itself (`:1258-1281`) — jump calibration
+must run *before* `ga.run_garch_module(...)` is called (line 1261), not after, so its result can
+be threaded into that same call:
 
 ```python
-    artifacts["jump_diffusion"] = _calibrate_default_jump_model(ticker, expiration, target_years)
+    print("\n[Running] Jump-Diffusion Calibration")
+    jump_diffusion_result = _calibrate_default_jump_model(ticker, expiration, target_years)
+    artifacts["jump_diffusion"] = jump_diffusion_result
+
+    print("\n[Running] GARCH Analysis")
+    garch_conditional_vol = None
+    try:
+        import garch_analysis as ga
+        garch_result = ga.run_garch_module(
+            ticker, output_dir=out_root,
+            merton_sigma=(jump_diffusion_result or {}).get("merton_sigma"),
+            jump_variance_share=(jump_diffusion_result or {}).get("jump_variance_share"),
+        )
+        files, interp, garch_conditional_vol = garch_result
+        # ... rest of the existing GARCH block (:1263-1281) unchanged ...
 ```
+
+(This replaces the existing `garch_result = ga.run_garch_module(ticker, output_dir=out_root)` call
+at line 1261 with the 4-argument version above; everything else in that block — `produced.extend`,
+`sections.append`, the `.error` check, `artifacts["garch_ran"] = True` — stays exactly as it is
+today.)
 
 Then at the `build_suite_context(...)` call site (`:1644`), add:
 
@@ -1263,6 +1470,11 @@ Expected: PASS
 
 Run: `cd Vol_Suite && ..\.venv\Scripts\python.exe -m pytest tests/test_context_mode.py -v`
 Expected: PASS, all pre-existing tests unaffected.
+
+Run: `cd Vol_Suite && ..\.venv\Scripts\python.exe -m pytest tests/test_garch_bridge.py -v`
+Expected: PASS — Task 8's integration tests are unaffected by this task (they exercise
+`garch_analysis.py` directly, not through `_run_core_analysis`), but re-running here confirms
+nothing in this task's edits regressed the GARCH module import path.
 
 - [ ] **Step 5: Commit**
 
@@ -1464,8 +1676,9 @@ git commit -m "feat(vol-suite): add optional model-implied VRP cross-check per t
 ## Task 13: Strategy recommender tie — `jump_risk_signal` biases toward convexity
 
 **Files:**
-- Modify: `Vol_Suite/strategy_recommender.py:43-103` (`StrategyRecommender.__init__`)
-- Modify: `Vol_Suite/strategy_recommender.py:537-576` (`_rank_strategies`)
+- Modify: `Vol_Suite/strategy_recommender.py:65-87` (`StrategyRecommender.__init__`)
+- Modify: `Vol_Suite/strategy_recommender.py:537-581` (`_rank_strategies`, through the
+  `strategy.rank_score = score` assignment that ends the per-strategy loop)
 - Test: `Vol_Suite/tests/test_jump_diffusion_recommender_tie.py`
 
 **Interfaces:**
@@ -1531,16 +1744,35 @@ In `StrategyRecommender.__init__` (`strategy_recommender.py:65-87`), add
 `jump_risk_signal: dict | None = None` to the signature and `self.jump_risk_signal =
 jump_risk_signal` in the body.
 
-In `_rank_strategies` (`strategy_recommender.py:537-576`), after the existing per-regime scoring
-block (the `if self.vol_regime == "RICH": ... elif ...` chain), add:
+In `_rank_strategies` (`strategy_recommender.py:537-581`), after the existing per-regime scoring
+block (the `if self.vol_regime == "RICH": ... elif ...` chain) and before `strategy.rank_score =
+score` (line 581), add:
 
 ```python
             # Jump-risk bias: elevated option-implied jump-variance share
-            # favors convexity (long-gamma) legs regardless of regime --
-            # additive to the regime-driven score above, never a replacement.
-            if self.jump_risk_signal and self.jump_risk_signal.get("jump_variance_share", 0.0) > 0.3:
-                if strategy.strategy_type in ("straddle", "strangle", "reverse_strangle"):
-                    score += abs(strategy.greeks_summary["gamma"]) * 5.0
+            # favors convexity (long-gamma) legs regardless of regime.
+            #
+            # CARL R1-F6: an earlier draft added a flat `abs(gamma) * 5.0`
+            # bonus here -- 3.3-5x the existing regime branches' own gamma
+            # weights (RICH: -1.0, CHEAP: +1.5, FAIR: +1.0, all on the same
+            # `abs(gamma)` term), which would have made the jump signal
+            # dominate/replace the regime-driven score rather than stay
+            # additive to it, contradicting the design spec's explicit
+            # "additive... never a replacement" intent. This version keeps
+            # the same additive `abs(gamma)` term the existing branches
+            # already use, but at 0.3x weight (deliberately below every
+            # existing regime's own gamma coefficient) and scaled further
+            # by jump_share itself, so the bonus is bounded to at most 30%
+            # of one regime-gamma-weight's worth of score, never enough to
+            # invert the regime-driven ranking on its own. A multiplicative
+            # `score *= (1 + ...)` was considered and rejected: RICH-regime
+            # scores are frequently negative (score -= abs(gamma)), and
+            # multiplying a negative score by a factor > 1 makes it *more*
+            # negative -- the opposite of the intended boost.
+            if self.jump_risk_signal and strategy.strategy_type in ("straddle", "strangle", "reverse_strangle"):
+                jump_share = min(self.jump_risk_signal.get("jump_variance_share", 0.0), 1.0)
+                if jump_share > 0.3:
+                    score += abs(strategy.greeks_summary["gamma"]) * 0.3 * jump_share
 
             strategy.rank_score = score
 ```
