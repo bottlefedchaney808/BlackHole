@@ -12,11 +12,10 @@ end-to-end with every network-facing module and stdin stubbed out, and
 asserts each pipeline step actually got invoked with the basket/ticker it
 should have used.
 """
+
 import builtins
-from typing import List
 
 import pytest
-
 import volatility_suite as vsuite
 
 
@@ -26,7 +25,7 @@ class ScriptedInput:
     raising, so a missed/extra prompt fails on an assertion downstream
     rather than on a confusing StopIteration."""
 
-    def __init__(self, answers: List[str]):
+    def __init__(self, answers: list[str]):
         self._answers = iter(answers)
 
     def __call__(self, prompt: str = "") -> str:
@@ -47,11 +46,16 @@ def _install_common_stubs(monkeypatch, calls: dict):
     `vsuite.x`) is what actually takes effect here.
     """
     import thetadata_client
+
     monkeypatch.setattr(thetadata_client, "ThetaDataController", lambda: FakeTD())
 
     import expiry_selector
-    monkeypatch.setattr(expiry_selector, "choose_expiry_interactive",
-                         lambda td, ticker: ("20261218", 0.4))
+
+    monkeypatch.setattr(
+        expiry_selector,
+        "choose_expiry_interactive",
+        lambda td, ticker: ("20261218", 0.4),
+    )
 
     import variance_swap_screener as vss
 
@@ -61,7 +65,6 @@ def _install_common_stubs(monkeypatch, calls: dict):
 
     def fake_screen_ticker(ticker, target_years, expiration=None):
         calls.setdefault("screen_ticker_calls", []).append(ticker)
-        return None
 
     monkeypatch.setattr(vss, "run_variance_screener", fake_run_variance_screener)
     monkeypatch.setattr(vss, "screen_ticker", fake_screen_ticker)
@@ -72,7 +75,9 @@ def _install_common_stubs(monkeypatch, calls: dict):
         individual_betas = {}
         dispersion_score = 0.4
 
-    def fake_run_correlation_engine(tickers, weights=None, market="SPY", period="2y", output_dir=None, save_csv=True):
+    def fake_run_correlation_engine(
+        tickers, weights=None, market="SPY", period="2y", output_dir=None, save_csv=True
+    ):
         calls["correlation_tickers"] = list(tickers)
         calls["correlation_weights"] = list(weights) if weights is not None else None
         calls["correlation_market"] = market
@@ -82,28 +87,47 @@ def _install_common_stubs(monkeypatch, calls: dict):
 
     import variance_swap_live as vsl
 
-    def fake_run_variance_swap_live(ticker, target_years, output_dir=None, expiration=None):
+    def fake_run_variance_swap_live(
+        ticker, target_years, output_dir=None, expiration=None
+    ):
         calls.setdefault("variance_swap_tickers", []).append(ticker)
-        return [], f"{ticker} variance swap", {"fair_variance_swap_strike_vol_pct": 30.0}
+        return (
+            [],
+            f"{ticker} variance swap",
+            {"fair_variance_swap_strike_vol_pct": 30.0},
+        )
 
     monkeypatch.setattr(vsl, "run_variance_swap_live", fake_run_variance_swap_live)
 
     import garch_analysis as ga
-    monkeypatch.setattr(ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31))
 
-    def fake_run_dealer_positioning(ticker, target_years, output_dir=None, save_csv=True, expiration=None, sign_model=None):
+    monkeypatch.setattr(
+        ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31)
+    )
+
+    def fake_run_dealer_positioning(
+        ticker,
+        target_years,
+        output_dir=None,
+        save_csv=True,
+        expiration=None,
+        sign_model=None,
+    ):
         calls["dealer_positioning_sign_model"] = sign_model
         return [], "Dealer positioning done", None
 
-    monkeypatch.setattr(vsuite, "_run_production_dealer_positioning", fake_run_dealer_positioning)
+    monkeypatch.setattr(
+        vsuite, "_run_production_dealer_positioning", fake_run_dealer_positioning
+    )
 
     import options_chain_scanner as ocs
 
     class FakeScanResult:
         verdict = "OK"
 
-    def fake_run_chain_scanner(ticker, target_years, expiration=None, output_dir=None,
-                                dealer_result=None):
+    def fake_run_chain_scanner(
+        ticker, target_years, expiration=None, output_dir=None, dealer_result=None
+    ):
         calls["chain_scanner_called"] = True
         return [], "Chain scan done", FakeScanResult()
 
@@ -157,20 +181,26 @@ def test_unified_flow_runs_the_same_pipeline_as_focus_workflow(monkeypatch, tmp_
     run the full analysis pipeline just like mode 1."""
     calls: dict = {}
     _install_common_stubs(monkeypatch, calls)
-    monkeypatch.setattr(vsuite, "_load_ticker_pack_interactive", lambda: _fake_pack_ctx())
-    monkeypatch.setattr(vsuite, "timestamped_output_dir", lambda base="outputs": str(tmp_path))
+    monkeypatch.setattr(
+        vsuite, "_load_ticker_pack_interactive", lambda: _fake_pack_ctx()
+    )
+    monkeypatch.setattr(
+        vsuite, "timestamped_output_dir", lambda base="outputs": str(tmp_path)
+    )
     monkeypatch.setattr(vsuite, "compose_pdf_report", lambda path, sections: path)
 
-    answers = ScriptedInput([
-        "2",     # input mode: highlighted ticker pack
-        "y",     # run options chain scanner step
-        "call",  # option type (for the suite_context handoff)
-        "",      # strike (keep null)
-        "n",     # run Options_Suite
-        "n",     # run VaR_Tools_Simulations
-        "y",     # compile PDF
-        "y",     # run group screener on the full highlighted pack
-    ])
+    answers = ScriptedInput(
+        [
+            "2",  # input mode: highlighted ticker pack
+            "y",  # run options chain scanner step
+            "call",  # option type (for the suite_context handoff)
+            "",  # strike (keep null)
+            "n",  # run Options_Suite
+            "n",  # run VaR_Tools_Simulations
+            "y",  # compile PDF
+            "y",  # run group screener on the full highlighted pack
+        ]
+    )
     monkeypatch.setattr(builtins, "input", answers)
 
     vsuite.run_unified_flow()
@@ -185,16 +215,22 @@ def test_focus_workflow_reaches_the_same_pipeline_calls(monkeypatch, tmp_path):
     calls, not just each pass independently."""
     calls: dict = {}
     _install_common_stubs(monkeypatch, calls)
-    monkeypatch.setattr(vsuite, "_load_ticker_pack_interactive", lambda: _fake_pack_ctx())
-    monkeypatch.setattr(vsuite, "timestamped_output_dir", lambda base="outputs": str(tmp_path))
+    monkeypatch.setattr(
+        vsuite, "_load_ticker_pack_interactive", lambda: _fake_pack_ctx()
+    )
+    monkeypatch.setattr(
+        vsuite, "timestamped_output_dir", lambda base="outputs": str(tmp_path)
+    )
     monkeypatch.setattr(vsuite, "compose_pdf_report", lambda path, sections: path)
 
-    answers = ScriptedInput([
-        "2",     # input mode: highlighted ticker pack
-        "y",     # run options chain scanner step
-        "y",     # compile outputs into single PDF
-        "y",     # run group screener on the full highlighted pack
-    ])
+    answers = ScriptedInput(
+        [
+            "2",  # input mode: highlighted ticker pack
+            "y",  # run options chain scanner step
+            "y",  # compile outputs into single PDF
+            "y",  # run group screener on the full highlighted pack
+        ]
+    )
     monkeypatch.setattr(builtins, "input", answers)
 
     vsuite.run_focus_workflow()
@@ -229,6 +265,7 @@ def test_garch_failure_is_recorded_in_artifacts_errors(monkeypatch, tmp_path):
     CALLER -- not an exception -- has to leave the machine-readable trace.
     Without this check vol_result.json reported a clean run after a blown fit."""
     import garch_analysis as ga
+
     real_run_garch_module = ga.run_garch_module
 
     calls: dict = {}
@@ -237,14 +274,15 @@ def test_garch_failure_is_recorded_in_artifacts_errors(monkeypatch, tmp_path):
     # put the real wrapper back so its internal failure handling is exercised.
     monkeypatch.setattr(ga, "run_garch_module", real_run_garch_module)
 
-    def _boom(ticker, start=None, end=None):
+    def _boom(ticker, start=None, end=None, merton_sigma=None):
         raise RuntimeError("fit did not converge")
 
     monkeypatch.setattr(ga, "run_garch_analysis", _boom)
     monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
 
     _produced, _sections, artifacts = vsuite._run_core_analysis(
-        **_core_analysis_kwargs(str(tmp_path)))
+        **_core_analysis_kwargs(str(tmp_path))
+    )
 
     assert artifacts["garch_ran"] is False
     assert artifacts["garch_conditional_vol"] is None
@@ -262,13 +300,17 @@ def test_garch_success_with_no_conditional_vol_is_not_an_error(monkeypatch, tmp_
     _install_common_stubs(monkeypatch, calls)
 
     import garch_analysis as ga
+
     monkeypatch.setattr(
-        ga, "run_garch_module",
-        lambda ticker, output_dir=None: ga.GarchModuleResult([], "GARCH done", None))
+        ga,
+        "run_garch_module",
+        lambda ticker, output_dir=None: ga.GarchModuleResult([], "GARCH done", None),
+    )
     monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
 
     _produced, _sections, artifacts = vsuite._run_core_analysis(
-        **_core_analysis_kwargs(str(tmp_path)))
+        **_core_analysis_kwargs(str(tmp_path))
+    )
 
     assert artifacts["garch_ran"] is True
     assert artifacts["garch_conditional_vol"] is None

@@ -28,8 +28,11 @@ class _FakeResult:
 @pytest.mark.unit
 def test_run_garch_module_returns_annualized_conditional_vol(monkeypatch, tmp_path):
     monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(ga, "run_garch_analysis",
-                        lambda ticker, start=None, end=None: _FakeResult())
+    monkeypatch.setattr(
+        ga,
+        "run_garch_analysis",
+        lambda ticker, start=None, end=None, merton_sigma=None: _FakeResult(),
+    )
     files, interp, vol = ga.run_garch_module("AAPL", output_dir=str(tmp_path))
     assert vol == pytest.approx(1.05 / 100.0 * np.sqrt(252.0), rel=1e-9)
     assert "Annualized conditional vol" in interp
@@ -63,8 +66,11 @@ def test_run_garch_module_vol_is_none_when_series_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
     res = _FakeResult()
     res.conditional_volatility = pd.Series(dtype=float)
-    monkeypatch.setattr(ga, "run_garch_analysis",
-                        lambda ticker, start=None, end=None: res)
+    monkeypatch.setattr(
+        ga,
+        "run_garch_analysis",
+        lambda ticker, start=None, end=None, merton_sigma=None: res,
+    )
     result = ga.run_garch_module("AAPL", output_dir=str(tmp_path))
     _files, interp, vol = result
     assert vol is None
