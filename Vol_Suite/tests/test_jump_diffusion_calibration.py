@@ -76,3 +76,61 @@ def test_variance_gamma_calibration_survives_infeasible_log_domain():
 
     assert isinstance(result.rmse_iv, float)
     assert result.model_name == "VarianceGamma"
+
+
+from jump_diffusion.models import BatesModel, HestonModel, KouModel
+
+
+def test_heston_calibration_recovers_known_params():
+    """True params deliberately offset from _DEFAULT_SEEDS['Heston'] on
+    every dimension (kappa/theta/xi/rho/v0 all differ 20-50%) -- a seed
+    planted at (or one param away from) the true answer would let a broken
+    characteristic function pass this test by never having to move. See
+    CARL R1-F4."""
+    S0, T, r, q = 100.0, 0.5, 0.03, 0.0
+    strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
+    true_model = HestonModel(kappa=3.2, theta=0.06, xi=0.9, rho=-0.75, v0=0.05)
+    chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
+    result = calibrate(HestonModel, chain, S0, T)
+    assert result.rmse_iv < 0.01
+
+
+def test_bates_calibration_recovers_known_params():
+    """True params offset from _DEFAULT_SEEDS['Bates'] on every dimension --
+    see the Heston test's docstring; same rationale, 7-param version."""
+    S0, T, r, q = 100.0, 0.5, 0.03, 0.0
+    strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
+    true_model = BatesModel(
+        kappa=3.0,
+        theta=0.06,
+        xi=0.8,
+        rho=-0.7,
+        v0=0.05,
+        lam=0.9,
+        mu_j=-0.09,
+        sigma_j=0.15,
+    )
+    chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
+    result = calibrate(BatesModel, chain, S0, T)
+    assert result.rmse_iv < 0.015  # 7-param fit -- slightly looser tolerance
+
+
+def test_kou_calibration_recovers_known_params():
+    """sigma deliberately offset from _DEFAULT_SEEDS['Kou']['sigma'] (0.18)
+    -- the original draft had sigma matching the seed exactly, which is the
+    same weak-test pattern as Heston/Bates above."""
+    S0, T, r, q = 100.0, 0.5, 0.03, 0.0
+    strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
+    true_model = KouModel(sigma=0.24, lam=0.8, p=0.35, eta1=12.0, eta2=6.0)
+    chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
+    result = calibrate(KouModel, chain, S0, T)
+    assert result.rmse_iv < 0.01
+
+
+def test_vg_calibration_recovers_known_params():
+    S0, T, r, q = 100.0, 0.5, 0.03, 0.0
+    strikes = np.array([80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0])
+    true_model = VarianceGammaModel(sigma=0.19, nu=0.25, theta_vg=-0.12)
+    chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
+    result = calibrate(VarianceGammaModel, chain, S0, T)
+    assert result.rmse_iv < 0.01
