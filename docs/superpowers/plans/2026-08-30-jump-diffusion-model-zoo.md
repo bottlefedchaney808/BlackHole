@@ -1164,11 +1164,23 @@ def run_garch_module(ticker: str, start: str = DEFAULT_START, end: str = None,
     except Exception as e:
         ...  # unchanged
     ...
-    # garch_analysis.py:383-410 -- unchanged through the garch_conditional_vol assignment and
-    # interpretation-text block; insert this immediately before line 410's return:
+    # garch_analysis.py:383-392 -- unchanged (garch_conditional_vol assignment).
+    #
+    # CARL R2-F1: insert the scaling HERE, immediately after line 392's
+    # try/except and BEFORE line 394's "Build interpretation text" block --
+    # not "immediately before the return" as an earlier draft of this step
+    # said. interp_lines (line 406) prints garch_conditional_vol into the
+    # human-readable GARCH report text; inserting the scaling after that
+    # block (as originally drafted) would return the *scaled* value to
+    # callers while the *unscaled* value stays visible in the report text
+    # the dashboard/PDF show, so the number a person reads to sanity-check
+    # the pipeline would silently disagree with the number that actually
+    # reached suite_context.json/VaR.
     if jump_variance_share is not None and garch_conditional_vol is not None:
         from jump_diffusion.garch_bridge import adjust_garch_forecast
         garch_conditional_vol = adjust_garch_forecast(garch_conditional_vol, jump_variance_share)
+    # garch_analysis.py:394-410 -- unchanged: interpretation-text block (now
+    # correctly reads the scaled garch_conditional_vol) through the return.
     return GarchModuleResult(files, interp, garch_conditional_vol)
 ```
 
@@ -1754,17 +1766,20 @@ score` (line 581), add:
             #
             # CARL R1-F6: an earlier draft added a flat `abs(gamma) * 5.0`
             # bonus here -- 3.3-5x the existing regime branches' own gamma
-            # weights (RICH: -1.0, CHEAP: +1.5, FAIR: +1.0, all on the same
-            # `abs(gamma)` term), which would have made the jump signal
-            # dominate/replace the regime-driven score rather than stay
-            # additive to it, contradicting the design spec's explicit
-            # "additive... never a replacement" intent. This version keeps
-            # the same additive `abs(gamma)` term the existing branches
-            # already use, but at 0.3x weight (deliberately below every
-            # existing regime's own gamma coefficient) and scaled further
-            # by jump_share itself, so the bonus is bounded to at most 30%
-            # of one regime-gamma-weight's worth of score, never enough to
-            # invert the regime-driven ranking on its own. A multiplicative
+            # weights (RICH: -abs(gamma)*1.0, CHEAP: +gamma*1.5 [signed, not
+            # abs -- CARL R2-F2 caught an earlier version of this note
+            # wrongly claiming abs() here too], FAIR: +abs(gamma)*1.0),
+            # which would have made the jump signal dominate/replace the
+            # regime-driven score rather than stay additive to it,
+            # contradicting the design spec's explicit "additive... never a
+            # replacement" intent. This version uses `abs(gamma)` (positive
+            # in practice for the long-gamma strategy types this bonus
+            # targets: straddle/strangle/reverse_strangle) at 0.3x weight
+            # (deliberately below every existing regime's own gamma
+            # coefficient) and scaled further by jump_share itself, so the
+            # bonus is bounded to at most 30% of one regime-gamma-weight's
+            # worth of score, never enough to invert the regime-driven
+            # ranking on its own. A multiplicative
             # `score *= (1 + ...)` was considered and rejected: RICH-regime
             # scores are frequently negative (score -= abs(gamma)), and
             # multiplying a negative score by a factor > 1 makes it *more*
