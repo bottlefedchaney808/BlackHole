@@ -518,9 +518,8 @@ def run_garch_module(
     os.makedirs(out_dir, exist_ok=True)
     os.environ["VS_OUTPUT_DIR"] = out_dir
     try:
-        res = run_garch_analysis(
-            ticker, start=start, end=end, merton_sigma=merton_sigma
-        )
+        kwargs = {} if merton_sigma is None else {"merton_sigma": merton_sigma}
+        res = run_garch_analysis(ticker, start=start, end=end, **kwargs)
     except Exception as e:
         print(f"  GARCH module failed: {e}")
         return GarchModuleResult(
@@ -549,11 +548,16 @@ def run_garch_module(
         print(f"  Warning: conditional volatility extraction failed: {e}")
 
     if jump_variance_share is not None and garch_conditional_vol is not None:
-        from jump_diffusion.garch_bridge import adjust_garch_forecast
+        try:
+            from jump_diffusion.garch_bridge import adjust_garch_forecast
 
-        garch_conditional_vol = adjust_garch_forecast(
-            garch_conditional_vol, jump_variance_share
-        )
+            garch_conditional_vol = adjust_garch_forecast(
+                garch_conditional_vol, jump_variance_share
+            )
+        except Exception as e:
+            # Not a module failure -- fall back to the unscaled GARCH vol.
+            # A jump-diffusion calibration bug must never abort a run.
+            print(f"  Warning: jump-variance-share scaling failed: {e}")
 
     # Build interpretation text
     try:

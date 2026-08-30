@@ -274,7 +274,7 @@ def test_garch_failure_is_recorded_in_artifacts_errors(monkeypatch, tmp_path):
     # put the real wrapper back so its internal failure handling is exercised.
     monkeypatch.setattr(ga, "run_garch_module", real_run_garch_module)
 
-    def _boom(ticker, start=None, end=None, merton_sigma=None):
+    def _boom(ticker, start=None, end=None):
         raise RuntimeError("fit did not converge")
 
     monkeypatch.setattr(ga, "run_garch_analysis", _boom)
