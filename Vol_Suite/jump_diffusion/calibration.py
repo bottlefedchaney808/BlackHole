@@ -71,10 +71,12 @@ def calibrate(
     # over the FULL valid strike set below (computed once, not per-iteration,
     # so it isn't the bottleneck).
     if len(strikes) > MAX_CALIB_STRIKES:
-        nearest = np.argsort(np.abs(strikes - spot))[:MAX_CALIB_STRIKES]
-        nearest = np.sort(nearest)
-        calib_strikes, calib_ivs = strikes[nearest], market_ivs[nearest]
+        nearest = np.sort(np.argsort(np.abs(strikes - spot))[:MAX_CALIB_STRIKES])
+        calib_mask = np.zeros(len(strikes), dtype=bool)
+        calib_mask[nearest] = True
+        calib_strikes, calib_ivs = strikes[calib_mask], market_ivs[calib_mask]
     else:
+        calib_mask = np.ones(len(strikes), dtype=bool)
         calib_strikes, calib_ivs = strikes, market_ivs
 
     def objective(x):
@@ -126,7 +128,15 @@ def calibrate(
         )
     fitted_ivs = np.array(fitted_ivs)
 
-    rmse = float(np.sqrt(np.nanmean((fitted_ivs - market_ivs) ** 2)))
+    # rmse_iv reflects fit quality over the strikes Nelder-Mead actually saw
+    # (calib_mask), not the full reported smile -- on a wide live chain the
+    # wings well outside MAX_CALIB_STRIKES are extrapolation, not fit, and
+    # folding their (often much larger) error into rmse_iv would understate
+    # how good the near-the-money fit itself is. fitted_ivs/market_ivs/
+    # strikes below still cover the full valid smile for plotting/reporting.
+    rmse = float(
+        np.sqrt(np.nanmean((fitted_ivs[calib_mask] - market_ivs[calib_mask]) ** 2))
+    )
 
     return CalibrationResult(
         model_name=model_cls.name,
