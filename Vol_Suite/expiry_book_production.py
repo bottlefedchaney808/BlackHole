@@ -50,7 +50,7 @@ def _theta_strike_to_dollars(strike: float) -> float:
 def normalize_snapshot_rows(raw_rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     if not raw_rows:
         raise ExpiryBookUnavailable("empty option snapshot")
-    normalized: list[dict[str, Any]] = []
+    parsed: list[dict[str, Any]] = []
     for raw in raw_rows:
         strike = _theta_strike_to_dollars(
             _number(raw, ("strike", "strike_price"), "strike")
@@ -62,14 +62,33 @@ def normalize_snapshot_rows(raw_rows: list[Mapping[str, Any]]) -> list[dict[str,
         iv = _number(
             raw, ("implied_vol", "impliedVol", "iv", "IV"), "implied volatility"
         )
-        # Vendor leaves implied_vol=0 / greeks=0 on unsolved deep-ITM legs
-        # (WMT 20261120: 5/54 rows). That is not a missing field — drop the
-        # unusable row instead of aborting the whole book.
-        if strike <= 0 or oi < 0 or iv <= 0:
+        if strike <= 0 or oi < 0:
             continue
-        normalized.append(
-            {"strike": strike, "right": right, "oi": oi, "implied_vol": iv}
-        )
+        parsed.append({"strike": strike, "right": right, "oi": oi, "implied_vol": iv})
+
+    # Put-call parity fallback. Vendor leaves implied_vol=0 / greeks=0 on
+    # unsolved deep-ITM legs (WMT 20261120: 5/54 rows; confirmed live on SPY
+    # 20260918: 124/642 rows, 100% ITM, several with thousands of contracts
+    # of real OI). That is not missing open interest -- it's the vendor
+    # failing to numerically solve IV for a leg with too little extrinsic
+    # value. The opposite-right leg at the same strike/expiry is almost
+    # always solved (it's the correspondingly OTM side, which stays
+    # liquidly quoted), and put-call parity says both sides should carry
+    # essentially the same IV, so mirror the solved side onto the unsolved
+    # one instead of dropping a real-OI strike from the book.
+    solved_iv_by_strike: dict[float, float] = {}
+    for row in parsed:
+        if row["implied_vol"] > 0:
+            solved_iv_by_strike.setdefault(row["strike"], row["implied_vol"])
+    for row in parsed:
+        if row["implied_vol"] <= 0:
+            mirrored = solved_iv_by_strike.get(row["strike"])
+            if mirrored is not None:
+                row["implied_vol"] = mirrored
+
+    # Only drop a strike/right when neither side solved -- truly no usable
+    # data, not a resolvable vendor gap.
+    normalized = [row for row in parsed if row["implied_vol"] > 0]
     if not normalized:
         raise ExpiryBookUnavailable("snapshot has no usable option rows")
     return normalized
