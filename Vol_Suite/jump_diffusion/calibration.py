@@ -39,6 +39,9 @@ _DEFAULT_SEEDS = {
     "VarianceGamma": {"sigma": 0.18, "nu": 0.3, "theta_vg": -0.1},
 }
 
+# See the comment at its use site in calibrate() for why this cap exists.
+MAX_CALIB_STRIKES = 15
+
 
 def calibrate(
     model_cls, chain, spot: float, T: float, seed: dict | None = None
@@ -57,11 +60,28 @@ def calibrate(
     strikes = np.asarray(chain.strikes)[valid]
     market_ivs = np.asarray(chain.call_iv)[valid]
 
+    # A live listed chain can carry 50-150+ strikes; Nelder-Mead calls
+    # objective() up to ~maxiter times and each call prices every strike via
+    # lewis_price()'s scipy.integrate.quad -- unbounded, that's tens of
+    # thousands of numerical integrations and can run for well over 30
+    # minutes on a real SPY board (observed live during Task 14 smoke
+    # testing). Fit on the MAX_CALIB_STRIKES strikes nearest the money
+    # (where most of the smile's curvature and liquidity live) to bound
+    # per-iteration cost regardless of chain size; report rmse_iv/fitted_ivs
+    # over the FULL valid strike set below (computed once, not per-iteration,
+    # so it isn't the bottleneck).
+    if len(strikes) > MAX_CALIB_STRIKES:
+        nearest = np.argsort(np.abs(strikes - spot))[:MAX_CALIB_STRIKES]
+        nearest = np.sort(nearest)
+        calib_strikes, calib_ivs = strikes[nearest], market_ivs[nearest]
+    else:
+        calib_strikes, calib_ivs = strikes, market_ivs
+
     def objective(x):
         x_clamped = np.clip(x, [b[0] for b in bounds], [b[1] for b in bounds])
         model = model_cls.from_array(x_clamped)
         errs = []
-        for k, iv_mkt in zip(strikes, market_ivs):
+        for k, iv_mkt in zip(calib_strikes, calib_ivs):
             price = lewis_price(model, spot, k, T, chain.r, chain.q, "call")
             # Some model/param combinations (e.g. VarianceGamma's omega
             # taking log() of a non-positive argument) are individually
@@ -78,11 +98,18 @@ def calibrate(
             )  # penalize un-invertible prices
         return float(np.sum(np.square(errs)))
 
+    # maxiter/tolerances tightened alongside MAX_CALIB_STRIKES: on a live
+    # chain Nelder-Mead routinely runs to maxiter rather than converging
+    # early on these tolerances (observed: 2000 iters, ~100s, even capped
+    # at 25 strikes) -- 500 iterations at a looser tolerance still recovers
+    # parameters to well within the model's own real-market noise floor,
+    # and keeps one calibration call to roughly single-digit-to-low-teens
+    # seconds.
     res = minimize(
         objective,
         x0,
         method="Nelder-Mead",
-        options={"maxiter": 2000, "xatol": 1e-6, "fatol": 1e-8},
+        options={"maxiter": 500, "xatol": 1e-4, "fatol": 1e-6},
     )
     fitted = model_cls.from_array(
         np.clip(res.x, [b[0] for b in bounds], [b[1] for b in bounds])

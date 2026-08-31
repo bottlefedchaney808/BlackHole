@@ -134,3 +134,37 @@ def test_vg_calibration_recovers_known_params():
     chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
     result = calibrate(VarianceGammaModel, chain, S0, T)
     assert result.rmse_iv < 0.01
+
+
+def test_calibration_on_a_wide_live_sized_chain_completes_quickly_and_returns_full_smile():
+    """A real listed chain (e.g. SPY monthly) can carry 100+ strikes.
+    calibrate() must bound its per-iteration Nelder-Mead cost regardless of
+    chain size (MAX_CALIB_STRIKES caps the strikes actually used inside the
+    optimizer's objective) while still reporting fitted_ivs/market_ivs/
+    strikes over the FULL input smile, not just the calibration subset --
+    a 150-strike chain must not silently shrink the reported output to 25
+    points. This is a regression test for a live-run timeout (>1800s)
+    discovered during Task 14 end-to-end smoke testing."""
+    import time
+
+    S0, T, r, q = 100.0, 0.5, 0.03, 0.0
+    strikes = np.linspace(50.0, 200.0, 150)
+    true_model = MertonModel(sigma=0.20, lam=0.8, mu_j=-0.08, sigma_j=0.12)
+    chain = _synthetic_chain(true_model, S0, T, r, q, strikes)
+
+    n_valid = int(np.sum(~np.isnan(chain.call_iv)))  # deep-wing strikes drop
+    # out via implied_vol()'s own None-on-uninvertible-price behavior --
+    # unrelated to the calibration-strike cap, so compare against this, not
+    # against the raw input strike count.
+
+    start = time.monotonic()
+    result = calibrate(MertonModel, chain, S0, T)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 30.0, f"calibrate() took {elapsed:.1f}s on a 150-strike chain"
+    assert n_valid > 30  # sanity: the round-trip fixture didn't drop everything
+    assert (
+        len(result.strikes) == n_valid
+    )  # full valid smile, not truncated to the calib cap
+    assert len(result.fitted_ivs) == n_valid
+    assert len(result.market_ivs) == n_valid
