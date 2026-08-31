@@ -69,9 +69,11 @@ class StrategyRecommender:
         vol_regime: str,
         current_price: float,
         expiry_days: float,
+        jump_risk_signal: dict | None = None,
     ):
         self.chain_data = chain_data
         self.edge_strikes = edge_strikes
+        self.jump_risk_signal = jump_risk_signal
         normalized_regime = (
             vol_regime.strip().upper() if isinstance(vol_regime, str) else vol_regime
         )
@@ -577,6 +579,40 @@ class StrategyRecommender:
             else:
                 score += abs(strategy.greeks_summary["gamma"])
                 score -= abs(strategy.greeks_summary["theta"])
+
+            # Jump-risk bias: elevated option-implied jump-variance share
+            # favors convexity (long-gamma) legs regardless of regime.
+            #
+            # CARL R1-F6: an earlier draft added a flat `abs(gamma) * 5.0`
+            # bonus here -- 3.3-5x the existing regime branches' own gamma
+            # weights (RICH: -abs(gamma)*1.0, CHEAP: +gamma*1.5 [signed, not
+            # abs -- CARL R2-F2 caught an earlier version of this note
+            # wrongly claiming abs() here too], FAIR: +abs(gamma)*1.0),
+            # which would have made the jump signal dominate/replace the
+            # regime-driven score rather than stay additive to it,
+            # contradicting the design spec's explicit "additive... never a
+            # replacement" intent. This version uses `abs(gamma)` (positive
+            # in practice for the long-gamma strategy types this bonus
+            # targets: straddle/strangle/reverse_strangle) at 0.3x weight
+            # (deliberately below every existing regime's own gamma
+            # coefficient) and scaled further by jump_share itself, so the
+            # bonus is bounded to at most 30% of one regime-gamma-weight's
+            # worth of score, never enough to invert the regime-driven
+            # ranking on its own. A multiplicative
+            # `score *= (1 + ...)` was considered and rejected: RICH-regime
+            # scores are frequently negative (score -= abs(gamma)), and
+            # multiplying a negative score by a factor > 1 makes it *more*
+            # negative -- the opposite of the intended boost.
+            if self.jump_risk_signal and strategy.strategy_type in (
+                "straddle",
+                "strangle",
+                "reverse_strangle",
+            ):
+                jump_share = min(
+                    self.jump_risk_signal.get("jump_variance_share", 0.0), 1.0
+                )
+                if jump_share > 0.3:
+                    score += abs(strategy.greeks_summary["gamma"]) * 0.3 * jump_share
 
             strategy.rank_score = score
 
