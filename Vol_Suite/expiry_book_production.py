@@ -109,6 +109,7 @@ class ProductionDealerExposure:
     flow_provenance: str = "quotes_missing"
     prior_spot: float | None = None
     prior_asof: str | None = None
+    jump_variance_share: float | None = None
 
 
 def _trades_to_quote_rows(trades, expiry: str) -> list:
@@ -199,7 +200,10 @@ def _bucket(dte: int) -> str | None:
 
 
 def fetch_production_result(
-    td: Any, ticker: str, expiry: str
+    td: Any,
+    ticker: str,
+    expiry: str,
+    jump_variance_share: float | None = None,
 ) -> ProductionDealerExposure:
     """Fetch the primary expiry plus near/mid/far books when listed."""
     try:
@@ -385,6 +389,7 @@ def fetch_production_result(
     )
     result.provenance["dividend_yield_q"] = f"{float(q):.6f}"
     result.provenance["q_source"] = q_source
+    result.jump_variance_share = jump_variance_share
     return result
 
 
