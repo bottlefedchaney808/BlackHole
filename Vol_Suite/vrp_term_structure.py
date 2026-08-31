@@ -60,6 +60,9 @@ class VrpTermPoint:
     atm_iv_pct: float  # ATM implied volatility (%)
     vrp_pct: float  # VRP = fair_vol_pct - atm_iv_pct
     rv_30d_pct: float  # trailing 30-day realized vol (%), annualized
+    model_implied_vrp_pct: float | None = (
+        None  # cross-check against fair_vol_pct via a jump-diffusion model
+    )
 
 
 @dataclass
@@ -120,6 +123,7 @@ def compute_vrp_term_structure(
     spot: float,
     r: float,
     q: float,
+    jump_model_cls=None,
 ) -> VrpTermStructureResult:
     """Compute the VRP term structure for *ticker* across multiple tenors.
 
@@ -169,6 +173,22 @@ def compute_vrp_term_structure(
             atm_iv_pct = result["atm_implied_vol_pct"]
             vrp = fair_vol_pct - atm_iv_pct  # convexity premium = VRP at this tenor
 
+            model_implied_vrp_pct = None
+            if jump_model_cls is not None:
+                try:
+                    from jump_diffusion.calibration import calibrate
+
+                    jd_result = calibrate(jump_model_cls, chain, spot, actual_T)
+                    # ATM fitted IV is the model's own read on the ATM point --
+                    # closest strike to spot in the calibrated chain.
+                    atm_idx = int(np.argmin(np.abs(jd_result.strikes - spot)))
+                    model_iv_pct = float(jd_result.fitted_ivs[atm_idx]) * 100
+                    model_implied_vrp_pct = model_iv_pct - atm_iv_pct
+                except Exception as exc:
+                    print(
+                        f"  [jump_diffusion] VRP tie calibration failed for {label}: {exc}"
+                    )
+
             # 4) Trailing 30-day realized vol
             rv_val = (
                 compute_realized_vol(prices, min(30, len(prices)))
@@ -186,6 +206,7 @@ def compute_vrp_term_structure(
                     atm_iv_pct=atm_iv_pct,
                     vrp_pct=vrp,
                     rv_30d_pct=rv_val_pct,
+                    model_implied_vrp_pct=model_implied_vrp_pct,
                 )
             )
         except Exception:
