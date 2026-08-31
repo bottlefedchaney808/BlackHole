@@ -194,6 +194,14 @@ summary.
   7d vendor-ΔIV vanna flow stays adjacent, never summed with inventory. Contracts:
   `Vol_Suite/docs/LIVE_expiry_book_20260821.md` (charts), `LIVE_expiry_book_20260820.md` (scalars).
   Vanna convention: `expiry_book_exposure.py::dealer_frame_vanna`.
+  **ITM-leg coverage (fixed 2026-08-31):** `expiry_book_production.py::normalize_snapshot_rows`
+  used to silently drop any strike where the vendor left `implied_vol=0` (can't numerically solve
+  IV for legs with little extrinsic value) — confirmed live on SPY: 124/642 rows (19%), 100% ITM,
+  several with thousands of contracts of real OI, which made GEX/VEX/CEX (and the surface
+  explorer, which shares this same row-fetch via `surface_grids.py::_fetch_expiry_rows`) look like
+  it cut off artificially right at spot instead of decaying across the whole chain. Now mirrors the
+  opposite-right leg's solved IV at the same strike (put-call parity) before dropping a row; only
+  drops when neither side solved.
 - **VaR_Tools_Simulations** — a Python port of a legacy Excel VaR toolkit (`VaRtools Samples.xls` is
   the source spec), one `var_engine/` module per original sheet: `corr_sim.py` (correlated GBM Monte
   Carlo), `mc_sim.py`, `hist_sim.py` (basic/Hull-White/FHS-GARCH), `copulas.py` (Gaussian/Student-T/
