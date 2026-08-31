@@ -185,7 +185,13 @@ def _install_stubs(
     import garch_analysis as ga
 
     monkeypatch.setattr(
-        ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31)
+        ga,
+        "run_garch_module",
+        lambda ticker, output_dir=None, merton_sigma=None, jump_variance_share=None: (
+            [],
+            "GARCH done",
+            0.31,
+        ),
     )
 
     import variance_swap_screener as vss
@@ -207,9 +213,11 @@ def _install_stubs(
         save_csv=True,
         expiration=None,
         sign_model=None,
+        jump_variance_share=None,
     ):
         calls["dealer_positioning_sign_model"] = sign_model
         calls["dealer_positioning_expiration"] = expiration
+        calls["dealer_positioning_jump_variance_share"] = jump_variance_share
         csv_path = os.path.join(
             output_dir or ".", f"{ticker}_gamma_records_20261218_000000.csv"
         )
@@ -221,7 +229,14 @@ def _install_stubs(
 
     import options_chain_scanner as ocs
 
-    def fake_run_chain_scanner(ticker, target_years, expiration=None, output_dir=None):
+    def fake_run_chain_scanner(
+        ticker,
+        target_years,
+        expiration=None,
+        output_dir=None,
+        dealer_result=None,
+        jump_risk_signal=None,
+    ):
         calls["chain_scanner_called"] = True
         raise AssertionError("chain scanner must be opt-in in context mode")
 
@@ -233,8 +248,9 @@ def _install_stubs(
     # an error into artifacts["errors"] for unrelated tests).
     import vrp_term_structure as vts
 
-    def fake_compute_vrp(ticker, td, spot, r, q):
+    def fake_compute_vrp(ticker, td, spot, r, q, jump_model_cls=None):
         calls["vrp_args"] = (ticker, spot, r, q)
+        calls["vrp_jump_model_cls"] = jump_model_cls
         return vts.VrpTermStructureResult(
             ticker=ticker,
             timestamp="2026-08-12T00:00:00Z",

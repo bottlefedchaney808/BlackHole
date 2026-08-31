@@ -578,7 +578,12 @@ def _prompt_sign_model_and_options_chain(pack_ctx: dict | None) -> tuple[str, bo
 
 
 def _run_production_dealer_positioning(
-    ticker: str, target_years: float, output_dir: str, expiration: str, sign_model: str
+    ticker: str,
+    target_years: float,
+    output_dir: str,
+    expiration: str,
+    sign_model: str,
+    jump_variance_share: float | None = None,
 ):
     """Run the authoritative expiry-book engine for the production suite."""
     from dealer_positioning import (
@@ -590,7 +595,9 @@ def _run_production_dealer_positioning(
 
     td = ThetaDataController()
     try:
-        result = fetch_production_result(td, ticker, expiration)
+        result = fetch_production_result(
+            td, ticker, expiration, jump_variance_share=jump_variance_share
+        )
     finally:
         td.close()
     interp = format_production_interp(result)
@@ -1610,15 +1617,24 @@ def _run_core_analysis(
         print("\n[Running] VRP Term Structure (1-12mo)")
         try:
             import vrp_term_structure as vts
+            from jump_diffusion.models import ALL_MODELS, BatesModel
             from thetadata_client import ThetaDataController
 
+            vrp_jump_model_cls = next(
+                (m for m in ALL_MODELS if m.name == JUMP_MODEL_DEFAULT), BatesModel
+            )
             td_vrp = ThetaDataController()
             try:
                 vrp_spot = td_vrp.fetch_spot_price(ticker)
                 vrp_q = td_vrp.fetch_dividend_yield(ticker)
                 vrp_r = td_vrp.fetch_risk_free_rate(0.25) or 0.05
                 vrp_result = vts.compute_vrp_term_structure(
-                    ticker, td_vrp, vrp_spot, vrp_r, vrp_q
+                    ticker,
+                    td_vrp,
+                    vrp_spot,
+                    vrp_r,
+                    vrp_q,
+                    jump_model_cls=vrp_jump_model_cls,
                 )
             finally:
                 td_vrp.close()
@@ -1728,6 +1744,9 @@ def _run_core_analysis(
             output_dir=out_root,
             expiration=expiration,
             sign_model=sign_model,
+            jump_variance_share=(jump_diffusion_result or {}).get(
+                "jump_variance_share"
+            ),
         )
         produced.extend(files)
         sections.append(
@@ -1836,6 +1855,22 @@ def _run_core_analysis(
                 expiration=expiration,
                 output_dir=out_root,
                 dealer_result=dp_result,
+                jump_risk_signal=(
+                    # jump_variance_share is only populated when
+                    # JUMP_MODEL_DEFAULT is Bates (see
+                    # _calibrate_default_jump_model); None otherwise, and
+                    # StrategyRecommender's bonus math assumes a numeric
+                    # jump_variance_share when a signal dict is passed at
+                    # all, so omit the signal entirely rather than pass None.
+                    {
+                        "jump_variance_share": jump_diffusion_result[
+                            "jump_variance_share"
+                        ]
+                    }
+                    if (jump_diffusion_result or {}).get("jump_variance_share")
+                    is not None
+                    else None
+                ),
             )
             produced.extend(files)
             sections.append(

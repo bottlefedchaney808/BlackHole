@@ -1085,6 +1085,7 @@ def run_chain_scanner(
     expiration: str | None = None,
     output_dir: str | None = None,
     dealer_result=None,
+    jump_risk_signal: dict | None = None,
 ) -> tuple:
     """Programmatic, non-interactive runner (mirrors run_variance_swap_live /
     screen_ticker / run_dealer_positioning conventions) for volatility_suite.py.
@@ -1143,6 +1144,7 @@ def run_chain_scanner(
                     datetime.strptime(result.expiry, "%Y%m%d").date()
                     - datetime.now(UTC).date()
                 ).days,
+                jump_risk_signal=jump_risk_signal,
             )
 
             strategies = recommender.recommend()

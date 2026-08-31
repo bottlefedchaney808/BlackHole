@@ -102,7 +102,13 @@ def _install_common_stubs(monkeypatch, calls: dict):
     import garch_analysis as ga
 
     monkeypatch.setattr(
-        ga, "run_garch_module", lambda ticker, output_dir=None: ([], "GARCH done", 0.31)
+        ga,
+        "run_garch_module",
+        lambda ticker, output_dir=None, merton_sigma=None, jump_variance_share=None: (
+            [],
+            "GARCH done",
+            0.31,
+        ),
     )
 
     def fake_run_dealer_positioning(
@@ -112,6 +118,7 @@ def _install_common_stubs(monkeypatch, calls: dict):
         save_csv=True,
         expiration=None,
         sign_model=None,
+        jump_variance_share=None,
     ):
         calls["dealer_positioning_sign_model"] = sign_model
         return [], "Dealer positioning done", None
@@ -126,7 +133,12 @@ def _install_common_stubs(monkeypatch, calls: dict):
         verdict = "OK"
 
     def fake_run_chain_scanner(
-        ticker, target_years, expiration=None, output_dir=None, dealer_result=None
+        ticker,
+        target_years,
+        expiration=None,
+        output_dir=None,
+        dealer_result=None,
+        jump_risk_signal=None,
     ):
         calls["chain_scanner_called"] = True
         return [], "Chain scan done", FakeScanResult()
