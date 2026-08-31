@@ -3,22 +3,22 @@
 # Variance swap calculator using ThetaData (via api.potatohedge.com) for live data.
 
 import math
-import warnings
 import os
-from datetime import datetime, timezone
+import warnings
 from dataclasses import dataclass
-from typing import Tuple, List
+from datetime import datetime
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+
+matplotlib.use("Agg")
 import textwrap
 
-from thetadata_client import ThetaDataController, strike_to_theta, strike_from_theta
-from correlation_engine import fetch_price_history
 import expiry_selector
+import matplotlib.pyplot as plt
+from correlation_engine import fetch_price_history
+from thetadata_client import ThetaDataController, strike_from_theta
 from vs_utils import timestamped_output_dir
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
@@ -69,7 +69,9 @@ def compute_vega_notional(base_notional: float = 100_000.0) -> float:
     return base_notional
 
 
-def compute_variance_notional(vega_notional: float, strike_vol: float | None) -> float | None:
+def compute_variance_notional(
+    vega_notional: float, strike_vol: float | None
+) -> float | None:
     """N_var = N_vol / (2 * sigma_strike). Returns None -- never a fabricated
     number -- when the fair strike vol isn't a usable positive value.
 
@@ -93,7 +95,9 @@ def _deltaK_half_widths(K: np.ndarray) -> np.ndarray:
     return dK
 
 
-def find_nearest_expiry_thetadata(td, ticker: str, target_years: float) -> Tuple[str, float]:
+def find_nearest_expiry_thetadata(
+    td, ticker: str, target_years: float
+) -> tuple[str, float]:
     """Kept as a thin wrapper (same name/signature) so nothing else importing
     this needs to change -- the actual lookup now lives in expiry_selector.py,
     shared with variance_swap_screener.py and dealer_positioning.py so all
@@ -101,7 +105,9 @@ def find_nearest_expiry_thetadata(td, ticker: str, target_years: float) -> Tuple
     return expiry_selector.nearest_expiry(td, ticker, target_years)
 
 
-def fetch_chain_thetadata(td, ticker: str, expiration: str, r: float, q: float) -> ChainData:
+def fetch_chain_thetadata(
+    td, ticker: str, expiration: str, r: float, q: float
+) -> ChainData:
     strikes = td.list_strikes(ticker, expiration)
     if not strikes:
         raise ValueError(f"No strikes found for {ticker} {expiration}")
@@ -115,19 +121,23 @@ def fetch_chain_thetadata(td, ticker: str, expiration: str, r: float, q: float) 
 
     for row in greeks:
         # ThetaData returns strikes in cents (multiplied by 1000) — convert to dollars
-        k = strike_from_theta(int(float(row['strike'])))
-        right = row.get('right', '')
-        bid = _to_float(row.get('bid'))
-        ask = _to_float(row.get('ask'))
-        iv = _to_float(row.get('implied_vol'))
-        mid = (bid + ask) / 2.0 if (not math.isnan(bid) and not math.isnan(ask) and bid > 0 and ask > 0) else 0.0
+        k = strike_from_theta(int(float(row["strike"])))
+        right = row.get("right", "")
+        bid = _to_float(row.get("bid"))
+        ask = _to_float(row.get("ask"))
+        iv = _to_float(row.get("implied_vol"))
+        mid = (
+            (bid + ask) / 2.0
+            if (not math.isnan(bid) and not math.isnan(ask) and bid > 0 and ask > 0)
+            else 0.0
+        )
         if mid == 0.0:
-            last = _to_float(row.get('last'))
+            last = _to_float(row.get("last"))
             mid = last if not math.isnan(last) else 0.0
-        if right == 'C':
+        if right == "C":
             call_map[k] = mid
             call_iv_map[k] = iv
-        elif right == 'P':
+        elif right == "P":
             put_map[k] = mid
             put_iv_map[k] = iv
 
@@ -138,16 +148,23 @@ def fetch_chain_thetadata(td, ticker: str, expiration: str, r: float, q: float) 
     call_iv = np.array([call_iv_map.get(k, np.nan) for k in K_grid])
     put_iv = np.array([put_iv_map.get(k, np.nan) for k in K_grid])
 
-    return ChainData(expiry=expiration, strikes=K_grid, call_mid=call_mid, put_mid=put_mid,
-                     r=r, q=q, call_iv=call_iv, put_iv=put_iv)
+    return ChainData(
+        expiry=expiration,
+        strikes=K_grid,
+        call_mid=call_mid,
+        put_mid=put_mid,
+        r=r,
+        q=q,
+        call_iv=call_iv,
+        put_iv=put_iv,
+    )
 
 
 def compute_realized_vol(prices: np.ndarray, lookback_days: int = 60) -> float:
     prices = np.asarray(prices).flatten()
     if len(prices) < 3:
         return np.nan
-    if len(prices) < lookback_days:
-        lookback_days = len(prices)
+    lookback_days = min(lookback_days, len(prices))
     prices = prices[-lookback_days:]
     log_returns = np.diff(np.log(prices))
     if len(log_returns) < 2:
@@ -165,7 +182,7 @@ def compute_fair_variance_strike(chain: ChainData, S0: float, T_years: float) ->
     if len(K) < 5:
         raise ValueError(f"Too few strikes ({len(K)}).")
     dK = _deltaK_half_widths(K)
-    weights = dK / (K ** 2)
+    weights = dK / (K**2)
     weighted_sum = np.sum(weights * OTM2)
     # Demeterfi-Derman-Kamal-Zou (1999) discrete fair-variance strike:
     #   sigma^2 = (2/T) e^{rT} Sum_i (dK_i/K_i^2) Q(K_i)  -  (1/T)(F/K0 - 1)^2
@@ -200,7 +217,8 @@ def compute_fair_variance_strike(chain: ChainData, S0: float, T_years: float) ->
         "S0": S0,
         "F": F,
         "T_years": T_years,
-        "r": chain.r, "q": chain.q,
+        "r": chain.r,
+        "q": chain.q,
         "fair_variance_annualized": fair_variance,
         "fair_variance_swap_strike_vol": fair_vol,
         "fair_variance_swap_strike_vol_pct": 100.0 * fair_vol,
@@ -209,16 +227,34 @@ def compute_fair_variance_strike(chain: ChainData, S0: float, T_years: float) ->
         "atm_implied_vol_pct": 100.0 * atm_iv,
         "convexity_premium_vol_pct": 100.0 * convexity_premium,
         "num_strikes_used": len(K),
-        "K_min": float(K.min()), "K_max": float(K.max()),
+        "K_min": float(K.min()),
+        "K_max": float(K.max()),
         "strike_table": {
-            "strikes": K, "deltaK": dK, "weights": weights,
-            "otm_prices": OTM2, "contributions": contributions,
-            "call_iv": call_iv_plot, "put_iv": put_iv_plot
-        }
+            "strikes": K,
+            "deltaK": dK,
+            "weights": weights,
+            "otm_prices": OTM2,
+            "contributions": contributions,
+            "call_iv": call_iv_plot,
+            "put_iv": put_iv_plot,
+        },
     }
 
 
-def generate_plots(result, chain, S0, F, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback, interpretation: str = None) -> str:
+def generate_plots(
+    result,
+    chain,
+    S0,
+    F,
+    ticker,
+    expiration,
+    rv_30,
+    rv_60,
+    rv_90,
+    rv_match,
+    match_lookback,
+    interpretation: str = None,
+) -> str:
     t = result["strike_table"]
     K = t["strikes"]
     contrib = t["contributions"]
@@ -229,47 +265,101 @@ def generate_plots(result, chain, S0, F, ticker, expiration, rv_30, rv_60, rv_90
     atm_iv_pct = result["atm_implied_vol_pct"]
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(f"{ticker} Variance Swap Analysis -- Expiry {expiration} (ThetaData)", fontsize=16, fontweight='bold')
+    fig.suptitle(
+        f"{ticker} Variance Swap Analysis -- Expiry {expiration} (ThetaData)",
+        fontsize=16,
+        fontweight="bold",
+    )
 
     ax1 = axes[0, 0]
-    ax1.bar(K, otm, width=np.diff(K, append=K[-1]+1)*0.8, color='steelblue', alpha=0.7)
-    ax1.axvline(x=F, color='red', linestyle='--', linewidth=1.5, label=f'F = {F:.2f}')
-    ax1.set_xlabel("Strike"); ax1.set_ylabel("Option Mid Price ($)")
+    ax1.bar(
+        K, otm, width=np.diff(K, append=K[-1] + 1) * 0.8, color="steelblue", alpha=0.7
+    )
+    ax1.axvline(x=F, color="red", linestyle="--", linewidth=1.5, label=f"F = {F:.2f}")
+    ax1.set_xlabel("Strike")
+    ax1.set_ylabel("Option Mid Price ($)")
     ax1.set_title("OTM Option Prices Used in Replication")
-    ax1.legend(); ax1.grid(axis='y', alpha=0.3)
+    ax1.legend()
+    ax1.grid(axis="y", alpha=0.3)
 
     ax2 = axes[0, 1]
-    colors = ['#e74c3c' if k <= F else '#2ecc71' for k in K]
-    ax2.bar(K, contrib, width=np.diff(K, append=K[-1]+1)*0.8, color=colors, alpha=0.7)
-    ax2.axvline(x=F, color='red', linestyle='--', linewidth=1.5, label=f'F = {F:.2f}')
-    ax2.set_xlabel("Strike"); ax2.set_ylabel("Contribution")
+    colors = ["#e74c3c" if k <= F else "#2ecc71" for k in K]
+    ax2.bar(
+        K, contrib, width=np.diff(K, append=K[-1] + 1) * 0.8, color=colors, alpha=0.7
+    )
+    ax2.axvline(x=F, color="red", linestyle="--", linewidth=1.5, label=f"F = {F:.2f}")
+    ax2.set_xlabel("Strike")
+    ax2.set_ylabel("Contribution")
     ax2.set_title("Replication Weights by Strike")
-    ax2.legend(); ax2.grid(axis='y', alpha=0.3)
+    ax2.legend()
+    ax2.grid(axis="y", alpha=0.3)
 
     ax3 = axes[1, 0]
-    ax3.scatter(K[~np.isnan(put_iv)], put_iv[~np.isnan(put_iv)]*100, color='red', label='Put IV', s=40, alpha=0.7)
-    ax3.scatter(K[~np.isnan(call_iv)], call_iv[~np.isnan(call_iv)]*100, color='green', label='Call IV', s=40, alpha=0.7)
-    ax3.axhline(y=fair_vol_pct, color='blue', linewidth=2, label=f'Fair Vol = {fair_vol_pct:.2f}%')
+    ax3.scatter(
+        K[~np.isnan(put_iv)],
+        put_iv[~np.isnan(put_iv)] * 100,
+        color="red",
+        label="Put IV",
+        s=40,
+        alpha=0.7,
+    )
+    ax3.scatter(
+        K[~np.isnan(call_iv)],
+        call_iv[~np.isnan(call_iv)] * 100,
+        color="green",
+        label="Call IV",
+        s=40,
+        alpha=0.7,
+    )
+    ax3.axhline(
+        y=fair_vol_pct,
+        color="blue",
+        linewidth=2,
+        label=f"Fair Vol = {fair_vol_pct:.2f}%",
+    )
     if not math.isnan(atm_iv_pct):
-        ax3.axhline(y=atm_iv_pct, color='orange', linestyle='--', linewidth=1.5, label=f'ATM IV = {atm_iv_pct:.2f}%')
+        ax3.axhline(
+            y=atm_iv_pct,
+            color="orange",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"ATM IV = {atm_iv_pct:.2f}%",
+        )
     else:
-        ax3.axhline(y=0, color='orange', linestyle='--', linewidth=1.5, label='ATM IV = N/A')
-    ax3.axvline(x=F, color='purple', linestyle=':', linewidth=1, label=f'F = {F:.2f}')
-    ax3.set_xlabel("Strike"); ax3.set_ylabel("Implied Volatility (%)")
+        ax3.axhline(
+            y=0, color="orange", linestyle="--", linewidth=1.5, label="ATM IV = N/A"
+        )
+    ax3.axvline(x=F, color="#2DD4BF", linestyle=":", linewidth=1, label=f"F = {F:.2f}")
+    ax3.set_xlabel("Strike")
+    ax3.set_ylabel("Implied Volatility (%)")
     ax3.set_title("Volatility Smile vs Fair Variance Swap Strike")
-    ax3.legend(fontsize=9); ax3.grid(alpha=0.3)
+    ax3.legend(fontsize=9)
+    ax3.grid(alpha=0.3)
 
     ax4 = axes[1, 1]
     lookbacks = [30, 60, 90, match_lookback]
-    labels = ['30d', '60d', '90d', f'{match_lookback}d (match)']
+    labels = ["30d", "60d", "90d", f"{match_lookback}d (match)"]
     rvs = [rv_30, rv_60, rv_90, rv_match]
     x_pos = np.arange(len(lookbacks))
-    ax4.bar(x_pos, [rv*100 for rv in rvs], width=0.5, color=['#3498db', '#3498db', '#3498db', '#e67e22'], alpha=0.8)
-    ax4.axhline(y=fair_vol_pct, color='red', linewidth=2, label=f'Fair Vol = {fair_vol_pct:.2f}%')
-    ax4.set_xticks(x_pos); ax4.set_xticklabels(labels)
+    ax4.bar(
+        x_pos,
+        [rv * 100 for rv in rvs],
+        width=0.5,
+        color=["#3498db", "#3498db", "#3498db", "#e67e22"],
+        alpha=0.8,
+    )
+    ax4.axhline(
+        y=fair_vol_pct,
+        color="red",
+        linewidth=2,
+        label=f"Fair Vol = {fair_vol_pct:.2f}%",
+    )
+    ax4.set_xticks(x_pos)
+    ax4.set_xticklabels(labels)
     ax4.set_ylabel("Annualized Volatility (%)")
     ax4.set_title("Realized Vol vs Fair Variance Swap Strike")
-    ax4.legend(); ax4.grid(axis='y', alpha=0.3)
+    ax4.legend()
+    ax4.grid(axis="y", alpha=0.3)
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     # Add interpretation text box if provided
@@ -277,79 +367,146 @@ def generate_plots(result, chain, S0, F, ticker, expiration, rv_30, rv_60, rv_90
         try:
             # Draw background box and multi-line wrapped text at bottom
             wrapped = textwrap.fill(interpretation, width=120)
-            bbox_props = dict(boxstyle="round,pad=0.6", facecolor="#ffffff", alpha=0.9, edgecolor="#bbbbbb")
-            fig.text(0.5, 0.02, wrapped, ha='center', va='bottom', fontsize=9, color="#222222", bbox=bbox_props)
+            bbox_props = dict(
+                boxstyle="round,pad=0.6",
+                facecolor="#ffffff",
+                alpha=0.9,
+                edgecolor="#bbbbbb",
+            )
+            fig.text(
+                0.5,
+                0.02,
+                wrapped,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="#222222",
+                bbox=bbox_props,
+            )
         except Exception:
             pass
 
     out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{ticker}_variance_swap_plots_{timestamp}.png")
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    plt.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close()
     return filename
 
 
 def export_csv(result, ticker, expiration, out_dir: str = None):
     t = result["strike_table"]
-    df = pd.DataFrame({
-        "Strike": t["strikes"], "DeltaK": t["deltaK"],
-        "Weight": t["weights"], "OTM_Price": t["otm_prices"],
-        "Contribution": t["contributions"]
-    })
+    df = pd.DataFrame(
+        {
+            "Strike": t["strikes"],
+            "DeltaK": t["deltaK"],
+            "Weight": t["weights"],
+            "OTM_Price": t["otm_prices"],
+            "Contribution": t["contributions"],
+        }
+    )
     out_dir = out_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(out_dir, f"{ticker}_{expiration}_variance_swap_strikes_{timestamp}.csv")
+    filename = os.path.join(
+        out_dir, f"{ticker}_{expiration}_variance_swap_strikes_{timestamp}.csv"
+    )
     df.to_csv(filename, index=False)
     return filename
 
 
-def export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback, out_dir: str = None):
-    rv_30_str = f"{rv_30*100:.2f}" if not math.isnan(rv_30) else "N/A"
-    rv_60_str = f"{rv_60*100:.2f}" if not math.isnan(rv_60) else "N/A"
-    rv_90_str = f"{rv_90*100:.2f}" if not math.isnan(rv_90) else "N/A"
-    rv_match_str = f"{rv_match*100:.2f}" if not math.isnan(rv_match) else "N/A"
-    vrp_str = f"{result['fair_variance_swap_strike_vol_pct'] - rv_match*100:.2f}" if not math.isnan(rv_match) else "N/A"
-    atm_iv_str = f"{result['atm_implied_vol_pct']:.2f}" if not math.isnan(result['atm_implied_vol_pct']) else "N/A"
-    convexity_str = f"{result['convexity_premium_vol_pct']:.2f}" if not math.isnan(result['convexity_premium_vol_pct']) else "N/A"
+def export_summary_csv(
+    result,
+    ticker,
+    expiration,
+    rv_30,
+    rv_60,
+    rv_90,
+    rv_match,
+    match_lookback,
+    out_dir: str = None,
+):
+    rv_30_str = f"{rv_30 * 100:.2f}" if not math.isnan(rv_30) else "N/A"
+    rv_60_str = f"{rv_60 * 100:.2f}" if not math.isnan(rv_60) else "N/A"
+    rv_90_str = f"{rv_90 * 100:.2f}" if not math.isnan(rv_90) else "N/A"
+    rv_match_str = f"{rv_match * 100:.2f}" if not math.isnan(rv_match) else "N/A"
+    vrp_str = (
+        f"{result['fair_variance_swap_strike_vol_pct'] - rv_match * 100:.2f}"
+        if not math.isnan(rv_match)
+        else "N/A"
+    )
+    atm_iv_str = (
+        f"{result['atm_implied_vol_pct']:.2f}"
+        if not math.isnan(result["atm_implied_vol_pct"])
+        else "N/A"
+    )
+    convexity_str = (
+        f"{result['convexity_premium_vol_pct']:.2f}"
+        if not math.isnan(result["convexity_premium_vol_pct"])
+        else "N/A"
+    )
     # Same sizing convention as the two other callers -- calling
     # compute_vega_notional() here (rather than a hardcoded number) keeps the
     # exported CSV in agreement with the result dict and the console print.
     vega_notional = compute_vega_notional()
-    variance_notional = compute_variance_notional(vega_notional, result["fair_variance_swap_strike_vol"])
+    variance_notional = compute_variance_notional(
+        vega_notional, result["fair_variance_swap_strike_vol"]
+    )
     # Numeric on the happy path (like the other raw-number cells such as
     # Vega_Notional / S0), "N/A" only when the fair strike vol was unusable.
     variance_notional_cell = "N/A" if variance_notional is None else variance_notional
 
     data = {
         "Metric": [
-            "Ticker", "Expiry", "Spot", "Forward", "T_years",
-            "Fair_Variance_Annualized", "Fair_Vol_%", "ATM_Strike",
-            "ATM_IV_%", "Convexity_Premium_vol_pts",
-            "Num_Strikes_Used", "K_min", "K_max",
-            "RV_30d_%", "RV_60d_%", "RV_90d_%",
-            f"RV_{match_lookback}d_%", "VRP_vol_pts",
-            "Vega_Notional/Initial_Seed", "Variance_Notional"
+            "Ticker",
+            "Expiry",
+            "Spot",
+            "Forward",
+            "T_years",
+            "Fair_Variance_Annualized",
+            "Fair_Vol_%",
+            "ATM_Strike",
+            "ATM_IV_%",
+            "Convexity_Premium_vol_pts",
+            "Num_Strikes_Used",
+            "K_min",
+            "K_max",
+            "RV_30d_%",
+            "RV_60d_%",
+            "RV_90d_%",
+            f"RV_{match_lookback}d_%",
+            "VRP_vol_pts",
+            "Vega_Notional/Initial_Seed",
+            "Variance_Notional",
         ],
         "Value": [
-            ticker, expiration, result["S0"], result["F"], result["T_years"],
+            ticker,
+            expiration,
+            result["S0"],
+            result["F"],
+            result["T_years"],
             result["fair_variance_annualized"],
             result["fair_variance_swap_strike_vol_pct"],
             result["atm_strike"],
             atm_iv_str,
             convexity_str,
             result["num_strikes_used"],
-            result["K_min"], result["K_max"],
-            rv_30_str, rv_60_str, rv_90_str,
-            rv_match_str, vrp_str,
+            result["K_min"],
+            result["K_max"],
+            rv_30_str,
+            rv_60_str,
+            rv_90_str,
+            rv_match_str,
+            vrp_str,
             vega_notional,
-            variance_notional_cell
-        ]
+            variance_notional_cell,
+        ],
     }
     df = pd.DataFrame(data)
     out_dir = out_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(out_dir, f"{ticker}_{expiration}_variance_swap_summary_{timestamp}.csv")
+    filename = os.path.join(
+        out_dir, f"{ticker}_{expiration}_variance_swap_summary_{timestamp}.csv"
+    )
     df.to_csv(filename, index=False)
     return filename
 
@@ -361,14 +518,16 @@ def main():
 
     ticker = input("Enter ticker: ").strip().upper() or "GME"
 
-    print(f"\n[1/5] Connecting to ThetaData...")
+    print("\n[1/5] Connecting to ThetaData...")
     td = ThetaDataController()
     dividend_yield = td.fetch_dividend_yield(ticker)
     expiration, actual_T = expiry_selector.choose_expiry_interactive(td, ticker)
     print(f"  Chosen expiry: {expiration}  (T={actual_T:.4f} yr)")
 
     print("\n[2/5] Fetching option chain...")
-    chain = fetch_chain_thetadata(td, ticker, expiration, RISK_FREE_RATE, dividend_yield)
+    chain = fetch_chain_thetadata(
+        td, ticker, expiration, RISK_FREE_RATE, dividend_yield
+    )
     print(f"  Strikes: {len(chain.strikes)}")
     td.close()
 
@@ -386,16 +545,28 @@ def main():
     result = compute_fair_variance_strike(chain, S0, actual_T)
 
     t = result["strike_table"]
-    K, dK, w, otm, cnt = t["strikes"], t["deltaK"], t["weights"], t["otm_prices"], t["contributions"]
+    K, dK, w, otm, cnt = (
+        t["strikes"],
+        t["deltaK"],
+        t["weights"],
+        t["otm_prices"],
+        t["contributions"],
+    )
     print("\n" + "-" * 80)
-    print(f"{'Strike':>8} | {'DeltaK':>8} | {'Weight':>10} | {'OTM Price':>10} | {'Contrib':>10}")
+    print(
+        f"{'Strike':>8} | {'DeltaK':>8} | {'Weight':>10} | {'OTM Price':>10} | {'Contrib':>10}"
+    )
     print("-" * 80)
     for i in range(len(K)):
-        print(f"{K[i]:8.2f} | {dK[i]:8.3f} | {w[i]:10.6f} | {otm[i]:10.4f} | {cnt[i]:10.6f}")
+        print(
+            f"{K[i]:8.2f} | {dK[i]:8.3f} | {w[i]:10.6f} | {otm[i]:10.4f} | {cnt[i]:10.6f}"
+        )
     print("-" * 80)
     print(f"{'TOTAL':>8} | {'':>8} | {'':>10} | {'':>10} | {np.sum(cnt):10.6f}")
 
-    print("\n--- Fetching historical prices for realized vol (ThetaData first, yfinance fallback)...")
+    print(
+        "\n--- Fetching historical prices for realized vol (ThetaData first, yfinance fallback)..."
+    )
     try:
         hist_df = fetch_price_history([ticker], period="2y")
         prices = hist_df[ticker].values.flatten()
@@ -410,14 +581,22 @@ def main():
         rv_30 = compute_realized_vol(prices, min(30, len(prices)))
         rv_60 = compute_realized_vol(prices, min(60, len(prices)))
         rv_90 = compute_realized_vol(prices, min(90, len(prices)))
-        match_lookback = int(actual_T * TRADING_DAYS)  # trading-day price points ~ option life
+        match_lookback = int(
+            actual_T * TRADING_DAYS
+        )  # trading-day price points ~ option life
         rv_match = compute_realized_vol(prices, min(match_lookback, len(prices)))
 
-    print(f"RV (30d):  {rv_30*100:.2f}%" if not math.isnan(rv_30) else "RV (30d):  N/A")
-    print(f"RV (60d):  {rv_60*100:.2f}%" if not math.isnan(rv_60) else "RV (60d):  N/A")
-    print(f"RV (90d):  {rv_90*100:.2f}%" if not math.isnan(rv_90) else "RV (90d):  N/A")
+    print(
+        f"RV (30d):  {rv_30 * 100:.2f}%" if not math.isnan(rv_30) else "RV (30d):  N/A"
+    )
+    print(
+        f"RV (60d):  {rv_60 * 100:.2f}%" if not math.isnan(rv_60) else "RV (60d):  N/A"
+    )
+    print(
+        f"RV (90d):  {rv_90 * 100:.2f}%" if not math.isnan(rv_90) else "RV (90d):  N/A"
+    )
     if not math.isnan(rv_match):
-        print(f"RV ({match_lookback}d): {rv_match*100:.2f}%")
+        print(f"RV ({match_lookback}d): {rv_match * 100:.2f}%")
 
     print("\n" + "=" * 60)
     print("FINAL RESULT")
@@ -434,30 +613,62 @@ def main():
     fair_vol_pct = result["fair_variance_swap_strike_vol_pct"]
     if not math.isnan(rv_match):
         vrp = fair_vol_pct - rv_match * 100
-        print(f"\n--- VRP ---")
-        print(f"Fair vol: {fair_vol_pct:.2f}% | RV: {rv_match*100:.2f}% | VRP: {vrp:+.2f} vol pts")
+        print("\n--- VRP ---")
+        print(
+            f"Fair vol: {fair_vol_pct:.2f}% | RV: {rv_match * 100:.2f}% | VRP: {vrp:+.2f} vol pts"
+        )
         print("---")
 
     vega_notional = compute_vega_notional()
-    variance_notional = compute_variance_notional(vega_notional, result["fair_variance_swap_strike_vol"])
+    variance_notional = compute_variance_notional(
+        vega_notional, result["fair_variance_swap_strike_vol"]
+    )
     if variance_notional is None:
-        print(f"\nVega notional/initial seed: ${vega_notional:,.0f} -> Variance notional: N/A "
-              f"(fair strike vol is {result['fair_variance_swap_strike_vol']}, not usable)")
+        print(
+            f"\nVega notional/initial seed: ${vega_notional:,.0f} -> Variance notional: N/A "
+            f"(fair strike vol is {result['fair_variance_swap_strike_vol']}, not usable)"
+        )
     else:
-        print(f"\nVega notional/initial seed: ${vega_notional:,.0f} -> Variance notional: ${variance_notional:,.2f}")
+        print(
+            f"\nVega notional/initial seed: ${vega_notional:,.0f} -> Variance notional: ${variance_notional:,.2f}"
+        )
 
     print("\n--- Generating plots...")
     try:
-        plot_file = generate_plots(result, chain, S0, F, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback)
+        plot_file = generate_plots(
+            result,
+            chain,
+            S0,
+            F,
+            ticker,
+            expiration,
+            rv_30,
+            rv_60,
+            rv_90,
+            rv_match,
+            match_lookback,
+        )
         print(f"  Plots: {plot_file}")
     except Exception as e:
         print(f"  Plot error: {e}")
 
     choice = input("\nExport CSV? (y/n): ").strip().lower()
-    if choice == 'y':
+    if choice == "y":
         out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
-        print(f"  Strikes CSV: {export_csv(result, ticker, expiration, out_dir=out_dir)}")
-        sum_file = export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback, out_dir=out_dir)
+        print(
+            f"  Strikes CSV: {export_csv(result, ticker, expiration, out_dir=out_dir)}"
+        )
+        sum_file = export_summary_csv(
+            result,
+            ticker,
+            expiration,
+            rv_30,
+            rv_60,
+            rv_90,
+            rv_match,
+            match_lookback,
+            out_dir=out_dir,
+        )
         print(f"  Summary CSV: {sum_file}")
     print("\nDone.")
 
@@ -466,8 +677,12 @@ if __name__ == "__main__":
     main()
 
 
-def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: str = None,
-                           expiration: str = None) -> tuple:
+def run_variance_swap_live(
+    ticker: str,
+    target_years: float = 0.25,
+    output_dir: str = None,
+    expiration: str = None,
+) -> tuple:
     """Programmatic runner for the variance swap live module.
     Returns (file_paths, interpretation_text, result_dict) -- the raw result
     dict lets callers (e.g. the volatility_suite orchestrator's opportunities
@@ -483,11 +698,15 @@ def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: 
     files = []
     td = ThetaDataController()
     dividend_yield = td.fetch_dividend_yield(ticker)
-    expiration, actual_T = expiry_selector.resolve_expiration(td, ticker, expiration, target_years)
+    expiration, actual_T = expiry_selector.resolve_expiration(
+        td, ticker, expiration, target_years
+    )
     r_live = td.fetch_risk_free_rate(actual_T)
     r_use = r_live if r_live is not None else RISK_FREE_RATE
     if r_live is None:
-        print(f"  [rate] yield curve unavailable; using fallback r={RISK_FREE_RATE:.4f}")
+        print(
+            f"  [rate] yield curve unavailable; using fallback r={RISK_FREE_RATE:.4f}"
+        )
     chain = fetch_chain_thetadata(td, ticker, expiration, r_use, dividend_yield)
     td.close()
     td2 = ThetaDataController()
@@ -505,46 +724,78 @@ def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: 
         prices = []
 
     if len(prices) < 5:
-        rv_30 = rv_60 = rv_90 = rv_match = float('nan')
+        rv_30 = rv_60 = rv_90 = rv_match = float("nan")
         match_lookback = 0
     else:
-        from math import isnan
         rv_30 = compute_realized_vol(prices, min(30, len(prices)))
         rv_60 = compute_realized_vol(prices, min(60, len(prices)))
         rv_90 = compute_realized_vol(prices, min(90, len(prices)))
-        match_lookback = int(actual_T * TRADING_DAYS)  # trading-day price points ~ option life
-        rv_match = compute_realized_vol(prices, min(match_lookback, len(prices))) if match_lookback > 0 else float('nan')
+        match_lookback = int(
+            actual_T * TRADING_DAYS
+        )  # trading-day price points ~ option life
+        rv_match = (
+            compute_realized_vol(prices, min(match_lookback, len(prices)))
+            if match_lookback > 0
+            else float("nan")
+        )
 
     # plots
     try:
         # generate_plots uses VS_OUTPUT_DIR env var; ensure it is set
-        os.environ['VS_OUTPUT_DIR'] = out_dir
+        os.environ["VS_OUTPUT_DIR"] = out_dir
         interp = (
             f"Fair vol: {result.get('fair_variance_swap_strike_vol_pct', 'N/A'):.2f}% | "
             f"ATM IV: {result.get('atm_implied_vol_pct', float('nan')):.2f}% | "
             f"Convexity: {result.get('convexity_premium_vol_pct', float('nan')):.2f}pp"
         )
-        plot_file = generate_plots(result, chain, S0, F, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback, interpretation=interp)
+        plot_file = generate_plots(
+            result,
+            chain,
+            S0,
+            F,
+            ticker,
+            expiration,
+            rv_30,
+            rv_60,
+            rv_90,
+            rv_match,
+            match_lookback,
+            interpretation=interp,
+        )
         files.append(plot_file)
     except Exception as e:
         print(f"  Plot error: {e}")
     # csv exports
     try:
         strikes_csv = export_csv(result, ticker, expiration, out_dir=out_dir)
-        summary_csv = export_summary_csv(result, ticker, expiration, rv_30, rv_60, rv_90, rv_match, match_lookback, out_dir=out_dir)
+        summary_csv = export_summary_csv(
+            result,
+            ticker,
+            expiration,
+            rv_30,
+            rv_60,
+            rv_90,
+            rv_match,
+            match_lookback,
+            out_dir=out_dir,
+        )
         files.extend([strikes_csv, summary_csv])
     except Exception as e:
         print(f"  CSV export failed: {e}")
     # Build interpretation text
     try:
-        fair_vol = result.get('fair_variance_swap_strike_vol_pct', None)
-        atm_iv = result.get('atm_implied_vol_pct', None)
-        convexity = result.get('convexity_premium_vol_pct', None)
+        fair_vol = result.get("fair_variance_swap_strike_vol_pct", None)
+        atm_iv = result.get("atm_implied_vol_pct", None)
+        convexity = result.get("convexity_premium_vol_pct", None)
         interp_lines = [
             f"Ticker: {ticker}",
-            f"Fair Vol (ann.): {fair_vol:.2f}%" if fair_vol is not None else "Fair Vol: N/A",
+            f"Fair Vol (ann.): {fair_vol:.2f}%"
+            if fair_vol is not None
+            else "Fair Vol: N/A",
             f"ATM IV: {atm_iv:.2f}%" if atm_iv is not None else "ATM IV: N/A",
-            f"Convexity (vol pts): {convexity:.2f}" if convexity is not None else "Convexity: N/A",
+            f"Convexity (vol pts): {convexity:.2f}"
+            if convexity is not None
+            else "Convexity: N/A",
         ]
     except Exception:
         interp_lines = [f"Ticker: {ticker}"]
@@ -552,11 +803,14 @@ def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: 
     # Surface realized vol / VRP on the result dict too, since they're computed
     # here but weren't previously part of the dict compute_fair_variance_strike returns.
     try:
-        result['rv_match'] = rv_match
+        result["rv_match"] = rv_match
         if not math.isnan(rv_match):
-            result['vrp_vol_pts'] = result.get('fair_variance_swap_strike_vol_pct', float('nan')) - rv_match * 100
+            result["vrp_vol_pts"] = (
+                result.get("fair_variance_swap_strike_vol_pct", float("nan"))
+                - rv_match * 100
+            )
         else:
-            result['vrp_vol_pts'] = float('nan')
+            result["vrp_vol_pts"] = float("nan")
     except Exception:
         pass
     # Trade sizing. Neither value was computed on this path before, so callers
@@ -565,10 +819,13 @@ def run_variance_swap_live(ticker: str, target_years: float = 0.25, output_dir: 
     # (a non-positive fair strike vol from a degraded chain) is handled
     # explicitly by compute_variance_notional returning None, so there is
     # nothing here worth wrapping in a blanket except.
-    result['vega_notional'] = compute_vega_notional()
-    result['variance_notional'] = compute_variance_notional(
-        result['vega_notional'], result.get('fair_variance_swap_strike_vol'))
-    if result['variance_notional'] is None:
-        print(f"  [sizing] variance notional unavailable: fair strike vol = "
-              f"{result.get('fair_variance_swap_strike_vol')}")
+    result["vega_notional"] = compute_vega_notional()
+    result["variance_notional"] = compute_variance_notional(
+        result["vega_notional"], result.get("fair_variance_swap_strike_vol")
+    )
+    if result["variance_notional"] is None:
+        print(
+            f"  [sizing] variance notional unavailable: fair strike vol = "
+            f"{result.get('fair_variance_swap_strike_vol')}"
+        )
     return files, interp, result

@@ -5,25 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}FinancialDevelopment Dashboard{% endblock %}</title>
 <style>
-/* Everything inline -- this runs offline on localhost, no CDN anything. */
+/* Everything inline -- this runs offline on localhost, no CDN anything.
+   Palette matches shared/chart_theme.py's dark navy-to-blue theme (no
+   purple/violet anywhere); keep the two in sync by hand if either changes. */
 :root {
   --bg: #070a14;
   --panel: #0c1122;
   --panel-2: #121a30;
   --border: #24304f;
   --text: #f8fafc;
-  --muted: #a389ad;
-  --accent: #a855f7;
-  --accent-2: #3b82f6;
-  --accent-soft: #a855f722;
-  --accent-glow: #a855f799;
+  --muted: #94a3b8;
+  --accent: #3b82f6;
+  --accent-2: #38bdf8;
+  --accent-soft: #3b82f622;
+  --accent-glow: #3b82f699;
   --ok: #34d399;
   --ok-soft: #34d39922;
   --warn: #fbbf24;
   --warn-soft: #fbbf2422;
   --err: #f87171;
   --err-soft: #f8717122;
-  --file-json: #a855f7;
+  --file-json: #38bdf8;
   --file-csv: #a3e635;
   --file-png: #22d3ee;
   --file-pdf: #f472b6;

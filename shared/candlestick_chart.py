@@ -18,26 +18,25 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patheffects
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import FuncFormatter
 
+from shared import chart_theme
 from shared.chart_data import CandlePayload, CandleRecord, ChartDataError
 
-
-_BACKGROUND_GRADIENT = ("#081326", "#21113d")
+_BACKGROUND_GRADIENT = chart_theme.BACKGROUND_GRADIENT
 _BACKGROUND = _BACKGROUND_GRADIENT[0]
-_PANEL = "#101d34"
-_PANEL_VOLUME = "#171a35"
-_TEXT = "#F4F7FF"
-_GRID = "#64748B"
-_UP = "#38BDF8"
-_DOWN = "#C084FC"
-_MUTED_TEXT = "#A9B7D0"
+_PANEL = chart_theme.PANEL
+_PANEL_VOLUME = chart_theme.PANEL_VOLUME
+_TEXT = chart_theme.TEXT
+_GRID = chart_theme.GRID
+_UP = chart_theme.UP
+_DOWN = chart_theme.DOWN
+_MUTED_TEXT = chart_theme.MUTED_TEXT
 
-_PANEL_SHADOW = ("#050914", 0.34)
-_CANDLE_SHADOW = ("#050914", 0.22)
-_GRADIENT = LinearSegmentedColormap.from_list("navy_purple", _BACKGROUND_GRADIENT)
+_PANEL_SHADOW = chart_theme.PANEL_SHADOW
+_CANDLE_SHADOW = chart_theme.CANDLE_SHADOW
+_GRADIENT = chart_theme.GRADIENT
 
 
 def _validate_payload(payload: CandlePayload) -> tuple[CandleRecord, ...]:
@@ -143,7 +142,7 @@ def _title(payload: CandlePayload, observations: tuple[CandleRecord, ...]) -> st
 
 
 def _add_background_gradient(figure) -> None:
-    """Paint a restrained navy-to-purple wash behind the chart panels."""
+    """Paint a restrained navy-to-blue wash behind the chart panels."""
     background = figure.add_axes((0, 0, 1, 1), zorder=-10)
     background.imshow(
         np.linspace(0, 1, 256, dtype=float)[:, None],
@@ -182,9 +181,7 @@ def _candle_width(dates: list[float]) -> float:
     """Choose a compact width in date units without filling short-window gaps."""
     if len(dates) < 2:
         return 0.55
-    spacing = median(
-        right - left for left, right in pairwise(dates) if right > left
-    )
+    spacing = median(right - left for left, right in pairwise(dates) if right > left)
     if not math.isfinite(spacing) or spacing <= 0:
         return 0.55
     return min(0.7, max(0.35, spacing * 0.72))
@@ -324,9 +321,13 @@ def _match_overlay_entry(obs_ts: datetime, overlay: list | None) -> dict | None:
     return None
 
 
-def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
-                       *, direction_overlay: list | None = None,
-                       live_note: str | None = None) -> Path:
+def render_candlestick(
+    payload: CandlePayload,
+    output_path: str | PathLike[str],
+    *,
+    direction_overlay: list | None = None,
+    live_note: str | None = None,
+) -> Path:
     """Render ``payload`` to a deterministic PNG and return its path.
 
     The renderer only reads the immutable normalized payload. Empty, malformed,
@@ -345,7 +346,9 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
     has_volume = any(observation.volume is not None for observation in observations)
     figure = None
     try:
-        calendar_dates = [mdates.date2num(observation.timestamp) for observation in observations]
+        calendar_dates = [
+            mdates.date2num(observation.timestamp) for observation in observations
+        ]
         dates = (
             _compress_non_trading_gaps(calendar_dates)
             if payload.interval != "1d"
@@ -382,7 +385,14 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
             candle_width = 0.72
         for date_number, candle in zip(dates, observations):
             color = _UP if candle.close >= candle.open else _DOWN
-            axis.vlines(date_number, candle.low, candle.high, color=color, linewidth=1.15, zorder=3)
+            axis.vlines(
+                date_number,
+                candle.low,
+                candle.high,
+                color=color,
+                linewidth=1.15,
+                zorder=3,
+            )
             body_bottom = min(candle.open, candle.close)
             body_height = max(abs(candle.close - candle.open), 1e-9)
             axis.add_patch(
@@ -444,10 +454,10 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
         if direction_overlay:
             spread = max(obs.high - obs.low for obs in observations) or 1.0
             marker_style = {
-                "sell": ("v", "orchid", 1.0),     # 0/5 — avoid/exit, above bar
-                "hold": ("o", "gray", 0.6),       # 3/5 — neutral, below bar
-                "buy": ("^", "lime", 1.0),        # 4/5 — below bar
-                "add": ("D", "gold", 1.0),        # 5/5 — add to position, below bar
+                "sell": ("v", "crimson", 1.0),  # 0/5 — avoid/exit, above bar
+                "hold": ("o", "gray", 0.6),  # 3/5 — neutral, below bar
+                "buy": ("^", "lime", 1.0),  # 4/5 — below bar
+                "add": ("D", "gold", 1.0),  # 5/5 — add to position, below bar
             }
             gated = apply_position_gate(direction_overlay)
             kind_by_ts: dict[str, str] = {}
@@ -474,16 +484,37 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
                 if kind not in marker_style:
                     continue  # gated none / 1-2/5 -> no marker
                 glyph, color, alpha = marker_style[kind]
-                y = obs.high + 0.03 * spread if kind == "sell" else obs.low - 0.03 * spread
-                axis.annotate(glyph, xy=(dates[i], y), fontsize=11, color=color,
-                              alpha=alpha, ha="center", va="center",
-                              annotation_clip=False)
+                y = (
+                    obs.high + 0.03 * spread
+                    if kind == "sell"
+                    else obs.low - 0.03 * spread
+                )
+                axis.annotate(
+                    glyph,
+                    xy=(dates[i], y),
+                    fontsize=11,
+                    color=color,
+                    alpha=alpha,
+                    ha="center",
+                    va="center",
+                    annotation_clip=False,
+                )
         if live_note:
-            axis.text(0.012, 0.985, live_note, transform=axis.transAxes,
-                      fontsize=9, color="white", alpha=0.9, va="top",
-                      bbox=dict(boxstyle="round,pad=0.3", fc="#1b2a4a", ec="none"))
+            axis.text(
+                0.012,
+                0.985,
+                live_note,
+                transform=axis.transAxes,
+                fontsize=9,
+                color="white",
+                alpha=0.9,
+                va="top",
+                bbox=dict(boxstyle="round,pad=0.3", fc="#1b2a4a", ec="none"),
+            )
 
-        figure.savefig(path, format="png", facecolor=figure.get_facecolor(), bbox_inches="tight")
+        figure.savefig(
+            path, format="png", facecolor=figure.get_facecolor(), bbox_inches="tight"
+        )
     except (IndexError, TypeError, ValueError, OverflowError) as exc:
         raise ChartDataError("could not render candle payload") from exc
     finally:
@@ -492,4 +523,4 @@ def render_candlestick(payload: CandlePayload, output_path: str | PathLike[str],
     return path
 
 
-__all__ = ["render_candlestick", "apply_position_gate"]
+__all__ = ["apply_position_gate", "render_candlestick"]

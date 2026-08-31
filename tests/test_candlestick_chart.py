@@ -27,9 +27,15 @@ from shared.chart_data import CandlePayload, CandleRecord, ChartDataError
 
 def _payload(*, with_volume: bool = True) -> CandlePayload:
     records = (
-        CandleRecord(datetime(2026, 8, 1), 100, 104, 98, 103, 1000 if with_volume else None),
-        CandleRecord(datetime(2026, 8, 2), 103, 105, 101, 102, 1200 if with_volume else None),
-        CandleRecord(datetime(2026, 8, 3), 102, 108, 101, 107, 1400 if with_volume else None),
+        CandleRecord(
+            datetime(2026, 8, 1), 100, 104, 98, 103, 1000 if with_volume else None
+        ),
+        CandleRecord(
+            datetime(2026, 8, 2), 103, 105, 101, 102, 1200 if with_volume else None
+        ),
+        CandleRecord(
+            datetime(2026, 8, 3), 102, 108, 101, 107, 1400 if with_volume else None
+        ),
     )
     return CandlePayload(
         ticker="SPY",
@@ -62,7 +68,9 @@ def test_render_does_not_mutate_payload(tmp_path: Path):
     assert payload.observations == before.observations
 
 
-@pytest.mark.parametrize(("lookback", "display"), [("1m", "1mo"), ("3m", "3mo"), ("6m", "6mo")])
+@pytest.mark.parametrize(
+    ("lookback", "display"), [("1m", "1mo"), ("3m", "3mo"), ("6m", "6mo")]
+)
 def test_title_displays_month_lookback_without_changing_payload(lookback, display):
     payload = replace(_payload(), lookback=lookback)
     title = _title(payload, payload.observations)
@@ -76,7 +84,10 @@ def test_short_window_date_formatter_includes_month_context():
 
     figure, axis = plt.subplots()
     try:
-        dates = [mdates.date2num(datetime(2026, 7, 21)), mdates.date2num(datetime(2026, 8, 14))]
+        dates = [
+            mdates.date2num(datetime(2026, 7, 21)),
+            mdates.date2num(datetime(2026, 8, 14)),
+        ]
         _configure_date_axis(axis, dates)
         formatter = axis.xaxis.get_major_formatter()
         assert formatter(dates[0], 0) == "21-Jul"
@@ -108,7 +119,9 @@ def test_render_includes_volume_subplot_and_metadata(tmp_path: Path, monkeypatch
         assert image.format == "PNG"
         assert image.width >= 800
         assert image.height >= 500
-    assert titles == ["SPY · 1d · 1mo · fixture · 3 bars · 2026-08-01—2026-08-03 · as of 2026-08-04"]
+    assert titles == [
+        "SPY · 1d · 1mo · fixture · 3 bars · 2026-08-01—2026-08-03 · as of 2026-08-04"
+    ]
 
 
 def test_short_windows_use_daily_spacing_and_readable_candle_widths():
@@ -124,28 +137,32 @@ def test_render_without_volume_still_writes_chart(tmp_path: Path):
     assert output.stat().st_size > 0
 
 
-def test_dark_blue_purple_theme_contract():
-    assert _BACKGROUND_GRADIENT == ("#081326", "#21113d")
+def test_dark_blue_theme_contract():
+    assert _BACKGROUND_GRADIENT == ("#081326", "#0f2545")
     assert _PANEL == "#101d34"
     assert _PANEL_VOLUME == "#171a35"
     assert _TEXT == "#F4F7FF"
     assert _GRID == "#64748B"
     assert _UP == "#38BDF8"
-    assert _DOWN == "#C084FC"
+    assert _DOWN == "#F87171"
 
 
 def test_render_rejects_non_daily_interval_before_plotting(tmp_path: Path, monkeypatch):
     payload = replace(_payload(), interval="2h")
     monkeypatch.setattr(
         "shared.candlestick_chart.plt.subplots",
-        lambda *args, **kwargs: pytest.fail("plotting must not start for a non-daily payload"),
+        lambda *args, **kwargs: pytest.fail(
+            "plotting must not start for a non-daily payload"
+        ),
     )
 
     with pytest.raises(ChartDataError, match="interval"):
         render_candlestick(payload, tmp_path / "intraday.png")
 
 
-@pytest.mark.parametrize("payload", [None, CandlePayload("SPY", "1d", "1m", "fixture", ())])
+@pytest.mark.parametrize(
+    "payload", [None, CandlePayload("SPY", "1d", "1m", "fixture", ())]
+)
 def test_render_rejects_missing_or_empty_payload(payload, tmp_path: Path):
     with pytest.raises(ChartDataError, match="payload|observations"):
         render_candlestick(payload, tmp_path / "empty.png")
@@ -204,9 +221,10 @@ assert CandlePayload is not None
 
 
 def test_render_candlestick_draws_direction_markers(tmp_path):
-    from shared.chart_data import CandlePayload, CandleRecord
-    from shared.candlestick_chart import render_candlestick, _marker_for_score
     from datetime import datetime
+
+    from shared.candlestick_chart import _marker_for_score, render_candlestick
+    from shared.chart_data import CandlePayload, CandleRecord
 
     # Score-based convention: 0/5 sell, 3/5 hold (NOT a buy), 4/5 buy, 5/5 add.
     assert _marker_for_score(0) == "sell"
@@ -218,47 +236,88 @@ def test_render_candlestick_draws_direction_markers(tmp_path):
     assert _marker_for_score(99) == "none"
 
     records = tuple(
-        CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0, high=102.0,
-                     low=99.0, close=101.0, volume=1000)
+        CandleRecord(
+            timestamp=datetime(2026, 8, 12, 9, 30),
+            open=100.0,
+            high=102.0,
+            low=99.0,
+            close=101.0,
+            volume=1000,
+        )
         for _ in range(3)
     )
-    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d",
-                            source="thetadata", observations=records)
+    payload = CandlePayload(
+        ticker="SPY",
+        interval="15m",
+        lookback="1d",
+        source="thetadata",
+        observations=records,
+    )
     out = tmp_path / "chart.png"
-    path = render_candlestick(payload, out,
-                              direction_overlay=[
-                                  {"ts": "2026-08-12T09:30:00", "conviction": "HIGH",
-                                   "score": 4, "signals": {}},
-                                  {"ts": "2026-08-12T09:45:00", "conviction": "NONE",
-                                   "score": 1, "signals": {}},
-                              ],
-                              live_note="LIVE: HIGH (4/5)")
+    path = render_candlestick(
+        payload,
+        out,
+        direction_overlay=[
+            {
+                "ts": "2026-08-12T09:30:00",
+                "conviction": "HIGH",
+                "score": 4,
+                "signals": {},
+            },
+            {
+                "ts": "2026-08-12T09:45:00",
+                "conviction": "NONE",
+                "score": 1,
+                "signals": {},
+            },
+        ],
+        live_note="LIVE: HIGH (4/5)",
+    )
     assert path.exists() and path.stat().st_size > 0
 
 
 def test_render_candlestick_skips_markers_below_score_threshold(tmp_path):
     """A bar with 1-2/5 signals draws no marker; 3/5 is a HOLD, not a buy."""
-    from shared.chart_data import CandlePayload, CandleRecord
-    from shared.candlestick_chart import render_candlestick, _marker_for_score
     from datetime import datetime
+
+    from shared.candlestick_chart import _marker_for_score, render_candlestick
+    from shared.chart_data import CandlePayload, CandleRecord
 
     # 1-2/5 signals -> no marker, same as no overlay entry.
     assert _marker_for_score(2) == "none"
 
     records = tuple(
-        CandleRecord(timestamp=datetime(2026, 8, 12, 9, 30), open=100.0, high=102.0,
-                     low=99.0, close=101.0, volume=1000)
+        CandleRecord(
+            timestamp=datetime(2026, 8, 12, 9, 30),
+            open=100.0,
+            high=102.0,
+            low=99.0,
+            close=101.0,
+            volume=1000,
+        )
         for _ in range(2)
     )
-    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d",
-                            source="thetadata", observations=records)
+    payload = CandlePayload(
+        ticker="SPY",
+        interval="15m",
+        lookback="1d",
+        source="thetadata",
+        observations=records,
+    )
     out = tmp_path / "chart.png"
-    path = render_candlestick(payload, out,
-                              direction_overlay=[
-                                  {"ts": "2026-08-12T09:30:00", "conviction": "NONE",
-                                   "score": 2, "signals": {}},
-                              ],
-                              live_note="LIVE: NONE (2/5)")
+    path = render_candlestick(
+        payload,
+        out,
+        direction_overlay=[
+            {
+                "ts": "2026-08-12T09:30:00",
+                "conviction": "NONE",
+                "score": 2,
+                "signals": {},
+            },
+        ],
+        live_note="LIVE: NONE (2/5)",
+    )
     assert path.exists() and path.stat().st_size > 0
 
 
@@ -331,15 +390,22 @@ def test_render_candlestick_same_day_bars_each_get_own_marker(tmp_path, monkeypa
     from shared.candlestick_chart import render_candlestick
 
     records = tuple(
-        CandleRecord(timestamp=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=1000)
+        CandleRecord(
+            timestamp=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=1000
+        )
         for ts in (
             datetime(2026, 8, 12, 9, 30),
             datetime(2026, 8, 12, 9, 45),
             datetime(2026, 8, 12, 10, 0),
         )
     )
-    payload = CandlePayload(ticker="SPY", interval="15m", lookback="1d",
-                            source="thetadata", observations=records)
+    payload = CandlePayload(
+        ticker="SPY",
+        interval="15m",
+        lookback="1d",
+        source="thetadata",
+        observations=records,
+    )
     calls = []
     original_annotate = mpl_axes.Axes.annotate
 
@@ -350,18 +416,39 @@ def test_render_candlestick_same_day_bars_each_get_own_marker(tmp_path, monkeypa
     monkeypatch.setattr(mpl_axes.Axes, "annotate", capture_annotate)
     out = tmp_path / "chart.png"
     path = render_candlestick(
-        payload, out,
+        payload,
+        out,
         direction_overlay=[
-            {"ts": "2026-08-12T09:30:00", "conviction": "LOW", "score": 0, "signals": {}},
-            {"ts": "2026-08-12T09:45:00", "conviction": "HIGH", "score": 4, "signals": {}},
-            {"ts": "2026-08-12T10:00:00", "conviction": "HIGH", "score": 5, "signals": {}},
+            {
+                "ts": "2026-08-12T09:30:00",
+                "conviction": "LOW",
+                "score": 0,
+                "signals": {},
+            },
+            {
+                "ts": "2026-08-12T09:45:00",
+                "conviction": "HIGH",
+                "score": 4,
+                "signals": {},
+            },
+            {
+                "ts": "2026-08-12T10:00:00",
+                "conviction": "HIGH",
+                "score": 5,
+                "signals": {},
+            },
         ],
     )
     assert path.exists() and path.stat().st_size > 0
-    assert sorted(glyph for _, glyph in calls) == ["D", "^"]  # add, buy; score-0 is gated none
+    assert sorted(glyph for _, glyph in calls) == [
+        "D",
+        "^",
+    ]  # add, buy; score-0 is gated none
 
 
-def test_render_candlestick_position_gate_hides_sell_hold_until_long(tmp_path, monkeypatch):
+def test_render_candlestick_position_gate_hides_sell_hold_until_long(
+    tmp_path, monkeypatch
+):
     """Same-day scores [0, 3, 4, 3, 0] draw none, none, buy, hold, sell."""
     from matplotlib import axes as mpl_axes
 
@@ -375,7 +462,9 @@ def test_render_candlestick_position_gate_hides_sell_hold_until_long(tmp_path, m
         datetime(2026, 8, 12, 10, 30),
     )
     records = tuple(
-        CandleRecord(timestamp=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=1000)
+        CandleRecord(
+            timestamp=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=1000
+        )
         for ts in bar_times
     )
     payload = CandlePayload(
@@ -411,17 +500,27 @@ def test_render_candlestick_position_gate_hides_sell_hold_until_long(tmp_path, m
 
 def test_position_gate_buy_in_hold_sell_out():
     from shared.candlestick_chart import apply_position_gate
+
     entries = [{"score": s} for s in [0, 3, 4, 3, 0, 0]]
-    assert apply_position_gate(entries) == ["none", "none", "buy", "hold", "sell", "none"]
+    assert apply_position_gate(entries) == [
+        "none",
+        "none",
+        "buy",
+        "hold",
+        "sell",
+        "none",
+    ]
 
 
 def test_position_gate_add_increments_then_flatten():
     from shared.candlestick_chart import apply_position_gate
+
     entries = [{"score": s} for s in [5, 5, 0]]
     assert apply_position_gate(entries) == ["add", "add", "sell"]
 
 
 def test_position_gate_empty_and_missing_score():
     from shared.candlestick_chart import apply_position_gate
+
     assert apply_position_gate([]) == []
     assert apply_position_gate([{}]) == ["none"]

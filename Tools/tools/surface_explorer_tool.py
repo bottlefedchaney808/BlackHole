@@ -99,13 +99,17 @@ def _resolve_ticker(context: dict[str, Any]) -> str:
 # already-computed grid.
 # ---------------------------------------------------------------------------
 # Dashboard dark-theme palette (dashboard/templates/base.html's CSS custom
-# properties) -- kept here rather than imported so this module has no
-# dependency on the dashboard package; duplicated intentionally, small.
-_DARK_BG = "#070a14"
-_DARK_PANEL = "#0c1122"
-_DARK_TEXT = "#f8fafc"
-_DARK_MUTED = "#a389ad"
-_DARK_ACCENT_CMAP = "plasma"
+# properties), imported from shared/chart_theme.py -- the single source of
+# truth every Python chart module now shares. shared/ is already a common
+# import root for every suite, so this doesn't add a dashboard-package
+# dependency.
+from shared import chart_theme
+
+_DARK_BG = chart_theme.DASHBOARD_BG
+_DARK_PANEL = chart_theme.DASHBOARD_PANEL
+_DARK_TEXT = chart_theme.DASHBOARD_TEXT
+_DARK_MUTED = chart_theme.DASHBOARD_MUTED
+_DARK_ACCENT_CMAP = chart_theme.DASHBOARD_ACCENT_CMAP
 
 
 def _apply_dark_theme(fig, ax) -> None:

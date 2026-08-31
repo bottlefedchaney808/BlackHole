@@ -64,8 +64,8 @@ from dealer_positioning import (
     ACCENT_GOLD,
     ACCENT_GREEN,
     ACCENT_ORANGE,
-    ACCENT_PURPLE,
     ACCENT_RED,
+    ACCENT_TEAL,
     DARK_BG,
     GRID_COLOR,
     PANEL_BG,
@@ -979,7 +979,7 @@ def plot_scanner_charts(result: ScanResult, output_dir: str | None = None) -> st
         result.spot, color=ACCENT_CYAN, linestyle="--", linewidth=1.5, alpha=0.8
     )
     ax1.axvline(
-        result.forward, color=ACCENT_PURPLE, linestyle=":", linewidth=1.5, alpha=0.8
+        result.forward, color=ACCENT_TEAL, linestyle=":", linewidth=1.5, alpha=0.8
     )
     ax1.set_title(
         f"{result.ticker} {result.expiry} -- IV Smile vs. Fit",

@@ -77,16 +77,17 @@
   </div>
   <div id="chart"></div>
   <script>
+    // Kept in sync by hand with shared/chart_theme.py (no purple/violet).
     const UP = "#38BDF8";
-    const DOWN = "#C084FC";
+    const DOWN = "#F87171";
     const TEXT = "#F4F7FF";
     const MUTED = "#A9B7D0";
     const GRID = "#64748B";
     const MARK = {
-      buy:  { color: "lime",   symbol: "triangle", rotate: 0 },
-      add:  { color: "gold",   symbol: "diamond",  rotate: 0 },
-      hold: { color: "gray",   symbol: "circle",   rotate: 0 },
-      sell: { color: "orchid", symbol: "triangle", rotate: 180 },
+      buy:  { color: "lime",    symbol: "triangle", rotate: 0 },
+      add:  { color: "gold",    symbol: "diamond",  rotate: 0 },
+      hold: { color: "gray",    symbol: "circle",   rotate: 0 },
+      sell: { color: "crimson", symbol: "triangle", rotate: 180 },
     };
 
     const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
