@@ -47,24 +47,32 @@ That's it. The `.venv` is already built and all deps are installed.
 
 ---
 
-## Run everything (demos, no network needed)
+## Run everything (canned demos, no network needed)
+
+`main.py` has no `--demo` flag (there never was one — older README versions
+invented it). The canned demo runs go through each module directly. From
+`VaR_Tools_Simulations/`, with the repo root on PYTHONPATH so the modules'
+`shared.*` imports resolve:
 
 ```bash
-python main.py --demo all
+set PYTHONPATH=..        # (bash: export PYTHONPATH=..)
+python -m var_engine.price_dist    # probability calculator
+python -m var_engine.corr_sim      # correlated simulation
+python -m var_engine.mc_sim        # monte carlo
+python -m var_engine.hist_sim      # historical simulation
+python -m var_engine.copulas       # copulas
+python -m var_engine.forex_var     # forex VaR
+python -m var_engine.cashflow_map  # cash flow mapping
+python -m var_engine.stress_test   # stress testing
+python -m var_engine.var_agg       # VaR aggregation
 ```
 
-Run one module:
+Run one module through the interactive menu (equivalent to the demos):
 
 ```bash
-python main.py --demo price_dist   # probability calculator
-python main.py --demo corr         # correlated simulation
-python main.py --demo mc           # monte carlo
-python main.py --demo hist         # historical simulation
-python main.py --demo copula       # copulas
-python main.py --demo forex        # forex VaR
-python main.py --demo cashflow     # cash flow mapping
-python main.py --demo stress       # stress testing
-python main.py --demo agg          # VaR aggregation
+python main.py --module 1    # 1-9 = corr_sim, mc_sim, hist_sim, copulas,
+                             #       forex_var, cashflow_map, stress_test,
+                             #       var_agg, hedge_optimizer
 ```
 
 Interactive menu:

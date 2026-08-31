@@ -398,3 +398,72 @@ Triggered by a user-reported error where an Options_Suite context-mode run appea
 2. ~~`base.html`'s dropped light-mode block (A-F2)~~ **Resolved, no fix** — dark-only is intentional (operator, 2026-08-10): "part of the dressing."
 3. The 3 root-level archive files (A-F6) and the `*_SUMMARY.md`/`*_COMPLETE.md` docs (A-F7) — delete, archive, or move out of the repo. **Still open.**
 4. Commit the currently-uncommitted diffs (A-F3, now including the copulas.py fix) — all verified correct and complete; no remaining blocker. **Still open** (awaiting go-ahead to commit).
+
+---
+
+## 2026-08-31 Addendum — full-repo audit pass
+
+Second whole-repo audit (evidence-first, adversarial checklist), master @
+07f8ab3 → remediation commits through `edea510`. This addendum records what
+the 2026-08-04 findings look like now, what the new pass found, and what was
+fixed the same day.
+
+### Status of the 2026-08-04 findings
+
+- Euler component-VaR `positions *` term — **confirmed fixed** in source.
+- Options_Suite `run_context_mode` stub — **confirmed fixed** (Leisen-Reimer
+  pricing, schema-valid output; CLAUDE.md corrected 2026-08-17).
+- Screener missing-realized-vol → 0.0 and blanket-except drops — **confirmed
+  fixed** (NaN + `data_quality` + `INSUFFICIENT DATA` + `skipped` reporting).
+- testpaths claim ("root tests excluded from pytest") — **stale**;
+  `pyproject.toml` testpaths now cover 9 trees.
+- VaR `--demo` flag documented in README — **still wrong until today**;
+  README now documents the real `python -m var_engine.<module>` path
+  (verified: modules run with repo root on PYTHONPATH).
+
+### New findings this pass (all remediated 2026-08-31)
+
+1. **SPXW stock-EOD root mismatch** (the known open gap): the
+   `_INDEX_PRICE_ROOT_ALIASES` SPXW→SPX map applied only to index-price
+   routes, so `hist_stock_eod("SPXW", ...)` paged an empty chain-root
+   history and `Vol_Suite/correlation_engine.fetch_price_history` (raw
+   pass-through) silently lost SPX realized-vol inputs. **Fixed at source**
+   (`shared/thetadata.py`), 3 regression tests in
+   `tests/test_thetadata_spxw_alias.py`.
+2. **16 pre-existing test failures** in 4 clusters, all root-caused:
+   - `tests/test_suite_validation.py` (5): tests asserted the retired
+     gamma-CSV requirement; updated to the current contract (correlation
+     CSVs only).
+   - `Vol_Suite/tests/test_dual_pipeline_gate.py` (2): sign-agreement gate
+     pinned the pre-2026-08-17-CARL vanna convention; now asserts
+     frame-complementarity (prod == −new) per the `dealer_frame_vanna`
+     pass-through fix, still catching per-leg drift.
+   - `Tools/tests/test_backtesting_tool.py` (1): asserted the retired
+     "all models" study mode; updated to the live/legacy selector contract.
+   - `replication_reference.py:197` (1, cascading to other files): eager
+     `ThetaDataController | None` annotation blew up when tests stubbed the
+     controller as a function; fixed with `from __future__ import annotations`.
+3. **Root scratch**: 38 tracked one-off files (`_cron_*`, `_dbg_ccl`,
+   `_live_scan*`, `iv_sweep_results.json`, `scratch_dealer_pkg/` 29 files)
+   untracked + gitignored (kept on disk). 10 fully-merged branches deleted
+   (feat-dealer-flows worktree and all unmerged branches left intact).
+4. **Dead pin**: `beautifulsoup4==4.15.0` — zero importers repo-wide;
+   removed from requirements.txt.
+
+### Verification
+
+Full suite after remediation: 2,521 passed / 16 failed / 53 skipped before
+(08-31 baseline); post-fix runs of every touched file green (40/40 suite
+validation, 23/23 dual-pipeline, 4/4 smoke, 4/4 backtesting tool, 3/3 SPXW
+alias). The remaining uncommitted-at-audit-time diff (jump-diffusion
+fail-loud calibration error dicts) was verified safe for all callers and
+committed first (`c370209`).
+
+### Still open
+
+- swaps.db 346 GB / `orchestrator_output/` 212 MB growth — needs the
+  approved VACUUM plan (see [[FD Open work]]).
+- 7 branches with small unmerged work (feature/swaps_UIexp bounded-search
+  fix is the most valuable; fix/dashboard-slowapi-startup is 5 months old).
+- Windows tmp-file teardown lock in `tests/test_decode_upis.py` (cosmetic;
+  connection not closed before `os.remove`).
