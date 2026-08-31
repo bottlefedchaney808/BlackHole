@@ -39,8 +39,10 @@ def test_resolve_strategies_empty_when_no_source(tmp_path):
 
 @pytest.mark.unit
 def test_dealer_gamma_study_always_runs_all_models(monkeypatch):
-    """The study always runs ONE combined backtest (all three live models:
-    v1, v2_live, dealer_exposure) -- there is no per-model selector."""
+    """The study default is the LIVE dealer-frame engine; the legacy v1/v2_live
+    arms stay available via sign_model='legacy'. 'all' is kept as an accepted
+    alias mapping to 'live' (dealer-model-adoption: comparison arms live in
+    backtests, production uses the live model only)."""
     import dataclasses
     import types
 
@@ -62,7 +64,7 @@ def test_dealer_gamma_study_always_runs_all_models(monkeypatch):
 
     ctx = {"focus": {"ticker": "SPY"}}
     out = backtesting_tool.run_dealer_gamma_study(ctx)
-    assert out["sign_model"] == "all"
+    assert out["sign_model"] == "live"
     assert out["report"] == "REPORT"
     assert calls["accumulate"] is True
-    assert calls["sign_model"] == "all"
+    assert calls["sign_model"] == "live"

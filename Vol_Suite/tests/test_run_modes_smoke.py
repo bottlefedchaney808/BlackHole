@@ -316,7 +316,7 @@ def test_garch_success_with_no_conditional_vol_is_not_an_error(monkeypatch, tmp_
     monkeypatch.setattr(
         ga,
         "run_garch_module",
-        lambda ticker, output_dir=None: ga.GarchModuleResult([], "GARCH done", None),
+        lambda ticker, output_dir=None, merton_sigma=None, jump_variance_share=None: ga.GarchModuleResult([], "GARCH done", None),
     )
     monkeypatch.setenv("VS_OUTPUT_DIR", str(tmp_path))
 

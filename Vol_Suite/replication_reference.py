@@ -38,6 +38,8 @@ synthetic test rather than re-deriving:
     version that shows the paper's claimed "worse near expiry" direction.
 """
 
+from __future__ import annotations
+
 import math
 import os
 from collections import defaultdict

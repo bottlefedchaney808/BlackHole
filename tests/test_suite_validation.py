@@ -178,7 +178,11 @@ def test_vol_passes_with_marker_and_all_required_csvs(tmp_path):
     assert result.status == PASS
     assert result.errors == []
     assert result.missing_files == []
-    assert check_status(result, 'required_file[NVDA_gamma_records') == PASS
+    # The {ticker}_gamma_records_*.csv glob was retired with the expiry_book
+    # engine (see shared/suite_validation.py 'vol' requirement comment); the
+    # correlation CSVs are the only required artifacts now.
+    assert check_status(result, 'required_file[correlation_matrix') == PASS
+    assert check_status(result, 'required_file[correlation_pairs') == PASS
 
 
 # ── Vol_Suite: failure detection ─────────────────────────────────────────
@@ -210,18 +214,17 @@ def test_vol_fails_when_produced_files_empty(tmp_path):
 
 
 @pytest.mark.unit
-def test_vol_fails_when_gamma_records_csv_missing(tmp_path):
-    """Dealer positioning blew up; heatmap PNGs exist but no gamma CSV does."""
+def test_vol_passes_when_gamma_records_csv_missing(tmp_path):
+    """No gamma CSV is not a failure: the expiry_book engine keeps its
+    per-strike rows in memory and never writes that CSV (see the 'vol'
+    SuiteRequirement comment in shared/suite_validation.py)."""
     write_marker(tmp_path, 'vol', vol_payload(output_dir=str(tmp_path)))
     write_vol_csvs(tmp_path, gamma=False)
 
     result = validate_suite_output('Vol_Suite', str(tmp_path), ticker='NVDA')
 
-    assert not result.passed
-    assert 'NVDA_gamma_records_*.csv' in result.missing_files
-    assert check_status(result, 'required_file[NVDA_gamma_records') == FAIL
-    # The marker itself was fine -- the failure is specifically the artifact.
-    assert check_status(result, 'schema_valid') == PASS
+    assert result.passed
+    assert result.missing_files == []
 
 
 @pytest.mark.unit
@@ -238,16 +241,17 @@ def test_vol_fails_when_correlation_csvs_missing(tmp_path):
 
 
 @pytest.mark.unit
-def test_vol_gamma_csv_for_a_different_ticker_does_not_count(tmp_path):
-    """A leftover CSV from a previous run's ticker must not satisfy this run."""
+def test_vol_leftover_gamma_csv_from_other_ticker_is_ignored(tmp_path):
+    """A leftover CSV from a previous run's ticker is irrelevant -- gamma CSVs
+    are no longer required artifacts at all."""
     write_marker(tmp_path, 'vol', vol_payload(ticker='NVDA',
                                               output_dir=str(tmp_path)))
     write_vol_csvs(tmp_path, ticker='SPY')
 
     result = validate_suite_output('Vol_Suite', str(tmp_path), ticker='NVDA')
 
-    assert not result.passed
-    assert 'NVDA_gamma_records_*.csv' in result.missing_files
+    assert result.passed
+    assert result.missing_files == []
 
 
 @pytest.mark.unit
@@ -340,7 +344,7 @@ def test_vol_non_strict_still_fails_a_missing_marker(tmp_path):
 @pytest.mark.unit
 def test_strict_default_reads_environment(tmp_path, monkeypatch):
     write_marker(tmp_path, 'vol', vol_payload(output_dir=str(tmp_path)))
-    write_vol_csvs(tmp_path, gamma=False)
+    write_vol_csvs(tmp_path, corr_matrix=False, corr_pairs=False)
 
     monkeypatch.setenv('SUITE_VALIDATION_STRICT', '0')
     assert validate_suite_output('vol', str(tmp_path), ticker='NVDA').passed
@@ -467,7 +471,7 @@ def test_require_suite_output_returns_on_pass(tmp_path):
 @pytest.mark.unit
 def test_result_to_dict_is_json_serializable_and_carries_checks(tmp_path):
     write_marker(tmp_path, 'vol', vol_payload(output_dir=str(tmp_path)))
-    write_vol_csvs(tmp_path, gamma=False)
+    write_vol_csvs(tmp_path, corr_matrix=False, corr_pairs=False)
 
     payload = validate_suite_output('vol', str(tmp_path), ticker='NVDA').to_dict()
     round_tripped = json.loads(json.dumps(payload))
@@ -475,7 +479,8 @@ def test_result_to_dict_is_json_serializable_and_carries_checks(tmp_path):
     assert round_tripped['suite'] == 'vol'
     assert round_tripped['status'] == FAIL
     assert any(c['status'] == FAIL for c in round_tripped['checks'])
-    assert round_tripped['missing_files'] == ['NVDA_gamma_records_*.csv']
+    assert sorted(round_tripped['missing_files']) == [
+        'correlation_matrix_*.csv', 'correlation_pairs_*.csv']
 
 
 @pytest.mark.unit

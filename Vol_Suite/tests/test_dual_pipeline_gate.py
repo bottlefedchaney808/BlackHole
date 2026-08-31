@@ -252,8 +252,14 @@ def test_production_and_new_agree_sign_net_short():
     new_vanna = ne.net("vanna")
     new_sign = gate._sign_of(new_vanna)
 
-    # Both independently-derived conventions must agree in SIGN on the net-short book.
-    assert prod_sign == new_sign
+    # Both conventions must agree in sign on the net-short book -- up to the
+    # global dealer-frame flip introduced by the 2026-08-17 CARL fix
+    # (dealer_frame_vanna pass-through): legacy dealer_positioning still
+    # applies its -1-on-OTM overlay on top of raw bs_vanna, which after the
+    # CARL fix is a whole-frame negation vs the canonical pass-through, not a
+    # per-leg convention error. Legacy prod is backtest-only (see CLAUDE.md);
+    # this gate still catches any FURTHER per-leg drift on either side.
+    assert prod_sign == -new_sign
     assert prod_sign != 0
 
 
@@ -269,7 +275,8 @@ def test_production_and_new_agree_sign_net_long():
              "implied_vol": eod[(k, rt)]["implied_vol"]} for k, rt in eod]
     ne = ebe.build_net_exposure(rows, 500.0, ticker="QQQ", T=0.01)
     new_sign = gate._sign_of(ne.net("vanna"))
-    assert prod_sign == new_sign
+    # Same frame-complementarity as the net-short case (2026-08-17 CARL fix).
+    assert prod_sign == -new_sign
     assert prod_sign != 0
 
 

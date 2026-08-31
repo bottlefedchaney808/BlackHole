@@ -1800,7 +1800,12 @@ class ThetaDataController:
 
     def hist_stock_eod(self, root: str, start_date: str, end_date: str) -> list[dict]:
         """Daily OHLCV history.  Paginates into <=28-day chunks to avoid
-        proxy-side 502 on long lookbacks."""
+        proxy-side 502 on long lookbacks. SPXW resolves to SPX here, same
+        as the index-price routes: SPXW's *listed chain* is rooted under
+        SPXW, but its EOD history (stock or index route) only exists under
+        SPX, so realized-vol inputs that pass the chain root through don't
+        silently come back empty."""
+        root = _INDEX_PRICE_ROOT_ALIASES.get(root, root)
         fmt = "%Y%m%d"
         start_dt = datetime.strptime(start_date, fmt)
         end_dt = datetime.strptime(end_date, fmt)
