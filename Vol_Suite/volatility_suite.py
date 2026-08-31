@@ -42,17 +42,17 @@ Both of those hacks are gone: the prompt order is now free to change, and
 Vol_Suite reports its own vol surface / dealer positioning / gamma records
 rather than having them inferred from filenames.
 """
+
 import argparse
+import json
 import math
 import os
-import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from vs_utils import timestamped_output_dir, collect_files, compose_pdf_report
 import index_membership as idxmem
 from suite_context import (
     DEFAULT_OPTIONS_SUITE_ROOT,
@@ -62,6 +62,63 @@ from suite_context import (
     read_suite_context,
     write_suite_context,
 )
+from vs_utils import collect_files, compose_pdf_report, timestamped_output_dir
+
+JUMP_MODEL_DEFAULT = os.getenv("JUMP_MODEL_DEFAULT", "Bates")
+
+
+def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: float):
+    """Calibrate JUMP_MODEL_DEFAULT against the focus ticker's chain at
+    *expiration*, plus a cheap Merton fit for the GARCH jump-day filter
+    (Task 7/8's tie 1 wants Merton specifically, independent of whichever
+    model JUMP_MODEL_DEFAULT names -- see the design spec's model guide).
+    Returns a dict shaped for suite_context.json's jump_diffusion key, or
+    None on any failure -- never raises (matches the GARCH call site's
+    error-swallowing discipline at this same call level). Self-contained:
+    fetches its own spot/rate/dividend/chain data, the same way
+    garch_analysis.run_garch_module fetches its own price history, rather
+    than depending on _run_core_analysis's internal variable soup.
+    """
+    from jump_diffusion.calibration import calibrate
+    from jump_diffusion.models import ALL_MODELS, BatesModel, MertonModel
+    from thetadata_client import ThetaDataController
+    from variance_swap_live import fetch_chain_thetadata
+
+    model_cls = next(
+        (m for m in ALL_MODELS if m.name == JUMP_MODEL_DEFAULT), BatesModel
+    )
+    try:
+        td = ThetaDataController()
+        spot = float(td.fetch_spot_price(ticker))
+        r = float(td.fetch_risk_free_rate(target_years))
+        q = float(td.fetch_dividend_yield(ticker, spot))
+        chain = fetch_chain_thetadata(td, ticker, expiration, r, q)
+        result = calibrate(model_cls, chain, spot, target_years)
+
+        jump_variance_share = None
+        if model_cls is BatesModel:
+            jump_variance_share = model_cls.from_array(
+                [result.params[p] for p in model_cls.param_names]
+            ).jump_variance_share(target_years)
+
+        if model_cls is MertonModel:
+            merton_sigma = result.params[
+                "sigma"
+            ]  # already fit, avoid a redundant calibration
+        else:
+            merton_result = calibrate(MertonModel, chain, spot, target_years)
+            merton_sigma = merton_result.params["sigma"]
+
+        return {
+            "model_name": result.model_name,
+            "params": result.params,
+            "rmse_iv": result.rmse_iv,
+            "jump_variance_share": jump_variance_share,
+            "merton_sigma": merton_sigma,
+        }
+    except Exception as exc:
+        print(f"  [jump_diffusion] {JUMP_MODEL_DEFAULT} calibration failed: {exc}")
+        return None
 
 
 def _ticker_exists(ticker: str) -> bool:
@@ -72,6 +129,7 @@ def _ticker_exists(ticker: str) -> bool:
     symbol returns a positive spot from the snapshot quote."""
     try:
         from thetadata_client import ThetaDataController
+
         td = ThetaDataController()
         try:
             return td.fetch_spot_price(ticker) > 0
@@ -87,15 +145,15 @@ def _ticker_exists(ticker: str) -> bool:
 # Populated from CLI flags in main() so the common single-ticker workflow can
 # run headless without stdin.  Keys are unique substrings of the prompt text
 # they bypass -- see _set_override calls in main().
-_noninteractive: Dict[str, str] = {}
+_noninteractive: dict[str, str] = {}
 
 
-def _set_override(key: str, value: Optional[str]) -> None:
+def _set_override(key: str, value: str | None) -> None:
     if value is not None:
         _noninteractive[key] = str(value)
 
 
-def _ni_input(prompt: str, default: Optional[str] = None) -> str:
+def _ni_input(prompt: str, default: str | None = None) -> str:
     """Like input(), but honours _noninteractive overrides keyed by prompt text.
 
     Keys that start with '_' are internal overrides not tied to a specific
@@ -126,7 +184,11 @@ def prompt_focus_ticker() -> str:
         if _ticker_exists(t):
             return t
         print(f"  '{t}' doesn't resolve to a tradable symbol -- check the spelling.")
-        retry = _ni_input("  Enter a different ticker, or press Enter to use it anyway: ").strip().upper()
+        retry = (
+            _ni_input("  Enter a different ticker, or press Enter to use it anyway: ")
+            .strip()
+            .upper()
+        )
         if not retry:
             return t
         if _ticker_exists(retry):
@@ -137,10 +199,17 @@ def prompt_focus_ticker() -> str:
 
 def _default_pack_manifest_path() -> str:
     root = Path(__file__).resolve().parent.parent
-    return str(root / "sentiment-scanner" / "data" / "exports" / "highlighted_ticker_packs" / "latest_manifest.json")
+    return str(
+        root
+        / "sentiment-scanner"
+        / "data"
+        / "exports"
+        / "highlighted_ticker_packs"
+        / "latest_manifest.json"
+    )
 
 
-def _load_json_file(path: str) -> Optional[dict]:
+def _load_json_file(path: str) -> dict | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -151,9 +220,12 @@ def _load_json_file(path: str) -> Optional[dict]:
     return None
 
 
-def _load_ticker_pack_interactive() -> Optional[dict]:
+def _load_ticker_pack_interactive() -> dict | None:
     default_manifest = _default_pack_manifest_path()
-    manifest_path = _ni_input(f"Ticker-pack manifest path [default: {default_manifest}]: ").strip() or default_manifest
+    manifest_path = (
+        _ni_input(f"Ticker-pack manifest path [default: {default_manifest}]: ").strip()
+        or default_manifest
+    )
     manifest = _load_json_file(manifest_path)
     if not manifest:
         print("  Could not load manifest file. Falling back to manual ticker entry.")
@@ -182,7 +254,9 @@ def _load_ticker_pack_interactive() -> Optional[dict]:
         return None
     pack = _load_json_file(pack_path)
     if not pack:
-        print(f"  Could not load pack JSON at {pack_path}. Falling back to manual ticker entry.")
+        print(
+            f"  Could not load pack JSON at {pack_path}. Falling back to manual ticker entry."
+        )
         return None
     tickers = pack.get("tickers", [])
     if not tickers:
@@ -215,7 +289,7 @@ def _load_ticker_pack_interactive() -> Optional[dict]:
     }
 
 
-def prompt_index_choice(ticker: str) -> Tuple[str, List[dict]]:
+def prompt_index_choice(ticker: str) -> tuple[str, list[dict]]:
     """Look up which tracked indices/sector ETFs the focus ticker belongs to
     and let the user choose one. Weight is the decision-support data point:
     a higher weight means the ticker is a more meaningful driver of that
@@ -226,7 +300,9 @@ def prompt_index_choice(ticker: str) -> Tuple[str, List[dict]]:
     idxmem.print_index_choices(ticker, matches)
     if matches:
         default_idx = matches[0]["index"]
-        choice = _ni_input(f"\nChoose an index by number, or type a ticker directly (default {default_idx}): ").strip()
+        choice = _ni_input(
+            f"\nChoose an index by number, or type a ticker directly (default {default_idx}): "
+        ).strip()
         if not choice:
             return default_idx, matches
         if choice.isdigit():
@@ -237,7 +313,9 @@ def prompt_index_choice(ticker: str) -> Tuple[str, List[dict]]:
     print(f"  {ticker} wasn't found in any tracked index/sector ETF.")
     # In non-interactive mode, fall back to the override or SPY rather than
     # blocking on a manual-entry prompt.
-    override = _get_noninteractive("Choose an index") or _get_noninteractive("Enter an index/sector ETF ticker manually")
+    override = _get_noninteractive("Choose an index") or _get_noninteractive(
+        "Enter an index/sector ETF ticker manually"
+    )
     if override:
         return str(override).upper(), matches
     print("  Falling back to SPY as the benchmark index.")
@@ -256,7 +334,7 @@ def prompt_index_choice(ticker: str) -> Tuple[str, List[dict]]:
 # Mastercard and Mid-America Apartment; CAT/CATY are Caterpillar and Cathay).
 # Add to it as needed -- an unlisted pair degrades to current behaviour, it
 # doesn't break anything.
-SHARE_CLASS_GROUPS: List[set] = [
+SHARE_CLASS_GROUPS: list[set] = [
     {"GOOGL", "GOOG"},
     {"BRK.A", "BRK.B", "BRK-A", "BRK-B"},
     {"FOX", "FOXA"},
@@ -272,8 +350,9 @@ SHARE_CLASS_GROUPS: List[set] = [
 ]
 
 
-def _dedupe_share_classes(constituents: List[Tuple[str, float]],
-                          protect: Optional[str] = None) -> List[Tuple[str, float]]:
+def _dedupe_share_classes(
+    constituents: list[tuple[str, float]], protect: str | None = None
+) -> list[tuple[str, float]]:
     """Collapse dual-class listings to a single ticker per issuer.
 
     The surviving ticker carries the issuer's COMBINED index weight, since the
@@ -283,7 +362,7 @@ def _dedupe_share_classes(constituents: List[Tuple[str, float]],
     `protect` (the focus ticker) always survives its group even if the other
     class carries more weight.
     """
-    kept: List[Tuple[str, float]] = []
+    kept: list[tuple[str, float]] = []
     handled: set = set()
     protect = (protect or "").upper()
 
@@ -307,15 +386,18 @@ def _dedupe_share_classes(constituents: List[Tuple[str, float]],
         else:
             survivor = max(siblings, key=lambda x: x[1])[0]
         dropped = ", ".join(s for s, _ in siblings if s != survivor)
-        print(f"  [dedupe] {survivor} and {dropped} are share classes of one issuer "
-              f"-> keeping {survivor} at combined weight {combined:.2f}%")
+        print(
+            f"  [dedupe] {survivor} and {dropped} are share classes of one issuer "
+            f"-> keeping {survivor} at combined weight {combined:.2f}%"
+        )
         kept.append((survivor, combined))
 
     return kept
 
 
-def _resolve_basket(ticker: str, chosen_index: str, top_n: int,
-                    known_weight: Optional[float] = None) -> Tuple[List[str], List[float]]:
+def _resolve_basket(
+    ticker: str, chosen_index: str, top_n: int, known_weight: float | None = None
+) -> tuple[list[str], list[float]]:
     """Build the index-weighted basket, making sure the focus ticker itself
     is always in it (even if its weight is too small to land in the default
     top_n cut) -- the whole point of the basket is to compare the focus
@@ -343,8 +425,8 @@ def _resolve_basket(ticker: str, chosen_index: str, top_n: int,
 
 
 def _resolve_ticker_universe(
-    ticker: str, pack_ctx: Optional[dict]
-) -> Tuple[List[str], bool, str, Optional[float], int, List[dict]]:
+    ticker: str, pack_ctx: dict | None
+) -> tuple[list[str], bool, str, float | None, int, list[dict]]:
     """Decide what basket/benchmark universe this run uses.
 
     If a sentiment-scanner pack with 2+ tickers was loaded, that pack IS the
@@ -365,32 +447,44 @@ def _resolve_ticker_universe(
 
     if use_pack_basket:
         chosen_index = os.environ.get("VS_BENCHMARK_INDEX", "SPY")
-        matches: List[dict] = []
+        matches: list[dict] = []
         known_weight = None
         top_n = len(group_tickers)
-        print(f"\nUsing the {len(group_tickers)}-ticker sentiment-scanner basket "
-              f"directly (skipping the index-basket prompt). Benchmark index: "
-              f"{chosen_index} (override with the VS_BENCHMARK_INDEX env var).")
+        print(
+            f"\nUsing the {len(group_tickers)}-ticker sentiment-scanner basket "
+            f"directly (skipping the index-basket prompt). Benchmark index: "
+            f"{chosen_index} (override with the VS_BENCHMARK_INDEX env var)."
+        )
     else:
         chosen_index, matches = prompt_index_choice(ticker)
-        known_weight = next((m["weight"] for m in matches if m["index"] == chosen_index), None)
-        n_input = _ni_input("Basket size — number of index constituents to pull (default 10): ").strip()
+        known_weight = next(
+            (m["weight"] for m in matches if m["index"] == chosen_index), None
+        )
+        n_input = _ni_input(
+            "Basket size — number of index constituents to pull (default 10): "
+        ).strip()
         top_n = int(n_input) if n_input else 10
 
     return group_tickers, use_pack_basket, chosen_index, known_weight, top_n, matches
 
 
 def _build_basket(
-    ticker: str, use_pack_basket: bool, group_tickers: List[str],
-    chosen_index: str, top_n: int, known_weight: Optional[float],
-) -> Tuple[List[str], List[float]]:
+    ticker: str,
+    use_pack_basket: bool,
+    group_tickers: list[str],
+    chosen_index: str,
+    top_n: int,
+    known_weight: float | None,
+) -> tuple[list[str], list[float]]:
     """The (tickers, weights) basket used for correlation stats AND, in the
     unified flow, the suite_context handoff -- computed once so both are
     backed by the same numbers instead of two independent (and potentially
     inconsistent) resolutions."""
     if use_pack_basket:
-        print(f"\n[1/5] Using the {len(group_tickers)}-ticker sentiment-scanner "
-              f"basket for correlation (not an index-derived basket)...")
+        print(
+            f"\n[1/5] Using the {len(group_tickers)}-ticker sentiment-scanner "
+            f"basket for correlation (not an index-derived basket)..."
+        )
         return list(group_tickers), [1.0] * len(group_tickers)
     print(f"\n[1/5] Building basket from {chosen_index} constituents...")
     return _resolve_basket(ticker, chosen_index, top_n, known_weight=known_weight)
@@ -401,12 +495,19 @@ def _run_id_now() -> str:
 
 
 def _choose_option_type() -> str:
-    raw = (_ni_input("Option type for shared context (call/put, default call): ").strip().lower() or "call")
+    raw = (
+        _ni_input("Option type for shared context (call/put, default call): ")
+        .strip()
+        .lower()
+        or "call"
+    )
     return "put" if raw == "put" else "call"
 
 
-def _choose_optional_strike() -> Optional[float]:
-    raw = _ni_input("Optional strike for shared context (press Enter to keep null): ").strip()
+def _choose_optional_strike() -> float | None:
+    raw = _ni_input(
+        "Optional strike for shared context (press Enter to keep null): "
+    ).strip()
     if not raw:
         return None
     try:
@@ -417,7 +518,11 @@ def _choose_optional_strike() -> Optional[float]:
 
 
 def _prompt_yes_no(prompt: str, default: bool) -> bool:
-    choice = _ni_input(f"{prompt} (y/n, default {'y' if default else 'n'}): ").strip().lower()
+    choice = (
+        _ni_input(f"{prompt} (y/n, default {'y' if default else 'n'}): ")
+        .strip()
+        .lower()
+    )
     if not choice:
         return default
     return choice == "y"
@@ -426,11 +531,13 @@ def _prompt_yes_no(prompt: str, default: bool) -> bool:
 def _require_existing_dir(path_value: str, label: str) -> str:
     resolved = Path(path_value).expanduser().resolve()
     if not resolved.exists() or not resolved.is_dir():
-        raise FileNotFoundError(f"{label} path does not exist or is not a directory: {resolved}")
+        raise FileNotFoundError(
+            f"{label} path does not exist or is not a directory: {resolved}"
+        )
     return str(resolved)
 
 
-def _collect_ranked_tickers_from_pack(pack_ctx: Optional[dict]) -> List[str]:
+def _collect_ranked_tickers_from_pack(pack_ctx: dict | None) -> list[str]:
     if not pack_ctx:
         return []
     rows = pack_ctx["pack"].get("tickers", [])
@@ -438,7 +545,7 @@ def _collect_ranked_tickers_from_pack(pack_ctx: Optional[dict]) -> List[str]:
         rows,
         key=lambda t: (int(t.get("rank", 9999) or 9999), -float(t.get("cns", 0) or 0)),
     )
-    out: List[str] = []
+    out: list[str] = []
     for row in ranked:
         symbol = str((row or {}).get("symbol", "")).upper().strip()
         if symbol and symbol not in out:
@@ -446,7 +553,7 @@ def _collect_ranked_tickers_from_pack(pack_ctx: Optional[dict]) -> List[str]:
     return out
 
 
-def _prompt_sign_model_and_options_chain(pack_ctx: Optional[dict]) -> Tuple[str, bool]:
+def _prompt_sign_model_and_options_chain(pack_ctx: dict | None) -> tuple[str, bool]:
     """The dealer-positioning sign-model choice and options-chain-scanner
     toggle -- asked identically by both run modes so mode 2 actually reaches
     v2 (vol_surface_replication) and the chain scanner instead of silently
@@ -457,19 +564,29 @@ def _prompt_sign_model_and_options_chain(pack_ctx: Optional[dict]) -> Tuple[str,
     sign_model = "expiry_book"
     options_hint = True
     if pack_ctx:
-        options_hint = bool(pack_ctx["pack"].get("downstream_hints", {}).get("options_suite", False))
+        options_hint = bool(
+            pack_ctx["pack"].get("downstream_hints", {}).get("options_suite", False)
+        )
     options_default = "y" if options_hint else "n"
-    run_options_chain = (_ni_input(f"Run Options Chain Scanner step? (y/n, default {options_default}): ").strip().lower() or options_default) == "y"
+    run_options_chain = (
+        _ni_input(f"Run Options Chain Scanner step? (y/n, default {options_default}): ")
+        .strip()
+        .lower()
+        or options_default
+    ) == "y"
     return sign_model, run_options_chain
 
 
-def _run_production_dealer_positioning(ticker: str, target_years: float,
-                                       output_dir: str, expiration: str,
-                                       sign_model: str):
+def _run_production_dealer_positioning(
+    ticker: str, target_years: float, output_dir: str, expiration: str, sign_model: str
+):
     """Run the authoritative expiry-book engine for the production suite."""
+    from dealer_positioning import (
+        plot_expiry_book_greek_exposure,
+        plot_expiry_book_heatmap,
+    )
     from expiry_book_production import fetch_production_result, format_production_interp
     from thetadata_client import ThetaDataController
-    from dealer_positioning import plot_expiry_book_greek_exposure, plot_expiry_book_heatmap
 
     td = ThetaDataController()
     try:
@@ -484,20 +601,25 @@ def _run_production_dealer_positioning(ticker: str, target_years: float,
     return files, interp, result
 
 
-def _prompt_extra_analytics(pack_ctx: Optional[dict]) -> Tuple[bool, bool, bool]:
+def _prompt_extra_analytics(pack_ctx: dict | None) -> tuple[bool, bool, bool]:
     """Toggles for the three optional analytics modules that sit alongside the
     core pipeline: the 2D (strike x tenor) vol surface, the VRP term
     structure (1-12mo), and -- only offered when a sentiment-scanner pack was
     actually loaded -- the CNS/war_score sentiment backtest. Asked identically
     by both run_focus_workflow and run_unified_flow, same pattern as
     _prompt_sign_model_and_options_chain."""
-    run_vs2d = _prompt_yes_no("Build 2D vol surface (strike x tenor) for the focus ticker?", default=False)
-    run_vrp = _prompt_yes_no("Run VRP term structure (1-12mo) for the focus ticker?", default=False)
+    run_vs2d = _prompt_yes_no(
+        "Build 2D vol surface (strike x tenor) for the focus ticker?", default=False
+    )
+    run_vrp = _prompt_yes_no(
+        "Run VRP term structure (1-12mo) for the focus ticker?", default=False
+    )
     run_sent_bt = False
     if pack_ctx:
         run_sent_bt = _prompt_yes_no(
             "Run sentiment backtest (CNS/war_score vs forward returns) on the highlighted-pack history?",
-            default=False)
+            default=False,
+        )
     return run_vs2d, run_vrp, run_sent_bt
 
 
@@ -539,7 +661,7 @@ def _run_child_suite(
     suite_root: str,
     context_path: str,
     output_dir: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     entrypoint = _child_entrypoint_for_suite(suite_root, suite_name)
     context_out = os.path.join(output_dir, f"{suite_name}_result.json")
     command = [
@@ -555,9 +677,11 @@ def _run_child_suite(
     env["SUITE_CONTEXT_MODE"] = "1"
     env["VS_OUTPUT_DIR"] = output_dir
 
-    print(f"  [{suite_name}] running {Path(entrypoint).name} "
-          f"(timeout {_CHILD_SUITE_TIMEOUT_SEC}s)... output is captured, "
-          f"so this will look idle until it finishes.")
+    print(
+        f"  [{suite_name}] running {Path(entrypoint).name} "
+        f"(timeout {_CHILD_SUITE_TIMEOUT_SEC}s)... output is captured, "
+        f"so this will look idle until it finishes."
+    )
     try:
         proc = subprocess.run(
             command,
@@ -577,8 +701,9 @@ def _run_child_suite(
             "suite": suite_name,
             "command": " ".join(command),
             "returncode": -1,
-            "stdout_tail": (e.stdout or b"").decode(errors="replace").splitlines()[-12:] and
-                           "\n".join((e.stdout or b"").decode(errors="replace").splitlines()[-12:]) or "",
+            "stdout_tail": (e.stdout or b"").decode(errors="replace").splitlines()[-12:]
+            and "\n".join((e.stdout or b"").decode(errors="replace").splitlines()[-12:])
+            or "",
             "stderr_tail": f"TIMEOUT after {_CHILD_SUITE_TIMEOUT_SEC}s -- child killed.",
         }
     return {
@@ -611,7 +736,7 @@ _MAX_GAMMA_RECORDS = int(os.environ.get("VS_VOL_RESULT_MAX_GAMMA_RECORDS", "500"
 
 
 def _iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _json_safe(value: Any) -> Any:
@@ -642,13 +767,13 @@ def _json_safe(value: Any) -> Any:
         return [_json_safe(v) for v in value]
     if isinstance(value, Path):
         return str(value)
-    item = getattr(value, "item", None)          # numpy scalar
+    item = getattr(value, "item", None)  # numpy scalar
     if callable(item) and getattr(value, "shape", None) == ():
         try:
             return _json_safe(item())
         except Exception:
             pass
-    tolist = getattr(value, "tolist", None)      # numpy array
+    tolist = getattr(value, "tolist", None)  # numpy array
     if callable(tolist):
         try:
             return _json_safe(tolist())
@@ -658,17 +783,23 @@ def _json_safe(value: Any) -> Any:
 
 
 _VARIANCE_LEG_FIELDS = (
-    "S0", "F", "T_years",
+    "S0",
+    "F",
+    "T_years",
     "fair_variance_annualized",
     "fair_variance_swap_strike_vol",
     "fair_variance_swap_strike_vol_pct",
-    "atm_strike", "atm_implied_vol", "atm_implied_vol_pct",
+    "atm_strike",
+    "atm_implied_vol",
+    "atm_implied_vol_pct",
     "convexity_premium_vol_pct",
-    "num_strikes_used", "K_min", "K_max",
+    "num_strikes_used",
+    "K_min",
+    "K_max",
 )
 
 
-def _variance_leg_summary(ticker: str, result: Optional[dict]) -> Optional[Dict[str, Any]]:
+def _variance_leg_summary(ticker: str, result: dict | None) -> dict[str, Any] | None:
     """One replication leg, flattened for the handoff.
 
     Deliberately drops `strike_table` -- it is a dict of parallel numpy arrays
@@ -678,7 +809,7 @@ def _variance_leg_summary(ticker: str, result: Optional[dict]) -> Optional[Dict[
     """
     if not isinstance(result, dict):
         return None
-    summary: Dict[str, Any] = {"ticker": str(ticker).upper()}
+    summary: dict[str, Any] = {"ticker": str(ticker).upper()}
     for key in _VARIANCE_LEG_FIELDS:
         if key in result:
             summary[key] = _json_safe(result[key])
@@ -689,20 +820,31 @@ def _variance_leg_summary(ticker: str, result: Optional[dict]) -> Optional[Dict[
 
 
 _DEALER_SCALAR_FIELDS = (
-    "ticker", "spot", "forward", "dividend_yield",
-    "total_net_gamma", "total_net_dollar_gamma",
-    "hedge_requirement", "gamma_flip_level",
-    "highest_gamma_strike", "total_gamma_exposure",
-    "num_expiries", "num_records",
+    "ticker",
+    "spot",
+    "forward",
+    "dividend_yield",
+    "total_net_gamma",
+    "total_net_dollar_gamma",
+    "hedge_requirement",
+    "gamma_flip_level",
+    "highest_gamma_strike",
+    "total_gamma_exposure",
+    "num_expiries",
+    "num_records",
     "greek_days_window",
-    "has_delta_data", "has_vanna_data", "has_charm_data",
-    "hedge_equiv_option_strike", "hedge_equiv_option_right",
+    "has_delta_data",
+    "has_vanna_data",
+    "has_charm_data",
+    "hedge_equiv_option_strike",
+    "hedge_equiv_option_right",
     "hedge_equiv_option_contracts",
 )
 
 
-def _dealer_positioning_summary(result: Any, sign_model: str,
-                                csv_path: Optional[str] = None) -> Dict[str, Any]:
+def _dealer_positioning_summary(
+    result: Any, sign_model: str, csv_path: str | None = None
+) -> dict[str, Any]:
     """The scalar dealer-positioning read, plus an explicit `available` flag.
 
     `available` is the load-bearing field: dealer positioning is the step most
@@ -711,7 +853,7 @@ def _dealer_positioning_summary(result: Any, sign_model: str,
     genuinely flat book. Consumers branch on `available`, never on whether the
     numbers look plausible.
     """
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "available": result is not None,
         "sign_model": str(sign_model),
         "gamma_records_csv": csv_path,
@@ -729,21 +871,35 @@ def _dealer_positioning_summary(result: Any, sign_model: str,
 
 
 _GAMMA_RECORD_FIELDS = (
-    "strike", "expiry", "right", "oi",
-    "gamma", "dollar_gamma", "iv", "tte",
-    "bid", "ask", "delta", "vanna", "charm",
+    "strike",
+    "expiry",
+    "right",
+    "oi",
+    "gamma",
+    "dollar_gamma",
+    "iv",
+    "tte",
+    "bid",
+    "ask",
+    "delta",
+    "vanna",
+    "charm",
 )
 
 
-def _gamma_records_payload(result: Any) -> Tuple[List[Dict[str, Any]], int, bool]:
+def _gamma_records_payload(result: Any) -> tuple[list[dict[str, Any]], int, bool]:
     """(records, total_before_truncation, was_truncated)."""
-    raw = list(getattr(result, "gamma_records", None) or []) if result is not None else []
+    raw = (
+        list(getattr(result, "gamma_records", None) or []) if result is not None else []
+    )
     total = len(raw)
     truncated = False
     if _MAX_GAMMA_RECORDS > 0 and total > _MAX_GAMMA_RECORDS:
+
         def _abs_dollar_gamma(rec: Any) -> float:
             val = _json_safe(getattr(rec, "dollar_gamma", None))
             return abs(float(val)) if isinstance(val, (int, float)) else 0.0
+
         raw = sorted(raw, key=_abs_dollar_gamma, reverse=True)[:_MAX_GAMMA_RECORDS]
         truncated = True
     records = [
@@ -753,7 +909,7 @@ def _gamma_records_payload(result: Any) -> Tuple[List[Dict[str, Any]], int, bool
     return records, total, truncated
 
 
-def _build_vol_surface(artifacts: Dict[str, Any]) -> Dict[str, Any]:
+def _build_vol_surface(artifacts: dict[str, Any]) -> dict[str, Any]:
     """The `vol_surface` block of vol_result.json.
 
     "Vol surface" here means what this suite actually measures: the two
@@ -779,23 +935,31 @@ def _build_vol_surface(artifacts: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_vol_result(*, artifacts: Dict[str, Any], context: Optional[Dict[str, Any]],
-                      output_dir: str, produced: List[str],
-                      summary: str = "") -> Dict[str, Any]:
+def _build_vol_result(
+    *,
+    artifacts: dict[str, Any],
+    context: dict[str, Any] | None,
+    output_dir: str,
+    produced: list[str],
+    summary: str = "",
+) -> dict[str, Any]:
     """Assemble a schema-valid vol_result payload from a completed run."""
     vol_surface = _build_vol_surface(artifacts)
-    dealer = artifacts.get("dealer_positioning", {"available": False,
-                                                  "sign_model": artifacts.get("sign_model", "")})
+    dealer = artifacts.get(
+        "dealer_positioning",
+        {"available": False, "sign_model": artifacts.get("sign_model", "")},
+    )
 
     # 'ok' means "at least one of the three blocks carries real content". A run
     # where every leg failed is reported as an error even though the process
     # exited cleanly -- otherwise the orchestrator books a total data outage as
     # a successful stage.
-    produced_something = bool(vol_surface.get("focus") or vol_surface.get("index")
-                              or dealer.get("available"))
+    produced_something = bool(
+        vol_surface.get("focus") or vol_surface.get("index") or dealer.get("available")
+    )
     status = "ok" if produced_something else "error"
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "schema_version": VOL_RESULT_SCHEMA_VERSION,
         "suite": "vol",
         "status": status,
@@ -810,7 +974,9 @@ def _build_vol_result(*, artifacts: Dict[str, Any], context: Optional[Dict[str, 
         "sentiment_backtest": artifacts.get("sentiment_backtest", {"available": False}),
         "gamma_records": artifacts.get("gamma_records", []),
         "gamma_records_total": int(artifacts.get("gamma_records_total", 0) or 0),
-        "gamma_records_truncated": bool(artifacts.get("gamma_records_truncated", False)),
+        "gamma_records_truncated": bool(
+            artifacts.get("gamma_records_truncated", False)
+        ),
         "gamma_records_csv": artifacts.get("gamma_records_csv"),
         "sign_model": artifacts.get("sign_model"),
         "produced_files": [os.path.basename(f) for f in (produced or [])],
@@ -818,15 +984,20 @@ def _build_vol_result(*, artifacts: Dict[str, Any], context: Optional[Dict[str, 
         "errors": artifacts.get("errors", []),
     }
     if status == "error":
-        steps = ", ".join(e.get("step", "?") for e in payload["errors"]) or "all pipeline steps"
-        payload["error"] = ("Vol_Suite produced no vol surface and no dealer positioning; "
-                            f"failed steps: {steps}")
+        steps = (
+            ", ".join(e.get("step", "?") for e in payload["errors"])
+            or "all pipeline steps"
+        )
+        payload["error"] = (
+            "Vol_Suite produced no vol surface and no dealer positioning; "
+            f"failed steps: {steps}"
+        )
     return _json_safe(payload)
 
 
-def _error_vol_result(*, ticker: str, error: str,
-                      output_dir: Optional[str] = None,
-                      run_id: Optional[str] = None) -> Dict[str, Any]:
+def _error_vol_result(
+    *, ticker: str, error: str, output_dir: str | None = None, run_id: str | None = None
+) -> dict[str, Any]:
     """A schema-valid vol_result for a run that never got as far as analysis.
 
     The empty blocks are present, not omitted, precisely so the consumer's
@@ -866,13 +1037,14 @@ def _import_shared_schemas():
         root = str(Path(__file__).resolve().parent.parent)
         if root not in sys.path:
             sys.path.insert(0, root)
-        from shared import schemas  # noqa: E402  (path set immediately above)
+        from shared import schemas
+
         return schemas
     except Exception:
         return None
 
 
-def _apply_instrument_resolver(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_instrument_resolver(payload: dict[str, Any]) -> dict[str, Any]:
     """Enrich a vol_result payload with cross-source instrument identifiers,
     per instrument_resolver.py's own stated integration point (see that
     module's docstring: "This module can be imported by volatility_suite.py
@@ -889,18 +1061,20 @@ def _apply_instrument_resolver(payload: Dict[str, Any]) -> Dict[str, Any]:
         return payload
     try:
         import instrument_resolver as ir
+
         resolver = ir.get_resolver_from_args(resolver_name)
         normalizer = ir.Vol_SuiteInstrumentNormalizer(resolver)
         payload = normalizer.add_instrument_identifiers_to_result(payload)
         if isinstance(payload.get("vol_surface"), dict):
             payload["vol_surface"] = normalizer.normalize_instrument_in_vol_surface(
-                payload["vol_surface"])
+                payload["vol_surface"]
+            )
     except Exception as e:
         print(f"  [instrument_resolver] enrichment failed: {e}", file=sys.stderr)
     return payload
 
 
-def _write_vol_result(path: str, payload: Dict[str, Any]) -> str:
+def _write_vol_result(path: str, payload: dict[str, Any]) -> str:
     """Validate then write. A payload that fails its own schema is REPLACED by
     an error payload that says so, so the file on disk is always readable by a
     consumer that trusts the contract -- rather than being a subtly malformed
@@ -928,9 +1102,9 @@ def _write_vol_result(path: str, payload: Dict[str, Any]) -> str:
     return out_path
 
 
-def _resolve_context_out_path(context_path: Optional[str],
-                              context: Optional[Dict[str, Any]],
-                              context_out: Optional[str]) -> str:
+def _resolve_context_out_path(
+    context_path: str | None, context: dict[str, Any] | None, context_out: str | None
+) -> str:
     """Where vol_result.json goes: --context-out if given, else the context's
     own output_dir, else next to the context file. Same precedence
     Options_Suite/main.py::_resolve_context_out_path uses, so all three
@@ -940,30 +1114,31 @@ def _resolve_context_out_path(context_path: Optional[str],
     output_dir = (context or {}).get("output_dir")
     if isinstance(output_dir, str) and output_dir.strip():
         return os.path.join(output_dir, "vol_result.json")
-    base = (os.path.dirname(os.path.abspath(context_path)) if context_path
-            else os.getcwd())
+    base = (
+        os.path.dirname(os.path.abspath(context_path)) if context_path else os.getcwd()
+    )
     return os.path.join(base, "vol_result.json")
 
 
 def _run_core_analysis(
     *,
     ticker: str,
-    pack_ctx: Optional[dict],
-    group_tickers: List[str],
+    pack_ctx: dict | None,
+    group_tickers: list[str],
     use_pack_basket: bool,
-    tickers: List[str],
-    weights: List[float],
+    tickers: list[str],
+    weights: list[float],
     chosen_index: str,
     target_years: float,
     expiration: str,
     sign_model: str,
     run_options_chain: bool,
     out_root: str,
-    run_group_screener: Optional[bool] = None,
+    run_group_screener: bool | None = None,
     run_vol_surface_2d: bool = False,
     run_vrp_term_structure: bool = False,
     run_sentiment_backtest: bool = False,
-) -> Tuple[List[str], List[dict], Dict[str, Any]]:
+) -> tuple[list[str], list[dict], dict[str, Any]]:
     """Runs the full Vol_Suite analysis pipeline: group screener (if a pack
     basket is present), basket correlation/dispersion, variance-swap
     replication on the index + focus ticker, an opportunities read, GARCH,
@@ -992,10 +1167,10 @@ def _run_core_analysis(
     than reconstructed by the caller from filenames, so a step that fails
     reports itself as failed instead of being invisible.
     """
-    produced: List[str] = []
-    sections: List[dict] = []
+    produced: list[str] = []
+    sections: list[dict] = []
 
-    artifacts: Dict[str, Any] = {
+    artifacts: dict[str, Any] = {
         "focus_ticker": ticker,
         "index_ticker": chosen_index,
         "expiration": expiration,
@@ -1029,27 +1204,44 @@ def _run_core_analysis(
     }
 
     def _note_error(step: str, exc: Exception) -> None:
-        artifacts["errors"].append({"step": step, "error": f"{type(exc).__name__}: {exc}"})
+        artifacts["errors"].append(
+            {"step": step, "error": f"{type(exc).__name__}: {exc}"}
+        )
 
     group_screener_ran = False
     if pack_ctx or run_group_screener:
         if run_group_screener is None:
-            run_pack_screen = (_ni_input("Run variance screener on full highlighted group first? (y/n, default y): ").strip().lower() or "y") == "y"
+            run_pack_screen = (
+                _ni_input(
+                    "Run variance screener on full highlighted group first? (y/n, default y): "
+                )
+                .strip()
+                .lower()
+                or "y"
+            ) == "y"
         else:
             run_pack_screen = bool(run_group_screener)
         if run_pack_screen and group_tickers:
-            print(f"\n[0/5] Running group screener on {len(group_tickers)} highlighted tickers...")
+            print(
+                f"\n[0/5] Running group screener on {len(group_tickers)} highlighted tickers..."
+            )
             try:
                 import variance_swap_screener as vss
-                files, interp = vss.run_variance_screener(group_tickers, target_years, output_dir=out_root)
+
+                files, interp = vss.run_variance_screener(
+                    group_tickers, target_years, output_dir=out_root
+                )
                 produced.extend(files)
-                group_label = ((pack_ctx or {}).get("pack", {}).get("group_id")
-                               or "highlighted-pack")
-                sections.append({
-                    "title": f"Group Screener: {group_label}",
-                    "text": interp or "",
-                    "images": [f for f in files if f.lower().endswith('.png')]
-                })
+                group_label = (pack_ctx or {}).get("pack", {}).get(
+                    "group_id"
+                ) or "highlighted-pack"
+                sections.append(
+                    {
+                        "title": f"Group Screener: {group_label}",
+                        "text": interp or "",
+                        "images": [f for f in files if f.lower().endswith(".png")],
+                    }
+                )
                 group_screener_ran = True
                 artifacts["group_screener_ran"] = True
             except Exception as e:
@@ -1065,10 +1257,15 @@ def _run_core_analysis(
             print("\n[Running] Sentiment Backtest (CNS/war_score vs forward returns)")
             try:
                 import sentiment_backtest as sbt
-                manifest_path = pack_ctx.get("manifest_path") or _default_pack_manifest_path()
+
+                manifest_path = (
+                    pack_ctx.get("manifest_path") or _default_pack_manifest_path()
+                )
                 # manifest_path = .../sentiment-scanner/data/exports/highlighted_ticker_packs/latest_manifest.json
                 # run_sentiment_backtest wants the "data" dir three levels up.
-                data_dir = os.path.dirname(os.path.dirname(os.path.dirname(manifest_path)))
+                data_dir = os.path.dirname(
+                    os.path.dirname(os.path.dirname(manifest_path))
+                )
                 bt_result = sbt.run_sentiment_backtest(data_dir, forward_days=5)
                 interp = (
                     f"packs_analyzed={bt_result.total_packs_analyzed}  "
@@ -1077,11 +1274,13 @@ def _run_core_analysis(
                     f"sharpe(long-only top quartile)={bt_result.sharpe_long_only}  "
                     f"cns_return_corr={bt_result.cns_return_correlation}"
                 )
-                sections.append({
-                    "title": "Sentiment Backtest (CNS/war_score vs forward returns)",
-                    "text": interp,
-                    "images": [],
-                })
+                sections.append(
+                    {
+                        "title": "Sentiment Backtest (CNS/war_score vs forward returns)",
+                        "text": interp,
+                        "images": [],
+                    }
+                )
                 artifacts["sentiment_backtest"] = {
                     "available": True,
                     "start_date": bt_result.start_date,
@@ -1089,21 +1288,30 @@ def _run_core_analysis(
                     "total_packs_analyzed": bt_result.total_packs_analyzed,
                     "total_signals": bt_result.total_signals,
                     "top_quartile_cns_names": list(bt_result.top_quartile_cns_names),
-                    "bottom_quartile_cns_names": list(bt_result.bottom_quartile_cns_names),
-                    "hit_rate_top_vs_bottom": _json_safe(bt_result.hit_rate_top_vs_bottom),
+                    "bottom_quartile_cns_names": list(
+                        bt_result.bottom_quartile_cns_names
+                    ),
+                    "hit_rate_top_vs_bottom": _json_safe(
+                        bt_result.hit_rate_top_vs_bottom
+                    ),
                     "sharpe_long_only": _json_safe(bt_result.sharpe_long_only),
-                    "cns_return_correlation": _json_safe(bt_result.cns_return_correlation),
+                    "cns_return_correlation": _json_safe(
+                        bt_result.cns_return_correlation
+                    ),
                     "forward_days": bt_result.forward_days,
                 }
             except Exception as e:
                 print(f"  Sentiment backtest failed: {e}")
                 _note_error("sentiment_backtest", e)
         else:
-            print("\n[Skipping] Sentiment Backtest -- no highlighted ticker pack was "
-                  "loaded this run (needs the ticker-pack input mode).")
+            print(
+                "\n[Skipping] Sentiment Backtest -- no highlighted ticker pack was "
+                "loaded this run (needs the ticker-pack input mode)."
+            )
 
     # ---- Step 1: basket stats (tickers/weights already resolved by caller) ----
     import correlation_engine as ce
+
     print(f"  Basket ({len(tickers)}): {', '.join(tickers)}")
 
     # A basket of one has no pairwise correlations, so the correlation engine
@@ -1115,32 +1323,45 @@ def _run_core_analysis(
     if basket_is_degenerate:
         print("  WARNING: basket has fewer than 2 names. Correlation/dispersion")
         print("           statistics below are structurally empty, not a signal.")
-        print("           Fix the constituent feed before trusting any dispersion read.")
+        print(
+            "           Fix the constituent feed before trusting any dispersion read."
+        )
 
     basket_stats = None
     try:
         basket_files, basket_interp, basket_stats = ce.run_correlation_engine(
-            tickers, weights=weights, market=chosen_index, period='2y', output_dir=out_root
+            tickers,
+            weights=weights,
+            market=chosen_index,
+            period="2y",
+            output_dir=out_root,
         )
         produced.extend(basket_files)
-        pack_group_id = (pack_ctx or {}).get("pack", {}).get("group_id") or "highlighted-pack"
+        pack_group_id = (pack_ctx or {}).get("pack", {}).get(
+            "group_id"
+        ) or "highlighted-pack"
         basket_label = (
             f"sentiment basket ({pack_group_id})"
-            if use_pack_basket else f"{chosen_index} constituents"
+            if use_pack_basket
+            else f"{chosen_index} constituents"
         )
-        sections.append({
-            "title": f"Basket Statistics — {basket_label}",
-            "text": basket_interp or "",
-            "images": [f for f in basket_files if f.lower().endswith('.png')]
-        })
+        sections.append(
+            {
+                "title": f"Basket Statistics — {basket_label}",
+                "text": basket_interp or "",
+                "images": [f for f in basket_files if f.lower().endswith(".png")],
+            }
+        )
         # dispersion_score is only information when there were pairs to
         # correlate; a degenerate basket's 0.000 is an artifact (see above), so
         # it is published as null rather than as a low-correlation reading.
         if not basket_is_degenerate:
             artifacts["basket"]["dispersion_score"] = _json_safe(
-                getattr(basket_stats, "dispersion_score", None))
+                getattr(basket_stats, "dispersion_score", None)
+            )
         artifacts["basket"]["betas"] = _json_safe(
-            dict(getattr(basket_stats, "individual_betas", {}) or {}))
+            dict(getattr(basket_stats, "individual_betas", {}) or {})
+        )
         # Realized annualized vol per basket ticker and the pairwise
         # correlation matrix were computed here (compute_basket_stats) but
         # previously only ever reached disk as a CSV/PNG artifact -- nothing
@@ -1151,11 +1372,14 @@ def _run_core_analysis(
         # basket block, so the orchestrator can thread real numbers into
         # VaR's context instead of leaving it to guess.
         artifacts["basket"]["individual_vols"] = _json_safe(
-            dict(getattr(basket_stats, "individual_vols", {}) or {}))
+            dict(getattr(basket_stats, "individual_vols", {}) or {})
+        )
         corr_matrix = getattr(basket_stats, "correlation_matrix", None)
         if corr_matrix is not None:
             artifacts["basket"]["correlation_matrix"] = _json_safe(corr_matrix)
-            artifacts["basket"]["correlation_tickers"] = list(getattr(basket_stats, "tickers", tickers))
+            artifacts["basket"]["correlation_tickers"] = list(
+                getattr(basket_stats, "tickers", tickers)
+            )
     except Exception as e:
         print(f"  Basket/correlation engine failed: {e}")
         _note_error("correlation_engine", e)
@@ -1163,32 +1387,47 @@ def _run_core_analysis(
     # ---- Step 2: variance-swap replication on ONLY the index + focus ticker ----
     # Full-constituent replication is explicitly deferred -- this is a
     # 2-leg read (index vs. the one ticker we're profiling), not a basket-wide run.
-    print(f"\n[2/5] Running variance-swap replication on {chosen_index} (index) and {ticker} (focus)...")
+    print(
+        f"\n[2/5] Running variance-swap replication on {chosen_index} (index) and {ticker} (focus)..."
+    )
     import variance_swap_live as vsl
+
     index_result = None
     ticker_result = None
     try:
-        idx_files, idx_interp, index_result = vsl.run_variance_swap_live(chosen_index, target_years, output_dir=out_root, expiration=expiration)
+        idx_files, idx_interp, index_result = vsl.run_variance_swap_live(
+            chosen_index, target_years, output_dir=out_root, expiration=expiration
+        )
         produced.extend(idx_files)
-        sections.append({
-            "title": f"Variance Swap: {chosen_index} (index)",
-            "text": idx_interp or "",
-            "images": [f for f in idx_files if f.lower().endswith('.png')]
-        })
-        artifacts["variance_swap"]["index"] = _variance_leg_summary(chosen_index, index_result)
+        sections.append(
+            {
+                "title": f"Variance Swap: {chosen_index} (index)",
+                "text": idx_interp or "",
+                "images": [f for f in idx_files if f.lower().endswith(".png")],
+            }
+        )
+        artifacts["variance_swap"]["index"] = _variance_leg_summary(
+            chosen_index, index_result
+        )
     except Exception as e:
         print(f"  Index replication failed: {e}")
         _note_error("variance_swap_index", e)
 
     try:
-        tk_files, tk_interp, ticker_result = vsl.run_variance_swap_live(ticker, target_years, output_dir=out_root, expiration=expiration)
+        tk_files, tk_interp, ticker_result = vsl.run_variance_swap_live(
+            ticker, target_years, output_dir=out_root, expiration=expiration
+        )
         produced.extend(tk_files)
-        sections.append({
-            "title": f"Variance Swap: {ticker} (focus)",
-            "text": tk_interp or "",
-            "images": [f for f in tk_files if f.lower().endswith('.png')]
-        })
-        artifacts["variance_swap"]["focus"] = _variance_leg_summary(ticker, ticker_result)
+        sections.append(
+            {
+                "title": f"Variance Swap: {ticker} (focus)",
+                "text": tk_interp or "",
+                "images": [f for f in tk_files if f.lower().endswith(".png")],
+            }
+        )
+        artifacts["variance_swap"]["focus"] = _variance_leg_summary(
+            ticker, ticker_result
+        )
     except Exception as e:
         print(f"  Focus ticker replication failed: {e}")
         _note_error("variance_swap_focus", e)
@@ -1197,17 +1436,25 @@ def _run_core_analysis(
     print("\n[3/5] Dispersion / vol opportunity read...")
     opp_lines = []
     if index_result and ticker_result:
-        idx_fv = index_result.get('fair_variance_swap_strike_vol_pct')
-        tk_fv = ticker_result.get('fair_variance_swap_strike_vol_pct')
+        idx_fv = index_result.get("fair_variance_swap_strike_vol_pct")
+        tk_fv = ticker_result.get("fair_variance_swap_strike_vol_pct")
         beta = basket_stats.individual_betas.get(ticker) if basket_stats else None
         # Only treat the dispersion score as real information if the basket
         # actually had pairs to correlate.
-        avg_corr = basket_stats.dispersion_score if (basket_stats and not basket_is_degenerate) else None
-        opp_lines.append(f"{chosen_index} fair vol: {idx_fv:.2f}%  |  {ticker} fair vol: {tk_fv:.2f}%")
+        avg_corr = (
+            basket_stats.dispersion_score
+            if (basket_stats and not basket_is_degenerate)
+            else None
+        )
+        opp_lines.append(
+            f"{chosen_index} fair vol: {idx_fv:.2f}%  |  {ticker} fair vol: {tk_fv:.2f}%"
+        )
         if beta is not None:
             opp_lines.append(f"{ticker} beta vs {chosen_index}: {beta:.2f}")
         if avg_corr is not None:
-            opp_lines.append(f"Basket avg pairwise correlation (dispersion score): {avg_corr:.3f}")
+            opp_lines.append(
+                f"Basket avg pairwise correlation (dispersion score): {avg_corr:.3f}"
+            )
         spread = tk_fv - idx_fv
         opp_lines.append(f"Vol spread (ticker - index): {spread:+.2f} vol pts")
         if avg_corr is not None and avg_corr < 0.3 and spread > 0:
@@ -1218,8 +1465,8 @@ def _run_core_analysis(
             )
         elif avg_corr is not None and avg_corr >= 0.6:
             opp_lines.append(
-                f"  -> HIGH basket correlation: weak dispersion environment; "
-                f"index-level short-vol is likely more efficient than a single-name dispersion leg."
+                "  -> HIGH basket correlation: weak dispersion environment; "
+                "index-level short-vol is likely more efficient than a single-name dispersion leg."
             )
         elif basket_is_degenerate:
             opp_lines.append(
@@ -1229,17 +1476,30 @@ def _run_core_analysis(
                 "supports or rejects a dispersion trade."
             )
         else:
-            opp_lines.append("  -> Mixed signal; no strong dispersion edge from correlation alone.")
+            opp_lines.append(
+                "  -> Mixed signal; no strong dispersion edge from correlation alone."
+            )
         if basket_stats:
             other_betas = sorted(
-                ((t, b) for t, b in basket_stats.individual_betas.items() if t != ticker),
-                key=lambda x: abs(x[1]), reverse=True
+                (
+                    (t, b)
+                    for t, b in basket_stats.individual_betas.items()
+                    if t != ticker
+                ),
+                key=lambda x: abs(x[1]),
+                reverse=True,
             )[:5]
             if other_betas:
-                opp_lines.append("Other basket names with the highest beta to " + chosen_index + " (worth a look too): " +
-                                 ", ".join(f"{t} ({b:.2f})" for t, b in other_betas))
+                opp_lines.append(
+                    "Other basket names with the highest beta to "
+                    + chosen_index
+                    + " (worth a look too): "
+                    + ", ".join(f"{t} ({b:.2f})" for t, b in other_betas)
+                )
     else:
-        opp_lines.append("Could not compute an opportunity read -- one or both replication legs failed.")
+        opp_lines.append(
+            "Could not compute an opportunity read -- one or both replication legs failed."
+        )
     opp_text = "\n".join(opp_lines)
     print(opp_text)
     sections.append({"title": "Opportunities", "text": opp_text, "images": []})
@@ -1247,24 +1507,45 @@ def _run_core_analysis(
 
     idx_leg = artifacts["variance_swap"]["index"] or {}
     focus_leg = artifacts["variance_swap"]["focus"] or {}
-    if idx_leg.get("fair_vol_pct") is not None and focus_leg.get("fair_vol_pct") is not None:
+    if (
+        idx_leg.get("fair_vol_pct") is not None
+        and focus_leg.get("fair_vol_pct") is not None
+    ):
         artifacts["variance_swap"]["vol_spread_pts"] = _json_safe(
-            float(focus_leg["fair_vol_pct"]) - float(idx_leg["fair_vol_pct"]))
+            float(focus_leg["fair_vol_pct"]) - float(idx_leg["fair_vol_pct"])
+        )
 
     # ---- Step 4: rest of the suite, scoped to the focus ticker ----
     print(f"\n[4/5] Running remaining modules for {ticker}...")
+
+    print("\n[Running] Jump-Diffusion Calibration")
+    jump_diffusion_result = _calibrate_default_jump_model(
+        ticker, expiration, target_years
+    )
+    artifacts["jump_diffusion"] = jump_diffusion_result
 
     print("\n[Running] GARCH Analysis")
     garch_conditional_vol = None
     try:
         import garch_analysis as ga
-        garch_result = ga.run_garch_module(ticker, output_dir=out_root)
+
+        garch_result = ga.run_garch_module(
+            ticker,
+            output_dir=out_root,
+            merton_sigma=(jump_diffusion_result or {}).get("merton_sigma"),
+            jump_variance_share=(jump_diffusion_result or {}).get(
+                "jump_variance_share"
+            ),
+        )
         files, interp, garch_conditional_vol = garch_result
         produced.extend(files)
-        sections.append({
-            "title": f"GARCH Analysis: {ticker}", "text": interp or "",
-            "images": [f for f in files if f.lower().endswith('.png')]
-        })
+        sections.append(
+            {
+                "title": f"GARCH Analysis: {ticker}",
+                "text": interp or "",
+                "images": [f for f in files if f.lower().endswith(".png")],
+            }
+        )
         # run_garch_module swallows a failing fit so one dead module does not
         # cost us dealer positioning, and reports it out-of-band via .error.
         # Without this check the failure would leave no machine-readable trace
@@ -1285,6 +1566,7 @@ def _run_core_analysis(
         try:
             import vol_surface_2d as vs2d
             from thetadata_client import ThetaDataController
+
             td_vs2d = ThetaDataController()
             try:
                 surface = vs2d.build_surface(ticker, td_vs2d)
@@ -1292,17 +1574,23 @@ def _run_core_analysis(
                 td_vs2d.close()
             if surface is not None:
                 ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-                surf_path = os.path.join(out_root, f"{ticker}_vol_surface_2d_{ts_tag}.png")
+                surf_path = os.path.join(
+                    out_root, f"{ticker}_vol_surface_2d_{ts_tag}.png"
+                )
                 vs2d.plot(surface, surf_path)
                 produced.append(surf_path)
                 tenors = surface.fitted_params.get("tenors", [])
                 spot = surface.fitted_params.get("spot")
-                sections.append({
-                    "title": f"2D Vol Surface: {ticker}",
-                    "text": (f"Fitted {len(tenors)} tenor(s) via quadratic-per-expiry smile "
-                             f"+ linear total-variance interpolation; spot={spot:.2f}."),
-                    "images": [surf_path],
-                })
+                sections.append(
+                    {
+                        "title": f"2D Vol Surface: {ticker}",
+                        "text": (
+                            f"Fitted {len(tenors)} tenor(s) via quadratic-per-expiry smile "
+                            f"+ linear total-variance interpolation; spot={spot:.2f}."
+                        ),
+                        "images": [surf_path],
+                    }
+                )
                 artifacts["vol_surface_2d"] = {
                     "available": True,
                     "tenors": _json_safe(tenors),
@@ -1310,8 +1598,10 @@ def _run_core_analysis(
                     "chart_path": surf_path,
                 }
             else:
-                print(f"  Could not build a 2D vol surface for {ticker} "
-                      f"(insufficient expiries/data).")
+                print(
+                    f"  Could not build a 2D vol surface for {ticker} "
+                    f"(insufficient expiries/data)."
+                )
         except Exception as e:
             print(f"  2D vol surface failed: {e}")
             _note_error("vol_surface_2d", e)
@@ -1321,20 +1611,25 @@ def _run_core_analysis(
         try:
             import vrp_term_structure as vts
             from thetadata_client import ThetaDataController
+
             td_vrp = ThetaDataController()
             try:
                 vrp_spot = td_vrp.fetch_spot_price(ticker)
                 vrp_q = td_vrp.fetch_dividend_yield(ticker)
                 vrp_r = td_vrp.fetch_risk_free_rate(0.25) or 0.05
-                vrp_result = vts.compute_vrp_term_structure(ticker, td_vrp, vrp_spot, vrp_r, vrp_q)
+                vrp_result = vts.compute_vrp_term_structure(
+                    ticker, td_vrp, vrp_spot, vrp_r, vrp_q
+                )
             finally:
                 td_vrp.close()
             # Print the table on the suite's own console block. Until this
             # existed the term structure only ever reached the PDF section
             # and vol_result.json, so a headless run's log gave no way to
             # tell a computed term structure from a skipped one.
-            print(f"\n  {'Tenor':<6} {'Expiry':<10} {'FairVol%':<10} "
-                  f"{'ATM IV%':<10} {'VRP%':<10} {'RV30%':<10}")
+            print(
+                f"\n  {'Tenor':<6} {'Expiry':<10} {'FairVol%':<10} "
+                f"{'ATM IV%':<10} {'VRP%':<10} {'RV30%':<10}"
+            )
             print("  " + "-" * 58)
 
             def _fmt(v, spec=".2f"):
@@ -1343,24 +1638,30 @@ def _run_core_analysis(
                 return format(v, spec) if not math.isnan(v) else "N/A"
 
             for p in vrp_result.points:
-                print(f"  {p.expiry_label:<6} {p.expiry_date:<10} "
-                      f"{_fmt(p.fair_vol_pct):<10} {_fmt(p.atm_iv_pct):<10} "
-                      f"{_fmt(p.vrp_pct, '+.2f'):<10} {_fmt(p.rv_30d_pct):<10}")
+                print(
+                    f"  {p.expiry_label:<6} {p.expiry_date:<10} "
+                    f"{_fmt(p.fair_vol_pct):<10} {_fmt(p.atm_iv_pct):<10} "
+                    f"{_fmt(p.vrp_pct, '+.2f'):<10} {_fmt(p.rv_30d_pct):<10}"
+                )
             print(f"  Term structure shape: {vrp_result.shape}")
 
             ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-            vrp_path = os.path.join(out_root, f"{ticker}_vrp_term_structure_{ts_tag}.png")
+            vrp_path = os.path.join(
+                out_root, f"{ticker}_vrp_term_structure_{ts_tag}.png"
+            )
             vts.plot_vrp_term_structure(vrp_result, vrp_path)
             produced.append(vrp_path)
-            sections.append({
-                "title": f"VRP Term Structure: {ticker} (shape={vrp_result.shape})",
-                "text": "\n".join(
-                    f"{p.expiry_label}: fair={p.fair_vol_pct:.2f}% atm={p.atm_iv_pct:.2f}% "
-                    f"vrp={p.vrp_pct:+.2f}pp rv30={p.rv_30d_pct:.2f}%"
-                    for p in vrp_result.points
-                ),
-                "images": [vrp_path],
-            })
+            sections.append(
+                {
+                    "title": f"VRP Term Structure: {ticker} (shape={vrp_result.shape})",
+                    "text": "\n".join(
+                        f"{p.expiry_label}: fair={p.fair_vol_pct:.2f}% atm={p.atm_iv_pct:.2f}% "
+                        f"vrp={p.vrp_pct:+.2f}pp rv30={p.rv_30d_pct:.2f}%"
+                        for p in vrp_result.points
+                    ),
+                    "images": [vrp_path],
+                }
+            )
             artifacts["vrp_term_structure"] = {
                 "available": True,
                 "shape": vrp_result.shape,
@@ -1379,25 +1680,38 @@ def _run_core_analysis(
     # entirely when the focus ticker's score is already sitting in the group
     # screener's table above. See FIX_PLAN_20260725.md, issue 2.
     if group_screener_ran and ticker in group_tickers:
-        print(f"\n[Skipping] Focus-Ticker Screener Recheck for {ticker} -- "
-              f"already scored in the Group Screener table above.")
-        sections.append({
-            "title": f"Screener Score: {ticker} (see Group Screener above)",
-            "text": f"{ticker} was already scored as part of the Group Screener "
-                    f"run in this session; see that section's table for its "
-                    f"row rather than re-running a single-ticker screen.",
-            "images": []
-        })
+        print(
+            f"\n[Skipping] Focus-Ticker Screener Recheck for {ticker} -- "
+            f"already scored in the Group Screener table above."
+        )
+        sections.append(
+            {
+                "title": f"Screener Score: {ticker} (see Group Screener above)",
+                "text": f"{ticker} was already scored as part of the Group Screener "
+                f"run in this session; see that section's table for its "
+                f"row rather than re-running a single-ticker screen.",
+                "images": [],
+            }
+        )
     else:
         print("\n[Running] Focus-Ticker Screener Recheck (post-basket)")
         try:
             import variance_swap_screener as vss
+
             r = vss.screen_ticker(ticker, target_years, expiration=expiration)
             if r:
                 vss.print_screener_table([r])
-                interp = (f"{ticker}: Score={r.score:.1f} ({r.signal}), VRP={r.vrp_pct:+.1f}pp, "
-                         f"Convexity={r.convexity_pct:.1f}pp, Skew={r.skew_bias:.2f}, Tail={r.tail_mass:.1%}")
-                sections.append({"title": f"Focus-Ticker Screener Recheck: {ticker}", "text": interp, "images": []})
+                interp = (
+                    f"{ticker}: Score={r.score:.1f} ({r.signal}), VRP={r.vrp_pct:+.1f}pp, "
+                    f"Convexity={r.convexity_pct:.1f}pp, Skew={r.skew_bias:.2f}, Tail={r.tail_mass:.1%}"
+                )
+                sections.append(
+                    {
+                        "title": f"Focus-Ticker Screener Recheck: {ticker}",
+                        "text": interp,
+                        "images": [],
+                    }
+                )
             else:
                 print(f"  No screener result for {ticker}.")
         except Exception as e:
@@ -1409,21 +1723,32 @@ def _run_core_analysis(
     dealer_positioning_ok = False
     try:
         files, interp, dp_result = _run_production_dealer_positioning(
-            ticker=ticker, target_years=target_years, output_dir=out_root,
-            expiration=expiration, sign_model=sign_model)
+            ticker=ticker,
+            target_years=target_years,
+            output_dir=out_root,
+            expiration=expiration,
+            sign_model=sign_model,
+        )
         produced.extend(files)
-        sections.append({
-            "title": f"Dealer Positioning: {ticker} (sign_model={sign_model})", "text": interp or "",
-            "images": [f for f in files if f.lower().endswith('.png')]
-        })
+        sections.append(
+            {
+                "title": f"Dealer Positioning: {ticker} (sign_model={sign_model})",
+                "text": interp or "",
+                "images": [f for f in files if f.lower().endswith(".png")],
+            }
+        )
         if hasattr(dp_result, "snapshot"):
             total_net_dollar_gamma = dp_result.snapshot.gex()
             artifacts["dealer_positioning"] = {
                 "available": dp_result.status == "available",
-                "engine": "expiry_book", "sign_model": "expiry_book",
-                "units": dp_result.units, "provenance": dp_result.provenance,
-                "spot": dp_result.spot, "expiry": dp_result.expiry,
-                "gex": total_net_dollar_gamma, "dex": dp_result.snapshot.dex(),
+                "engine": "expiry_book",
+                "sign_model": "expiry_book",
+                "units": dp_result.units,
+                "provenance": dp_result.provenance,
+                "spot": dp_result.spot,
+                "expiry": dp_result.expiry,
+                "gex": total_net_dollar_gamma,
+                "dex": dp_result.snapshot.dex(),
                 "execution_locus": vars(dp_result.execution_locus),
                 "structural": vars(dp_result.structural),
                 # shared/schemas.py::validate_vol_result's dealer_positioning
@@ -1456,9 +1781,12 @@ def _run_core_analysis(
             # Test/comparison adapters may still supply the historical result
             # shape. Normalize it here without making that shape a production
             # dependency or reopening the legacy live caller.
-            gamma_csv = next((f for f in files if str(f).lower().endswith(".csv")), None)
+            gamma_csv = next(
+                (f for f in files if str(f).lower().endswith(".csv")), None
+            )
             artifacts["dealer_positioning"] = _dealer_positioning_summary(
-                dp_result, "expiry_book", csv_path=gamma_csv)
+                dp_result, "expiry_book", csv_path=gamma_csv
+            )
             records, total, truncated = _gamma_records_payload(dp_result)
             artifacts["gamma_records"] = records
             artifacts["gamma_records_total"] = total
@@ -1482,14 +1810,20 @@ def _run_core_analysis(
         # dealer-positioning step already failed for this ticker/expiry.
         # Skip it and report the dependency plainly instead of masking the
         # upstream failure.
-        print("\n[5/5] Skipping Options Chain Scanner: dealer positioning "
-              "(step 4) failed, so no shared dealer-engine result is available "
-              "to plot the vanna panel from.")
-        artifacts["chain_scan"] = {"available": False, "error": "dealer_positioning_unavailable"}
+        print(
+            "\n[5/5] Skipping Options Chain Scanner: dealer positioning "
+            "(step 4) failed, so no shared dealer-engine result is available "
+            "to plot the vanna panel from."
+        )
+        artifacts["chain_scan"] = {
+            "available": False,
+            "error": "dealer_positioning_unavailable",
+        }
     elif run_options_chain:
         print(f"\n[5/5] Running Options Chain Scanner for {ticker} @ {expiration}...")
         try:
             import options_chain_scanner as ocs
+
             # Share the dealer-positioning engine's own result (step 4 just
             # succeeded, since dp_result is not None here) so the scanner's
             # vanna panel matches the 4-panel dealer chart exactly instead of
@@ -1497,51 +1831,69 @@ def _run_core_analysis(
             # options_chain_scanner.compute_vanna_positioning's docstring for
             # the "two-vanna" bug this closes.
             files, interp, scan_result = ocs.run_chain_scanner(
-                ticker, target_years, expiration=expiration, output_dir=out_root,
-                dealer_result=dp_result)
+                ticker,
+                target_years,
+                expiration=expiration,
+                output_dir=out_root,
+                dealer_result=dp_result,
+            )
             produced.extend(files)
-            sections.append({
-                "title": f"Options Chain Scan: {ticker} {expiration} ({scan_result.verdict})",
-                "text": interp or "",
-                "images": [f for f in files if f.lower().endswith('.png')]
-            })
+            sections.append(
+                {
+                    "title": f"Options Chain Scan: {ticker} {expiration} ({scan_result.verdict})",
+                    "text": interp or "",
+                    "images": [f for f in files if f.lower().endswith(".png")],
+                }
+            )
             artifacts["chain_scan"] = {
                 "verdict": _json_safe(getattr(scan_result, "verdict", None)),
                 "expiration": expiration,
-                "strategies": getattr(scan_result, "strategies", []),  # Add strategies from scan
+                "strategies": getattr(
+                    scan_result, "strategies", []
+                ),  # Add strategies from scan
             }
 
             # Add Strategy Recommendations section to PDF
             strategies = getattr(scan_result, "strategies", [])
             if strategies:
-                strat_text = f"Strategy Recommendations for {ticker} ({scan_result.verdict})\n"
+                strat_text = (
+                    f"Strategy Recommendations for {ticker} ({scan_result.verdict})\n"
+                )
                 strat_text += "=" * 60 + "\n\n"
                 for i, strat in enumerate(strategies, 1):
-                    strat_text += f"{i}. {strat.get('strategy_type', 'Unknown').upper()}\n"
+                    strat_text += (
+                        f"{i}. {strat.get('strategy_type', 'Unknown').upper()}\n"
+                    )
                     strat_text += f"   Vol Regime: {strat.get('vol_regime', 'N/A')}\n"
                     strat_text += f"   Rank Score: {strat.get('rank_score', 0):.2f}\n"
                     strat_text += f"   Rationale: {strat.get('rationale', 'N/A')}\n"
 
                     # Add legs
-                    legs = strat.get('legs', [])
+                    legs = strat.get("legs", [])
                     if legs:
                         strat_text += "   Legs:\n"
                         for leg in legs:
-                            qty_str = f"+{leg.get('quantity')}" if leg.get('quantity', 0) > 0 else f"{leg.get('quantity')}"
+                            qty_str = (
+                                f"+{leg.get('quantity')}"
+                                if leg.get("quantity", 0) > 0
+                                else f"{leg.get('quantity')}"
+                            )
                             strat_text += f"     {qty_str} {leg.get('instrument_type', '?').upper()} @ ${leg.get('strike', 0):.2f}\n"
 
                     # Add Greeks
-                    greeks = strat.get('greeks_summary', {})
+                    greeks = strat.get("greeks_summary", {})
                     if greeks:
                         strat_text += f"   Greeks: Δ={greeks.get('delta', 0):.3f}, Γ={greeks.get('gamma', 0):.4f}, "
                         strat_text += f"Θ={greeks.get('theta', 0):.3f}, V={greeks.get('vega', 0):.3f}\n"
                     strat_text += "\n"
 
-                sections.append({
-                    "title": "Strategy Recommendations",
-                    "text": strat_text,
-                    "images": []
-                })
+                sections.append(
+                    {
+                        "title": "Strategy Recommendations",
+                        "text": strat_text,
+                        "images": [],
+                    }
+                )
 
         except Exception as e:
             print(f"  Chain scanner failed: {e}")
@@ -1558,7 +1910,12 @@ def run_unified_flow():
     print("  VOLATILITY SUITE — Unified Cross-Suite Run")
     print("=" * 60)
 
-    load_mode = _get_noninteractive("_load_mode") or _ni_input("Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: ").strip()
+    load_mode = (
+        _get_noninteractive("_load_mode")
+        or _ni_input(
+            "Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: "
+        ).strip()
+    )
     if str(load_mode).strip() == "2":
         pack_ctx = _load_ticker_pack_interactive()
     else:
@@ -1567,22 +1924,29 @@ def run_unified_flow():
     if pack_ctx:
         print(f"\nUsing focus ticker from pack: {ticker}")
 
-    group_tickers, use_pack_basket, chosen_index, known_weight, top_n, _matches = \
+    group_tickers, use_pack_basket, chosen_index, known_weight, top_n, _matches = (
         _resolve_ticker_universe(ticker, pack_ctx)
+    )
 
     import expiry_selector
     from thetadata_client import ThetaDataController
+
     print()
     td_for_expiry = ThetaDataController()
     try:
         if _get_noninteractive("_expiry") or _get_noninteractive("_target_years"):
             expiration, target_years = expiry_selector.choose_expiry_noninteractive(
-                td_for_expiry, ticker,
+                td_for_expiry,
+                ticker,
                 expiry=_get_noninteractive("_expiry"),
-                target_years=float(_get_noninteractive("_target_years")) if _get_noninteractive("_target_years") else None,
+                target_years=float(_get_noninteractive("_target_years"))
+                if _get_noninteractive("_target_years")
+                else None,
             )
         else:
-            expiration, target_years = expiry_selector.choose_expiry_interactive(td_for_expiry, ticker)
+            expiration, target_years = expiry_selector.choose_expiry_interactive(
+                td_for_expiry, ticker
+            )
     finally:
         td_for_expiry.close()
 
@@ -1591,26 +1955,42 @@ def run_unified_flow():
     # silently default the dealer-positioning sign model to v1 and the
     # options chain scanner to off. See FIX_PLAN_20260725.md.
     sign_model, run_options_chain = _prompt_sign_model_and_options_chain(pack_ctx)
-    run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = _prompt_extra_analytics(pack_ctx)
+    run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = (
+        _prompt_extra_analytics(pack_ctx)
+    )
 
     option_type = _choose_option_type()
     strike = _choose_optional_strike()
-    run_options_suite = _prompt_yes_no("Run Options_Suite after writing context?", default=False)
-    run_var_suite = _prompt_yes_no("Run VaR_Tools_Simulations after writing context?", default=False)
+    run_options_suite = _prompt_yes_no(
+        "Run Options_Suite after writing context?", default=False
+    )
+    run_var_suite = _prompt_yes_no(
+        "Run VaR_Tools_Simulations after writing context?", default=False
+    )
     compile_pdf = _prompt_yes_no("Compile outputs into single PDF?", default=False)
 
     out_root = timestamped_output_dir()
     os.environ["VS_OUTPUT_DIR"] = out_root
     print(f"\nOutputs will be written to: {out_root}")
 
-    tickers, weights = _build_basket(ticker, use_pack_basket, group_tickers, chosen_index, top_n, known_weight)
+    tickers, weights = _build_basket(
+        ticker, use_pack_basket, group_tickers, chosen_index, top_n, known_weight
+    )
 
     # ---- Run the SAME analysis pipeline mode 1 runs ----
     produced, sections, artifacts = _run_core_analysis(
-        ticker=ticker, pack_ctx=pack_ctx, group_tickers=group_tickers,
-        use_pack_basket=use_pack_basket, tickers=tickers, weights=weights,
-        chosen_index=chosen_index, target_years=target_years, expiration=expiration,
-        sign_model=sign_model, run_options_chain=run_options_chain, out_root=out_root,
+        ticker=ticker,
+        pack_ctx=pack_ctx,
+        group_tickers=group_tickers,
+        use_pack_basket=use_pack_basket,
+        tickers=tickers,
+        weights=weights,
+        chosen_index=chosen_index,
+        target_years=target_years,
+        expiration=expiration,
+        sign_model=sign_model,
+        run_options_chain=run_options_chain,
+        out_root=out_root,
         run_vol_surface_2d=run_vol_surface_2d,
         run_vrp_term_structure=run_vrp_term_structure,
         run_sentiment_backtest=run_sentiment_backtest,
@@ -1637,11 +2017,13 @@ def run_unified_flow():
         index_ticker=chosen_index,
         basket_tickers=tickers,
         basket_weights=weights,
-        sentiment_manifest_path=(pack_ctx or {}).get("manifest_path") or _default_pack_manifest_path(),
+        sentiment_manifest_path=(pack_ctx or {}).get("manifest_path")
+        or _default_pack_manifest_path(),
         sentiment_pack_json_path=sentiment_pack_json,
         sentiment_group_id=sentiment_group_id,
         sentiment_ranked_tickers=group_tickers,
         garch_conditional_vol=artifacts.get("garch_conditional_vol"),
+        jump_diffusion=artifacts.get("jump_diffusion"),
         run_options_suite=run_options_suite,
         run_var_suite=run_var_suite,
         compile_pdf=compile_pdf,
@@ -1651,13 +2033,18 @@ def run_unified_flow():
     )
 
     # Populate strategies from chain scan into shared context (Task 3 integration)
-    if isinstance(artifacts.get('chain_scan'), dict) and 'strategies' in artifacts['chain_scan']:
-        context['strategies'] = artifacts['chain_scan']['strategies']
+    if (
+        isinstance(artifacts.get("chain_scan"), dict)
+        and "strategies" in artifacts["chain_scan"]
+    ):
+        context["strategies"] = artifacts["chain_scan"]["strategies"]
 
-    context_path = write_suite_context(context, os.path.join(out_root, "suite_context.json"))
+    context_path = write_suite_context(
+        context, os.path.join(out_root, "suite_context.json")
+    )
     print(f"Wrote shared handoff context: {context_path}")
 
-    child_results: List[Dict[str, Any]] = []
+    child_results: list[dict[str, Any]] = []
     before_files = set(collect_files(out_root))
 
     if run_options_suite:
@@ -1691,7 +2078,10 @@ def run_unified_flow():
     # sections to compile, because _run_core_analysis just produced them.
     if compile_pdf:
         try:
-            pdf_path = os.path.join(out_root, f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+            pdf_path = os.path.join(
+                out_root,
+                f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            )
             compose_pdf_report(pdf_path, sections)
             print(f"Compiled PDF: {pdf_path}")
         except Exception as e:
@@ -1709,7 +2099,9 @@ def run_unified_flow():
         f"child_suite_new_files={len(new_child_files)}",
     ]
     for result in child_results:
-        status = "ok" if result["returncode"] == 0 else f"failed(rc={result['returncode']})"
+        status = (
+            "ok" if result["returncode"] == 0 else f"failed(rc={result['returncode']})"
+        )
         summary_lines.append(f"{result['suite']}_suite={status}")
     summary_text = "\n".join(summary_lines)
 
@@ -1728,9 +2120,14 @@ def run_unified_flow():
         vol_result_path = _write_vol_result(
             os.path.join(out_root, "vol_result.json"),
             _apply_instrument_resolver(
-                _build_vol_result(artifacts=artifacts, context=context,
-                                  output_dir=out_root, produced=produced,
-                                  summary=summary_text)),
+                _build_vol_result(
+                    artifacts=artifacts,
+                    context=context,
+                    output_dir=out_root,
+                    produced=produced,
+                    summary=summary_text,
+                )
+            ),
         )
         print(f"Wrote vol result: {vol_result_path}")
     except Exception as e:
@@ -1758,7 +2155,12 @@ def run_focus_workflow():
     print("  VOLATILITY SUITE — Focus-Ticker Workflow")
     print("=" * 60)
 
-    load_mode = _get_noninteractive("_load_mode") or _ni_input("Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: ").strip()
+    load_mode = (
+        _get_noninteractive("_load_mode")
+        or _ni_input(
+            "Input mode: (1) manual focus ticker, (2) highlighted ticker pack [default 1]: "
+        ).strip()
+    )
     if str(load_mode).strip() == "2":
         pack_ctx = _load_ticker_pack_interactive()
     else:
@@ -1767,8 +2169,9 @@ def run_focus_workflow():
     if pack_ctx:
         print(f"\nUsing focus ticker from pack: {ticker}")
 
-    group_tickers, use_pack_basket, chosen_index, known_weight, top_n, _matches = \
+    group_tickers, use_pack_basket, chosen_index, known_weight, top_n, _matches = (
         _resolve_ticker_universe(ticker, pack_ctx)
+    )
 
     # Expiry selection: still asks for a target-years number the same way it
     # always has (0.33 / 0.15 / 0.25 / whatever), but no longer silently
@@ -1785,17 +2188,23 @@ def run_focus_workflow():
     # this also fixes).
     import expiry_selector
     from thetadata_client import ThetaDataController
+
     print()
     td_for_expiry = ThetaDataController()
     try:
         if _get_noninteractive("_expiry") or _get_noninteractive("_target_years"):
             expiration, target_years = expiry_selector.choose_expiry_noninteractive(
-                td_for_expiry, ticker,
+                td_for_expiry,
+                ticker,
                 expiry=_get_noninteractive("_expiry"),
-                target_years=float(_get_noninteractive("_target_years")) if _get_noninteractive("_target_years") else None,
+                target_years=float(_get_noninteractive("_target_years"))
+                if _get_noninteractive("_target_years")
+                else None,
             )
         else:
-            expiration, target_years = expiry_selector.choose_expiry_interactive(td_for_expiry, ticker)
+            expiration, target_years = expiry_selector.choose_expiry_interactive(
+                td_for_expiry, ticker
+            )
     finally:
         td_for_expiry.close()
 
@@ -1804,21 +2213,36 @@ def run_focus_workflow():
     # _prompt_sign_model_and_options_chain), so the two entry points can't
     # drift on this again.
     sign_model, run_options_chain = _prompt_sign_model_and_options_chain(pack_ctx)
-    run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = _prompt_extra_analytics(pack_ctx)
+    run_vol_surface_2d, run_vrp_term_structure, run_sentiment_backtest = (
+        _prompt_extra_analytics(pack_ctx)
+    )
 
-    pdf_choice = _ni_input("Compile outputs into single PDF? (y/n, default n): ").strip().lower() or 'n'
+    pdf_choice = (
+        _ni_input("Compile outputs into single PDF? (y/n, default n): ").strip().lower()
+        or "n"
+    )
 
     out_root = timestamped_output_dir()
     print(f"\nOutputs will be written to: {out_root}")
-    os.environ['VS_OUTPUT_DIR'] = out_root
+    os.environ["VS_OUTPUT_DIR"] = out_root
 
-    tickers, weights = _build_basket(ticker, use_pack_basket, group_tickers, chosen_index, top_n, known_weight)
+    tickers, weights = _build_basket(
+        ticker, use_pack_basket, group_tickers, chosen_index, top_n, known_weight
+    )
 
     produced, sections, _artifacts = _run_core_analysis(
-        ticker=ticker, pack_ctx=pack_ctx, group_tickers=group_tickers,
-        use_pack_basket=use_pack_basket, tickers=tickers, weights=weights,
-        chosen_index=chosen_index, target_years=target_years, expiration=expiration,
-        sign_model=sign_model, run_options_chain=run_options_chain, out_root=out_root,
+        ticker=ticker,
+        pack_ctx=pack_ctx,
+        group_tickers=group_tickers,
+        use_pack_basket=use_pack_basket,
+        tickers=tickers,
+        weights=weights,
+        chosen_index=chosen_index,
+        target_years=target_years,
+        expiration=expiration,
+        sign_model=sign_model,
+        run_options_chain=run_options_chain,
+        out_root=out_root,
         run_vol_surface_2d=run_vol_surface_2d,
         run_vrp_term_structure=run_vrp_term_structure,
         run_sentiment_backtest=run_sentiment_backtest,
@@ -1826,14 +2250,17 @@ def run_focus_workflow():
 
     # ---- Summary / optional PDF ----
     print("\nRun complete.")
-    all_files = collect_files(os.environ['VS_OUTPUT_DIR'])
+    all_files = collect_files(os.environ["VS_OUTPUT_DIR"])
     print(f"Files in output folder ({os.environ['VS_OUTPUT_DIR']}):")
     for f in all_files:
         print(f"  {f}")
 
-    if pdf_choice == 'y':
+    if pdf_choice == "y":
         try:
-            pdf_path = os.path.join(os.environ['VS_OUTPUT_DIR'], f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+            pdf_path = os.path.join(
+                os.environ["VS_OUTPUT_DIR"],
+                f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            )
             compose_pdf_report(pdf_path, sections)
             print(f"Compiled PDF: {pdf_path}")
         except Exception as e:
@@ -1865,7 +2292,7 @@ def _compact_expiry(iso_or_compact: str) -> str:
     return raw.replace("-", "")
 
 
-def run_context_mode(context_path: str, context_out: Optional[str] = None) -> int:
+def run_context_mode(context_path: str, context_out: str | None = None) -> int:
     """Run the full analysis pipeline with zero prompts, driven by a
     suite_context.json, and publish vol_result.json.
 
@@ -1882,13 +2309,17 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
     interactive unified flow, where nothing else is going to launch them, still
     does.
     """
-    context: Optional[Dict[str, Any]] = None
+    context: dict[str, Any] | None = None
     try:
         context = read_suite_context(context_path)
     except Exception as exc:
         out_path = _resolve_context_out_path(context_path, None, context_out)
-        _write_vol_result(out_path, _error_vol_result(
-            ticker="", error=f"Unusable context {context_path}: {exc}"))
+        _write_vol_result(
+            out_path,
+            _error_vol_result(
+                ticker="", error=f"Unusable context {context_path}: {exc}"
+            ),
+        )
         print(f"Unusable context {context_path}: {exc}", file=sys.stderr)
         return 2
 
@@ -1898,7 +2329,11 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
     target_years = float(focus["target_years"])
     expiration = _compact_expiry(focus["expiration_date"])
 
-    out_root = context.get("output_dir") or os.environ.get("VS_OUTPUT_DIR") or timestamped_output_dir()
+    out_root = (
+        context.get("output_dir")
+        or os.environ.get("VS_OUTPUT_DIR")
+        or timestamped_output_dir()
+    )
     os.makedirs(out_root, exist_ok=True)
     os.environ["VS_OUTPUT_DIR"] = out_root
 
@@ -1907,7 +2342,10 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
     tickers = [str(t).upper() for t in basket["tickers"]]
     weights = [float(w) for w in basket["weights"]]
     chosen_index = str(basket["index_ticker"]).upper()
-    group_tickers = [str(t).upper() for t in (context.get("sentiment", {}).get("ranked_tickers") or [])]
+    group_tickers = [
+        str(t).upper()
+        for t in (context.get("sentiment", {}).get("ranked_tickers") or [])
+    ]
 
     # The prompts mode 1/2 ask become environment knobs here. Defaults are the
     # ones the interactive flow defaults to, except the two that cost a lot of
@@ -1935,7 +2373,9 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
     print("=" * 60)
     print(f"  context      : {context_path}")
     print(f"  run_id       : {context['run_id']}")
-    print(f"  focus        : {ticker} @ {focus['expiration_date']} (T={target_years:.4f}yr)")
+    print(
+        f"  focus        : {ticker} @ {focus['expiration_date']} (T={target_years:.4f}yr)"
+    )
     print(f"  index/basket : {chosen_index} / {len(tickers)} names")
     print(f"  sign_model   : {sign_model}")
     print(f"  output_dir   : {out_root}")
@@ -1965,149 +2405,297 @@ def run_context_mode(context_path: str, context_out: Optional[str] = None) -> in
             run_sentiment_backtest=run_sentiment_backtest,
         )
     except Exception as exc:
-        _write_vol_result(out_path, _error_vol_result(
-            ticker=ticker, error=f"{type(exc).__name__}: {exc}",
-            output_dir=out_root, run_id=context.get("run_id")))
+        _write_vol_result(
+            out_path,
+            _error_vol_result(
+                ticker=ticker,
+                error=f"{type(exc).__name__}: {exc}",
+                output_dir=out_root,
+                run_id=context.get("run_id"),
+            ),
+        )
         print(f"Context-mode run failed: {exc}", file=sys.stderr)
         return 1
 
     if context.get("controls", {}).get("compile_pdf"):
         try:
-            pdf_path = os.path.join(out_root, f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+            pdf_path = os.path.join(
+                out_root,
+                f"volatility_suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            )
             compose_pdf_report(pdf_path, sections)
             produced.append(pdf_path)
             print(f"Compiled PDF: {pdf_path}")
         except Exception as e:
             print(f"PDF compilation failed: {e}", file=sys.stderr)
 
-    summary = "\n".join([
-        f"run_id={context['run_id']}",
-        f"focus={ticker} {focus['expiration_date']} {focus['option_type']}",
-        f"analysis_output_files={len(produced)}",
-        f"failed_steps={len(artifacts.get('errors', []))}",
-    ])
+    summary = "\n".join(
+        [
+            f"run_id={context['run_id']}",
+            f"focus={ticker} {focus['expiration_date']} {focus['option_type']}",
+            f"analysis_output_files={len(produced)}",
+            f"failed_steps={len(artifacts.get('errors', []))}",
+        ]
+    )
 
     payload = _apply_instrument_resolver(
-        _build_vol_result(artifacts=artifacts, context=context,
-                          output_dir=out_root, produced=produced,
-                          summary=summary))
+        _build_vol_result(
+            artifacts=artifacts,
+            context=context,
+            output_dir=out_root,
+            produced=produced,
+            summary=summary,
+        )
+    )
     written = _write_vol_result(out_path, payload)
     print(f"\nWrote vol result: {written}")
     print(summary)
     return 0 if payload.get("status") == "ok" else 1
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="volatility_suite.py",
         description="Volatility suite: interactive focus/unified workflows, or a "
-                    "non-interactive context-mode run driven by suite_context.json.")
+        "non-interactive context-mode run driven by suite_context.json.",
+    )
     parser.add_argument(
-        "--context", default=None,
+        "--context",
+        default=None,
         help="Path to a suite_context.json. Supplying it selects non-interactive "
-             "context mode: every prompt is answered from the context and nothing "
-             "is read from stdin.")
+        "context mode: every prompt is answered from the context and nothing "
+        "is read from stdin.",
+    )
     parser.add_argument(
-        "--context-out", default=None,
-        help="Where to write vol_result.json (default: <context output_dir>/vol_result.json).")
+        "--context-out",
+        default=None,
+        help="Where to write vol_result.json (default: <context output_dir>/vol_result.json).",
+    )
     loop_group = parser.add_mutually_exclusive_group()
     loop_group.add_argument(
-        "--no-loop", dest="loop", action="store_false", default=False,
+        "--no-loop",
+        dest="loop",
+        action="store_false",
+        default=False,
         help="Run one workflow and exit. This is the default and always has "
-             "been; the flag exists so every suite accepts the same headless "
-             "flag set, and so a caller can state the intent explicitly rather "
-             "than depending on the default. Context mode is unconditionally "
-             "single-pass, so it is a no-op there.")
+        "been; the flag exists so every suite accepts the same headless "
+        "flag set, and so a caller can state the intent explicitly rather "
+        "than depending on the default. Context mode is unconditionally "
+        "single-pass, so it is a no-op there.",
+    )
     loop_group.add_argument(
-        "--loop", dest="loop", action="store_true",
+        "--loop",
+        dest="loop",
+        action="store_true",
         help="Return to the run-mode menu after each workflow instead of "
-             "exiting; 'q' quits.")
+        "exiting; 'q' quits.",
+    )
     parser.add_argument(
-        "--mode", choices=["1", "2"], default=None,
+        "--mode",
+        choices=["1", "2"],
+        default=None,
         help="Preselect the interactive run mode (1 = focus workflow, "
-             "2 = unified cross-suite run) instead of being prompted for it.")
+        "2 = unified cross-suite run) instead of being prompted for it.",
+    )
     parser.add_argument(
-        "--instrument-resolver", default=None,
+        "--instrument-resolver",
+        default=None,
         help="Name of an IdentifierResolver (see instrument_resolver.py) used to "
-             "enrich vol_result.json with cross-source normalized instrument "
-             "identifiers for the focus/index tickers. Unset (default) skips "
-             "enrichment entirely -- vol_result.json is unchanged.")
+        "enrich vol_result.json with cross-source normalized instrument "
+        "identifiers for the focus/index tickers. Unset (default) skips "
+        "enrichment entirely -- vol_result.json is unchanged.",
+    )
     # ------------------------------------------------------------------
     # Non-interactive workflow overrides
     # ------------------------------------------------------------------
-    ni = parser.add_argument_group("non-interactive workflow overrides",
+    ni = parser.add_argument_group(
+        "non-interactive workflow overrides",
         "When any of these flags is supplied, the corresponding prompt is "
         "bypassed and the flag value is used instead.  Supplying enough of "
-        "them makes the run fully headless -- no stdin required.")
-    ni.add_argument("--ticker", default=None,
-                    help="Focus ticker (bypasses 'Focus ticker' prompt).")
-    ni.add_argument("--index", default=None,
-                    help="Benchmark/sector ETF ticker (bypasses index choice prompt).")
-    ni.add_argument("--basket-size", type=int, default=None,
-                    help="Number of index constituents to pull (bypasses basket size prompt).")
-    ni.add_argument("--expiry", default=None,
-                    help="Expiration date as YYYYMMDD or YYYY-MM-DD.  When supplied, "
-                         "the interactive expiry picker is skipped and target-years is "
-                         "computed from today.")
-    ni.add_argument("--target-years", type=float, default=None,
-                    help="Target time-to-expiry in years (e.g. 0.25).  Used with "
-                         "--expiry or to auto-select the nearest expiry.")
-    ni.add_argument("--option-type", default=None, choices=["call", "put"],
-                    help="Option type for shared context (bypasses option-type prompt).")
-    ni.add_argument("--strike", type=float, default=None,
-                    help="Optional strike for shared context (bypasses strike prompt).")
+        "them makes the run fully headless -- no stdin required.",
+    )
+    ni.add_argument(
+        "--ticker", default=None, help="Focus ticker (bypasses 'Focus ticker' prompt)."
+    )
+    ni.add_argument(
+        "--index",
+        default=None,
+        help="Benchmark/sector ETF ticker (bypasses index choice prompt).",
+    )
+    ni.add_argument(
+        "--basket-size",
+        type=int,
+        default=None,
+        help="Number of index constituents to pull (bypasses basket size prompt).",
+    )
+    ni.add_argument(
+        "--expiry",
+        default=None,
+        help="Expiration date as YYYYMMDD or YYYY-MM-DD.  When supplied, "
+        "the interactive expiry picker is skipped and target-years is "
+        "computed from today.",
+    )
+    ni.add_argument(
+        "--target-years",
+        type=float,
+        default=None,
+        help="Target time-to-expiry in years (e.g. 0.25).  Used with "
+        "--expiry or to auto-select the nearest expiry.",
+    )
+    ni.add_argument(
+        "--option-type",
+        default=None,
+        choices=["call", "put"],
+        help="Option type for shared context (bypasses option-type prompt).",
+    )
+    ni.add_argument(
+        "--strike",
+        type=float,
+        default=None,
+        help="Optional strike for shared context (bypasses strike prompt).",
+    )
     pack_group = ni.add_mutually_exclusive_group()
-    pack_group.add_argument("--pack", action="store_true", default=None,
-                            help="Use the highlighted ticker pack (selects pack mode).")
-    pack_group.add_argument("--no-pack", action="store_false", dest="pack",
-                            help="Skip the highlighted ticker pack (manual ticker mode, default).")
-    ni.add_argument("--pack-manifest-path", default=None,
-                    help="Path to the ticker-pack manifest JSON (bypasses manifest prompt).")
-    ni.add_argument("--pack-index", type=int, default=None,
-                    help="1-based index into the manifest's packs list (bypasses pack-choice prompt).")
-    ni.add_argument("--run-chain-scanner", action="store_true", default=None,
-                    help="Run the Options Chain Scanner step (y to the prompt).")
-    ni.add_argument("--no-chain-scanner", action="store_false", dest="run_chain_scanner",
-                    help="Skip the Options Chain Scanner step (n to the prompt).")
-    ni.add_argument("--run-group-screener", action="store_true", default=None,
-                    help="Run the variance screener on the full highlighted group first.")
-    ni.add_argument("--no-group-screener", action="store_false", dest="run_group_screener",
-                    help="Skip the variance screener on the full highlighted group.")
-    ni.add_argument("--run-2d-surface", action="store_true", default=None,
-                    help="Build the 2D vol surface (strike x tenor).")
-    ni.add_argument("--no-2d-surface", action="store_false", dest="run_2d_surface",
-                    help="Skip the 2D vol surface.")
-    ni.add_argument("--run-vrp", action="store_true", default=None,
-                    help="Run the VRP term structure (1-12mo).")
-    ni.add_argument("--no-vrp", action="store_false", dest="run_vrp",
-                    help="Skip the VRP term structure.")
-    ni.add_argument("--run-sentiment-backtest", action="store_true", default=None,
-                    help="Run the sentiment backtest on the highlighted-pack history.")
-    ni.add_argument("--no-sentiment-backtest", action="store_false", dest="run_sentiment_backtest",
-                    help="Skip the sentiment backtest.")
-    ni.add_argument("--compile-pdf", action="store_true", default=None,
-                    help="Compile outputs into a single PDF.")
-    ni.add_argument("--no-compile-pdf", action="store_false", dest="compile_pdf",
-                    help="Skip PDF compilation.")
-    ni.add_argument("--run-options-suite", action="store_true", default=None,
-                    help="Launch Options_Suite after writing context.")
-    ni.add_argument("--no-options-suite", action="store_false", dest="run_options_suite",
-                    help="Skip launching Options_Suite.")
-    ni.add_argument("--run-var-suite", action="store_true", default=None,
-                    help="Launch VaR_Tools_Simulations after writing context.")
-    ni.add_argument("--no-var-suite", action="store_false", dest="run_var_suite",
-                    help="Skip launching VaR_Tools_Simulations.")
-    ni.add_argument("--yes", action="store_true", default=None,
-                    help="Accept all yes/no defaults (equivalent to --run-chain-scanner "
-                         "--run-group-screener --run-2d-surface --run-vrp --compile-pdf "
-                         "--run-options-suite --run-var-suite).")
+    pack_group.add_argument(
+        "--pack",
+        action="store_true",
+        default=None,
+        help="Use the highlighted ticker pack (selects pack mode).",
+    )
+    pack_group.add_argument(
+        "--no-pack",
+        action="store_false",
+        dest="pack",
+        help="Skip the highlighted ticker pack (manual ticker mode, default).",
+    )
+    ni.add_argument(
+        "--pack-manifest-path",
+        default=None,
+        help="Path to the ticker-pack manifest JSON (bypasses manifest prompt).",
+    )
+    ni.add_argument(
+        "--pack-index",
+        type=int,
+        default=None,
+        help="1-based index into the manifest's packs list (bypasses pack-choice prompt).",
+    )
+    ni.add_argument(
+        "--run-chain-scanner",
+        action="store_true",
+        default=None,
+        help="Run the Options Chain Scanner step (y to the prompt).",
+    )
+    ni.add_argument(
+        "--no-chain-scanner",
+        action="store_false",
+        dest="run_chain_scanner",
+        help="Skip the Options Chain Scanner step (n to the prompt).",
+    )
+    ni.add_argument(
+        "--run-group-screener",
+        action="store_true",
+        default=None,
+        help="Run the variance screener on the full highlighted group first.",
+    )
+    ni.add_argument(
+        "--no-group-screener",
+        action="store_false",
+        dest="run_group_screener",
+        help="Skip the variance screener on the full highlighted group.",
+    )
+    ni.add_argument(
+        "--run-2d-surface",
+        action="store_true",
+        default=None,
+        help="Build the 2D vol surface (strike x tenor).",
+    )
+    ni.add_argument(
+        "--no-2d-surface",
+        action="store_false",
+        dest="run_2d_surface",
+        help="Skip the 2D vol surface.",
+    )
+    ni.add_argument(
+        "--run-vrp",
+        action="store_true",
+        default=None,
+        help="Run the VRP term structure (1-12mo).",
+    )
+    ni.add_argument(
+        "--no-vrp",
+        action="store_false",
+        dest="run_vrp",
+        help="Skip the VRP term structure.",
+    )
+    ni.add_argument(
+        "--run-sentiment-backtest",
+        action="store_true",
+        default=None,
+        help="Run the sentiment backtest on the highlighted-pack history.",
+    )
+    ni.add_argument(
+        "--no-sentiment-backtest",
+        action="store_false",
+        dest="run_sentiment_backtest",
+        help="Skip the sentiment backtest.",
+    )
+    ni.add_argument(
+        "--compile-pdf",
+        action="store_true",
+        default=None,
+        help="Compile outputs into a single PDF.",
+    )
+    ni.add_argument(
+        "--no-compile-pdf",
+        action="store_false",
+        dest="compile_pdf",
+        help="Skip PDF compilation.",
+    )
+    ni.add_argument(
+        "--run-options-suite",
+        action="store_true",
+        default=None,
+        help="Launch Options_Suite after writing context.",
+    )
+    ni.add_argument(
+        "--no-options-suite",
+        action="store_false",
+        dest="run_options_suite",
+        help="Skip launching Options_Suite.",
+    )
+    ni.add_argument(
+        "--run-var-suite",
+        action="store_true",
+        default=None,
+        help="Launch VaR_Tools_Simulations after writing context.",
+    )
+    ni.add_argument(
+        "--no-var-suite",
+        action="store_false",
+        dest="run_var_suite",
+        help="Skip launching VaR_Tools_Simulations.",
+    )
+    ni.add_argument(
+        "--yes",
+        action="store_true",
+        default=None,
+        help="Accept all yes/no defaults (equivalent to --run-chain-scanner "
+        "--run-group-screener --run-2d-surface --run-vrp --compile-pdf "
+        "--run-options-suite --run-var-suite).",
+    )
 
     args = parser.parse_args(argv)
 
     # Apply --yes before individual flags so explicit flags can override it.
     if args.yes:
-        for attr in ("run_chain_scanner", "run_group_screener", "run_2d_surface",
-                     "run_vrp", "compile_pdf", "run_options_suite", "run_var_suite"):
+        for attr in (
+            "run_chain_scanner",
+            "run_group_screener",
+            "run_2d_surface",
+            "run_vrp",
+            "compile_pdf",
+            "run_options_suite",
+            "run_var_suite",
+        ):
             if getattr(args, attr) is None:
                 setattr(args, attr, True)
 
@@ -2123,19 +2711,66 @@ def main(argv: Optional[List[str]] = None) -> int:
     _set_override("Focus ticker (e.g. MSFT)", args.ticker)
     _set_override("Choose an index", args.index)
     _set_override("Enter an index/sector ETF ticker manually", args.index)
-    _set_override("Basket size", str(args.basket_size) if args.basket_size is not None else None)
+    _set_override(
+        "Basket size", str(args.basket_size) if args.basket_size is not None else None
+    )
     _set_override("Option type", args.option_type)
-    _set_override("Optional strike", str(args.strike) if args.strike is not None else None)
+    _set_override(
+        "Optional strike", str(args.strike) if args.strike is not None else None
+    )
     _set_override("Ticker-pack manifest path", args.pack_manifest_path)
-    _set_override("Choose pack number", str(args.pack_index) if args.pack_index is not None else None)
-    _set_override("Run Options Chain Scanner step", "y" if args.run_chain_scanner else "n" if args.run_chain_scanner is False else None)
-    _set_override("Run variance screener", "y" if args.run_group_screener else "n" if args.run_group_screener is False else None)
-    _set_override("Build 2D vol surface", "y" if args.run_2d_surface else "n" if args.run_2d_surface is False else None)
-    _set_override("Run VRP term structure", "y" if args.run_vrp else "n" if args.run_vrp is False else None)
-    _set_override("Run sentiment backtest", "y" if args.run_sentiment_backtest else "n" if args.run_sentiment_backtest is False else None)
-    _set_override("Compile outputs into single PDF", "y" if args.compile_pdf else "n" if args.compile_pdf is False else None)
-    _set_override("Run Options_Suite after writing context", "y" if args.run_options_suite else "n" if args.run_options_suite is False else None)
-    _set_override("Run VaR_Tools_Simulations after writing context", "y" if args.run_var_suite else "n" if args.run_var_suite is False else None)
+    _set_override(
+        "Choose pack number",
+        str(args.pack_index) if args.pack_index is not None else None,
+    )
+    _set_override(
+        "Run Options Chain Scanner step",
+        "y"
+        if args.run_chain_scanner
+        else "n"
+        if args.run_chain_scanner is False
+        else None,
+    )
+    _set_override(
+        "Run variance screener",
+        "y"
+        if args.run_group_screener
+        else "n"
+        if args.run_group_screener is False
+        else None,
+    )
+    _set_override(
+        "Build 2D vol surface",
+        "y" if args.run_2d_surface else "n" if args.run_2d_surface is False else None,
+    )
+    _set_override(
+        "Run VRP term structure",
+        "y" if args.run_vrp else "n" if args.run_vrp is False else None,
+    )
+    _set_override(
+        "Run sentiment backtest",
+        "y"
+        if args.run_sentiment_backtest
+        else "n"
+        if args.run_sentiment_backtest is False
+        else None,
+    )
+    _set_override(
+        "Compile outputs into single PDF",
+        "y" if args.compile_pdf else "n" if args.compile_pdf is False else None,
+    )
+    _set_override(
+        "Run Options_Suite after writing context",
+        "y"
+        if args.run_options_suite
+        else "n"
+        if args.run_options_suite is False
+        else None,
+    )
+    _set_override(
+        "Run VaR_Tools_Simulations after writing context",
+        "y" if args.run_var_suite else "n" if args.run_var_suite is False else None,
+    )
     # Internal overrides (not tied to a specific prompt string).
     if args.expiry:
         _noninteractive["_expiry"] = args.expiry
@@ -2159,8 +2794,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.context_out:
         parser.error("--context-out requires --context (or SUITE_CONTEXT_MODE=1).")
 
-    prompt = ("Run mode: (1) standard focus workflow, (2) unified cross-suite run "
-              + ("[default 1, q to quit]: " if args.loop else "[default 1]: "))
+    prompt = "Run mode: (1) standard focus workflow, (2) unified cross-suite run " + (
+        "[default 1, q to quit]: " if args.loop else "[default 1]: "
+    )
     while True:
         mode = args.mode if args.mode is not None else input(prompt).strip()
         if mode.lower() in {"q", "quit", "exit"}:
@@ -2174,5 +2810,5 @@ def main(argv: Optional[List[str]] = None) -> int:
         print()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise SystemExit(main())
