@@ -99,3 +99,13 @@ trading_journal/x_buzz/raw/
 
 # Trash staging (files awaiting deletion decisions; moved here, not deleted)
 _trash/
+
+# Root scratch (untracked 2026-08-31 audit): one-off cron/debug/live-scan scripts
+# and outputs, plus the archived scratch_dealer_pkg design docs (kept on disk,
+# out of the repo tree)
+_cron_*.py
+_dbg_*.py
+_live_scan*.py
+_live_scan_out.txt
+iv_sweep_results.json
+scratch_dealer_pkg/
