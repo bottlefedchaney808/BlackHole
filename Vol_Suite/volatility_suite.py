@@ -72,10 +72,15 @@ def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: fl
     *expiration*, plus a cheap Merton fit for the GARCH jump-day filter
     (Task 7/8's tie 1 wants Merton specifically, independent of whichever
     model JUMP_MODEL_DEFAULT names -- see the design spec's model guide).
-    Returns a dict shaped for suite_context.json's jump_diffusion key, or
-    None on any failure -- never raises (matches the GARCH call site's
-    error-swallowing discipline at this same call level). Self-contained:
-    fetches its own spot/rate/dividend/chain data, the same way
+    Returns a dict shaped for suite_context.json's jump_diffusion key. On
+    any failure returns {"status": "error", "error": <reason>} instead of
+    raising (matches the GARCH call site's error-swallowing discipline at
+    this same call level) -- the reason is also printed, but a live
+    orchestrator run only ever persists a *successful* suite's stdout tail,
+    so without this the failure reason was unrecoverable after the fact
+    (confirmed live 2026-08-31: a null jump_diffusion block in a completed
+    NVDA run with no way to tell what failed). Self-contained: fetches its
+    own spot/rate/dividend/chain data, the same way
     garch_analysis.run_garch_module fetches its own price history, rather
     than depending on _run_core_analysis's internal variable soup.
     """
@@ -117,8 +122,9 @@ def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: fl
             "merton_sigma": merton_sigma,
         }
     except Exception as exc:
-        print(f"  [jump_diffusion] {JUMP_MODEL_DEFAULT} calibration failed: {exc}")
-        return None
+        reason = f"{type(exc).__name__}: {exc}"
+        print(f"  [jump_diffusion] {JUMP_MODEL_DEFAULT} calibration failed: {reason}")
+        return {"status": "error", "error": reason}
 
 
 def _ticker_exists(ticker: str) -> bool:
