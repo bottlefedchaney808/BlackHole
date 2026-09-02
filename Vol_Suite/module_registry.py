@@ -752,6 +752,44 @@ def _run_surface_flow_strike_expiry(
     )
 
 
+def _selection_only_marker(slug: str) -> Any:
+    """Builds a `run()` for a Task 6 selection-only marker ModuleSpec.
+
+    These four slugs (group_screener, vol_surface_2d, vrp_term_structure,
+    sentiment_backtest) are gated steps INSIDE volatility_suite.py's
+    `_run_core_analysis` -- inline `if run_x: ...` blocks sharing local
+    state across steps within one function call (most notably: the
+    options-chain-scanner step deliberately reuses the dealer-positioning
+    step's already-computed result from earlier in the SAME
+    `_run_core_analysis` call, to avoid a documented "two-vanna" bug -- see
+    `_run_core_analysis`'s options-chain-scanner step comment). They are not
+    independently callable the way `chain_scanner`/`svi_smile`/the
+    dealer-book cluster/the surface modules are: there is no
+    `_run_core_analysis`-bypassing implementation to wrap.
+
+    These entries exist purely so `--list-modules` / the dashboard checkbox
+    UI can surface and select them (via `context["modules"]` membership,
+    resolved by `volatility_suite.run_context_mode` ->
+    `_resolve_core_analysis_flags`) -- NOT so `run_selected_modules` or any
+    other direct `.run()` caller can execute them standalone. Calling
+    `.run()` directly always raises NotImplementedError explaining this,
+    rather than silently no-op'ing or (worse) attempting an independent
+    fetch that could reintroduce the two-vanna bug.
+    """
+
+    def _run(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
+        raise NotImplementedError(
+            f"{slug} only runs as part of Vol_Suite's core context-mode "
+            "pipeline (_run_core_analysis, one of its five gated steps). "
+            "Select it via context['modules'] on a vol_suite context-mode "
+            "run (run_context_mode), not as a standalone module invocation "
+            "-- it has no independent, _run_core_analysis-bypassing "
+            "implementation to run here."
+        )
+
+    return _run
+
+
 MODULES: list[ModuleSpec] = [
     ModuleSpec(
         name="Dealer Exposure",
@@ -866,6 +904,58 @@ MODULES: list[ModuleSpec] = [
         suite="vol_suite",
         category="surface",
         run=_run_surface_flow_strike_expiry,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    # Task 6 (Modularization Overhaul, Phase 3): selection-only markers for
+    # four of _run_core_analysis's five gated pipeline steps (chain_scanner,
+    # the fifth, already exists above as a real independently-runnable
+    # module from Task 4 -- not duplicated here). See
+    # _selection_only_marker's docstring: calling .run() on any of these
+    # four always raises NotImplementedError; their real execution only
+    # happens inside volatility_suite.run_context_mode's
+    # _run_core_analysis call, selected via context["modules"] membership.
+    ModuleSpec(
+        name="Group Screener (selection-only)",
+        slug="group_screener",
+        suite="vol_suite",
+        category="pipeline_step",
+        run=_selection_only_marker("group_screener"),
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="global"),
+    ),
+    ModuleSpec(
+        name="Vol Surface 2D (selection-only)",
+        slug="vol_surface_2d",
+        suite="vol_suite",
+        category="pipeline_step",
+        run=_selection_only_marker("vol_surface_2d"),
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="VRP Term Structure (selection-only)",
+        slug="vrp_term_structure",
+        suite="vol_suite",
+        category="pipeline_step",
+        run=_selection_only_marker("vrp_term_structure"),
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Sentiment Backtest (selection-only)",
+        slug="sentiment_backtest",
+        suite="vol_suite",
+        category="pipeline_step",
+        run=_selection_only_marker("sentiment_backtest"),
         cli_entry=None,
         default_selected=False,
         requires=[],

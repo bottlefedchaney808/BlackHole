@@ -2324,6 +2324,64 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+# Task 6 (Modularization Overhaul, Phase 3): fixed slug mapping from
+# context["modules"] entries to _run_core_analysis's five gated-step
+# booleans. These slugs are NOT independently runnable ModuleSpecs in the
+# usual Task 3/4/5 sense (see module_registry.py's group_screener/
+# vol_surface_2d/vrp_term_structure/sentiment_backtest entries, which exist
+# purely for --list-modules/dashboard discoverability and raise
+# NotImplementedError if .run() is called directly) -- their real execution
+# only happens inside _run_core_analysis's shared pipeline, which is why
+# run_context_mode resolves them by direct slug-string membership below
+# rather than through shared.module_registry.
+_CORE_ANALYSIS_MODULE_SLUGS = {
+    "chain_scanner": "run_options_chain",
+    "group_screener": "run_group_screener",
+    "vol_surface_2d": "run_vol_surface_2d",
+    "vrp_term_structure": "run_vrp_term_structure",
+    "sentiment_backtest": "run_sentiment_backtest",
+}
+
+
+def _resolve_core_analysis_flags(context: dict[str, Any]) -> dict[str, bool]:
+    """Resolve the five _run_core_analysis gated-step booleans for
+    run_context_mode.
+
+    Back-compat (non-negotiable, see Task 6 brief): when context["modules"]
+    is absent or an empty list, this returns EXACTLY the env-var-driven
+    values run_context_mode has always used -- same _env_flag() reads, same
+    defaults (VS_RUN_VRP_TERM_STRUCTURE defaults True; the other four
+    default False). An empty list is treated the same as absent (falls back
+    to env vars), not as "select nothing".
+
+    When context["modules"] is a non-empty list, every one of the five
+    booleans is resolved purely from slug membership in that list -- env
+    vars are not consulted at all for this call, and nothing not explicitly
+    selected runs, including vrp_term_structure. This is a deliberate
+    choice (see Task 6 brief report): context["modules"] is an explicit
+    selection API (the same one Task 2's run_selected_modules / the
+    dashboard checkbox UI use), and "selected modules run, nothing else
+    does" is the least surprising contract for that API -- a caller who
+    wants the VRP default under module-selection should list
+    "vrp_term_structure" explicitly, the same way they'd list any other
+    slug.
+    """
+    modules = context.get("modules")
+    if not modules:
+        return {
+            "run_options_chain": _env_flag("VS_RUN_CHAIN_SCANNER", False),
+            "run_group_screener": _env_flag("VS_RUN_GROUP_SCREENER", False),
+            "run_vol_surface_2d": _env_flag("VS_RUN_VOL_SURFACE_2D", False),
+            "run_vrp_term_structure": _env_flag("VS_RUN_VRP_TERM_STRUCTURE", True),
+            "run_sentiment_backtest": _env_flag("VS_RUN_SENTIMENT_BACKTEST", False),
+        }
+    selected = {str(m).strip().lower() for m in modules}
+    return {
+        flag_name: slug in selected
+        for slug, flag_name in _CORE_ANALYSIS_MODULE_SLUGS.items()
+    }
+
+
 def _compact_expiry(iso_or_compact: str) -> str:
     """suite_context stores expiration_date as ISO 'YYYY-MM-DD' (see
     suite_context._normalize_expiration). Every analysis module in this suite
@@ -2395,19 +2453,19 @@ def run_context_mode(context_path: str, context_out: str | None = None) -> int:
     # chain), which are opt-in.
     # Production sign-model selection is locked to the expiry-book engine.
     sign_model = "expiry_book"
-    run_options_chain = _env_flag("VS_RUN_CHAIN_SCANNER", False)
-    run_group_screener = _env_flag("VS_RUN_GROUP_SCREENER", False)
-    run_vol_surface_2d = _env_flag("VS_RUN_VOL_SURFACE_2D", False)
-    # Default-ON, unlike its opt-in neighbours above: the VRP term structure
-    # is the headline output consumers read off vol_result.json, and while it
-    # defaulted to False every unified run published
-    # {"available": False} with nothing saying the step had simply never been
-    # asked for. It costs a handful of extra chain fetches (one per tenor),
-    # which is the same order as the replication legs already running -- not
-    # the per-ticker re-runs that keep the screener/chain scanner opt-in.
-    # Set VS_RUN_VRP_TERM_STRUCTURE=0 to skip it.
-    run_vrp_term_structure = _env_flag("VS_RUN_VRP_TERM_STRUCTURE", True)
-    run_sentiment_backtest = _env_flag("VS_RUN_SENTIMENT_BACKTEST", False)
+    # Task 6 (Modularization Overhaul, Phase 3): when context["modules"] is a
+    # non-empty list, these five booleans come from slug membership in that
+    # list instead of the VS_RUN_* env vars -- see
+    # _resolve_core_analysis_flags's docstring for the back-compat contract
+    # (absent/empty "modules" is byte-identical to the historical env-var
+    # path, including VS_RUN_VRP_TERM_STRUCTURE's True default) and the
+    # VRP-under-selection judgment call.
+    _core_flags = _resolve_core_analysis_flags(context)
+    run_options_chain = _core_flags["run_options_chain"]
+    run_group_screener = _core_flags["run_group_screener"]
+    run_vol_surface_2d = _core_flags["run_vol_surface_2d"]
+    run_vrp_term_structure = _core_flags["run_vrp_term_structure"]
+    run_sentiment_backtest = _core_flags["run_sentiment_backtest"]
 
     print("=" * 60)
     print("  VOLATILITY SUITE — context mode (non-interactive)")
