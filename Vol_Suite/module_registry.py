@@ -3,26 +3,31 @@
 See `shared/module_registry.py` for the contract and
 `shared/module_registry.py::all_modules()` for how this gets aggregated.
 
-Task 3 of the modularization overhaul populates this file for the first
+Task 3 of the modularization overhaul populated this file for the first
 time, with the dealer-book module cluster: `dealer_exposure`, `dealer_flow`,
 `position_book`, `dual_book`. All four are thin `ModuleSpec` adapters over
 already-tested, already-live Vol_Suite code (`expiry_book_production.py`,
 `dealer_position_book.py`, `delta_band.py`, `dual_book.py`,
-`dealer_positioning.py`) -- no suite-internal logic changes here.
-`chain_scanner`, `svi_smile`, and `surface_grids` builders are separate
-follow-up tasks, not this file's concern yet.
+`dealer_positioning.py`) -- no suite-internal logic changes there.
 
-Flat cwd-relative imports fragile surface (see CLAUDE.md): the five
-Vol_Suite-internal modules above import each other via flat top-level names
-(e.g. `import expiry_book_exposure as ebe`), which only resolve when
-Vol_Suite/ itself is on `sys.path`. Vol_Suite's own tests get this via
+Task 4 adds two more: `chain_scanner` (a thin adapter over
+`options_chain_scanner.run_chain_scanner`, same pattern as Task 3) and
+`svi_smile` (new glue code -- see its section below for why it's different).
+`surface_grids` builders remain a separate follow-up task, not this file's
+concern yet.
+
+Flat cwd-relative imports fragile surface (see CLAUDE.md): the Vol_Suite-
+internal modules above import each other via flat top-level names (e.g.
+`import expiry_book_exposure as ebe`), which only resolve when Vol_Suite/
+itself is on `sys.path`. Vol_Suite's own tests get this via
 `tests/conftest.py`, but this file is also imported as `Vol_Suite.
 module_registry` from the repo root (`shared/module_registry.py::
 _suite_modules`), where Vol_Suite/ is NOT automatically on `sys.path`.
 Insert it defensively, before importing any Vol_Suite-internal module --
 verified by `Vol_Suite/tests/test_module_registry_dealer_book.py`'s
 repo-root-import test (spawns a fresh subprocess with only the repo root on
-sys.path).
+sys.path). `svi_smile`'s "model_comparison" mode additionally needs
+Options_Suite/ on sys.path for `smile_by_model.py` -- same treatment.
 """
 
 from __future__ import annotations
@@ -30,20 +35,52 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 _VOL_SUITE_DIR = Path(__file__).resolve().parent
-if str(_VOL_SUITE_DIR) not in sys.path:
-    sys.path.insert(0, str(_VOL_SUITE_DIR))
+# Insert (or MOVE) Vol_Suite/ to the very front of sys.path. The membership
+# check alone is not enough: Tools/tools/surface_explorer_tool.py (imported
+# eagerly by Tools/registry.py) front-inserts Options_Suite/ -- whose flat
+# expiry_selector.py shadows Vol_Suite's (missing DEFAULT_A) -- so in a
+# process that imported Tools/ first, Vol_Suite/ could sit BEHIND
+# Options_Suite/ and every Vol_Suite-internal flat import below would
+# resolve to the wrong module (AttributeError). That failure mode is real
+# and silent in production: shared.module_registry._suite_modules() swallows
+# the import error by design, so Vol_Suite's modules would simply vanish
+# from all_modules() whenever the dashboard (or any Tools/-importing
+# process) had already imported Tools/registry. Move-to-front makes this
+# file's own imports order-independent -- see
+# TestRepoRootImport.test_all_modules_survives_tools_first_import_order.
+if str(_VOL_SUITE_DIR) in sys.path:
+    sys.path.remove(str(_VOL_SUITE_DIR))
+sys.path.insert(0, str(_VOL_SUITE_DIR))
 _REPO_ROOT = _VOL_SUITE_DIR.parent
 if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+    sys.path.insert(1, str(_REPO_ROOT))
+_OPTIONS_SUITE_DIR = _REPO_ROOT / "Options_Suite"
+if str(_OPTIONS_SUITE_DIR) not in sys.path:
+    # Appended, NOT inserted at index 0: Options_Suite ships its own flat
+    # top-level modules that collide by name with Vol_Suite's (e.g. its own
+    # expiry_selector.py, missing DEFAULT_A) -- inserting Options_Suite/
+    # ahead of Vol_Suite/ in sys.path made Vol_Suite-internal `import
+    # expiry_selector` calls (dealer_positioning.py) resolve to the WRONG
+    # module and crash with AttributeError. Appending keeps Options_Suite/
+    # only as a last-resort resolver, present just for `import
+    # smile_by_model` (svi_smile's "model_comparison" mode) without
+    # shadowing anything Vol_Suite-internal.
+    sys.path.append(str(_OPTIONS_SUITE_DIR))
 
 import dealer_flow_module
 import dealer_position_book
 import delta_band
 import dual_book
+import expiry_book_exposure as ebe
+import expiry_book_production as ebp
+import expiry_selector
+import options_chain_scanner as ocs
+import smile_by_model
 from dealer_exposure_module import fetch_dealer_exposure
 
 from shared.module_registry import ArchiveHint, ArtifactRef, ModuleResult, ModuleSpec
@@ -291,6 +328,279 @@ def _run_dual_book(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# chain_scanner
+# ---------------------------------------------------------------------------
+
+
+def _run_chain_scanner(context: dict[str, Any]) -> ModuleResult:
+    """Wraps options_chain_scanner.run_chain_scanner as-is (full single-
+    expiry chain scan: greeks pull, SVI/quadratic smile edge-detection,
+    vanna positioning read, strategy recommendations). run_chain_scanner
+    owns its own ThetaDataController lifecycle internally -- unlike
+    dealer_exposure/dual_book above, there's no `td` injection seam here to
+    match against, so this helper (like _run_position_book) doesn't take a
+    `td` kwarg either.
+    """
+    try:
+        ticker = _resolve_ticker(context)
+        expiry = _resolve_expiry(context)
+        expiration = None if expiry == "auto" else expiry
+        output_dir = str(context.get("output_dir") or ".")
+        target_years = float(context.get("target_years") or 0.25)
+        files, interp, result = ocs.run_chain_scanner(
+            ticker,
+            target_years=target_years,
+            expiration=expiration,
+            output_dir=output_dir,
+            jump_risk_signal=context.get("jump_risk_signal"),
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    artifacts: list[ArtifactRef] = [
+        ArtifactRef(path=f, kind="png" if str(f).lower().endswith(".png") else "csv")
+        for f in files
+    ]
+    # run_chain_scanner always writes chain_strategies.json (either with
+    # real recommendations or the "no edges" empty artifact) but doesn't
+    # append it to the `files` list it returns -- pick it up here so this
+    # module's artifacts list is complete.
+    strategies_path = os.path.join(output_dir, "chain_strategies.json")
+    if os.path.exists(strategies_path):
+        artifacts.append(ArtifactRef(path=strategies_path, kind="json"))
+
+    metrics: dict[str, Any] = {
+        "ticker": result.ticker,
+        "expiry": result.expiry,
+        "spot": result.spot,
+        "atm_iv_pct": result.atm_iv_pct,
+        "rv_match_pct": result.rv_match_pct,
+        "regime": result.regime,
+        "verdict": result.verdict,
+        "edge_candidates_count": len(result.edge_candidates or []),
+        "net_vanna_shares": result.net_vanna_shares,
+        "svi_params": result.svi_params,
+        "interp": interp,
+    }
+    return ModuleResult(
+        status="ok",
+        artifacts=artifacts,
+        metrics=metrics,
+        context_patch={"chain_scanner_result": result},
+    )
+
+
+# ---------------------------------------------------------------------------
+# svi_smile
+# ---------------------------------------------------------------------------
+#
+# Unlike every module above, svi_smile does not wrap one already-existing
+# entry point -- it's new thin glue over THREE existing SVI/smile call
+# sites that never had a shared standalone runner:
+#
+#   "chain_scanner"    -> options_chain_scanner.fit_svi_smile, the local
+#                          edge-detection smile fit (OTM-only, sqrt(OI)
+#                          weighted via svi_rp.calibrate_svi) scan_chain
+#                          runs against one ticker's single-expiry chain
+#                          DataFrame. fit_svi_smile itself takes an
+#                          already-built df/forward/T, not a ticker, so
+#                          this mode first gathers those inputs with the
+#                          same handful of fetch/forward-price lines
+#                          scan_chain runs immediately before calling it
+#                          (see _svi_chain_scanner_inputs).
+#   "exposure_overlay" -> expiry_book_exposure.svi_rp_overlay, the
+#                          production dealer-book cheap/rich book-signing
+#                          overlay expiry_book_production.fetch_production_
+#                          result runs right before calling it. Gathers the
+#                          same chain_iv/oi_by inputs that call site builds
+#                          (see _svi_exposure_overlay_inputs), reusing
+#                          expiry_book_production.normalize_snapshot_rows/
+#                          _merge_greeks_oi rather than re-deriving their
+#                          put-call-parity ITM-leg-coverage fallback.
+#   "model_comparison" -> Options_Suite.smile_by_model.build_iv_smile_by_model,
+#                          which is already ticker-driven and fully
+#                          self-contained (fetches its own spot/expiry/
+#                          strike/rate/dividend-yield) -- called directly,
+#                          no gathering needed.
+#
+# NOTE on the brief's premise: the brief says all three "ultimately
+# delegate to the same underlying svi_rp.calibrate_svi" -- verified false
+# for "model_comparison": smile_by_model.build_iv_smile_by_model never
+# imports or calls svi_rp at all (confirmed by grep across Options_Suite/).
+# It builds a completely different kind of smile -- each Options_Suite
+# pricing model's OWN chain-wide IV curve (via chain_evaluation.
+# build_smile_comparison) vs. the market's vendor IV, not an SVI reference
+# fit. This doesn't block giving it a shared dispatch entry point (the
+# brief's actual scope, "give each of the three a single shared standalone
+# entry point, nothing more"), but it does mean this module dispatches to
+# three genuinely different smile constructions, only two of which
+# (chain_scanner, exposure_overlay) touch svi_rp.calibrate_svi.
+#
+# None of the three call sites' internal edge-detection / book-signing /
+# model-comparison logic is reimplemented here -- each mode only gathers
+# that site's real inputs (or, for model_comparison, none at all) and
+# forwards them to the existing function unchanged.
+
+SVI_SMILE_MODES = ("chain_scanner", "exposure_overlay", "model_comparison")
+
+
+def _svi_chain_scanner_inputs(td: Any, ticker: str, expiration: str):
+    """Same fetch/forward-price plumbing options_chain_scanner.scan_chain
+    runs immediately before calling fit_svi_smile -- gathered standalone
+    here since fit_svi_smile takes an already-built chain DataFrame +
+    forward price, not a bare ticker."""
+    spot = td.fetch_spot_price(ticker)
+    if spot <= 0:
+        raise ValueError(f"Could not fetch spot for {ticker}")
+    dividend_yield = td.fetch_dividend_yield(ticker)
+    exp_date = datetime.strptime(expiration, "%Y%m%d").replace(
+        tzinfo=UTC
+    ).date()
+    today = datetime.now(UTC).date()
+    actual_T = max((exp_date - today).days, 0) / ocs.DEFAULT_A
+    r_live = td.fetch_risk_free_rate(actual_T)
+    r_use = r_live if r_live is not None else ocs.RISK_FREE_RATE
+    forward = ocs.compute_forward_price(spot, r_use, dividend_yield, actual_T)
+    df = ocs.build_chain_dataframe(td, ticker, expiration)
+    return df, forward, actual_T, spot
+
+
+def _run_svi_smile_chain_scanner(
+    td: Any, ticker: str, expiration: str
+) -> dict[str, Any]:
+    df, forward, actual_T, spot = _svi_chain_scanner_inputs(td, ticker, expiration)
+    _fitted_df, smile_a, smile_b, svi_params = ocs.fit_svi_smile(
+        df, forward, actual_T, spot=spot
+    )
+    return {
+        "ticker": ticker,
+        "expiry": expiration,
+        "spot": spot,
+        "forward": forward,
+        "T_years": actual_T,
+        "smile_a": smile_a,
+        "smile_b": smile_b,
+        "svi_params": svi_params,
+    }
+
+
+def _svi_exposure_overlay_inputs(td: Any, ticker: str, expiration: str):
+    """Same chain_iv/oi_by construction expiry_book_production.py's
+    fetch_production_result runs right before its own svi_rp_overlay call
+    -- reuses normalize_snapshot_rows/_merge_greeks_oi (the put-call-parity
+    ITM-leg-coverage fallback) rather than re-deriving that logic here."""
+    spot = float(td.fetch_spot_price(ticker))
+    if spot <= 0:
+        raise ValueError(f"Could not fetch spot for {ticker}")
+    raw_rows = td.option_bulk_greeks(ticker, expiration)
+    oi_rows = td.option_bulk_oi(ticker, expiration)
+    try:
+        q = float(td.fetch_dividend_yield(ticker))
+    except Exception:  # noqa: BLE001 -- q fallback to 0 mirrors expiry_book_production.py:265-269
+        q = 0.0
+    rows = ebp.normalize_snapshot_rows(ebp._merge_greeks_oi(raw_rows, oi_rows))
+    chain_iv = {(r["strike"], r["right"]): r["implied_vol"] for r in rows}
+    oi_by = {(r["strike"], r["right"]): int(r["oi"]) for r in rows}
+    dte = ebp._dte_of(expiration)
+    t = dte / ebe.DEFAULT_A
+    return chain_iv, oi_by, spot, t, q
+
+
+def _run_svi_smile_exposure_overlay(
+    td: Any, ticker: str, expiration: str
+) -> dict[str, Any]:
+    chain_iv, oi_by, spot, t, q = _svi_exposure_overlay_inputs(td, ticker, expiration)
+    overlay = ebe.svi_rp_overlay(
+        chain_iv, spot, t, oi_by=oi_by, ticker=ticker, r=ebe.RISK_FREE_RATE, q=q
+    )
+    return {
+        "ticker": overlay.ticker,
+        "expiry": expiration,
+        "spot": spot,
+        "T_years": t,
+        "sigma_atm": overlay.sigma_atm,
+        "cheap_strikes": overlay.cheap_strikes,
+        "rich_strikes": overlay.rich_strikes,
+        "net_cheap_oi": overlay.net_cheap_oi,
+        "net_rich_oi": overlay.net_rich_oi,
+        "term_structure_flag": overlay.term_structure_flag,
+        "butterfly_clamped": overlay.butterfly_clamped,
+    }
+
+
+def _run_svi_smile_model_comparison(
+    context: dict[str, Any], td: Any, ticker: str, expiration: str | None
+) -> dict[str, Any]:
+    return smile_by_model.build_iv_smile_by_model(
+        ticker,
+        td=td,
+        expiry=expiration,
+        strike=context.get("strike"),
+        option_type=str(context.get("option_type") or "call"),
+        include_mc=bool(context.get("include_mc", True)),
+        include_heston=bool(context.get("include_heston", True)),
+    )
+
+
+def _run_svi_smile(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
+    """Dispatches on context['mode'] (default 'chain_scanner') across the
+    three call sites documented above. Fail-loud: an unknown mode, a
+    missing ticker, or a genuine fetch/fit failure all become
+    status='failed' with real error text, never a fake 'ok'."""
+    mode = str(context.get("mode") or "chain_scanner").strip().lower()
+    if mode not in SVI_SMILE_MODES:
+        return ModuleResult(
+            status="failed",
+            artifacts=[],
+            metrics={
+                "error": (
+                    f"unknown svi_smile mode {mode!r}, expected one of "
+                    f"{SVI_SMILE_MODES}"
+                ),
+                "error_type": "ValueError",
+            },
+            context_patch=None,
+        )
+
+    try:
+        ticker = _resolve_ticker(context)
+        expiry = _resolve_expiry(context)
+        target_years = float(context.get("target_years") or 0.25)
+
+        owns_td = td is None
+        if owns_td:
+            from thetadata_client import ThetaDataController
+
+            td = ThetaDataController()
+        try:
+            if mode == "model_comparison":
+                expiration = None if expiry == "auto" else expiry
+                metrics = _run_svi_smile_model_comparison(
+                    context, td, ticker, expiration
+                )
+            else:
+                expiration = (
+                    expiry
+                    if expiry != "auto"
+                    else expiry_selector.resolve_expiration(
+                        td, ticker, None, target_years
+                    )[0]
+                )
+                if mode == "chain_scanner":
+                    metrics = _run_svi_smile_chain_scanner(td, ticker, expiration)
+                else:
+                    metrics = _run_svi_smile_exposure_overlay(td, ticker, expiration)
+        finally:
+            if owns_td:
+                td.close()
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    metrics["mode"] = mode
+    return ModuleResult(status="ok", artifacts=[], metrics=metrics, context_patch=None)
+
+
 MODULES: list[ModuleSpec] = [
     ModuleSpec(
         name="Dealer Exposure",
@@ -332,6 +642,36 @@ MODULES: list[ModuleSpec] = [
         category="exposure",
         run=_run_dual_book,
         cli_entry="Vol_Suite/dual_book.py",
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Chain Scanner",
+        slug="chain_scanner",
+        suite="vol_suite",
+        category="scanner",
+        run=_run_chain_scanner,
+        # options_chain_scanner.py has a real __main__ block (see main()
+        # above _run_chain_scanner in that file), but it's a fully
+        # interactive prompt-driven flow (input("Enter ticker: ")) with no
+        # headless/--context entry point of its own -- not a clean existing
+        # standalone-CLI target, and Task 4's brief says not to build a new
+        # CLI file unless one is missing and trivial to add, which this
+        # isn't (it would need the same headless-argument plumbing Task 3's
+        # two new CLI files added from scratch).
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="SVI Smile",
+        slug="svi_smile",
+        suite="vol_suite",
+        category="smile",
+        run=_run_svi_smile,
+        cli_entry=None,
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),

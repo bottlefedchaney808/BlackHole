@@ -39,8 +39,12 @@ def _by_slug(slug: str):
 
 class TestModuleSpecRegistration:
     def test_all_four_slugs_present(self):
+        # Task 4 (chain_scanner, svi_smile) added two more entries to the
+        # same MODULES list -- see test_module_registry_chain_svi.py for
+        # their own coverage. This still asserts the four Task 3 slugs are
+        # present and untouched, just not that they're the ONLY entries.
         slugs = {m.slug for m in vs_registry.MODULES}
-        assert slugs == {"dealer_exposure", "dealer_flow", "position_book", "dual_book"}
+        assert {"dealer_exposure", "dealer_flow", "position_book", "dual_book"} <= slugs
 
     def test_dealer_exposure_spec_fields(self):
         m = _by_slug("dealer_exposure")
@@ -110,17 +114,18 @@ class TestRepoRootImport:
     def test_imports_cleanly_from_repo_root_only(self):
         code = (
             "import sys; "
-            "sys.path.insert(0, r'%s'); "
-            "import Vol_Suite.module_registry as m; "
-            "assert len(m.MODULES) == 4, m.MODULES; "
+            f"sys.path.insert(0, r'{REPO_ROOT}'); "
+            + "import Vol_Suite.module_registry as m; "
+            "assert len(m.MODULES) == 6, m.MODULES; "
             "print('OK')"
-        ) % str(REPO_ROOT)
+        )
         proc = subprocess.run(
             [sys.executable, "-c", code],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         assert proc.returncode == 0, (
             f"repo-root-relative import of Vol_Suite.module_registry failed:\n"
@@ -145,25 +150,25 @@ class _FakeTD:
 
 
 def _exposure_result(**overrides):
-    defaults = dict(
-        ticker="SPY",
-        expiry="20261016",
-        spot=650.0,
-        gex_reference=1.0,
-        book_gamma=2.0,
-        charm_1d=3.0,
-        residual_vanna_inventory=4.0,
-        band_n=100.0,
-        band_z=0.5,
-        band_regime="QUIET/ABSORBED",
-        structural=SimpleNamespace(status="available"),
-        vanna_flow_live=250_000.0,
-        vanna_flow_provenance="SURFACE_CHANGE",
-        d_iv_used=0.02,
-        flow_volume_rows=0,
-        flow_provenance="live_snapshot+snapshot_only",
-        flow_layer="snapshot_only",
-    )
+    defaults = {
+        "ticker": "SPY",
+        "expiry": "20261016",
+        "spot": 650.0,
+        "gex_reference": 1.0,
+        "book_gamma": 2.0,
+        "charm_1d": 3.0,
+        "residual_vanna_inventory": 4.0,
+        "band_n": 100.0,
+        "band_z": 0.5,
+        "band_regime": "QUIET/ABSORBED",
+        "structural": SimpleNamespace(status="available"),
+        "vanna_flow_live": 250_000.0,
+        "vanna_flow_provenance": "SURFACE_CHANGE",
+        "d_iv_used": 0.02,
+        "flow_volume_rows": 0,
+        "flow_provenance": "live_snapshot+snapshot_only",
+        "flow_layer": "snapshot_only",
+    }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 

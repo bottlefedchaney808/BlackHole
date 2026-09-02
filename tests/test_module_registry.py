@@ -1,11 +1,13 @@
 """Tests for shared/module_registry.py -- Phase 1 registry scaffolding.
 
-Phase 1 is registration-only: no suite MODULES lists are populated yet (they
-stay empty until a later phase), so all_modules() should currently return
-exactly the Tools/registry.py entries, adapted via from_tool_spec. Real
-cycle-detection over the `requires` graph is deferred to a later phase (see
-test_requires_cycle_not_yet_detected below) since this phase never executes
-the requires graph -- it only registers modules.
+Phase 1 was registration-only: suite MODULES lists started empty and
+all_modules() returned exactly the Tools/registry.py entries, adapted via
+from_tool_spec. Later phases (3+) populate suite registries; from Task 4 on,
+the aggregation test asserts Tools/ entries plus whatever suite registries
+are populated, with no slug collisions across the boundary -- not "Tools
+only". Real cycle-detection over the `requires` graph is deferred to a later
+phase (see test_requires_cycle_not_yet_detected below) since registration
+never executes the requires graph.
 """
 
 from __future__ import annotations
@@ -44,13 +46,22 @@ def test_all_modules_contains_every_tool_registry_entry_adapted():
             assert module.archive == ArchiveHint(key_shape="global")
 
 
-def test_all_modules_has_nothing_yet_from_the_four_suite_registries():
-    # Phase 1: every suite's module_registry.py::MODULES is still [], so the
-    # only contributions to all_modules() come from Tools/registry.py.
+def test_all_modules_aggregates_tools_plus_populated_suite_registries():
+    # Phase 1 kept every suite MODULES list empty; Phase 3+ populate them
+    # (vol_suite first: dealer-book cluster, then chain_scanner/svi_smile).
+    # Aggregation must carry the Tools/ entries plus every populated suite
+    # registry, with no slug collisions across the Tools/suite boundary.
+    # Written open-ended so later phases adding more suite entries (or
+    # populating the other three suites) don't trip it again.
     modules = all_modules()
+    slugs = [m.slug for m in modules]
     tool_slugs = {t.slug for t in TOOLS}
-    assert {m.slug for m in modules} == tool_slugs
-    assert len(modules) == len(TOOLS)
+    suite_slugs = {m.slug for m in modules if m.suite != "tools"}
+
+    assert tool_slugs <= set(slugs)
+    assert suite_slugs, "expected at least one populated suite registry by now"
+    assert len(slugs) == len(set(slugs))
+    assert set(slugs) == tool_slugs | suite_slugs
 
 
 def test_all_modules_has_no_duplicate_slugs():
