@@ -31,10 +31,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import delta_band
 import dealer_position_book as dpb
+from dealer_position_book import (
+    PositionBookResult,
+    accumulate_position_book,
+    load_history_days,
+)
 from delta_band import BandFit, band_position, load_band_fit
-from dealer_position_book import PositionBookResult, accumulate_position_book, load_history_days
 
 _BAND_FIT_DEFINITION = "bucketed_0_10"  # active_for_live per the Phase-1 fit JSON
 
@@ -124,7 +127,9 @@ def _resolve_auto_expiry(td: Any, ticker: str) -> str:
     rejected by the production validator). Falls back to the first listing."""
     from datetime import date, datetime
 
-    listed = sorted(str(e).replace("-", "") for e in (td.list_expirations(ticker) or []))
+    listed = sorted(
+        str(e).replace("-", "") for e in (td.list_expirations(ticker) or [])
+    )
     today = date.today()
     fallback = None
     for e in listed:
@@ -188,7 +193,7 @@ def format_dual_book_interp(dual: DualBookResult) -> str:
     # Exposure book (snapshot, units: shares).
     if getattr(expo, "band_n", None) is not None:
         lines.append(
-            f"Exposure book (snapshot): N=${float(expo.band_n)/1e6:,.1f}M "
+            f"Exposure book (snapshot): N=${float(expo.band_n) / 1e6:,.1f}M "
             f"z={float(expo.band_z):+.2f} {expo.band_regime}"
         )
     else:
@@ -203,7 +208,7 @@ def format_dual_book_interp(dual: DualBookResult) -> str:
     if dual.position_z is not None:
         lines.append(
             f"Position book (accumulated flow, {lookback}d {arm}, {window}): "
-            f"N={float(pos.total_net)/1e6:.2f}M vanna-weighted-oi "
+            f"N={float(pos.total_net) / 1e6:.2f}M vanna-weighted-oi "
             f"z={dual.position_z:+.2f} {dual.position_regime}"
         )
     else:
@@ -212,7 +217,7 @@ def format_dual_book_interp(dual: DualBookResult) -> str:
     # Spread with the mixed-units caveat.
     if dual.spread is not None:
         lines.append(
-            f"Spread (exposure - position): {float(dual.spread)/1e6:,.2f}M "
+            f"Spread (exposure - position): {float(dual.spread) / 1e6:,.2f}M "
             "[units caveat: mixed units — compare direction/magnitude class, "
             "not exact dollars]"
         )
@@ -258,7 +263,9 @@ def _load_root_env() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Dual-book output: exposure snapshot + assumed dealer position")
+    ap = argparse.ArgumentParser(
+        description="Dual-book output: exposure snapshot + assumed dealer position"
+    )
     ap.add_argument("ticker", nargs="?", default="SPY")
     ap.add_argument("expiry", nargs="?", default="auto")
     ap.add_argument("--lookback", type=int, default=150)
@@ -268,16 +275,57 @@ def main(argv: list[str] | None = None) -> int:
     _load_root_env()
     import shared.thetadata as th
 
+    ticker = args.ticker.upper()
     td = th.ThetaDataController()  # NOTE: first positional arg is base_url, not ticker
     dual = fetch_dual_book(
         td,
-        args.ticker.upper(),
+        ticker,
         expiry=args.expiry,
         lookback=args.lookback,
         arm=args.arm,
     )
     print(format_dual_book_interp(dual))
+
+    _archive_standalone_run(ticker, dual)
     return 0
+
+
+def _archive_standalone_run(ticker: str, dual: DualBookResult) -> None:
+    """Phase 6 of the modularization overhaul (Task 7): see
+    `dealer_exposure_module.py::_archive_standalone_run`'s docstring for the
+    shared rationale. `metrics` mirrors `Vol_Suite/module_registry.py::
+    _run_dual_book`'s field set. No chart artifacts (`dual_book.py`
+    produces none today, matching the ModuleSpec wrapper)."""
+    try:
+        from shared.module_archive import record as archive_record
+        from shared.module_registry import ModuleResult, resolve_modules
+
+        module_spec = resolve_modules(["dual_book"])[0]
+        expo = dual.exposure
+        context = {"ticker": ticker, "expiry": getattr(expo, "expiry", None)}
+        metrics = {
+            "ticker": getattr(expo, "ticker", ticker),
+            "units": dict(dual.units),
+            "exposure_band_n": getattr(expo, "band_n", None),
+            "exposure_band_z": getattr(expo, "band_z", None),
+            "exposure_band_regime": getattr(expo, "band_regime", None),
+            "position_total_net": dual.position.total_net,
+            "position_z": dual.position_z,
+            "position_regime": dual.position_regime,
+            "spread": dual.spread,
+        }
+        module_result = ModuleResult(
+            status="ok", artifacts=[], metrics=metrics, context_patch=None
+        )
+        archive_record(module_result, module_spec, context, triggered_by="cli")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "dual_book standalone CLI: could not archive run (archiving is "
+            "best-effort; the run itself already completed)",
+            exc_info=True,
+        )
 
 
 if __name__ == "__main__":

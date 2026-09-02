@@ -65,6 +65,7 @@ paths currently writes a `context_audit:sentiment` row into `orchestrator_runs`
 `shared/context_audit.py` transaction helper that exists for a real
 producer-fold use case but is not currently called by `run_unified`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,15 +78,15 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from shared.logging import setup_logging, log_operation, get_metrics, LogContext
+from shared.logging import setup_logging
 
 # Setup structured JSON logging
 logger = setup_logging(
-    name='orchestrator',
+    name="orchestrator",
     level=logging.INFO,
     use_json=True,
 )
@@ -98,20 +99,20 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from shared.context_audit import (  # noqa: E402  (path pinned immediately above)
+from shared.context_audit import (
     ContextMutationAudit,
     audit_sentiment_mutation,
 )
-from shared.suite_validation import (  # noqa: E402  (path pinned immediately above)
+from shared.module_registry import (
+    all_modules,
+    resolve_modules,
+)
+from shared.suite_validation import (
     ValidationResult,
     marker_filename,
     validate_suite_output,
 )
-from shared.module_registry import (  # noqa: E402  (path pinned immediately above)
-    ModuleSpec,
-    all_modules,
-    resolve_modules,
-)
+
 
 def _find_shared_python() -> str:
     """Locate the interpreter in the consolidated root `.venv`, cross-platform.
@@ -123,11 +124,11 @@ def _find_shared_python() -> str:
     real filesystem rather than branching on `os.name` alone so a venv created
     inside e.g. WSL or Git Bash on Windows still resolves correctly.
     """
-    venv_dir = Path(ROOT) / '.venv'
+    venv_dir = Path(ROOT) / ".venv"
     candidates = [
-        venv_dir / 'Scripts' / 'python.exe',  # Windows
-        venv_dir / 'bin' / 'python3',         # Linux / Mac
-        venv_dir / 'bin' / 'python',          # Linux / Mac fallback
+        venv_dir / "Scripts" / "python.exe",  # Windows
+        venv_dir / "bin" / "python3",  # Linux / Mac
+        venv_dir / "bin" / "python",  # Linux / Mac fallback
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -135,7 +136,11 @@ def _find_shared_python() -> str:
     # Nothing found -- return the platform-appropriate default path anyway so
     # the `os.path.exists(SHARED_PYTHON)` check below fails with a clear
     # "shared interpreter not found" message instead of a confusing crash.
-    default = venv_dir / 'Scripts' / 'python.exe' if os.name == 'nt' else venv_dir / 'bin' / 'python'
+    default = (
+        venv_dir / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else venv_dir / "bin" / "python"
+    )
     return str(default)
 
 
@@ -144,19 +149,19 @@ def _find_shared_python() -> str:
 SHARED_PYTHON = _find_shared_python()
 
 SUITE_ROOTS = {
-    'options': os.path.join(ROOT, 'Options_Suite'),
-    'vol': os.path.join(ROOT, 'Vol_Suite'),
-    'var': os.path.join(ROOT, 'VaR_Tools_Simulations'),
-    'sentiment': os.path.join(ROOT, 'sentiment-scanner'),
+    "options": os.path.join(ROOT, "Options_Suite"),
+    "vol": os.path.join(ROOT, "Vol_Suite"),
+    "var": os.path.join(ROOT, "VaR_Tools_Simulations"),
+    "sentiment": os.path.join(ROOT, "sentiment-scanner"),
 }
 
 # Same default as Vol_Suite's `_CHILD_SUITE_TIMEOUT_SEC`, and honours the same
 # environment override, so raising it for a slow box raises it everywhere.
-DEFAULT_TIMEOUT_SEC = int(os.environ.get('SUITE_CHILD_TIMEOUT_SEC', '1800'))
+DEFAULT_TIMEOUT_SEC = int(os.environ.get("SUITE_CHILD_TIMEOUT_SEC", "1800"))
 
 # SWAPS_DB_PATH env var overrides, e.g. for a mounted Docker volume; see
 # .env.example / docker-compose.yml
-DB_PATH = os.environ.get('SWAPS_DB_PATH') or os.path.join(ROOT, 'swaps.db')
+DB_PATH = os.environ.get("SWAPS_DB_PATH") or os.path.join(ROOT, "swaps.db")
 
 
 def _warn_if_schema_outdated() -> None:
@@ -174,6 +179,7 @@ def _warn_if_schema_outdated() -> None:
         if ROOT not in sys.path:
             sys.path.insert(0, ROOT)
         import setup_db
+
         setup_db.check_schema_version(DB_PATH)
     except Exception as e:
         logger.warning(f"Schema version check skipped: {e}")
@@ -187,34 +193,38 @@ def _warn_if_schema_outdated() -> None:
 # only while Vol_Suite had no `--context-out` writer; keeping the key means a
 # future producer-shaped suite can be added without reintroducing an implicit
 # rule about which suites are exempt from the marker invariant.
-_SUITE_SPECS: Dict[str, Dict[str, Any]] = {
-    'options': {
-        'entrypoint': 'main.py',
-        'flags': lambda ctx, out: ['--context', ctx, '--context-out', out],
-        'writes_context_out': True,
-        'note': '',
+_SUITE_SPECS: dict[str, dict[str, Any]] = {
+    "options": {
+        "entrypoint": "main.py",
+        "flags": lambda ctx, out: ["--context", ctx, "--context-out", out],
+        "writes_context_out": True,
+        "note": "",
     },
-    'var': {
-        'entrypoint': 'main.py',
-        'flags': lambda ctx, out: ['--context', ctx, '--context-out', out],
-        'writes_context_out': True,
-        'note': '',
+    "var": {
+        "entrypoint": "main.py",
+        "flags": lambda ctx, out: ["--context", ctx, "--context-out", out],
+        "writes_context_out": True,
+        "note": "",
     },
-    'sentiment': {
+    "sentiment": {
         # Producer, not consumer: it has no --context, only --export-context,
         # and it loops forever without --no-loop.
         # Skip YouTube scanner for orchestrator speed (not critical for context).
-        'entrypoint': 'main.py',
-        'flags': lambda ctx, out: ['--export-context', out, '--no-loop', '--skip-youtube'],
-        'writes_context_out': True,
-        'note': 'context producer: --export-context (schema_version 2 sentiment block)',
+        "entrypoint": "main.py",
+        "flags": lambda ctx, out: [
+            "--export-context",
+            out,
+            "--no-loop",
+            "--skip-youtube",
+        ],
+        "writes_context_out": True,
+        "note": "context producer: --export-context (schema_version 2 sentiment block)",
     },
-    'vol': {
-        'entrypoint': 'volatility_suite.py',
-        'flags': lambda ctx, out: ['--context', ctx, '--context-out', out,
-                                   '--no-loop'],
-        'writes_context_out': True,
-        'note': 'vol_result.json: vol surface + dealer positioning + gamma records',
+    "vol": {
+        "entrypoint": "volatility_suite.py",
+        "flags": lambda ctx, out: ["--context", ctx, "--context-out", out, "--no-loop"],
+        "writes_context_out": True,
+        "note": "vol_result.json: vol surface + dealer positioning + gamma records",
     },
 }
 
@@ -223,13 +233,15 @@ _SUITE_SPECS: Dict[str, Dict[str, Any]] = {
 # suite_context reuse
 # --------------------------------------------------------------------------
 
+
 def _import_suite_context():
     """Import Vol_Suite/suite_context.py so the context is built and validated
     by the module that owns the schema, not by a copy of it that can drift."""
-    vol_root = SUITE_ROOTS['vol']
+    vol_root = SUITE_ROOTS["vol"]
     if vol_root not in sys.path:
         sys.path.insert(0, vol_root)
-    import suite_context  # noqa: E402  (path is set immediately above)
+    import suite_context
+
     return suite_context
 
 
@@ -237,15 +249,24 @@ def _import_sentiment_scanners():
     """Import the 4 non-social option-chain scanners directly (IV Rank, Max
     Pain, Skew, Unusual OI) -- no StockTwits/Reddit/YouTube/GEX, no ticker
     discovery, since the orchestrator already knows the ticker."""
-    sentiment_root = SUITE_ROOTS['sentiment']
+    sentiment_root = SUITE_ROOTS["sentiment"]
     if sentiment_root not in sys.path:
         sys.path.insert(0, sentiment_root)
-    from scanner.iv_rank_scanner import scan_iv_rank, format_iv_rank
-    from scanner.max_pain_scanner import scan_max_pain, format_max_pain
-    from scanner.skew_scanner import scan_skew, format_skew
-    from scanner.unusual_oi_scanner import scan_unusual_oi, format_unusual_oi
-    return (scan_iv_rank, format_iv_rank, scan_max_pain, format_max_pain,
-            scan_skew, format_skew, scan_unusual_oi, format_unusual_oi)
+    from scanner.iv_rank_scanner import format_iv_rank, scan_iv_rank
+    from scanner.max_pain_scanner import format_max_pain, scan_max_pain
+    from scanner.skew_scanner import format_skew, scan_skew
+    from scanner.unusual_oi_scanner import format_unusual_oi, scan_unusual_oi
+
+    return (
+        scan_iv_rank,
+        format_iv_rank,
+        scan_max_pain,
+        format_max_pain,
+        scan_skew,
+        format_skew,
+        scan_unusual_oi,
+        format_unusual_oi,
+    )
 
 
 def _import_var_engine_builders():
@@ -260,14 +281,15 @@ def _import_var_engine_builders():
     Tools/ call in the same long-lived dashboard process), silently handing
     back a module missing these builder functions instead of raising.
     """
-    var_root = SUITE_ROOTS['var']
+    var_root = SUITE_ROOTS["var"]
     if var_root not in sys.path:
         sys.path.insert(0, var_root)
-    module_name = 'var_tools_main'
+    module_name = "var_tools_main"
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(
-        module_name, os.path.join(var_root, 'main.py'))
+        module_name, os.path.join(var_root, "main.py")
+    )
     var_main = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = var_main
     spec.loader.exec_module(var_main)
@@ -279,11 +301,12 @@ def _import_direction_suite():
     trend/liquidity, combined into one conviction call)."""
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
-    from Direction.signal_generator import generate  # noqa: E402
+    from Direction.signal_generator import generate
+
     return generate
 
 
-def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, Any]:
+def run_market_signals_stage(ticker: str, context: dict[str, Any]) -> dict[str, Any]:
     """Replaces the old sentiment-scanner stage: option-chain scanners that
     don't need social-media scraping, three 1-year-out simulations seeded
     from live spot + GARCH vol, and the 5-tool Direction suite.
@@ -298,103 +321,52 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
             return dataclasses.asdict(obj)
         return obj
 
-    bundle: Dict[str, Any] = {
-        'suite': 'sentiment',
-        'status': 'ok',
-        'ticker': ticker,
-        'timestamp': _iso_utc_now(),
-        'scanners': {},
-        'simulations': {},
-        'direction': None,
+    bundle: dict[str, Any] = {
+        "suite": "sentiment",
+        "status": "ok",
+        "ticker": ticker,
+        "timestamp": _iso_utc_now(),
+        "scanners": {},
+        "simulations": {},
+        "direction": None,
     }
-    errors: List[str] = []
+    errors: list[str] = []
 
-    # ---- option-chain scanners (IV Rank, Max Pain, Skew, Unusual OI) ----
+    # ---- option-chain scanners via registry (Phase 4) ----
     try:
-        (scan_iv_rank, format_iv_rank, scan_max_pain, format_max_pain,
-         scan_skew, format_skew, scan_unusual_oi, format_unusual_oi) = _import_sentiment_scanners()
-
-        for key, scan_fn, fmt_fn in (
-            ('iv_rank', scan_iv_rank, format_iv_rank),
-            ('max_pain', scan_max_pain, format_max_pain),
-            ('skew', scan_skew, format_skew),
-            ('unusual_oi', scan_unusual_oi, format_unusual_oi),
-        ):
+        import sys
+        from pathlib import Path
+        import importlib.util
+        import types
+        root = Path(__file__).resolve().parent
+        sdir = root / "sentiment-scanner"
+        if str(sdir) not in sys.path:
+            sys.path.insert(0, str(sdir))
+        # load the registry module under the expected 'sentiment_scanner' name
+        spec = importlib.util.spec_from_file_location(
+            "sentiment_scanner.module_registry", str(sdir / "module_registry.py")
+        )
+        reg_mod = importlib.util.module_from_spec(spec)
+        sys.modules["sentiment_scanner.module_registry"] = reg_mod
+        # also provide the package for 'import sentiment_scanner.module_registry'
+        if "sentiment_scanner" not in sys.modules:
+            pkg = types.ModuleType("sentiment_scanner")
+            pkg.__path__ = [str(sdir)]
+            sys.modules["sentiment_scanner"] = pkg
+        spec.loader.exec_module(reg_mod)
+        resolve_modules = reg_mod.resolve_modules
+        scanner_slugs = ["iv_rank", "max_pain", "skew", "unusual_oi"]
+        for spec in resolve_modules(scanner_slugs):
             try:
-                _focus = context.get('focus') or {}
-                _garch_dec = _focus.get('garch_conditional_vol')
-                _fair_pct = _focus.get('fair_vol_pct')
-                _garch_pct = (float(_garch_dec * 100.0)
-                              if isinstance(_garch_dec, (int, float))
-                              and not isinstance(_garch_dec, bool) else None)
-                _fair_val = (float(_fair_pct)
-                             if isinstance(_fair_pct, (int, float))
-                             and not isinstance(_fair_pct, bool) else None)
-                if key == 'iv_rank':
-                    scan = scan_fn(ticker, garch_cond_vol_pct=_garch_pct,
-                                   fair_vol_pct=_fair_val)
-                elif key == 'max_pain':
-                    # Pin Max Pain to the expiry this run is analyzing instead
-                    # of letting it self-select its own nearest-~30DTE one, and
-                    # pass the context's GARCH/fair vol for its narrative.
-                    _pinned_expiry = _focus.get('expiration_date')
-                    try:
-                        scan = scan_fn(
-                            ticker,
-                            expiry=_pinned_expiry,
-                            garch_cond_vol_pct=_garch_pct, fair_vol_pct=_fair_val,
-                        )
-                    except Exception as e:
-                        if _pinned_expiry and ('404' in str(e) or 'Not Found' in str(e)):
-                            scan = None
-                        else:
-                            raise
-                    # ThetaData sometimes has no OI snapshot at all for the
-                    # exact expiry this run pinned max pain to (e.g. a 404 on
-                    # bulk_snapshot/option/open_interest for that expiry) even
-                    # though the pinning itself is correct. The scanner now
-                    # falls back to the historical OI endpoint internally, but
-                    # if that also fails, treat the result as an expected
-                    # degraded result -- not a scanner crash -- so one missing
-                    # OI snapshot doesn't blank out the rest of the bundle.
-                    _mp_err = getattr(scan, 'error', None) if scan is not None else 'no_oi'
-                    if scan is None or (_mp_err and any(
-                        tok in str(_mp_err) for tok in (
-                            '404', 'Not Found', 'no_oi', 'empty',
-                            # shared/thetadata.py's _V2Response.json() raises this
-                            # plain TypeError when the v2 client's retries are
-                            # exhausted and the envelope's .data is None -- the
-                            # same "no usable OI data" outcome as a 404, just
-                            # surfaced through a different exception shape.
-                            'v2 payload is None',
-                        )
-                    )):
-                        print(f"  {ticker:6s} | MAX_PAIN: no OI snapshot available for pinned "
-                              f"expiry {_pinned_expiry}; reporting degraded result instead of failing.")
-                        if scan is not None:
-                            scan = dataclasses.replace(scan, error='no_oi_for_pinned_expiry')
-                        else:
-                            from scanner.max_pain_scanner import MaxPainScan
-                            scan = MaxPainScan(
-                                ticker=ticker, spot=0.0, expiry=_pinned_expiry or "",
-                                T_years=0.0, max_pain_strike=0.0, max_pain_value=0.0,
-                                second_pain_strike=0.0, price_vs_pain_pct=0.0,
-                                near_pin=False, pain_profile=[], num_strikes=0,
-                                timestamp=_iso_utc_now(), error='no_oi_for_pinned_expiry',
-                            )
-                else:
-                    scan = scan_fn(ticker)
-                line = fmt_fn(scan)
-                print(line)
-                bundle['scanners'][key] = _to_jsonable(scan)
+                res = spec.run({"ticker": ticker, "focus": context.get("focus") or {}})
+                bundle["scanners"][spec.slug] = res.metrics or {}
             except Exception as e:
-                msg = f"{key} scanner failed: {e}"
-                print(f"  {ticker:6s} | {key.upper()}: ERROR — {e}")
-                errors.append(msg)
-                bundle['scanners'][key] = {'error': str(e)}
+                errors.append(f"{spec.slug}: {e}")
+                bundle["scanners"][spec.slug] = {"error": str(e)}
     except Exception as e:
-        errors.append(f"scanner import failed: {e}")
-        print(f"  [market-signals] scanner import failed: {e}")
+        errors.append(f"sentiment registry: {e}")
+
+    # (old scanner reimpl removed; Phase 4 registry active)
 
     # ---- 1-year-out simulations (MC, copula, correlation) ----
     # This stage now runs AFTER Vol_Suite (see run_unified) specifically so
@@ -410,23 +382,29 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
     try:
         var_main = _import_var_engine_builders()
         for key, builder in (
-            ('mc_sim', var_main._build_mc_sim_from_context),
-            ('copula', var_main._build_copula_from_context),
-            ('corr_sim', var_main._build_corr_sim_peer_from_context),
+            ("mc_sim", var_main._build_mc_sim_from_context),
+            ("copula", var_main._build_copula_from_context),
+            ("corr_sim", var_main._build_corr_sim_peer_from_context),
         ):
             try:
                 sim_result = builder(context, ticker)
-                bundle['simulations'][key] = sim_result
+                bundle["simulations"][key] = sim_result
                 # Bulk array-shaped fields (matrices, the 20-bin terminal-price
                 # histogram) are kept in the bundle but out of the console line.
-                _noisy = ('correlation_matrix', 'sim_vols', 'sim_corr',
-                          'terminal_price_histogram')
-                print(f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in _noisy})}")
+                _noisy = (
+                    "correlation_matrix",
+                    "sim_vols",
+                    "sim_corr",
+                    "terminal_price_histogram",
+                )
+                print(
+                    f"  [{key}] {json.dumps({k: v for k, v in sim_result.items() if k not in _noisy})}"
+                )
             except Exception as e:
                 msg = f"{key} sim failed: {e}"
                 print(f"  [market-signals] {msg}")
                 errors.append(msg)
-                bundle['simulations'][key] = {'error': str(e)}
+                bundle["simulations"][key] = {"error": str(e)}
     except Exception as e:
         errors.append(f"var_engine import failed: {e}")
         print(f"  [market-signals] var_engine import failed: {e}")
@@ -435,21 +413,28 @@ def run_market_signals_stage(ticker: str, context: Dict[str, Any]) -> Dict[str, 
     try:
         generate = _import_direction_suite()
         direction = generate(ticker)
-        bundle['direction'] = direction
-        sig = direction.get('signals', {})
-        print(f"  [direction] {ticker}: {direction.get('conviction')} | "
-              f"score {direction.get('score')}/5 | "
-              + " ".join(f"{k}={'ON' if v else 'off'}" for k, v in sig.items()))
+        bundle["direction"] = direction
+        sig = direction.get("signals", {})
+        print(
+            f"  [direction] {ticker}: {direction.get('conviction')} | "
+            f"score {direction.get('score')}/5 | "
+            + " ".join(f"{k}={'ON' if v else 'off'}" for k, v in sig.items())
+        )
     except Exception as e:
         errors.append(f"direction suite failed: {e}")
         print(f"  [market-signals] direction suite failed: {e}")
 
     if errors:
-        bundle['status'] = 'partial' if any(
-            bundle['scanners'].get(k, {}).get('error') is None
-            for k in ('iv_rank', 'max_pain', 'skew', 'unusual_oi')
-        ) or bundle['direction'] is not None else 'error'
-        bundle['errors'] = errors
+        bundle["status"] = (
+            "partial"
+            if any(
+                bundle["scanners"].get(k, {}).get("error") is None
+                for k in ("iv_rank", "max_pain", "skew", "unusual_oi")
+            )
+            or bundle["direction"] is not None
+            else "error"
+        )
+        bundle["errors"] = errors
 
     return bundle
 
@@ -459,34 +444,40 @@ def _import_volatility_suite():
     same index-constituents logic the interactive flow uses (_resolve_basket),
     instead of the orchestrator silently defaulting every run to a one-name
     basket. Import-safe: main() only runs under __main__."""
-    vol_root = SUITE_ROOTS['vol']
+    vol_root = SUITE_ROOTS["vol"]
     if vol_root not in sys.path:
         sys.path.insert(0, vol_root)
-    import volatility_suite  # noqa: E402  (path is set immediately above)
+    import volatility_suite
+
     return volatility_suite
 
 
 def _iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _run_id_now() -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Microsecond suffix: concurrent unified runs launched in the same second
     # previously collided on one run_id and clobbered each other's output dir.
-    return now.strftime('%Y%m%dT%H%M%SZ') + f'{now.microsecond:06d}'
+    return now.strftime("%Y%m%dT%H%M%SZ") + f"{now.microsecond:06d}"
 
 
 def _default_manifest_path() -> str:
     """Same location Vol_Suite's `_default_pack_manifest_path()` points at."""
     return os.path.join(
-        SUITE_ROOTS['sentiment'], 'data', 'exports',
-        'highlighted_ticker_packs', 'latest_manifest.json')
+        SUITE_ROOTS["sentiment"],
+        "data",
+        "exports",
+        "highlighted_ticker_packs",
+        "latest_manifest.json",
+    )
 
 
 # --------------------------------------------------------------------------
 # swaps.db
 # --------------------------------------------------------------------------
+
 
 def _get_connection() -> sqlite3.Connection:
     """Same connection pattern as db_loader.SwapsLoader.get_connection()."""
@@ -495,7 +486,7 @@ def _get_connection() -> sqlite3.Connection:
     return conn
 
 
-def get_recent_swap_activity(limit: int = 50) -> List[Dict[str, Any]]:
+def get_recent_swap_activity(limit: int = 50) -> list[dict[str, Any]]:
     """Recent high-notional swap activity as plain dicts.
 
     Direct in-process SQLite read via `swaps_query.SwapsQuery` -- no subprocess.
@@ -529,7 +520,7 @@ def get_recent_swap_activity(limit: int = 50) -> List[Dict[str, Any]]:
             cur = conn.cursor()
             cur.execute("SELECT MAX(effective_date) AS d FROM swap_trades;")
             row = cur.fetchone()
-            latest = row['d'] if row else None
+            latest = row["d"] if row else None
         finally:
             conn.close()
         if not latest:
@@ -539,26 +530,37 @@ def get_recent_swap_activity(limit: int = 50) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-    if hasattr(rows, 'to_dict'):          # pandas DataFrame
-        rows = rows.to_dict(orient='records')
+    if hasattr(rows, "to_dict"):  # pandas DataFrame
+        rows = rows.to_dict(orient="records")
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for r in rows or []:
         d = dict(r)
-        out.append({
-            'product': d.get('product'),
-            'total_notional': (float(d['total_notional'])
-                               if d.get('total_notional') is not None else None),
-            'trade_count': (int(d['trade_count'])
-                            if d.get('trade_count') is not None else None),
-            'effective_date': str(latest),
-        })
+        out.append(
+            {
+                "product": d.get("product"),
+                "total_notional": (
+                    float(d["total_notional"])
+                    if d.get("total_notional") is not None
+                    else None
+                ),
+                "trade_count": (
+                    int(d["trade_count"]) if d.get("trade_count") is not None else None
+                ),
+                "effective_date": str(latest),
+            }
+        )
     return out
 
 
-def log_run(run_type: str, focus: Dict[str, Any], started_at: str,
-            completed_at: Optional[str], status: str,
-            results: Any) -> Optional[int]:
+def log_run(
+    run_type: str,
+    focus: dict[str, Any],
+    started_at: str,
+    completed_at: str | None,
+    status: str,
+    results: Any,
+) -> int | None:
     """Insert one row into orchestrator_runs (see setup_db.init_database).
 
     Swallows its own errors on purpose: audit logging must never be the reason
@@ -569,19 +571,22 @@ def log_run(run_type: str, focus: Dict[str, Any], started_at: str,
         conn = _get_connection()
         cur = conn.cursor()
         try:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO orchestrator_runs (
                     run_type, focus_json, started_at, completed_at,
                     status, results_json
                 ) VALUES (?, ?, ?, ?, ?, ?);
-            """, (
-                run_type,
-                json.dumps(focus, default=str),
-                started_at,
-                completed_at,
-                status,
-                json.dumps(results, default=str),
-            ))
+            """,
+                (
+                    run_type,
+                    json.dumps(focus, default=str),
+                    started_at,
+                    completed_at,
+                    status,
+                    json.dumps(results, default=str),
+                ),
+            )
             conn.commit()
             return cur.lastrowid
         finally:
@@ -596,8 +601,10 @@ def log_run(run_type: str, focus: Dict[str, Any], started_at: str,
 # context construction
 # --------------------------------------------------------------------------
 
-def build_context(focus: Dict[str, Any],
-                  controls: Dict[str, Any] = None) -> Dict[str, Any]:
+
+def build_context(
+    focus: dict[str, Any], controls: dict[str, Any] = None
+) -> dict[str, Any]:
     """Build a suite_context.json-shaped dict via Vol_Suite's own builder.
 
     `focus` accepts the schema's own focus field names (ticker, option_type,
@@ -617,12 +624,12 @@ def build_context(focus: Dict[str, Any],
     """
     sc = _import_suite_context()
 
-    ticker = str(focus.get('ticker') or '').strip().upper()
+    ticker = str(focus.get("ticker") or "").strip().upper()
     if not ticker:
         raise ValueError("focus.ticker is required")
 
-    index_ticker = str(focus.get('index_ticker') or 'SPY').upper()
-    basket_tickers = focus.get('basket_tickers')
+    index_ticker = str(focus.get("index_ticker") or "SPY").upper()
+    basket_tickers = focus.get("basket_tickers")
     if not basket_tickers:
         # Previously defaulted straight to [ticker] -- a permanently
         # degenerate one-name "basket" with no correlation/dispersion
@@ -632,26 +639,33 @@ def build_context(focus: Dict[str, Any],
         # flow's _resolve_basket does, and only fall back to single-name if
         # that resolution genuinely comes back empty (e.g. holdings sources
         # unreachable).
-        basket_size = int(focus.get('basket_size') or 10)
+        basket_size = int(focus.get("basket_size") or 10)
         try:
             vs = _import_volatility_suite()
-            basket_tickers, resolved_weights = vs._resolve_basket(ticker, index_ticker, basket_size)
+            basket_tickers, resolved_weights = vs._resolve_basket(
+                ticker, index_ticker, basket_size
+            )
             if not basket_tickers:
                 raise ValueError("basket resolution returned no names")
         except Exception as exc:
-            print(f"WARNING: basket resolution against {index_ticker} failed ({exc}); "
-                  f"falling back to a single-name basket for {ticker}.")
+            print(
+                f"WARNING: basket resolution against {index_ticker} failed ({exc}); "
+                f"falling back to a single-name basket for {ticker}."
+            )
             basket_tickers = [ticker]
             resolved_weights = None
     else:
         basket_tickers = list(basket_tickers)
         resolved_weights = None
 
-    basket_weights = list(focus.get('basket_weights') or resolved_weights
-                          or [1.0 / len(basket_tickers)] * len(basket_tickers))
+    basket_weights = list(
+        focus.get("basket_weights")
+        or resolved_weights
+        or [1.0 / len(basket_tickers)] * len(basket_tickers)
+    )
 
-    expiration = focus.get('expiration_date')
-    target_years = focus.get('target_years')
+    expiration = focus.get("expiration_date")
+    target_years = focus.get("target_years")
     if not expiration and target_years is None:
         raise ValueError("focus needs expiration_date and/or target_years")
     if not expiration:
@@ -667,62 +681,74 @@ def build_context(focus: Dict[str, Any],
         # interactive flow and screener already rely on for this.
         try:
             import expiry_selector
+
             from shared.thetadata import ThetaDataController
+
             _import_volatility_suite()  # puts Vol_Suite root on sys.path
             td = ThetaDataController()
             exp_str, _resolved_years = expiry_selector.nearest_expiry(
-                td, ticker, float(target_years))
+                td, ticker, float(target_years)
+            )
             expiration = sc._normalize_expiration(exp_str)
         except Exception as exc:
-            print(f"WARNING: could not snap target_years={target_years} to a "
-                  f"real ThetaData-listed expiration for {ticker} ({exc}); "
-                  f"falling back to naive calendar-date arithmetic, which may "
-                  f"pick a date ThetaData has no snapshot data for.")
+            print(
+                f"WARNING: could not snap target_years={target_years} to a "
+                f"real ThetaData-listed expiration for {ticker} ({exc}); "
+                f"falling back to naive calendar-date arithmetic, which may "
+                f"pick a date ThetaData has no snapshot data for."
+            )
             days = max(1, int(round(float(target_years) * 365)))
-            expiration = (datetime.now(timezone.utc).date()
-                          + _timedelta_days(days)).strftime('%Y-%m-%d')
+            expiration = (datetime.now(UTC).date() + _timedelta_days(days)).strftime(
+                "%Y-%m-%d"
+            )
     if target_years is None:
         exp_date = datetime.strptime(
-            sc._normalize_expiration(expiration), '%Y-%m-%d').date()
-        target_years = max(
-            (exp_date - datetime.now(timezone.utc).date()).days, 1) / 365.0
+            sc._normalize_expiration(expiration), "%Y-%m-%d"
+        ).date()
+        target_years = max((exp_date - datetime.now(UTC).date()).days, 1) / 365.0
 
     controls = controls or {}
-    output_dir = focus.get('output_dir') or os.path.join(
-        ROOT, 'orchestrator_output', _run_id_now())
+    output_dir = focus.get("output_dir") or os.path.join(
+        ROOT, "orchestrator_output", _run_id_now()
+    )
     os.makedirs(output_dir, exist_ok=True)
 
     context = sc.build_suite_context(
         output_dir=output_dir,
-        run_id=str(focus.get('run_id') or _run_id_now()),
+        run_id=str(focus.get("run_id") or _run_id_now()),
         ticker=ticker,
-        option_type=str(focus.get('option_type') or 'call').lower(),
-        strike=focus.get('strike'),
+        option_type=str(focus.get("option_type") or "call").lower(),
+        strike=focus.get("strike"),
         target_years=float(target_years),
         expiration_date=str(expiration),
         index_ticker=index_ticker,
         basket_tickers=basket_tickers,
         basket_weights=basket_weights,
-        sentiment_manifest_path=(focus.get('sentiment_manifest_path')
-                                 or _default_manifest_path()),
-        sentiment_pack_json_path=focus.get('sentiment_pack_json_path'),
-        sentiment_group_id=focus.get('sentiment_group_id'),
-        sentiment_ranked_tickers=focus.get('sentiment_ranked_tickers') or [],
-        var_horizon_days=int(focus.get('var_horizon_days') or focus.get('horizon_days') or 252),
-        var_confidence=float(focus.get('var_confidence') or 0.99),
-        var_positions=focus.get('var_positions'),
-        run_options_suite=bool(controls.get('run_options_suite', False)),
-        run_var_suite=bool(controls.get('run_var_suite', False)),
-        compile_pdf=bool(controls.get('compile_pdf', False)),
-        options_suite_root=SUITE_ROOTS['options'],
-        var_suite_root=SUITE_ROOTS['var'],
-        sentiment_suite_root=SUITE_ROOTS['sentiment'],
-        data_sources=focus.get('data_sources') or [],  # Multi-source: pass enabled sources
+        sentiment_manifest_path=(
+            focus.get("sentiment_manifest_path") or _default_manifest_path()
+        ),
+        sentiment_pack_json_path=focus.get("sentiment_pack_json_path"),
+        sentiment_group_id=focus.get("sentiment_group_id"),
+        sentiment_ranked_tickers=focus.get("sentiment_ranked_tickers") or [],
+        var_horizon_days=int(
+            focus.get("var_horizon_days") or focus.get("horizon_days") or 252
+        ),
+        var_confidence=float(focus.get("var_confidence") or 0.99),
+        var_positions=focus.get("var_positions"),
+        run_options_suite=bool(controls.get("run_options_suite", False)),
+        run_var_suite=bool(controls.get("run_var_suite", False)),
+        compile_pdf=bool(controls.get("compile_pdf", False)),
+        options_suite_root=SUITE_ROOTS["options"],
+        var_suite_root=SUITE_ROOTS["var"],
+        sentiment_suite_root=SUITE_ROOTS["sentiment"],
+        data_sources=focus.get("data_sources")
+        or [],  # Multi-source: pass enabled sources
     )
 
-    if focus.get('include_swap_activity', True):
-        context['swap_activity'] = get_recent_swap_activity(
-            limit=int(focus.get('swap_activity_limit') or 50))
+    if focus.get("include_swap_activity", True):
+        context["swap_activity"] = get_recent_swap_activity(
+            limit=int(focus.get("swap_activity_limit") or 50)
+        )
 
     # Re-validate after the extra key, proving the sibling field does not
     # break the contract for any child that re-reads it with read_suite_context.
@@ -732,6 +758,7 @@ def build_context(focus: Dict[str, Any],
 
 def _timedelta_days(days: int):
     from datetime import timedelta
+
     return timedelta(days=days)
 
 
@@ -739,11 +766,14 @@ def _timedelta_days(days: int):
 # output validation
 # --------------------------------------------------------------------------
 
-def _validate_suite_output(suite_name: str,
-                           output_dir: str,
-                           payload: Optional[Dict[str, Any]] = None,
-                           focus: Optional[Dict[str, Any]] = None,
-                           strict: Optional[bool] = None) -> ValidationResult:
+
+def _validate_suite_output(
+    suite_name: str,
+    output_dir: str,
+    payload: dict[str, Any] | None = None,
+    focus: dict[str, Any] | None = None,
+    strict: bool | None = None,
+) -> ValidationResult:
     """Check that *suite_name* left usable output in *output_dir*, and log it.
 
     Thin orchestrator-side wrapper over
@@ -760,21 +790,28 @@ def _validate_suite_output(suite_name: str,
         suite_name,
         output_dir,
         payload=payload,
-        ticker=focus.get('ticker'),
+        ticker=focus.get("ticker"),
         strict=strict,
     )
 
-    print("  " + result.report().replace('\n', '\n  '))
+    print("  " + result.report().replace("\n", "\n  "))
 
-    log_run(f'validate:{result.suite}', focus, started_at, _iso_utc_now(),
-            result.status, result.to_dict())
+    log_run(
+        f"validate:{result.suite}",
+        focus,
+        started_at,
+        _iso_utc_now(),
+        result.status,
+        result.to_dict(),
+    )
     return result
 
 
-def _audit_market_signals_fold(context: Dict[str, Any],
-                          sentiment_result: Optional[Dict[str, Any]],
-                          focus: Optional[Dict[str, Any]] = None
-                          ) -> ContextMutationAudit:
+def _audit_market_signals_fold(
+    context: dict[str, Any],
+    sentiment_result: dict[str, Any] | None,
+    focus: dict[str, Any] | None = None,
+) -> ContextMutationAudit:
     """Fold the market-signals stage's block into *context* under audit, and log it.
 
     Thin orchestrator-side wrapper over
@@ -795,20 +832,27 @@ def _audit_market_signals_fold(context: Dict[str, Any],
     mutated-and-valid (PASS) or restored to the pre-mutation baseline (FAIL) --
     never in the rejected intermediate state.
     """
-    focus = focus if focus is not None else context.get('focus', {})
+    focus = focus if focus is not None else context.get("focus", {})
     started_at = _iso_utc_now()
 
     audit = audit_sentiment_mutation(context, sentiment_result)
 
-    print("  " + audit.report().replace('\n', '\n  '))
+    print("  " + audit.report().replace("\n", "\n  "))
 
-    log_run('context_audit:sentiment', focus, started_at, _iso_utc_now(),
-            audit.status, audit.to_dict())
+    log_run(
+        "context_audit:sentiment",
+        focus,
+        started_at,
+        _iso_utc_now(),
+        audit.status,
+        audit.to_dict(),
+    )
     return audit
 
 
-def run_suite(name: str, context: dict, timeout: int = 1800,
-              validate: bool = True) -> dict:
+def run_suite(
+    name: str, context: dict, timeout: int = 1800, validate: bool = True
+) -> dict:
     """Launch one child suite in context mode and return its result JSON.
 
     Same command shape as Vol_Suite's `_run_child_suite` -- context written to
@@ -832,37 +876,44 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
     behaviour (used by the tests that exercise the runner itself).
     """
     if name not in SUITE_ROOTS:
-        raise ValueError(f"Unknown suite {name!r}; expected one of "
-                         f"{sorted(SUITE_ROOTS)}")
+        raise ValueError(
+            f"Unknown suite {name!r}; expected one of {sorted(SUITE_ROOTS)}"
+        )
 
     started_at = _iso_utc_now()
     start_time = time.time()
     spec = _SUITE_SPECS[name]
     suite_root = SUITE_ROOTS[name]
-    entrypoint = os.path.join(suite_root, spec['entrypoint'])
+    entrypoint = os.path.join(suite_root, spec["entrypoint"])
 
-    output_dir = context.get('output_dir') or tempfile.mkdtemp(prefix='orch_')
+    output_dir = context.get("output_dir") or tempfile.mkdtemp(prefix="orch_")
     os.makedirs(output_dir, exist_ok=True)
 
     # The context file goes in the run's own output dir when there is one so it
     # survives the run for debugging; a temp file otherwise.
-    ctx_path = os.path.join(output_dir, f'suite_context_{name}.json')
+    ctx_path = os.path.join(output_dir, f"suite_context_{name}.json")
     # The child's `--context-out` target IS the marker validation looks for, so
     # the filename comes from the validation module rather than being spelled
     # twice and left to drift.
     out_path = os.path.join(output_dir, marker_filename(name))
 
-    def _fail(message: str, stderr: str = '', returncode: Optional[int] = None) -> dict:
+    def _fail(message: str, stderr: str = "", returncode: int | None = None) -> dict:
         result = {
-            'suite': name,
-            'error': message,
-            'stderr': stderr,
-            'returncode': returncode,
-            'command': None,
-            'started_at': started_at,
+            "suite": name,
+            "error": message,
+            "stderr": stderr,
+            "returncode": returncode,
+            "command": None,
+            "started_at": started_at,
         }
-        log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                _iso_utc_now(), 'error', result)
+        log_run(
+            f"suite:{name}",
+            context.get("focus", {}),
+            started_at,
+            _iso_utc_now(),
+            "error",
+            result,
+        )
         return result
 
     if not os.path.exists(SHARED_PYTHON):
@@ -871,9 +922,9 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
         return _fail(f"Entrypoint not found for suite {name!r}: {entrypoint}")
 
     try:
-        with open(ctx_path, 'w', encoding='utf-8') as f:
+        with open(ctx_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2)
-            f.write('\n')
+            f.write("\n")
     except Exception as e:
         return _fail(f"Could not write context file {ctx_path}: {e}")
 
@@ -883,14 +934,16 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
     # publish it too, or the plugin/dashboard cannot see the run and fall back
     # to an older one. Written with the same context dict, so content is
     # identical to the unified path's canonical file.
-    canonical_path = os.path.join(output_dir, 'suite_context.json')
+    canonical_path = os.path.join(output_dir, "suite_context.json")
     try:
-        with open(canonical_path, 'w', encoding='utf-8') as f:
+        with open(canonical_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2)
-            f.write('\n')
+            f.write("\n")
     except Exception as e:
-        print(f"  [{name}] WARNING: could not write canonical suite_context.json: {e}",
-              file=sys.stderr)
+        print(
+            f"  [{name}] WARNING: could not write canonical suite_context.json: {e}",
+            file=sys.stderr,
+        )
 
     # Stale result from an earlier run must not be mistaken for this run's
     # output if the child dies before writing.
@@ -900,32 +953,34 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
         except OSError:
             pass
 
-    command = [SHARED_PYTHON, entrypoint] + list(spec['flags'](ctx_path, out_path))
+    command = [SHARED_PYTHON, entrypoint] + list(spec["flags"](ctx_path, out_path))
 
     env = os.environ.copy()
     # Ensure shared module is in PYTHONPATH for all child suites
-    env['PYTHONPATH'] = f"{ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
-    env['SUITE_CONTEXT_PATH'] = ctx_path
-    env['SUITE_CONTEXT_MODE'] = '1'
-    env['VS_OUTPUT_DIR'] = output_dir
+    env["PYTHONPATH"] = f"{ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["SUITE_CONTEXT_PATH"] = ctx_path
+    env["SUITE_CONTEXT_MODE"] = "1"
+    env["VS_OUTPUT_DIR"] = output_dir
     # PYTHONIOENCODING fixes the captured pipes; PYTHONUTF8 also makes the
     # children's bare `open(path)` calls default to UTF-8. Without the latter,
     # a child reading its own JSON/markdown with the Windows cp1252 locale
     # encoding dies on any non-ASCII byte -- observed as a UnicodeDecodeError
     # out of charmap_decode partway through a Vol_Suite run.
-    env['PYTHONIOENCODING'] = 'utf-8'
-    env['PYTHONUTF8'] = '1'
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     # Vol_Suite's context mode skips the options chain scanner by default
     # (it's the one step expensive enough to opt out of in a headless batch)
     # unless VS_RUN_CHAIN_SCANNER is set. Orchestrator-driven runs -- unified
     # or single-suite -- should always produce chain_strategies.json so
     # Tools/tools/options_strategy_tool.py's cached mode has something to
     # read; an operator can still override by exporting the var themselves.
-    env.setdefault('VS_RUN_CHAIN_SCANNER', '1')
+    env.setdefault("VS_RUN_CHAIN_SCANNER", "1")
 
-    print(f"  [{name}] running {spec['entrypoint']} (timeout {timeout}s)... "
-          f"output is captured, so this will look idle until it finishes.")
-    if spec['note']:
+    print(
+        f"  [{name}] running {spec['entrypoint']} (timeout {timeout}s)... "
+        f"output is captured, so this will look idle until it finishes."
+    )
+    if spec["note"]:
         print(f"  [{name}] note: {spec['note']}")
 
     try:
@@ -935,8 +990,8 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
             env=env,
             capture_output=True,
             text=True,
-            encoding='utf-8',
-            errors='replace',
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             # stdin closed for every child, with no exceptions. Vol_Suite used
             # to be fed a scripted prompt sequence here; now that it has a real
@@ -946,114 +1001,163 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
-        stderr = e.stderr if isinstance(e.stderr, str) else (e.stderr or b'').decode(errors='replace')
+        stderr = (
+            e.stderr
+            if isinstance(e.stderr, str)
+            else (e.stderr or b"").decode(errors="replace")
+        )
         result = {
-            'suite': name,
-            'error': f'TIMEOUT after {timeout}s -- child killed.',
-            'stderr': "\n".join(stderr.splitlines()[-20:]),
-            'returncode': -1,
-            'command': ' '.join(command),
-            'started_at': started_at,
+            "suite": name,
+            "error": f"TIMEOUT after {timeout}s -- child killed.",
+            "stderr": "\n".join(stderr.splitlines()[-20:]),
+            "returncode": -1,
+            "command": " ".join(command),
+            "started_at": started_at,
         }
-        log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                _iso_utc_now(), 'timeout', result)
+        log_run(
+            f"suite:{name}",
+            context.get("focus", {}),
+            started_at,
+            _iso_utc_now(),
+            "timeout",
+            result,
+        )
         return result
     except Exception as e:
         return _fail(f"Failed to launch {name}: {e}")
 
-    stderr_tail = "\n".join((proc.stderr or '').splitlines()[-20:])
-    stdout_tail = "\n".join((proc.stdout or '').splitlines()[-20:])
+    stderr_tail = "\n".join((proc.stderr or "").splitlines()[-20:])
+    stdout_tail = "\n".join((proc.stdout or "").splitlines()[-20:])
 
     if proc.returncode != 0:
         result = {
-            'suite': name,
-            'error': f'{name} exited with returncode {proc.returncode}',
-            'stderr': stderr_tail or stdout_tail,
-            'returncode': proc.returncode,
-            'command': ' '.join(command),
-            'started_at': started_at,
+            "suite": name,
+            "error": f"{name} exited with returncode {proc.returncode}",
+            "stderr": stderr_tail or stdout_tail,
+            "returncode": proc.returncode,
+            "command": " ".join(command),
+            "started_at": started_at,
         }
-        log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                _iso_utc_now(), 'error', result)
+        log_run(
+            f"suite:{name}",
+            context.get("focus", {}),
+            started_at,
+            _iso_utc_now(),
+            "error",
+            result,
+        )
         return result
 
-    def _finalize(payload: Any, context_out: Optional[str]) -> Any:
+    def _finalize(payload: Any, context_out: str | None) -> Any:
         """Attach provenance, validate the marker, log, return.
 
         Every success path ends here so validation cannot be bypassed by
         whichever branch a future edit adds a `return` to.
         """
         if isinstance(payload, dict):
-            payload.setdefault('suite', name)
-            payload['_orchestrator'] = {
-                'command': ' '.join(command),
-                'context_path': ctx_path,
-                'context_out': context_out,
-                'returncode': proc.returncode,
-                'started_at': started_at,
-                'completed_at': _iso_utc_now(),
+            payload.setdefault("suite", name)
+            payload["_orchestrator"] = {
+                "command": " ".join(command),
+                "context_path": ctx_path,
+                "context_out": context_out,
+                "returncode": proc.returncode,
+                "started_at": started_at,
+                "completed_at": _iso_utc_now(),
             }
 
         if not validate:
-            log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                    _iso_utc_now(), 'ok', payload)
+            log_run(
+                f"suite:{name}",
+                context.get("focus", {}),
+                started_at,
+                _iso_utc_now(),
+                "ok",
+                payload,
+            )
             return payload
 
         verdict = _validate_suite_output(
-            name, output_dir,
+            name,
+            output_dir,
             payload=payload if isinstance(payload, dict) else None,
-            focus=context.get('focus', {}))
+            focus=context.get("focus", {}),
+        )
 
         if isinstance(payload, dict):
-            payload['_validation'] = verdict.to_dict()
+            payload["_validation"] = verdict.to_dict()
 
         if not verdict.passed:
             result = {
-                'suite': name,
-                'error': (f'{name} output validation FAILED: '
-                          + '; '.join(verdict.errors)),
-                'stderr': stderr_tail or stdout_tail,
-                'returncode': proc.returncode,
-                'command': ' '.join(command),
-                'started_at': started_at,
-                'validation': verdict.to_dict(),
-                'payload': payload,
+                "suite": name,
+                "error": (
+                    f"{name} output validation FAILED: " + "; ".join(verdict.errors)
+                ),
+                "stderr": stderr_tail or stdout_tail,
+                "returncode": proc.returncode,
+                "command": " ".join(command),
+                "started_at": started_at,
+                "validation": verdict.to_dict(),
+                "payload": payload,
             }
-            log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                    _iso_utc_now(), 'invalid', result)
+            log_run(
+                f"suite:{name}",
+                context.get("focus", {}),
+                started_at,
+                _iso_utc_now(),
+                "invalid",
+                result,
+            )
             return result
 
-        log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                _iso_utc_now(), 'ok', payload)
+        log_run(
+            f"suite:{name}",
+            context.get("focus", {}),
+            started_at,
+            _iso_utc_now(),
+            "ok",
+            payload,
+        )
         return payload
 
     if not os.path.exists(out_path):
         result = {
-            'suite': name,
-            'error': f'{name} exited 0 but wrote no context-out at {out_path}',
-            'stderr': stderr_tail or stdout_tail,
-            'returncode': 0,
-            'command': ' '.join(command),
-            'started_at': started_at,
+            "suite": name,
+            "error": f"{name} exited 0 but wrote no context-out at {out_path}",
+            "stderr": stderr_tail or stdout_tail,
+            "returncode": 0,
+            "command": " ".join(command),
+            "started_at": started_at,
         }
-        log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                _iso_utc_now(), 'error', result)
+        log_run(
+            f"suite:{name}",
+            context.get("focus", {}),
+            started_at,
+            _iso_utc_now(),
+            "error",
+            result,
+        )
         return result
 
     try:
-        with open(out_path, 'r', encoding='utf-8-sig') as f:
+        with open(out_path, "r", encoding="utf-8-sig") as f:
             payload = json.load(f)
     except Exception as e:
         result = {
-            'suite': name,
-            'error': f'Could not parse {name} context-out {out_path}: {e}',
-            'stderr': stderr_tail,
-            'returncode': 0,
-            'command': ' '.join(command),
-            'started_at': started_at,
+            "suite": name,
+            "error": f"Could not parse {name} context-out {out_path}: {e}",
+            "stderr": stderr_tail,
+            "returncode": 0,
+            "command": " ".join(command),
+            "started_at": started_at,
         }
-        log_run(f'suite:{name}', context.get('focus', {}), started_at,
-                _iso_utc_now(), 'error', result)
+        log_run(
+            f"suite:{name}",
+            context.get("focus", {}),
+            started_at,
+            _iso_utc_now(),
+            "error",
+            result,
+        )
         return result
 
     return _finalize(payload, out_path)
@@ -1063,6 +1167,7 @@ def run_suite(name: str, context: dict, timeout: int = 1800,
 # unified flow
 # --------------------------------------------------------------------------
 
+
 def _print_phase_header(phase_num: int, phase_name: str, description: str) -> None:
     """Print a formatted phase header for status display."""
     print(f"\n[{phase_num}/3] {phase_name}")
@@ -1070,7 +1175,7 @@ def _print_phase_header(phase_num: int, phase_name: str, description: str) -> No
     print("-" * 60)
 
 
-def _build_swaps_result(context: Dict[str, Any]) -> Dict[str, Any]:
+def _build_swaps_result(context: dict[str, Any]) -> dict[str, Any]:
     """Builds the swaps_result.json artifact from context['swap_activity']
     (already populated by build_context via get_recent_swap_activity).
 
@@ -1083,26 +1188,28 @@ def _build_swaps_result(context: Dict[str, Any]) -> Dict[str, Any]:
     """
     from shared.schemas import validate_swaps_result
 
-    ticker = (context.get('focus') or {}).get('ticker')
-    rows = context.get('swap_activity') or []
+    ticker = (context.get("focus") or {}).get("ticker")
+    rows = context.get("swap_activity") or []
     result = {
-        'schema_version': 1,
-        'suite': 'swaps',
-        'status': 'ok' if rows else 'no_data',
-        'ticker': ticker,
-        'timestamp': _iso_utc_now(),
-        'row_count': len(rows),
-        'top_notional': rows[:20],
-        'effective_date': rows[0].get('effective_date') if rows else None,
+        "schema_version": 1,
+        "suite": "swaps",
+        "status": "ok" if rows else "no_data",
+        "ticker": ticker,
+        "timestamp": _iso_utc_now(),
+        "row_count": len(rows),
+        "top_notional": rows[:20],
+        "effective_date": rows[0].get("effective_date") if rows else None,
     }
     try:
         validate_swaps_result(result)
     except Exception as e:
-        print(f"  [swaps] WARNING: swaps_result failed validation: {e}", file=sys.stderr)
+        print(
+            f"  [swaps] WARNING: swaps_result failed validation: {e}", file=sys.stderr
+        )
     return result
 
 
-def _print_swaps_block(swaps_result: Dict[str, Any]) -> None:
+def _print_swaps_block(swaps_result: dict[str, Any]) -> None:
     """Bounded, clearly-delimited swaps summary in unified-run stdout --
     at most 10 product lines regardless of how many rows swap_activity has,
     with a graceful message when there is nothing to show (cold swaps.db or
@@ -1110,23 +1217,35 @@ def _print_swaps_block(swaps_result: Dict[str, Any]) -> None:
     print(f"\n{'-' * 60}")
     print("  SWAPS (recent DTCC activity)")
     print(f"{'-' * 60}")
-    if swaps_result['status'] != 'ok':
-        print("  No swap activity available -- swaps.db may be cold, or there is "
-              "no recent DTCC-reported activity for this ticker.")
+    if swaps_result["status"] != "ok":
+        print(
+            "  No swap activity available -- swaps.db may be cold, or there is "
+            "no recent DTCC-reported activity for this ticker."
+        )
     else:
-        print(f"  {swaps_result['row_count']} product row(s) as of "
-              f"{swaps_result['effective_date']}")
-        for row in swaps_result['top_notional'][:10]:
-            notional = row.get('total_notional')
-            notional_str = f"${notional:,.0f}" if isinstance(notional, (int, float)) else '--'
-            product = str(row.get('product') or '?')[:40]
-            print(f"    {product:40s} {notional_str:>18s}  ({row.get('trade_count')} trades)")
-        if swaps_result['row_count'] > 10:
-            print(f"    ... and {swaps_result['row_count'] - 10} more (see swaps_result.json)")
+        print(
+            f"  {swaps_result['row_count']} product row(s) as of "
+            f"{swaps_result['effective_date']}"
+        )
+        for row in swaps_result["top_notional"][:10]:
+            notional = row.get("total_notional")
+            notional_str = (
+                f"${notional:,.0f}" if isinstance(notional, (int, float)) else "--"
+            )
+            product = str(row.get("product") or "?")[:40]
+            print(
+                f"    {product:40s} {notional_str:>18s}  ({row.get('trade_count')} trades)"
+            )
+        if swaps_result["row_count"] > 10:
+            print(
+                f"    ... and {swaps_result['row_count'] - 10} more (see swaps_result.json)"
+            )
     print(f"{'-' * 60}")
 
 
-def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str, Any]) -> None:
+def _thread_vol_stats_into_context(
+    context: dict[str, Any], vol_result: dict[str, Any]
+) -> None:
     """Vol_Suite computes a real per-ticker realized annualized vol and a
     pairwise correlation matrix for the resolved basket (correlation_engine.py
     ::compute_basket_stats) and now publishes both in vol_result.json's basket
@@ -1144,24 +1263,30 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
     reindexing/subsetting a correlation matrix is worse than leaving VaR to
     fall back to its own documented defaults.
     """
-    basket_out = ((vol_result or {}).get('vol_surface') or {}).get('basket') or {}
-    ctx_tickers = list(context.get('basket', {}).get('tickers') or [])
+    basket_out = ((vol_result or {}).get("vol_surface") or {}).get("basket") or {}
+    ctx_tickers = list(context.get("basket", {}).get("tickers") or [])
 
-    corr_tickers = basket_out.get('correlation_tickers')
-    corr_matrix = basket_out.get('correlation_matrix')
+    corr_tickers = basket_out.get("correlation_tickers")
+    corr_matrix = basket_out.get("correlation_matrix")
     if corr_tickers and corr_matrix and list(corr_tickers) == ctx_tickers:
-        context['basket']['correlation_matrix'] = corr_matrix
+        context["basket"]["correlation_matrix"] = corr_matrix
     elif corr_matrix:
-        print(f"WARNING: vol's correlation ticker order {corr_tickers} doesn't match "
-              f"the basket {ctx_tickers}; not threading a correlation matrix into VaR.")
+        print(
+            f"WARNING: vol's correlation ticker order {corr_tickers} doesn't match "
+            f"the basket {ctx_tickers}; not threading a correlation matrix into VaR."
+        )
 
-    individual_vols = basket_out.get('individual_vols') or {}
+    individual_vols = basket_out.get("individual_vols") or {}
     if ctx_tickers and all(t in individual_vols for t in ctx_tickers):
-        context.setdefault('var', {})['volatilities'] = [float(individual_vols[t]) for t in ctx_tickers]
+        context.setdefault("var", {})["volatilities"] = [
+            float(individual_vols[t]) for t in ctx_tickers
+        ]
     elif individual_vols:
         missing = [t for t in ctx_tickers if t not in individual_vols]
-        print(f"WARNING: vol's individual_vols is missing {missing}; "
-              f"not threading volatilities into VaR.")
+        print(
+            f"WARNING: vol's individual_vols is missing {missing}; "
+            f"not threading volatilities into VaR."
+        )
 
     # Vol_Suite fits GARCH(1,1) for the focus ticker as part of its own
     # analysis (vol_surface.garch_conditional_vol). Thread it into
@@ -1169,40 +1294,53 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
     # sims (which now run AFTER vol -- see run_unified) reuse this one real
     # fit via their existing context-vol-preferred resolution instead of
     # fitting GARCH a second time for the same ticker in the same run.
-    garch_vol = ((vol_result or {}).get('vol_surface') or {}).get('garch_conditional_vol')
-    if isinstance(garch_vol, (int, float)) and not isinstance(garch_vol, bool) and garch_vol > 0:
-        context.setdefault('focus', {})['garch_conditional_vol'] = float(garch_vol)
+    garch_vol = ((vol_result or {}).get("vol_surface") or {}).get(
+        "garch_conditional_vol"
+    )
+    if (
+        isinstance(garch_vol, (int, float))
+        and not isinstance(garch_vol, bool)
+        and garch_vol > 0
+    ):
+        context.setdefault("focus", {})["garch_conditional_vol"] = float(garch_vol)
 
     # Fair variance-strike vol for the focus leg (vol_surface block). The
     # IV-rank scanner reads fair_vol_pct to compute the RICH/CHEAP regime and
     # VRP; without it the scanner silently degrades to 0.0 and reports UNKNOWN.
-    focus_surface = ((vol_result or {}).get('vol_surface') or {})
-    focus_leg = focus_surface.get('focus')
-    fair_vol_pct = focus_leg.get('fair_vol_pct') if isinstance(focus_leg, dict) else None
+    focus_surface = (vol_result or {}).get("vol_surface") or {}
+    focus_leg = focus_surface.get("focus")
+    fair_vol_pct = (
+        focus_leg.get("fair_vol_pct") if isinstance(focus_leg, dict) else None
+    )
     if fair_vol_pct is None:
-        fair_vol_pct = focus_surface.get('fair_vol_pct')
+        fair_vol_pct = focus_surface.get("fair_vol_pct")
     if fair_vol_pct is None:
-        fair_vol_pct = focus_surface.get('fair_variance_swap_strike_vol_pct')
+        fair_vol_pct = focus_surface.get("fair_variance_swap_strike_vol_pct")
     if isinstance(fair_vol_pct, (int, float)) and not isinstance(fair_vol_pct, bool):
-        context.setdefault('focus', {})['fair_vol_pct'] = float(fair_vol_pct)
+        context.setdefault("focus", {})["fair_vol_pct"] = float(fair_vol_pct)
 
     # Expected return for the focus leg. Prefer a Vol_Suite-published value;
     # else the correlation engine's basket expected return; else fall back to
     # VaR's realized geometric annualized return for the focus ticker so the
     # 1yr-out sims' `_resolve_drift_and_quality` reports source="context".
-    expected_return = focus_surface.get('expected_return')
+    expected_return = focus_surface.get("expected_return")
     if expected_return is None:
-        expected_return = ((vol_result or {}).get('correlation_engine') or {}).get('basket_expected_return')
+        expected_return = ((vol_result or {}).get("correlation_engine") or {}).get(
+            "basket_expected_return"
+        )
     if expected_return is None:
         try:
             from var_engine import data_loader  # VaR's drift estimator
-            _tk = (context.get('focus') or {}).get('ticker')
+
+            _tk = (context.get("focus") or {}).get("ticker")
             if _tk:
                 expected_return = data_loader.estimate_geometric_return(_tk)
         except Exception:
             expected_return = None
-    if isinstance(expected_return, (int, float)) and not isinstance(expected_return, bool):
-        context.setdefault('focus', {})['expected_return'] = float(expected_return)
+    if isinstance(expected_return, (int, float)) and not isinstance(
+        expected_return, bool
+    ):
+        context.setdefault("focus", {})["expected_return"] = float(expected_return)
 
 
 # --------------------------------------------------------------------------
@@ -1217,19 +1355,57 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
 # --------------------------------------------------------------------------
 
 
-def _archive_module_result(module_slug: str, result: Any, context: Dict[str, Any]) -> None:
+def _archive_module_result(
+    module_slug: str, result: Any, context: dict[str, Any]
+) -> None:
     """Archiver hook, called once per executed module in `run_selected_modules`.
 
-    No-op stub in this task -- the real archiver is a later phase (Phase 6 of
-    the modularization overhaul). This call site exists now so that phase is
-    a pure implementation drop-in rather than a call-site hunt through
-    `run_selected_modules`.
+    Phase 6 of the modularization overhaul (Task 7): delegates to
+    `shared.module_archive.record`, which owns the dedicated archive DB,
+    schema, and never-raise contract -- see that module's docstring.
+
+    `triggered_by="orchestrator"` covers BOTH callers of
+    `run_selected_modules` (orchestrator.py's own `--modules`/
+    `--modules-category`/`--all-modules` CLI flags, and
+    `dashboard/app.py::_execute_run`'s call into this same function when a
+    `modules` list is present) -- traced directly: `_execute_run` does not
+    duplicate this archiver hook itself, it just calls
+    `orchestrator.run_selected_modules`, which reaches this exact call site.
+    A single `triggered_by` value covering both is a deliberate choice
+    (documented in the task-7 report) rather than plumbing a second
+    parameter through `run_selected_modules` to distinguish CLI-direct from
+    dashboard-triggered at this call site. `"cli"` is reserved for a suite's
+    standalone `cli_entry` `__main__` block, a real separate OS process that
+    bypasses `run_selected_modules` (and this hook) entirely -- those call
+    `shared.module_archive.record` directly.
+
+    Looks up the executed module's real `ModuleSpec` (needed for `.suite`/
+    `.archive.key_shape`, which `record()` requires) via
+    `shared.module_registry.resolve_modules` -- `run_selected_modules`
+    already resolved `module_slug` once via the same registry lookup, so
+    this can't fail for any `module_slug` this hook is actually called with;
+    guarded anyway, matching `record()`'s own never-raise contract, so a
+    hypothetical future caller passing an unregistered slug still can't
+    fail the run.
     """
-    # TODO: Phase 6 implements the real archiver.
-    pass
+    try:
+        module_spec = resolve_modules([module_slug])[0]
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "_archive_module_result: could not resolve ModuleSpec for "
+            "module_slug=%r; skipping archive (module run itself is "
+            "unaffected)",
+            module_slug,
+            exc_info=True,
+        )
+        return
+
+    from shared import module_archive
+
+    module_archive.record(result, module_spec, context, triggered_by="orchestrator")
 
 
-def _expand_module_requires(selected: List[Any]) -> List[Any]:
+def _expand_module_requires(selected: list[Any]) -> list[Any]:
     """Transitively add every `requires` dependency not already selected.
 
     `selected` are the explicitly-resolved ModuleSpecs; a dependency named in
@@ -1239,7 +1415,7 @@ def _expand_module_requires(selected: List[Any]) -> List[Any]:
     registered anywhere in `shared.module_registry.all_modules()`.
     """
     index = {module.slug: module for module in all_modules()}
-    included: Dict[str, Any] = {module.slug: module for module in selected}
+    included: dict[str, Any] = {module.slug: module for module in selected}
     pending = list(selected)
     while pending:
         module = pending.pop()
@@ -1257,7 +1433,7 @@ def _expand_module_requires(selected: List[Any]) -> List[Any]:
     return list(included.values())
 
 
-def _topo_sort_modules(modules: List[Any]) -> List[Any]:
+def _topo_sort_modules(modules: list[Any]) -> list[Any]:
     """Order `modules` so every `requires` dependency runs before its
     dependent (Kahn's algorithm). Only edges between modules present in
     `modules` are honoured -- callers are expected to have already expanded
@@ -1266,7 +1442,7 @@ def _topo_sort_modules(modules: List[Any]) -> List[Any]:
     """
     by_slug = {module.slug: module for module in modules}
     in_degree = {slug: 0 for slug in by_slug}
-    dependents: Dict[str, List[str]] = {slug: [] for slug in by_slug}
+    dependents: dict[str, list[str]] = {slug: [] for slug in by_slug}
     for module in modules:
         for req_slug in module.requires:
             if req_slug not in by_slug:
@@ -1275,7 +1451,7 @@ def _topo_sort_modules(modules: List[Any]) -> List[Any]:
             dependents[req_slug].append(module.slug)
 
     ready = sorted(slug for slug, degree in in_degree.items() if degree == 0)
-    ordered_slugs: List[str] = []
+    ordered_slugs: list[str] = []
     while ready:
         slug = ready.pop(0)
         ordered_slugs.append(slug)
@@ -1293,7 +1469,7 @@ def _topo_sort_modules(modules: List[Any]) -> List[Any]:
     return [by_slug[slug] for slug in ordered_slugs]
 
 
-def run_selected_modules(slugs: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
+def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str, Any]:
     """Resolve, expand, order and execute a set of registry modules.
 
     New, additive execution path (Task 2 of the modularization overhaul),
@@ -1331,7 +1507,7 @@ def run_selected_modules(slugs: List[str], context: Dict[str, Any]) -> Dict[str,
     expanded = _expand_module_requires(selected)
     ordered = _topo_sort_modules(expanded)
 
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
     for module in ordered:
         result = module.run(context)
         results[module.slug] = result
@@ -1346,9 +1522,11 @@ def run_selected_modules(slugs: List[str], context: Dict[str, Any]) -> Dict[str,
     }
 
 
-def run_unified(focus: Dict[str, Any],
-                fail_on_suite_error: Optional[bool] = None,
-                validate: bool = True) -> Dict[str, Any]:
+def run_unified(
+    focus: dict[str, Any],
+    fail_on_suite_error: bool | None = None,
+    validate: bool = True,
+) -> dict[str, Any]:
     """Mirror of Vol_Suite's mode-2 dependency order, headless.
 
     vol -> sentiment (market signals) -> {options, var}. Vol_Suite runs first
@@ -1380,62 +1558,70 @@ def run_unified(focus: Dict[str, Any],
       a reason that has nothing to do with their own logic.
     """
     started_at = _iso_utc_now()
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
     if fail_on_suite_error is None:
-        fail_on_suite_error = bool(focus.get('fail_on_suite_error', False))
+        fail_on_suite_error = bool(focus.get("fail_on_suite_error", False))
 
     controls = {
-        'run_options_suite': True,
-        'run_var_suite': True,
-        'compile_pdf': bool(focus.get('compile_pdf', False)),
+        "run_options_suite": True,
+        "run_var_suite": True,
+        "compile_pdf": bool(focus.get("compile_pdf", False)),
     }
     context = build_context(focus, controls=controls)
-    output_dir = context['output_dir']
-    timeout = int(focus.get('timeout') or DEFAULT_TIMEOUT_SEC)
+    output_dir = context["output_dir"]
+    timeout = int(focus.get("timeout") or DEFAULT_TIMEOUT_SEC)
     print(f"\n[unified] run_id={context['run_id']} output_dir={output_dir}")
     if fail_on_suite_error:
-        print("[unified] --fail-on-suite-error: the first invalid or failed "
-              "stage aborts the chain.")
+        print(
+            "[unified] --fail-on-suite-error: the first invalid or failed "
+            "stage aborts the chain."
+        )
 
     swaps_result = _build_swaps_result(context)
     try:
-        with open(os.path.join(output_dir, 'swaps_result.json'), 'w', encoding='utf-8') as f:
+        with open(
+            os.path.join(output_dir, "swaps_result.json"), "w", encoding="utf-8"
+        ) as f:
             json.dump(swaps_result, f, indent=2, default=str)
-            f.write('\n')
+            f.write("\n")
     except Exception as e:
-        print(f"  [swaps] WARNING: could not write swaps_result.json: {e}", file=sys.stderr)
+        print(
+            f"  [swaps] WARNING: could not write swaps_result.json: {e}",
+            file=sys.stderr,
+        )
     _print_swaps_block(swaps_result)
 
-    aborted_by: Optional[str] = None
+    aborted_by: str | None = None
 
-    def _skip(stage: str) -> Dict[str, Any]:
+    def _skip(stage: str) -> dict[str, Any]:
         # A context-audit abort is unconditional; a suite abort only happens
         # under --fail-on-suite-error. The reason has to say which, or a reader
         # of the skipped record goes looking for a flag that was never set.
         reason = (
-            'the context mutation audit FAILED and the context was rolled back'
-            if aborted_by == 'context_audit'
-            else f'upstream stage {aborted_by!r} failed validation '
-                 'and --fail-on-suite-error is set')
+            "the context mutation audit FAILED and the context was rolled back"
+            if aborted_by == "context_audit"
+            else f"upstream stage {aborted_by!r} failed validation "
+            "and --fail-on-suite-error is set"
+        )
         return {
-            'suite': stage,
-            'status': 'skipped',
-            'skipped': True,
-            'error': f'skipped: {reason}',
-            'blocked_by': aborted_by,
-            'timestamp': _iso_utc_now(),
+            "suite": stage,
+            "status": "skipped",
+            "skipped": True,
+            "error": f"skipped: {reason}",
+            "blocked_by": aborted_by,
+            "timestamp": _iso_utc_now(),
         }
 
     # ---- 1. Vol_Suite (produces vol surface / dealer positioning / GARCH fit) ----
-    _print_phase_header(1, "VOL SUITE",
-                       "Dealer positioning / vol surface / gamma exposure")
-    results['vol'] = run_suite('vol', context, timeout=timeout,
-                               validate=validate)
-    if 'error' in results['vol'] and fail_on_suite_error:
-        aborted_by = 'vol'
-    elif 'error' not in results['vol']:
-        _thread_vol_stats_into_context(context, results['vol'])
-    elif isinstance(results['vol'].get('payload'), dict):
+    _print_phase_header(
+        1, "VOL SUITE", "Dealer positioning / vol surface / gamma exposure"
+    )
+    results["vol"] = run_suite("vol", context, timeout=timeout, validate=validate)
+    if "error" in results["vol"] and fail_on_suite_error:
+        aborted_by = "vol"
+    elif "error" not in results["vol"]:
+        _thread_vol_stats_into_context(context, results["vol"])
+    elif isinstance(results["vol"].get("payload"), dict):
         # Validation FAILED (e.g. a downstream step like dealer_positioning
         # left a required file missing -- see run_suite/_finalize), but the
         # suite still computed and returned real numbers (vol_surface's GARCH
@@ -1445,7 +1631,7 @@ def run_unified(focus: Dict[str, Any],
         # /fair_vol_pct stayed None (scanners degrading to 0.0/UNKNOWN) purely
         # because, say, the gamma_records CSV never got written, which has
         # nothing to do with whether the GARCH fit itself succeeded.
-        _thread_vol_stats_into_context(context, results['vol']['payload'])
+        _thread_vol_stats_into_context(context, results["vol"]["payload"])
 
     # ---- 2. MARKET SIGNALS (option-chain scanners + 1yr sims + direction suite) ----
     # Replaces the old sentiment-scanner stage (StockTwits/Reddit/YouTube/GEX),
@@ -1455,16 +1641,20 @@ def run_unified(focus: Dict[str, Any],
     # sims can reuse Vol_Suite's GARCH fit via context instead of re-fitting.
     class _MarketSignalsAudit:
         def __init__(self, status: str):
-            self.passed = status != 'error'
+            self.passed = status != "error"
             self._status = status
+
         def to_dict(self):
             return {
-                'validation_status': 'PASS' if self.passed else 'FAIL',
-                'mutations_detected': [],
-                'rolled_back': False,
-                'validation_errors': ([] if self.passed else
-                                      [f'market signals stage status={self._status}']),
-                'reason': f'market signals stage status={self._status}; no context mutation performed',
+                "validation_status": "PASS" if self.passed else "FAIL",
+                "mutations_detected": [],
+                "rolled_back": False,
+                "validation_errors": (
+                    []
+                    if self.passed
+                    else [f"market signals stage status={self._status}"]
+                ),
+                "reason": f"market signals stage status={self._status}; no context mutation performed",
             }
 
     if aborted_by:
@@ -1474,27 +1664,32 @@ def run_unified(focus: Dict[str, Any],
         # this branch is kept structurally apart from the "did market signals
         # itself fail" check below rather than trying to except it out there.
         print(f"\n[2/3] MARKET SIGNALS (SKIPPED — blocked by {aborted_by})")
-        sentiment_result = _skip('sentiment')
-        results['sentiment'] = sentiment_result
-        context_audit = _MarketSignalsAudit('skipped')
+        sentiment_result = _skip("sentiment")
+        results["sentiment"] = sentiment_result
+        context_audit = _MarketSignalsAudit("skipped")
     else:
-        _print_phase_header(2, "MARKET SIGNALS",
-                           "IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite")
-        sentiment_result = run_market_signals_stage(context['focus']['ticker'], context)
-        results['sentiment'] = sentiment_result
+        _print_phase_header(
+            2,
+            "MARKET SIGNALS",
+            "IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite",
+        )
+        sentiment_result = run_market_signals_stage(context["focus"]["ticker"], context)
+        results["sentiment"] = sentiment_result
 
         # Write the same two marker files a subprocess suite would have written,
         # so the dashboard's existing 'sentiment' file-claiming logic picks this
         # bundle up under the (relabeled) unified Output tab section unchanged.
         try:
-            sentiment_marker = os.path.join(output_dir, 'sentiment_result.json')
-            with open(sentiment_marker, 'w', encoding='utf-8') as f:
+            sentiment_marker = os.path.join(output_dir, "sentiment_result.json")
+            with open(sentiment_marker, "w", encoding="utf-8") as f:
                 json.dump(sentiment_result, f, indent=2, default=str)
-                f.write('\n')
-            sentiment_ctx_copy = os.path.join(output_dir, 'suite_context_sentiment.json')
-            with open(sentiment_ctx_copy, 'w', encoding='utf-8') as f:
+                f.write("\n")
+            sentiment_ctx_copy = os.path.join(
+                output_dir, "suite_context_sentiment.json"
+            )
+            with open(sentiment_ctx_copy, "w", encoding="utf-8") as f:
                 json.dump(context, f, indent=2, default=str)
-                f.write('\n')
+                f.write("\n")
         except Exception as e:
             print(f"  [market-signals] WARNING: could not write marker files: {e}")
 
@@ -1503,88 +1698,99 @@ def run_unified(focus: Dict[str, Any],
         # is no producer/consumer handoff for this stage), so there is no
         # real mutation to audit -- this just records the stage's own status.
         print("\n[unified] Stage 2b/3: context mutation audit (sentiment block)...")
-        context_audit = _MarketSignalsAudit(sentiment_result.get('status', 'ok'))
+        context_audit = _MarketSignalsAudit(sentiment_result.get("status", "ok"))
         if not context_audit.passed:
             # Unlike a suite failure, this is not degradable by
             # --fail-on-suite-error: the context is the input to every
             # remaining stage, so running them against one that just failed
             # validation would only produce failures that say nothing about
             # the suites themselves.
-            aborted_by = 'context_audit'
-        elif 'error' in sentiment_result and fail_on_suite_error:
-            aborted_by = 'sentiment'
+            aborted_by = "context_audit"
+        elif "error" in sentiment_result and fail_on_suite_error:
+            aborted_by = "sentiment"
 
     # ---- 3. Options_Suite + VaR_Tools_Simulations (consume Vol_Suite's context) ----
     if aborted_by:
         print(f"\n[3/3] OPTIONS & VAR SUITES (SKIPPED — blocked by {aborted_by})")
-        results['options'] = _skip('options')
-        results['var'] = _skip('var')
+        results["options"] = _skip("options")
+        results["var"] = _skip("var")
     else:
-        _print_phase_header(3, "OPTIONS & VAR SUITES",
-                           "Option pricing + value-at-risk analysis (parallel)")
-        results['options'] = run_suite('options', context, timeout=timeout,
-                                       validate=validate)
-        results['var'] = run_suite('var', context, timeout=timeout,
-                                   validate=validate)
+        _print_phase_header(
+            3,
+            "OPTIONS & VAR SUITES",
+            "Option pricing + value-at-risk analysis (parallel)",
+        )
+        results["options"] = run_suite(
+            "options", context, timeout=timeout, validate=validate
+        )
+        results["var"] = run_suite("var", context, timeout=timeout, validate=validate)
 
     combined = {
-        'run_id': context['run_id'],
-        'output_dir': output_dir,
-        'context_path': os.path.join(output_dir, 'suite_context.json'),
-        'focus': context['focus'],
-        'swap_activity_rows': len(context.get('swap_activity') or []),
-        'swaps': swaps_result,
-        'results': results,
-        'fail_on_suite_error': bool(fail_on_suite_error),
-        'aborted_by': aborted_by,
-        'validation': {
-            stage: (r.get('_validation') or r.get('validation') or {}).get('status')
+        "run_id": context["run_id"],
+        "output_dir": output_dir,
+        "context_path": os.path.join(output_dir, "suite_context.json"),
+        "focus": context["focus"],
+        "swap_activity_rows": len(context.get("swap_activity") or []),
+        "swaps": swaps_result,
+        "results": results,
+        "fail_on_suite_error": bool(fail_on_suite_error),
+        "aborted_by": aborted_by,
+        "validation": {
+            stage: (r.get("_validation") or r.get("validation") or {}).get("status")
             for stage, r in results.items()
         },
         # Kept out of `results` on purpose: that dict is the per-suite tally
         # (`ok == len(results)` decides the run status), and the audit is not a
         # suite. It has its own row in orchestrator_runs either way.
-        'context_audit': context_audit.to_dict(),
-        'started_at': started_at,
-        'completed_at': _iso_utc_now(),
+        "context_audit": context_audit.to_dict(),
+        "started_at": started_at,
+        "completed_at": _iso_utc_now(),
     }
 
     # One canonical copy of the context alongside the per-suite copies, same
     # filename Vol_Suite writes so existing tooling finds it.
     try:
         sc = _import_suite_context()
-        sc.write_suite_context(context, combined['context_path'])
+        sc.write_suite_context(context, combined["context_path"])
     except Exception as e:
-        print(f"  [unified] WARNING: could not write suite_context.json: {e}",
-              file=sys.stderr)
+        print(
+            f"  [unified] WARNING: could not write suite_context.json: {e}",
+            file=sys.stderr,
+        )
 
-    ok = sum(1 for r in results.values() if 'error' not in r)
+    ok = sum(1 for r in results.values() if "error" not in r)
     if not context_audit.passed:
         # 'error', not 'aborted': nothing here was a judgement call about how
         # much failure to tolerate. The context mutation did not survive
         # validation, the context was rolled back, and the run failed.
-        status = 'error'
+        status = "error"
     elif aborted_by:
         # 'aborted' rather than 'partial': the missing stages were never
         # attempted, so reporting them as partial results would overstate what
         # the run actually knows.
-        status = 'aborted'
+        status = "aborted"
     else:
-        status = 'ok' if ok == len(results) else ('partial' if ok else 'error')
-    combined['status'] = status
+        status = "ok" if ok == len(results) else ("partial" if ok else "error")
+    combined["status"] = status
 
     # ---- Completion summary ----
     total = len(results)
     print(f"\n{'=' * 60}")
     print(f"  Suites completed: {ok}/{total}")
     if context_audit.passed:
-        print(f"  Context audit: PASSED")
+        print("  Context audit: PASSED")
     else:
-        print(f"  Context audit: FAILED (context rolled back)")
+        print("  Context audit: FAILED (context rolled back)")
     print(f"{'=' * 60}")
 
-    log_run('unified', context['focus'], started_at, combined['completed_at'],
-            status, combined)
+    log_run(
+        "unified",
+        context["focus"],
+        started_at,
+        combined["completed_at"],
+        status,
+        combined,
+    )
     return combined
 
 
@@ -1592,7 +1798,8 @@ def run_unified(focus: Dict[str, Any],
 # multi-source orchestration
 # --------------------------------------------------------------------------
 
-def discover_adapters() -> List[str]:
+
+def discover_adapters() -> list[str]:
     """Discover enabled data sources via DATA_SOURCES environment variable.
 
     Reads comma-separated source names from DATA_SOURCES env var. Each source
@@ -1601,16 +1808,16 @@ def discover_adapters() -> List[str]:
     Returns:
         List of enabled source names. Defaults to ['DTCC'] if env var is unset.
     """
-    data_sources_str = os.environ.get('DATA_SOURCES', 'DTCC').strip()
+    data_sources_str = os.environ.get("DATA_SOURCES", "DTCC").strip()
     if not data_sources_str:
-        return ['DTCC']
+        return ["DTCC"]
 
-    sources = [s.strip().upper() for s in data_sources_str.split(',') if s.strip()]
+    sources = [s.strip().upper() for s in data_sources_str.split(",") if s.strip()]
     logger.info(f"Discovered {len(sources)} enabled data sources: {', '.join(sources)}")
-    return sources or ['DTCC']
+    return sources or ["DTCC"]
 
 
-def _get_adapter_for_source(source_name: str) -> Optional[Any]:
+def _get_adapter_for_source(source_name: str) -> Any | None:
     """Load the adapter module for a given source name.
 
     Maps source names (DTCC, CME, OTC) to adapter modules in adapters/ directory.
@@ -1619,13 +1826,13 @@ def _get_adapter_for_source(source_name: str) -> Optional[Any]:
     Returns:
         Instantiated adapter, or None if the source is not available.
     """
-    adapters_dir = os.path.join(ROOT, 'adapters')
+    adapters_dir = os.path.join(ROOT, "adapters")
     if not os.path.isdir(adapters_dir):
         logger.warning(f"adapters/ directory not found at {adapters_dir}")
         return None
 
     source_lower = source_name.lower()
-    module_path = os.path.join(adapters_dir, f'{source_lower}_adapter.py')
+    module_path = os.path.join(adapters_dir, f"{source_lower}_adapter.py")
 
     if not os.path.exists(module_path):
         logger.warning(f"Adapter module not found for {source_name}: {module_path}")
@@ -1634,7 +1841,8 @@ def _get_adapter_for_source(source_name: str) -> Optional[Any]:
     try:
         # Dynamically import the adapter module
         spec = importlib.util.spec_from_file_location(
-            f'adapters.{source_lower}_adapter', module_path)
+            f"adapters.{source_lower}_adapter", module_path
+        )
         if not spec or not spec.loader:
             logger.error(f"Could not load spec for {source_name} adapter")
             return None
@@ -1643,9 +1851,11 @@ def _get_adapter_for_source(source_name: str) -> Optional[Any]:
         spec.loader.exec_module(module)
 
         # Find the adapter class (e.g., DTCCAdapter, CMEAdapter, OTCAdapter)
-        adapter_class_name = f'{source_name.upper()}Adapter'
+        adapter_class_name = f"{source_name.upper()}Adapter"
         if not hasattr(module, adapter_class_name):
-            logger.error(f"Adapter class {adapter_class_name} not found in {module_path}")
+            logger.error(
+                f"Adapter class {adapter_class_name} not found in {module_path}"
+            )
             return None
 
         adapter_class = getattr(module, adapter_class_name)
@@ -1656,10 +1866,12 @@ def _get_adapter_for_source(source_name: str) -> Optional[Any]:
         return None
 
 
-def run_unified_sources(tickers: List[str],
-                       target_years: float = 0.25,
-                       sources: Optional[List[str]] = None,
-                       timeout: int = None) -> Dict[str, Any]:
+def run_unified_sources(
+    tickers: list[str],
+    target_years: float = 0.25,
+    sources: list[str] | None = None,
+    timeout: int = None,
+) -> dict[str, Any]:
     """Orchestrate parallel data ingestion from multiple sources, then run unified suite.
 
     This is the main entry point for cross-source analytics. It:
@@ -1710,8 +1922,8 @@ def run_unified_sources(tickers: List[str],
     # ---- Stage 1: Parallel data ingestion from all sources ----
     print("\n[multi-source] Stage 1/3: Parallel data ingestion...")
 
-    trades_by_source: Dict[str, int] = {}
-    ingestion_errors: Dict[str, str] = {}
+    trades_by_source: dict[str, int] = {}
+    ingestion_errors: dict[str, str] = {}
 
     # Import here to avoid circular dependency
     try:
@@ -1745,7 +1957,8 @@ def run_unified_sources(tickers: List[str],
                 trades_by_source[source] = len(trade_records)
                 logger.info(
                     f"  {source}: upserted {len(trade_records)} trades "
-                    f"(inserted={result.get('inserted')}, updated={result.get('updated')})")
+                    f"(inserted={result.get('inserted')}, updated={result.get('updated')})"
+                )
             else:
                 trades_by_source[source] = 0
                 logger.info(f"  {source}: no trades fetched")
@@ -1758,35 +1971,45 @@ def run_unified_sources(tickers: List[str],
 
     # ---- Stage 2: Run unified suite with aggregated data ----
     total_trades = sum(trades_by_source.values())
-    print(f"\n[multi-source] Stage 2/3: Aggregated {total_trades} trades from {len(sources)} sources")
+    print(
+        f"\n[multi-source] Stage 2/3: Aggregated {total_trades} trades from {len(sources)} sources"
+    )
 
     # Build focus for the first ticker (orchestrator is single-ticker-focused for now)
     focus = {
-        'ticker': tickers[0].upper(),
-        'option_type': 'call',
-        'target_years': float(target_years),
-        'data_sources': sources,  # Pass sources to context
+        "ticker": tickers[0].upper(),
+        "option_type": "call",
+        "target_years": float(target_years),
+        "data_sources": sources,  # Pass sources to context
     }
 
-    print(f"[multi-source] Stage 3/3: Running unified suite (ticker={focus['ticker']})...")
+    print(
+        f"[multi-source] Stage 3/3: Running unified suite (ticker={focus['ticker']})..."
+    )
     unified_result = run_unified(focus, fail_on_suite_error=False, validate=True)
 
     # ---- Combine results ----
     combined = {
-        'run_id': run_id,
-        'sources_requested': sources,
-        'sources_ingested': [s for s in sources if trades_by_source.get(s, 0) > 0],
-        'trades_by_source': trades_by_source,
-        'total_trades_ingested': total_trades,
-        'ingestion_errors': ingestion_errors or None,
-        'unified_result': unified_result,
-        'started_at': started_at,
-        'completed_at': _iso_utc_now(),
+        "run_id": run_id,
+        "sources_requested": sources,
+        "sources_ingested": [s for s in sources if trades_by_source.get(s, 0) > 0],
+        "trades_by_source": trades_by_source,
+        "total_trades_ingested": total_trades,
+        "ingestion_errors": ingestion_errors or None,
+        "unified_result": unified_result,
+        "started_at": started_at,
+        "completed_at": _iso_utc_now(),
     }
 
     # Log the multi-source orchestration run
-    log_run('multi_source', focus, started_at, combined['completed_at'],
-            'ok' if total_trades > 0 else 'partial', combined)
+    log_run(
+        "multi_source",
+        focus,
+        started_at,
+        combined["completed_at"],
+        "ok" if total_trades > 0 else "partial",
+        combined,
+    )
 
     return combined
 
@@ -1794,6 +2017,7 @@ def run_unified_sources(tickers: List[str],
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
+
 
 def _stdin_is_available() -> bool:
     """Check if stdin is available (interactive terminal vs redirected/piped).
@@ -1810,29 +2034,35 @@ def _stdin_is_available() -> bool:
         return False
 
 
-def _summarize(combined: Dict[str, Any]) -> str:
+def _summarize(combined: dict[str, Any]) -> str:
     lines = [
         f"run_id={combined['run_id']}",
         f"focus={combined['focus']['ticker']} {combined['focus']['expiration_date']} "
         f"{combined['focus']['option_type']}"
-        + (f" K={combined['focus']['strike']}"
-           if combined['focus'].get('strike') is not None else ""),
+        + (
+            f" K={combined['focus']['strike']}"
+            if combined["focus"].get("strike") is not None
+            else ""
+        ),
         f"output_dir={combined['output_dir']}",
         f"swap_activity_rows={combined['swap_activity_rows']}",
         f"status={combined['status']}",
     ]
-    if combined.get('aborted_by'):
-        reason = ('context mutation audit FAILED'
-                  if combined['aborted_by'] == 'context_audit'
-                  else '--fail-on-suite-error')
+    if combined.get("aborted_by"):
+        reason = (
+            "context mutation audit FAILED"
+            if combined["aborted_by"] == "context_audit"
+            else "--fail-on-suite-error"
+        )
         lines.append(f"aborted_by={combined['aborted_by']} ({reason})")
 
-    audit = combined.get('context_audit') or {}
+    audit = combined.get("context_audit") or {}
     if audit:
-        mutated = audit.get('mutations_detected') or []
-        line = (f"context_audit={audit.get('validation_status')} "
-                f"mutations={len(mutated)}")
-        if audit.get('rolled_back'):
+        mutated = audit.get("mutations_detected") or []
+        line = (
+            f"context_audit={audit.get('validation_status')} mutations={len(mutated)}"
+        )
+        if audit.get("rolled_back"):
             line += " ROLLED_BACK"
         lines.append(line)
         # Concise diff: the changed keys, not the values and not the contexts.
@@ -1840,26 +2070,26 @@ def _summarize(combined: Dict[str, Any]) -> str:
             lines.append(f"  mutated: {key}")
         if len(mutated) > 8:
             lines.append(f"  ... and {len(mutated) - 8} more mutated key(s)")
-        for err in audit.get('validation_errors') or []:
+        for err in audit.get("validation_errors") or []:
             lines.append(f"  context_audit: {err}")
 
-    for name, result in combined['results'].items():
-        validation = (result.get('_validation') or result.get('validation') or {})
-        verdict = validation.get('status')
-        if result.get('skipped'):
+    for name, result in combined["results"].items():
+        validation = result.get("_validation") or result.get("validation") or {}
+        verdict = validation.get("status")
+        if result.get("skipped"):
             lines.append(f"{name}=SKIPPED ({result.get('blocked_by')} failed upstream)")
             continue
-        if 'error' in result:
+        if "error" in result:
             lines.append(f"{name}=FAILED: {result['error']}")
-            for err in validation.get('errors') or []:
+            for err in validation.get("errors") or []:
                 lines.append(f"  {name} validation: {err}")
-            if result.get('stderr'):
-                first = result['stderr'].splitlines()
+            if result.get("stderr"):
+                first = result["stderr"].splitlines()
                 lines.append(f"  {name} stderr tail: {first[-1] if first else ''}")
         else:
-            suffix = f", validation={verdict}" if verdict else ''
+            suffix = f", validation={verdict}" if verdict else ""
             lines.append(f"{name}=ok ({result.get('status', 'ok')}{suffix})")
-            for warning in validation.get('warnings') or []:
+            for warning in validation.get("warnings") or []:
                 lines.append(f"  {name} validation WARN: {warning}")
     return "\n".join(lines)
 
@@ -1875,6 +2105,7 @@ def _check_ticker_exists(ticker: str) -> bool:
     """
     try:
         from Vol_Suite.thetadata_client import ThetaDataController
+
         td = ThetaDataController()
         try:
             spot = td.fetch_spot_price(ticker)
@@ -1897,7 +2128,11 @@ def _prompt_ticker_interactive() -> str:
         if _check_ticker_exists(t):
             return t
         print(f"  '{t}' doesn't resolve to a tradable symbol -- check spelling.")
-        retry = input("  Try a different ticker, or press Enter to use it anyway: ").strip().upper()
+        retry = (
+            input("  Try a different ticker, or press Enter to use it anyway: ")
+            .strip()
+            .upper()
+        )
         if not retry:
             return t
         if _check_ticker_exists(retry):
@@ -1929,7 +2164,7 @@ def _prompt_run_mode() -> str:
         print(f"  Invalid choice '{choice}'. Enter 1-5.")
 
 
-def _prompt_expiration_interactive() -> Tuple[Optional[str], Optional[float]]:
+def _prompt_expiration_interactive() -> tuple[str | None, float | None]:
     """Prompt for expiration date OR target years.
 
     Returns tuple (expiration_date, target_years) where exactly one is not None:
@@ -1937,16 +2172,26 @@ def _prompt_expiration_interactive() -> Tuple[Optional[str], Optional[float]]:
       - If user chooses target years: (None, 0.25)
     """
     while True:
-        choice = input("\nExpiration method: (1) ISO date YYYY-MM-DD, (2) target years [default 2]: ").strip() or "2"
+        choice = (
+            input(
+                "\nExpiration method: (1) ISO date YYYY-MM-DD, (2) target years [default 2]: "
+            ).strip()
+            or "2"
+        )
         if choice == "1":
             while True:
                 exp = input("  Enter expiration (YYYY-MM-DD): ").strip()
-                if exp and len(exp) == 10 and exp.count('-') == 2:
+                if exp and len(exp) == 10 and exp.count("-") == 2:
                     return exp, None
                 print("  Invalid format. Use YYYY-MM-DD (e.g., 2026-10-16).")
         elif choice == "2":
             while True:
-                years = input("  Target years (e.g., 0.25, 0.5, 1.0) [default 0.25]: ").strip() or "0.25"
+                years = (
+                    input(
+                        "  Target years (e.g., 0.25, 0.5, 1.0) [default 0.25]: "
+                    ).strip()
+                    or "0.25"
+                )
                 try:
                     y = float(years)
                     if y > 0:
@@ -1974,12 +2219,12 @@ def run_interactive_orchestrator() -> int:
     mode_choice = _prompt_run_mode()
 
     # Map mode to suite list (includes required dependencies)
-    suite_map: Dict[str, List[str]] = {
+    suite_map: dict[str, list[str]] = {
         "1": ["sentiment", "vol", "options", "var"],  # Unified
-        "2": ["sentiment", "vol"],                    # Vol only
-        "3": ["sentiment", "vol", "options"],        # Options suite
-        "4": ["sentiment", "vol", "var"],            # VaR tools
-        "5": None,                                     # Custom (handled below)
+        "2": ["sentiment", "vol"],  # Vol only
+        "3": ["sentiment", "vol", "options"],  # Options suite
+        "4": ["sentiment", "vol", "var"],  # VaR tools
+        "5": None,  # Custom (handled below)
     }
 
     requested_suites = suite_map.get(mode_choice)
@@ -1992,8 +2237,14 @@ def run_interactive_orchestrator() -> int:
                 requested_suites = ["vol", "options", "var"]
                 break
             # Parse comma or space separated
-            requested_suites = [s.strip().lower() for s in suite_input.replace(',', ' ').split() if s.strip()]
-            valid = all(s in ['options', 'vol', 'var', 'sentiment'] for s in requested_suites)
+            requested_suites = [
+                s.strip().lower()
+                for s in suite_input.replace(",", " ").split()
+                if s.strip()
+            ]
+            valid = all(
+                s in ["options", "vol", "var", "sentiment"] for s in requested_suites
+            )
             if valid and requested_suites:
                 break
             print("  Invalid suite name(s). Use: options vol var sentiment")
@@ -2012,45 +2263,51 @@ def run_interactive_orchestrator() -> int:
     print("Additional Options (press Enter for defaults)")
 
     strike_input = input("  Strike (optional, ATM if blank): ").strip()
-    strike: Optional[float] = None
+    strike: float | None = None
     if strike_input:
         try:
             strike = float(strike_input)
         except ValueError:
             print(f"  Warning: '{strike_input}' is not valid; using ATM instead.")
 
-    option_type = input("  Option type (call/put) [default call]: ").strip().lower() or "call"
+    option_type = (
+        input("  Option type (call/put) [default call]: ").strip().lower() or "call"
+    )
     if option_type not in ["call", "put"]:
         print(f"  Warning: '{option_type}' is invalid; using 'call' instead.")
         option_type = "call"
 
     index = input("  Benchmark index [default SPY]: ").strip().upper() or "SPY"
 
-    compile_pdf_input = input("  Compile results to PDF? (y/n) [default n]: ").strip().lower() or "n"
+    compile_pdf_input = (
+        input("  Compile results to PDF? (y/n) [default n]: ").strip().lower() or "n"
+    )
     compile_pdf = compile_pdf_input == "y"
 
     # Step 5: Build and validate focus dict
-    focus: Dict[str, Any] = {
-        'ticker': ticker,
-        'option_type': option_type,
-        'strike': strike,
-        'index_ticker': index,
-        'fail_on_suite_error': False,
-        'compile_pdf': compile_pdf,
+    focus: dict[str, Any] = {
+        "ticker": ticker,
+        "option_type": option_type,
+        "strike": strike,
+        "index_ticker": index,
+        "fail_on_suite_error": False,
+        "compile_pdf": compile_pdf,
     }
     if expiration:
-        focus['expiration_date'] = expiration
+        focus["expiration_date"] = expiration
     else:
-        focus['target_years'] = target_years
+        focus["target_years"] = target_years
 
     # Validate focus before proceeding
-    if not focus.get('ticker'):
+    if not focus.get("ticker"):
         print("\nERROR: Ticker is required.")
         return 1
-    if focus.get('strike') is not None and not isinstance(focus['strike'], (int, float)):
+    if focus.get("strike") is not None and not isinstance(
+        focus["strike"], (int, float)
+    ):
         print("\nERROR: Strike must be a number.")
         return 1
-    if not (focus.get('expiration_date') or focus.get('target_years')):
+    if not (focus.get("expiration_date") or focus.get("target_years")):
         print("\nERROR: Expiration or target_years is required.")
         return 1
 
@@ -2086,21 +2343,21 @@ def run_interactive_orchestrator() -> int:
 
     print("\n" + ("=" * 60))
     print(_summarize(combined))
-    return 0 if combined['status'] == 'ok' else 1
+    return 0 if combined["status"] == "ok" else 1
 
 
-def _focus_from_args(args: argparse.Namespace) -> Dict[str, Any]:
-    focus: Dict[str, Any] = {
-        'ticker': args.ticker,
-        'option_type': args.option_type,
-        'strike': args.strike,
+def _focus_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    focus: dict[str, Any] = {
+        "ticker": args.ticker,
+        "option_type": args.option_type,
+        "strike": args.strike,
     }
     if args.expiry:
-        focus['expiration_date'] = args.expiry
+        focus["expiration_date"] = args.expiry
     else:
-        focus['target_years'] = args.target_years
+        focus["target_years"] = args.target_years
     if args.index:
-        focus['index_ticker'] = args.index
+        focus["index_ticker"] = args.index
     return focus
 
 
@@ -2114,10 +2371,12 @@ def _print_modules_table() -> None:
     print(header)
     print("-" * len(header))
     for module in modules:
-        print(f"{module.slug:<30} {module.name:<35} {module.category:<18} {module.suite}")
+        print(
+            f"{module.slug:<30} {module.name:<35} {module.category:<18} {module.suite}"
+        )
 
 
-def _summarize_modules(combined: Dict[str, Any]) -> str:
+def _summarize_modules(combined: dict[str, Any]) -> str:
     """Human-readable summary for `run_selected_modules`' return value, the
     --modules/--modules-category/--all-modules counterpart to `_summarize`
     (which summarizes run_unified's return value)."""
@@ -2130,10 +2389,10 @@ def _summarize_modules(combined: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog='orchestrator.py',
-        description='Run the sibling suites over the shared suite_context handoff.',
+        prog="orchestrator.py",
+        description="Run the sibling suites over the shared suite_context handoff.",
         epilog="""
 INTERACTIVE MODE (Recommended):
   orchestrator.py --interactive
@@ -2157,50 +2416,100 @@ ADVANCED OPTIONS:
     )
     # Make mode mutually exclusive, but --interactive optional (not required)
     mode = parser.add_mutually_exclusive_group(required=False)
-    mode.add_argument('--interactive', action='store_true',
-                      help='Launch in interactive mode: guided prompts for all parameters.')
-    mode.add_argument('--unified', action='store_true',
-                      help='Run vol -> market signals -> options + var in dependency order.')
-    mode.add_argument('--suite', choices=sorted(SUITE_ROOTS),
-                      help='Run a single suite in context mode.')
-    parser.add_argument('--modules', default=None,
-                        help='Comma-separated module slugs to run via the module '
-                             'registry (shared.module_registry.run_selected_modules). '
-                             'New, additive path alongside --unified/--suite; '
-                             'mutually exclusive with --modules-category/--all-modules.')
-    parser.add_argument('--modules-category', default=None,
-                        help='Run every registered module whose .category matches '
-                             'this string. Mutually exclusive with --modules/--all-modules.')
-    parser.add_argument('--all-modules', action='store_true',
-                        help='Run every module returned by shared.module_registry.all_modules(). '
-                             'Mutually exclusive with --modules/--modules-category.')
-    parser.add_argument('--list-modules', action='store_true',
-                        help='Print name/slug/category/suite for every registered '
-                             'module and exit without running anything.')
+    mode.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Launch in interactive mode: guided prompts for all parameters.",
+    )
+    mode.add_argument(
+        "--unified",
+        action="store_true",
+        help="Run vol -> market signals -> options + var in dependency order.",
+    )
+    mode.add_argument(
+        "--suite",
+        choices=sorted(SUITE_ROOTS),
+        help="Run a single suite in context mode.",
+    )
+    parser.add_argument(
+        "--modules",
+        default=None,
+        help="Comma-separated module slugs to run via the module "
+        "registry (shared.module_registry.run_selected_modules). "
+        "New, additive path alongside --unified/--suite; "
+        "mutually exclusive with --modules-category/--all-modules.",
+    )
+    parser.add_argument(
+        "--modules-category",
+        default=None,
+        help="Run every registered module whose .category matches "
+        "this string. Mutually exclusive with --modules/--all-modules.",
+    )
+    parser.add_argument(
+        "--all-modules",
+        action="store_true",
+        help="Run every module returned by shared.module_registry.all_modules(). "
+        "Mutually exclusive with --modules/--modules-category.",
+    )
+    parser.add_argument(
+        "--list-modules",
+        action="store_true",
+        help="Print name/slug/category/suite for every registered "
+        "module and exit without running anything.",
+    )
     # Make --ticker optional (only required in CLI mode if --unified/--suite chosen)
-    parser.add_argument('--ticker', required=False,
-                        help='Focus ticker, e.g. NVDA. Required if --unified or --suite is used.')
-    parser.add_argument('--strike', type=float, default=None,
-                        help='Optional strike; null means the child picks ATM.')
-    parser.add_argument('--expiry', default=None,
-                        help='Expiration YYYY-MM-DD (or YYYYMMDD; normalized to ISO).')
-    parser.add_argument('--option-type', default='call', choices=['call', 'put'])
-    parser.add_argument('--index', default=None, help='Basket index ticker (default SPY).')
-    parser.add_argument('--target-years', type=float, default=0.25,
-                        help='Used only when --expiry is omitted (default 0.25).')
-    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT_SEC,
-                        help=f'Per-child timeout in seconds (default {DEFAULT_TIMEOUT_SEC}).')
-    parser.add_argument('--json', action='store_true',
-                        help='Print the full combined result as JSON instead of a summary.')
-    parser.add_argument('--fail-on-suite-error', action='store_true',
-                        help='Abort the unified chain at the first suite whose '
-                             'output fails validation, instead of continuing '
-                             'downstream against known-bad input. Downstream '
-                             'stages are reported as skipped. Exit code 1.')
-    parser.add_argument('--no-validate', action='store_true',
-                        help='Skip explicit output validation entirely '
-                             '(pre-validation behaviour; for debugging a suite '
-                             'whose marker contract is in flux).')
+    parser.add_argument(
+        "--ticker",
+        required=False,
+        help="Focus ticker, e.g. NVDA. Required if --unified or --suite is used.",
+    )
+    parser.add_argument(
+        "--strike",
+        type=float,
+        default=None,
+        help="Optional strike; null means the child picks ATM.",
+    )
+    parser.add_argument(
+        "--expiry",
+        default=None,
+        help="Expiration YYYY-MM-DD (or YYYYMMDD; normalized to ISO).",
+    )
+    parser.add_argument("--option-type", default="call", choices=["call", "put"])
+    parser.add_argument(
+        "--index", default=None, help="Basket index ticker (default SPY)."
+    )
+    parser.add_argument(
+        "--target-years",
+        type=float,
+        default=0.25,
+        help="Used only when --expiry is omitted (default 0.25).",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT_SEC,
+        help=f"Per-child timeout in seconds (default {DEFAULT_TIMEOUT_SEC}).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the full combined result as JSON instead of a summary.",
+    )
+    parser.add_argument(
+        "--fail-on-suite-error",
+        action="store_true",
+        help="Abort the unified chain at the first suite whose "
+        "output fails validation, instead of continuing "
+        "downstream against known-bad input. Downstream "
+        "stages are reported as skipped. Exit code 1.",
+    )
+    parser.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Skip explicit output validation entirely "
+        "(pre-validation behaviour; for debugging a suite "
+        "whose marker contract is in flux).",
+    )
     args = parser.parse_args(argv)
 
     _warn_if_schema_outdated()
@@ -2216,77 +2525,98 @@ ADVANCED OPTIONS:
         bool(x) for x in (args.modules, args.modules_category, args.all_modules)
     )
     if _module_flags_given > 1:
-        parser.error('--modules, --modules-category, and --all-modules are '
-                     'mutually exclusive; pick one.')
+        parser.error(
+            "--modules, --modules-category, and --all-modules are "
+            "mutually exclusive; pick one."
+        )
     if _module_flags_given and (args.unified or args.suite):
-        parser.error('--modules/--modules-category/--all-modules cannot be '
-                     'combined with --unified or --suite.')
+        parser.error(
+            "--modules/--modules-category/--all-modules cannot be "
+            "combined with --unified or --suite."
+        )
     if _module_flags_given and not args.ticker:
-        parser.error('--ticker is required when using --modules/'
-                     '--modules-category/--all-modules.')
+        parser.error(
+            "--ticker is required when using --modules/"
+            "--modules-category/--all-modules."
+        )
 
     # Validate CLI args: if using --unified or --suite, --ticker must be provided
     if (args.unified or args.suite) and not args.ticker:
-        parser.error('--ticker is required when using --unified or --suite')
+        parser.error("--ticker is required when using --unified or --suite")
 
     if args.no_validate and args.fail_on_suite_error:
-        parser.error('--no-validate and --fail-on-suite-error are contradictory: '
-                     'there is nothing to fail on with validation disabled.')
+        parser.error(
+            "--no-validate and --fail-on-suite-error are contradictory: "
+            "there is nothing to fail on with validation disabled."
+        )
 
     # If --interactive, check for stdin and dispatch
     if args.interactive:
         if not _stdin_is_available():
-            print("ERROR: --interactive requires an interactive terminal.",
-                  file=sys.stderr)
-            print("stdin is redirected or not available (piped input, CI, etc.).",
-                  file=sys.stderr)
-            print("", file=sys.stderr)
-            print("Fallback: use CLI flags instead:",
-                  file=sys.stderr)
-            print("  orchestrator.py --unified --ticker TICKER [--expiry YYYY-MM-DD]",
-                  file=sys.stderr)
+            print(
+                "ERROR: --interactive requires an interactive terminal.",
+                file=sys.stderr,
+            )
+            print(
+                "stdin is redirected or not available (piped input, CI, etc.).",
+                file=sys.stderr,
+            )
+            print(file=sys.stderr)
+            print("Fallback: use CLI flags instead:", file=sys.stderr)
+            print(
+                "  orchestrator.py --unified --ticker TICKER [--expiry YYYY-MM-DD]",
+                file=sys.stderr,
+            )
             return 1
         return run_interactive_orchestrator()
 
     focus = _focus_from_args(args)
-    focus['timeout'] = args.timeout
-    focus['fail_on_suite_error'] = bool(args.fail_on_suite_error)
+    focus["timeout"] = args.timeout
+    focus["fail_on_suite_error"] = bool(args.fail_on_suite_error)
 
     if _module_flags_given:
         if args.all_modules:
             module_slugs = [m.slug for m in all_modules()]
         elif args.modules_category:
             module_slugs = [
-                m.slug for m in all_modules()
-                if m.category == args.modules_category
+                m.slug for m in all_modules() if m.category == args.modules_category
             ]
         else:
             module_slugs = [
-                s.strip() for s in (args.modules or '').split(',') if s.strip()
+                s.strip() for s in (args.modules or "").split(",") if s.strip()
             ]
         context = build_context(focus)
         combined = run_selected_modules(module_slugs, context)
         print("\n" + ("=" * 60))
-        print(json.dumps(combined, indent=2, default=str) if args.json
-              else _summarize_modules(combined))
-        return 0 if combined['status'] == 'ok' else 1
+        print(
+            json.dumps(combined, indent=2, default=str)
+            if args.json
+            else _summarize_modules(combined)
+        )
+        return 0 if combined["status"] == "ok" else 1
 
     if args.unified:
-        combined = run_unified(focus,
-                               fail_on_suite_error=bool(args.fail_on_suite_error),
-                               validate=not args.no_validate)
+        combined = run_unified(
+            focus,
+            fail_on_suite_error=bool(args.fail_on_suite_error),
+            validate=not args.no_validate,
+        )
         print("\n" + ("=" * 60))
-        print(json.dumps(combined, indent=2, default=str) if args.json
-              else _summarize(combined))
-        return 0 if combined['status'] == 'ok' else 1
+        print(
+            json.dumps(combined, indent=2, default=str)
+            if args.json
+            else _summarize(combined)
+        )
+        return 0 if combined["status"] == "ok" else 1
 
     context = build_context(focus)
-    result = run_suite(args.suite, context, timeout=args.timeout,
-                       validate=not args.no_validate)
+    result = run_suite(
+        args.suite, context, timeout=args.timeout, validate=not args.no_validate
+    )
     print("\n" + ("=" * 60))
     print(json.dumps(result, indent=2, default=str))
-    return 1 if 'error' in result else 0
+    return 1 if "error" in result else 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise SystemExit(main())

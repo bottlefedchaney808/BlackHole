@@ -132,8 +132,19 @@ def test_only_max_pain_is_pinned_to_the_run_expiry(monkeypatch):
                         lambda: _FakeVarMain())
 
     scanners = _RecordingScanners()
-    monkeypatch.setattr(orchestrator, '_import_sentiment_scanners',
-                        scanners.as_import_tuple)
+    # Phase 4: ensure hyphen-dir 'sentiment-scanner' is on path so 'scanner.*' (how
+    # registry loads its sub scanners) is resolvable for monkeypatch; patch the
+    # scan fns that the adapters call.
+    import sys
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent
+    _sdir = _root / "sentiment-scanner"
+    if str(_sdir) not in sys.path:
+        sys.path.insert(0, str(_sdir))
+    monkeypatch.setattr("scanner.iv_rank_scanner.scan_iv_rank", scanners._scan('iv_rank'))
+    monkeypatch.setattr("scanner.max_pain_scanner.scan_max_pain", scanners._scan('max_pain'))
+    monkeypatch.setattr("scanner.skew_scanner.scan_skew", scanners._scan('skew'))
+    monkeypatch.setattr("scanner.unusual_oi_scanner.scan_unusual_oi", scanners._scan('unusual_oi'))
 
     context = _context(focus={'ticker': 'NVDA',
                               'garch_conditional_vol': None,
@@ -167,8 +178,17 @@ def test_max_pain_self_selects_when_the_context_carries_no_expiry(monkeypatch):
                         lambda: _FakeVarMain())
 
     scanners = _RecordingScanners()
-    monkeypatch.setattr(orchestrator, '_import_sentiment_scanners',
-                        scanners.as_import_tuple)
+    # Phase 4: ensure hyphen-dir on path for 'scanner.*' resolvable
+    import sys
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent
+    _sdir = _root / "sentiment-scanner"
+    if str(_sdir) not in sys.path:
+        sys.path.insert(0, str(_sdir))
+    monkeypatch.setattr("scanner.iv_rank_scanner.scan_iv_rank", scanners._scan('iv_rank'))
+    monkeypatch.setattr("scanner.max_pain_scanner.scan_max_pain", scanners._scan('max_pain'))
+    monkeypatch.setattr("scanner.skew_scanner.scan_skew", scanners._scan('skew'))
+    monkeypatch.setattr("scanner.unusual_oi_scanner.scan_unusual_oi", scanners._scan('unusual_oi'))
 
     orchestrator.run_market_signals_stage('NVDA', _context())
 

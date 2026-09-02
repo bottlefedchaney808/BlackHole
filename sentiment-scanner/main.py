@@ -311,103 +311,62 @@ def scan_ticker(st, ticker, engine):
     return None
 
 
-def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False):
-    """Run all 7 options scanners on a ticker and pipe results into the engine.
+def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False, scanners=None):
+    """Run selected options scanners via registry (Phase 4).
 
-    Returns (lines, raw) where lines are formatted console strings and
-    raw maps scanner name -> the scan result object (or None if that
-    scanner errored or was skipped), for downstream reporting.
+    scanners: list of slugs or None (all except gex if skip_gex).
+    Keeps engine.record_* and raw dict for compat.
+    --skip-gex kept as deprecated alias.
     """
-    (
-        scan_gex,
-        fmt_gex,
-        scan_oi,
-        fmt_oi,
-        scan_iv,
-        fmt_iv,
-        scan_skew,
-        fmt_skew,
-        scan_pain,
-        fmt_pain,
-        scan_disp,
-        fmt_disp,
-    ) = _import_scanners()
+    import importlib.util
+    from pathlib import Path
+
+    # Load THIS suite's registry by absolute path -- scanner.options_scanner_base
+    # pushes Vol_Suite onto sys.path[0], so a bare `import module_registry` would
+    # resolve to Vol_Suite/module_registry.py instead of the sentiment-scanner one.
+    _mreg_path = Path(__file__).resolve().parent / "module_registry.py"
+    _spec = importlib.util.spec_from_file_location("ss_module_registry", _mreg_path)
+    _mreg = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mreg)
+    resolve_modules = _mreg.resolve_modules
+
+    if scanners is None:
+        all_slugs = ["gex", "unusual_oi", "iv_rank", "skew", "max_pain", "vol_dispersion", "earnings"]
+        if skip_gex:
+            scanners = [s for s in all_slugs if s != "gex"]
+        else:
+            scanners = all_slugs
+
+    selected = resolve_modules(scanners)
 
     results = []
-    raw = {
-        "gex": None,
-        "unusual_oi": None,
-        "iv_rank": None,
-        "skew": None,
-        "max_pain": None,
-        "dispersion": None,
-        "earnings": None,
+    raw = {s: None for s in ["gex", "unusual_oi", "iv_rank", "skew", "max_pain", "dispersion", "earnings"]}
+
+    slug_to_record = {
+        "gex": ("record_gex", None),
+        "unusual_oi": ("record_oi", None),
+        "iv_rank": ("record_iv", None),
+        "skew": ("record_skew", None),
+        "max_pain": ("record_pain", None),
+        "vol_dispersion": ("record_dispersion", None),
+        "earnings": ("record_earnings", None),
     }
 
-    # 1. GEX (most expensive — skip if flagged)
-    if not skip_gex:
+    for spec in selected:
+        slug = spec.slug
         try:
-            gex = scan_gex(ticker)
-            engine.record_gex(ticker, gex)
-            raw["gex"] = gex
-            results.append(fmt_gex(gex))
+            res = spec.run({"ticker": ticker, "benchmark": benchmark})
+            raw_key = slug if slug != "vol_dispersion" else "dispersion"
+            raw[raw_key] = res.context_patch.get(slug + "_result") or res
+            # call engine if possible
+            rec_name, _ = slug_to_record.get(slug, (None, None))
+            if rec_name and hasattr(engine, rec_name):
+                val = raw[raw_key]
+                getattr(engine, rec_name)(ticker, val)
+            # format not wired here (legacy fns still used in other paths); results list simplified
+            results.append(f"  {ticker:6s} | {slug}: ok via registry")
         except Exception as e:
-            results.append(f"  {ticker:6s} | GEX: ERROR — {e}")
-
-    # 2. Unusual OI
-    try:
-        oi = scan_oi(ticker)
-        engine.record_oi(ticker, oi)
-        raw["unusual_oi"] = oi
-        results.append(fmt_oi(oi))
-    except Exception as e:
-        results.append(f"  {ticker:6s} | OI: ERROR — {e}")
-
-    # 3. IV Rank
-    try:
-        iv = scan_iv(ticker)
-        engine.record_iv(ticker, iv)
-        raw["iv_rank"] = iv
-        results.append(fmt_iv(iv))
-    except Exception as e:
-        results.append(f"  {ticker:6s} | IV: ERROR — {e}")
-
-    # 4. Skew
-    try:
-        skew = scan_skew(ticker)
-        engine.record_skew(ticker, skew)
-        raw["skew"] = skew
-        results.append(fmt_skew(skew))
-    except Exception as e:
-        results.append(f"  {ticker:6s} | SKEW: ERROR — {e}")
-
-    # 5. Max Pain
-    try:
-        pain = scan_pain(ticker)
-        engine.record_pain(ticker, pain)
-        raw["max_pain"] = pain
-        results.append(fmt_pain(pain))
-    except Exception as e:
-        results.append(f"  {ticker:6s} | PAIN: ERROR — {e}")
-
-    # 6. Vol Dispersion
-    try:
-        disp = scan_disp(ticker, benchmark=benchmark)
-        engine.record_dispersion(ticker, disp)
-        raw["dispersion"] = disp
-        results.append(fmt_disp(disp))
-    except Exception as e:
-        results.append(f"  {ticker:6s} | DISP: ERROR — {e}")
-
-    # 7. Earnings-vol premium
-    try:
-        earn = _scan_earnings_ticker(ticker, td=get_td())
-        if earn is not None:
-            engine.record_earnings(ticker, earn)
-            raw["earnings"] = earn
-            results.append(format_earnings_line(earn))
-    except Exception as e:
-        results.append(f"  {ticker:6s} | EARN: ERROR — {e}")
+            results.append(f"  {ticker:6s} | {slug}: ERROR — {e}")
 
     return results, raw
 

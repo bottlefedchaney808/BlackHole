@@ -968,6 +968,79 @@ def chart(request: Request):
     )
 
 
+# Phase 7: Dealer Book tab (two parallel 4-panel sets + archive history)
+# Side A reuses dealer_exposure (already charts), Side B uses position_book (now charts via Phase 7)
+@app.get("/dealer-book", response_class=HTMLResponse)
+def dealer_book(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request,
+        "dealer_book.html",
+        {"active": "dealer-book"},
+    )
+
+
+@app.post("/dealer-book/load")
+async def dealer_book_load(request: Request):
+    body = await _parse_body(request)
+    ticker = str(body.get("ticker", "SPY")).strip().upper() or "SPY"
+    expiry = str(body.get("expiry", "auto")).strip() or "auto"
+
+    # Use same resolution path as dealer_exposure_module (no 3rd point)
+    # (expiry auto handled inside the modules via their context)
+    context = {"ticker": ticker, "expiry": expiry, "output_dir": None}
+
+    try:
+        # run the two in parallel via Phase 2 selectable run
+        from orchestrator import run_selected_modules
+        res = run_selected_modules(["dealer_exposure", "position_book"], context)
+        side_a = res.get("results", {}).get("dealer_exposure", {}) or {}
+        side_b = res.get("results", {}).get("position_book", {}) or {}
+        return JSONResponse({
+            "status": "ok",
+            "side_a": {
+                "artifacts": side_a.get("artifacts", []),
+                "interp": side_a.get("metrics", {}).get("interp", ""),
+            },
+            "side_b": {
+                "artifacts": side_b.get("artifacts", []),
+                "interp": side_b.get("metrics", {}).get("interp", ""),
+            },
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/dealer-book/history")
+def dealer_book_history(ticker: str = "", expiry: str = ""):
+    try:
+        from shared import module_archive
+        rows = module_archive.query(
+            ticker=ticker or None,
+            expiry=expiry or None,
+            module_slug=None,  # both dealer_exposure + position_book
+            limit=50,
+        )
+        # filter to the two relevant slugs for this tab
+        relevant = [r for r in rows if r.get("module_slug") in ("dealer_exposure", "position_book")]
+        return JSONResponse({"rows": relevant})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "rows": []}, status_code=500)
+
+
+# Phase 8: generic archived-module widget api (uses renderer + ArchiveIndex)
+@app.get("/api/widget/archived/{module_slug}")
+def widget_archived(module_slug: str):
+    try:
+        from shared import module_archive
+        from dashboard.widget_archive_renderer import render_widget
+        rows = module_archive.query(module_slug=module_slug, limit=1)
+        if rows:
+            return render_widget(module_slug, rows[0])
+        return {"type": "empty", "slug": module_slug}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 @app.post("/run/{suite_or_unified}")
 @limiter.limit("1/60s")  # Max 1 run per 60 seconds per IP
 async def trigger_run(

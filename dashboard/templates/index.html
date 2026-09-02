@@ -400,3 +400,31 @@ pollSurfaces();
 setInterval(pollSurfaces, 60000);
 </script>
 {% endblock %}
+
+<!-- Phase 8: generic archived-module widget (new panel, not repurposing existing) -->
+<div class="panel widget" id="archivedModuleWidget">
+  <header><h2>Archived module snapshot</h2><span class="note">from Phase 6 archive</span></header>
+  <div>
+    <select id="arch-sel" onchange="loadArchived()">
+      <option value="dealer_exposure">dealer_exposure</option>
+      <option value="position_book">position_book</option>
+      <option value="iv_rank">iv_rank</option>
+    </select>
+    <button onclick="loadArchived()">Load latest</button>
+  </div>
+  <div id="archivedContent" style="margin-top:8px; font-size:12px;">—</div>
+</div>
+
+<script>
+function loadArchived() {
+  const slug = document.getElementById('arch-sel').value;
+  fetch('/api/widget/archived/' + slug)
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('archivedContent');
+      el.textContent = JSON.stringify(d).slice(0,200);
+    })
+    .catch(e => console.error(e));
+}
+setTimeout(loadArchived, 2000);
+</script>

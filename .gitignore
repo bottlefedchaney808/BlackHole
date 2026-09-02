@@ -64,6 +64,14 @@ swaps.db
 swaps.db-shm
 swaps.db-wal
 swaps.db.lock
+
+# Module-registry automatic archiving system (Phase 6 of the Modularization
+# Overhaul) -- shared/module_archive.py's dedicated SQLite DB, deliberately
+# separate from swaps.db (see that module's docstring). Same WAL sidecar
+# pattern as swaps.db above.
+module_archive.db
+module_archive.db-shm
+module_archive.db-wal
 orchestrator_output/
 dashboard/dashboard_*.log
 Options_Suite/.claude/worktrees/

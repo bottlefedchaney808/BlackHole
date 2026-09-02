@@ -282,6 +282,7 @@ class TestPositionBookRun:
             arm="div_signed",
             lookback=150,
             dates_used=["20260101", "20260901"],
+            spot=123.45,
         )
 
     def test_metrics_carry_units_disambiguation_key(self, monkeypatch):

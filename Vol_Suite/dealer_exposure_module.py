@@ -94,14 +94,65 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output-dir", default=".")
     args = ap.parse_args(argv)
 
-    files, interp, _result = fetch_dealer_exposure(
-        args.ticker.strip().upper(), args.expiry, args.output_dir
-    )
+    ticker = args.ticker.strip().upper()
+    files, interp, result = fetch_dealer_exposure(ticker, args.expiry, args.output_dir)
     print(interp)
     print("\nCharts written:")
     for f in files:
         print(f"  {f}")
+
+    _archive_standalone_run(ticker, result, files)
     return 0
+
+
+def _archive_standalone_run(ticker: str, result: Any, files: list[str]) -> None:
+    """Phase 6 of the modularization overhaul (Task 7): this standalone CLI
+    entry bypasses `orchestrator.run_selected_modules` entirely (a real
+    separate OS process), so it archives directly rather than relying on
+    `orchestrator.py::_archive_module_result` -- see that hook's docstring
+    and `shared/module_archive.py`'s module docstring for why a dedicated
+    archive DB (not `swaps.db`) is required for exactly this cross-process
+    case. `metrics` mirrors `Vol_Suite/module_registry.py::_run_dealer_
+    exposure`'s field set so an archived row looks the same regardless of
+    which of the two launch paths produced it. Never raises --
+    `module_archive.record` is itself never-raise, and the module_spec
+    lookup below is defensively guarded so a broken registry import can't
+    fail a standalone run that otherwise succeeded.
+    """
+    try:
+        from shared.module_archive import record as archive_record
+        from shared.module_registry import ArtifactRef, ModuleResult, resolve_modules
+
+        module_spec = resolve_modules(["dealer_exposure"])[0]
+        context = {"ticker": ticker, "expiry": result.expiry}
+        metrics = {
+            "ticker": result.ticker,
+            "expiry": result.expiry,
+            "spot": result.spot,
+            "gex_reference": result.gex_reference,
+            "book_gamma": result.book_gamma,
+            "charm_1d": result.charm_1d,
+            "residual_vanna_inventory": result.residual_vanna_inventory,
+            "band_n": result.band_n,
+            "band_z": result.band_z,
+            "band_regime": result.band_regime,
+            "structural_status": result.structural.status,
+        }
+        module_result = ModuleResult(
+            status="ok",
+            artifacts=[ArtifactRef(path=f, kind="png") for f in files],
+            metrics=metrics,
+            context_patch=None,
+        )
+        archive_record(module_result, module_spec, context, triggered_by="cli")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "dealer_exposure_module standalone CLI: could not archive run "
+            "(archiving is best-effort; the run itself already completed)",
+            exc_info=True,
+        )
 
 
 if __name__ == "__main__":

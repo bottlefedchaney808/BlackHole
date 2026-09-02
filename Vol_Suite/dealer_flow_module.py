@@ -62,15 +62,43 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output-dir", default=".")
     args = ap.parse_args(argv)
 
-    _files, interp, result = fetch_dealer_exposure(
-        args.ticker.strip().upper(), args.expiry, args.output_dir
-    )
+    ticker = args.ticker.strip().upper()
+    _files, interp, result = fetch_dealer_exposure(ticker, args.expiry, args.output_dir)
     metrics = extract_flow_metrics(result)
     print(interp)
     print("\nFlow metrics:")
     for k, v in metrics.items():
         print(f"  {k}: {v}")
+
+    _archive_standalone_run(ticker, result.expiry, metrics)
     return 0
+
+
+def _archive_standalone_run(ticker: str, expiry: str, metrics: dict[str, Any]) -> None:
+    """See `dealer_exposure_module.py::_archive_standalone_run`'s docstring
+    -- same rationale (standalone CLI bypasses `run_selected_modules`
+    entirely, so it archives directly, never raising). No chart artifacts
+    of its own: `dealer_flow` extracts fields from the same fetch
+    `dealer_exposure` already rendered, and this CLI doesn't re-render.
+    """
+    try:
+        from shared.module_archive import record as archive_record
+        from shared.module_registry import ModuleResult, resolve_modules
+
+        module_spec = resolve_modules(["dealer_flow"])[0]
+        context = {"ticker": ticker, "expiry": expiry}
+        module_result = ModuleResult(
+            status="ok", artifacts=[], metrics=dict(metrics), context_patch=None
+        )
+        archive_record(module_result, module_spec, context, triggered_by="cli")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "dealer_flow_module standalone CLI: could not archive run "
+            "(archiving is best-effort; the run itself already completed)",
+            exc_info=True,
+        )
 
 
 if __name__ == "__main__":

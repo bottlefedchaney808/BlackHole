@@ -219,6 +219,16 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
             "greeks": greeks,
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
+        # Phase 5: registry support for explicit --modules (or context modules key)
+        # default ["leisen_reimer"] keeps behavior byte-identical (per plan)
+        if context.get("modules"):
+            try:
+                from .module_registry import resolve_modules
+                for spec in resolve_modules(context.get("modules", ["leisen_reimer"])):
+                    if spec.slug != "leisen_reimer":
+                        payload.setdefault("other_models", {})[spec.slug] = spec.run(context).metrics
+            except Exception:
+                pass
         _write_context_payload(output_path, payload)
         print(json.dumps(payload, indent=2))
         return 0
@@ -237,7 +247,8 @@ def run_context_mode(context_path: str, context_out: Optional[str], no_interacti
 
 
 def _gather_all_models_and_market(ticker, S, K, T, r, q, option_type, is_call,
-                                   resolved_exp, vol_manager, pricing_config):
+                                   resolved_exp, vol_manager, pricing_config,
+                                   rr25_bf25_override: tuple[float, float] | None = None):
     """Shared per-model price/Greeks/market gathering used by BOTH
     choice == '9' (single-K "Run all models & compare") and choice == '10'
     (full-chain evaluation) -- both need the exact same `models` dict,
@@ -346,8 +357,15 @@ def _gather_all_models_and_market(ticker, S, K, T, r, q, option_type, is_call,
     auto_rr, auto_bf, auto_atm = get_auto_rr_bf(ticker, expiry_date)
     rr25_default = auto_rr
     bf25_default = auto_bf
-    rr25 = get_safe_float(f"Enter RR25 to use for Vanna-Volga (default {rr25_default:.2f}): ", rr25_default)
-    bf25 = get_safe_float(f"Enter BF25 to use for Vanna-Volga (default {bf25_default:.2f}): ", bf25_default)
+    if rr25_bf25_override is not None or os.environ.get("SUITE_CONTEXT_MODE") == "1":
+        if rr25_bf25_override is not None:
+            rr25, bf25 = rr25_bf25_override
+        else:
+            rr25 = rr25_default
+            bf25 = bf25_default
+    else:
+        rr25 = get_safe_float(f"Enter RR25 to use for Vanna-Volga (default {rr25_default:.2f}): ", rr25_default)
+        bf25 = get_safe_float(f"Enter BF25 to use for Vanna-Volga (default {bf25_default:.2f}): ", bf25_default)
     # auto_atm is percent-vol-point form (get_auto_rr_bf's own convention);
     # VV's own independent market read, not another model's solved sigma.
     atm_vol_vv = auto_atm / 100.0 if auto_atm else None
@@ -752,7 +770,7 @@ def main():
         if choice == '9':
             gathered = _gather_all_models_and_market(
                 ticker, S, K, T, r, q, option_type, is_call, resolved_exp,
-                vol_manager, pricing_config,
+                vol_manager, pricing_config, None,
             )
             td = gathered['td']
             market_iv = gathered['market_iv']
@@ -828,7 +846,7 @@ def main():
         if choice == '10':
             gathered = _gather_all_models_and_market(
                 ticker, S, K, T, r, q, option_type, is_call, resolved_exp,
-                vol_manager, pricing_config,
+                vol_manager, pricing_config, None,
             )
             td = gathered['td']
             market_exp = gathered['market_exp']

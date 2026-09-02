@@ -47,6 +47,7 @@ PositionBookResult (dataclass)::
     lookback:           int
     arm:                'div_signed' | 'fixed_sign'
     total_net:          float  (sum of position_by_strike)
+    spot:               float  (last day in window; for Phase 7 chart axvlines)
 
 Run the CLI for a real cache-backed accumulation:
 
@@ -95,6 +96,7 @@ class PositionBookResult:
     lookback: int = 150
     arm: str = "div_signed"
     total_net: float = 0.0
+    spot: float = 0.0  # last day's spot; added for Phase 7 4-panel charts (axvline reference)
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +154,9 @@ def _atm_iv_from_rows(rows: list, spot: float) -> float | None:
     return ebe.atm_iv_otm(rows, spot)
 
 
-def _compute_vanna_stats(rows: list) -> tuple[dict[tuple[float, str], float], float | None]:
+def _compute_vanna_stats(
+    rows: list,
+) -> tuple[dict[tuple[float, str], float], float | None]:
     """vanna map + mean |vanna| over rows that carry a usable vanna."""
     vanna_map: dict[tuple[float, str], float] = {}
     abs_vals: list[float] = []
@@ -286,11 +290,16 @@ def accumulate_position_book(
                     # Match the reference's T for this expiry.
                     from datetime import datetime
 
-                    T = max(
-                        (datetime.strptime(_exp_expiry_expiry(expiry), "%Y%m%d")
-                         - datetime.strptime(d, "%Y%m%d")).days,
-                        1,
-                    ) / 365.0
+                    T = (
+                        max(
+                            (
+                                datetime.strptime(_exp_expiry_expiry(expiry), "%Y%m%d")
+                                - datetime.strptime(d, "%Y%m%d")
+                            ).days,
+                            1,
+                        )
+                        / 365.0
+                    )
                     chain_iv = {}
                     for row in rows:
                         try:
@@ -309,8 +318,10 @@ def accumulate_position_book(
                     )
                     if vs_ref is not None:
                         day_sign_map = {}
-                        for (k, right) in chain_iv:
-                            s = vol_surface_reference.resolve_vol_surface_sign(vs_ref, k, right)
+                        for k, right in chain_iv:
+                            s = vol_surface_reference.resolve_vol_surface_sign(
+                                vs_ref, k, right
+                            )
                             day_sign_map[(k, right)] = (
                                 s if s != 0.0 else FALLBACK_STATIC_SIGN
                             )
@@ -390,6 +401,7 @@ def accumulate_position_book(
             }
         )
 
+    spot = _day_spot(days[-1]) if days else 0.0
     return PositionBookResult(
         ticker=ticker,
         position_by_strike=position,
@@ -398,6 +410,7 @@ def accumulate_position_book(
         lookback=lookback,
         arm=arm,
         total_net=sum(position.values()),
+        spot=spot,
     )
 
 
@@ -481,9 +494,16 @@ def load_history_days(cache_dir: str = _CACHE_DIR, lookback: int = 150) -> list[
                     "vanna": vanna,
                 }
             )
-        days.append({"date": d, "spot": None, "per_expiry": [
-            {"expiry": e, "rows": rows} for e, rows in sorted(per_expiry.items())
-        ]})
+        days.append(
+            {
+                "date": d,
+                "spot": None,
+                "per_expiry": [
+                    {"expiry": e, "rows": rows}
+                    for e, rows in sorted(per_expiry.items())
+                ],
+            }
+        )
 
     # Fill spot from the daily_book trace when available.
     spot_path = os.path.join(cache_dir, "daily_book.jsonl")
@@ -505,7 +525,9 @@ def load_history_days(cache_dir: str = _CACHE_DIR, lookback: int = 150) -> list[
 def format_accumulated_report(r: PositionBookResult) -> str:
     """Mirrors replication_reference.format_accumulated_report style."""
     arm_note = (
-        "ΔIV-signed (Cem primary)" if r.arm == "div_signed" else "fixed static sign (A/B)"
+        "ΔIV-signed (Cem primary)"
+        if r.arm == "div_signed"
+        else "fixed static sign (A/B)"
     )
     lines = [
         f"{r.ticker} assumed dealer position book, arm={r.arm} ({arm_note}), "
@@ -545,11 +567,71 @@ def main(argv: list[str] | None = None) -> int:
     if len(days) < 2:
         print(f"ERROR: need >=2 cache days, got {len(days)}", file=sys.stderr)
         return 1
+    ticker = args.ticker.upper()
     result = accumulate_position_book(
-        days, lookback=args.lookback, arm=args.arm, ticker=args.ticker.upper()
+        days, lookback=args.lookback, arm=args.arm, ticker=ticker
     )
     print(format_accumulated_report(result))
+
+    # Phase 7: render charts for the dealer-book tab (Side B); best-effort
+    chart_files: list[str] = []
+    try:
+        from dealer_positioning import plot_position_book, plot_position_book_heatmap
+        output_dir = os.getenv("VS_OUTPUT_DIR") or "."
+        os.makedirs(output_dir, exist_ok=True)
+        chart_files = [
+            plot_position_book(result, output_dir=output_dir),
+            plot_position_book_heatmap(result, output_dir=output_dir),
+        ]
+        print("\nCharts written:")
+        for f in chart_files:
+            print(f"  {f}")
+    except Exception:
+        pass
+
+    _archive_standalone_run(ticker, result, chart_files)
     return 0
+
+
+def _archive_standalone_run(ticker: str, result: PositionBookResult, files: list[str] | None = None) -> None:
+    """Phase 6 of the modularization overhaul (Task 7): see
+    `dealer_exposure_module.py::_archive_standalone_run`'s docstring for the
+    shared rationale. `metrics` mirrors `Vol_Suite/module_registry.py::
+    _run_position_book`'s field set. `key_shape="ticker_only"` for
+    `position_book` (per its ModuleSpec), so no expiry is threaded through
+    here -- the position book has no per-expiry scope.
+    Phase 7: now also carries chart png artifacts when rendered by main().
+    """
+    try:
+        from shared.module_archive import record as archive_record
+        from shared.module_registry import ArtifactRef, ModuleResult, resolve_modules
+
+        module_spec = resolve_modules(["position_book"])[0]
+        context = {"ticker": ticker}
+        metrics = {
+            "units": "vanna_weighted_oi_delta_contracts",
+            "ticker": ticker,
+            "total_net": result.total_net,
+            "spot": getattr(result, "spot", 0.0),
+            "arm": result.arm,
+            "lookback": result.lookback,
+            "n_days": len(result.dates_used),
+            "dates_first": result.dates_used[0] if result.dates_used else None,
+            "dates_last": result.dates_used[-1] if result.dates_used else None,
+        }
+        arts = [ArtifactRef(path=f, kind="png") for f in (files or [])]
+        module_result = ModuleResult(
+            status="ok", artifacts=arts, metrics=metrics, context_patch=None
+        )
+        archive_record(module_result, module_spec, context, triggered_by="cli")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "dealer_position_book standalone CLI: could not archive run "
+            "(archiving is best-effort; the run itself already completed)",
+            exc_info=True,
+        )
 
 
 if __name__ == "__main__":

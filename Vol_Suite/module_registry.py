@@ -254,6 +254,7 @@ def _run_position_book(context: dict[str, Any]) -> ModuleResult:
                         "arm": result.arm,
                         "lookback": result.lookback,
                         "dates_used": result.dates_used,
+                        "spot": result.spot,
                     },
                     fh,
                     indent=2,
@@ -264,10 +265,27 @@ def _run_position_book(context: dict[str, Any]) -> ModuleResult:
             # carry the real accumulated result either way.
             pass
 
+        # Phase 7: add the 4-panel + heatmap charts (new for dealer-book tab Side B)
+        try:
+            from dealer_positioning import (
+                plot_position_book,
+                plot_position_book_heatmap,
+            )
+            chart_files = [
+                plot_position_book(result, output_dir=output_dir),
+                plot_position_book_heatmap(result, output_dir=output_dir),
+            ]
+            for f in chart_files:
+                artifacts.append(ArtifactRef(path=f, kind="png"))
+        except Exception:
+            # charting best-effort; scalar result + json still valid
+            pass
+
     metrics: dict[str, Any] = {
         "units": _POSITION_BOOK_UNITS,
         "ticker": ticker,
         "total_net": result.total_net,
+        "spot": result.spot,
         "band_z": band.z,
         "band_regime": band.regime,
         "arm": result.arm,
