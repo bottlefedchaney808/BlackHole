@@ -35,6 +35,13 @@ _SURFACE_SLUGS = {
     "surface_flow_strike_expiry",
 }
 
+# Task 6 (Modularization Overhaul, Phase 3) added four more selection-only
+# marker slugs (group_screener/vol_surface_2d/vrp_term_structure/
+# sentiment_backtest -- see Vol_Suite/module_registry.py's
+# _selection_only_marker) after this file was written, so the historical
+# "ten" name is kept (module-count assertions below have their own updated
+# arithmetic comments) rather than renamed everywhere Task 5 already
+# referenced it.
 _ALL_TEN_SLUGS = {
     "dealer_exposure",
     "dealer_flow",
@@ -86,7 +93,10 @@ class TestModuleSpecRegistration:
             "chain_scanner",
             "svi_smile",
         } <= slugs
-        assert len(vs_registry.MODULES) == 10
+        # 10 as of Task 5, + 4 selection-only markers from Task 6
+        # (group_screener/vol_surface_2d/vrp_term_structure/
+        # sentiment_backtest) = 14.
+        assert len(vs_registry.MODULES) == 14
 
 
 class TestAllModulesAggregation:
@@ -121,8 +131,10 @@ class TestRepoRootImport:
             + "import Vol_Suite.module_registry as m; "
             # 6 from Task 3/4 + 4 more from Task 5 (surface_greek/
             # surface_market_iv/surface_flow_strike_time/
-            # surface_flow_strike_expiry) = 10.
-            "assert len(m.MODULES) == 10, m.MODULES; "
+            # surface_flow_strike_expiry) = 10, + 4 more from Task 6
+            # (group_screener/vol_surface_2d/vrp_term_structure/
+            # sentiment_backtest selection-only markers) = 14.
+            "assert len(m.MODULES) == 14, m.MODULES; "
             "assert {ms.slug for ms in m.MODULES} >= set("
             f"{sorted(_SURFACE_SLUGS)!r}); "
             "print('OK')"
@@ -170,7 +182,8 @@ class TestRepoRootImport:
             "slugs = {m.slug for m in modules}; "
             f"assert set({sorted(_ALL_TEN_SLUGS)!r}) <= slugs, slugs; "
             "import Vol_Suite.module_registry as m; "
-            "assert len(m.MODULES) == 10, m.MODULES; "
+            # 10 as of Task 5, + 4 selection-only markers from Task 6 = 14.
+            "assert len(m.MODULES) == 14, m.MODULES; "
             "print('OK')"
         )
         proc = subprocess.run(

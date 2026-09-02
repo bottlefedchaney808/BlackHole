@@ -118,8 +118,10 @@ class TestRepoRootImport:
             + "import Vol_Suite.module_registry as m; "
             # 6 from Task 3/4 + 4 more from Task 5 (surface_greek/
             # surface_market_iv/surface_flow_strike_time/
-            # surface_flow_strike_expiry) = 10.
-            "assert len(m.MODULES) == 10, m.MODULES; "
+            # surface_flow_strike_expiry) = 10, + 4 more from Task 6
+            # (group_screener/vol_surface_2d/vrp_term_structure/
+            # sentiment_backtest selection-only markers) = 14.
+            "assert len(m.MODULES) == 14, m.MODULES; "
             "print('OK')"
         )
         proc = subprocess.run(
