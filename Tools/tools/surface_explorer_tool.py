@@ -28,6 +28,18 @@ Every mode returns the JSON grid (for an interactive client-side render)
 AND, when an output_dir is resolvable, a static matplotlib PNG (same
 "nice-to-have, never fails the whole tool" convention vrp_term_structure_tool.py
 uses for its chart_path).
+
+Task 5 (modularization overhaul): the four surface/heatmap modes above
+('greek_surface', 'iv_surface_market', 'flow_strike_time',
+'flow_strike_expiry') no longer call surface_grids.py directly -- they
+delegate their real work to the matching `Vol_Suite/module_registry.py`
+module (`surface_greek`/`surface_market_iv`/`surface_flow_strike_time`/
+`surface_flow_strike_expiry`, via `_import_vs_registry`) and adapt the
+returned `ModuleResult` back into this file's existing return shape
+(`mode`/`chart_path` plus the grid fields), so this dashboard page's
+observable behavior (same JSON shape, same PNG rendering, same error
+behavior) is unchanged. `iv_smile_by_model` is untouched -- it still calls
+Options_Suite/smile_by_model.py directly, unrelated to surface_grids.py.
 """
 
 from __future__ import annotations
@@ -64,10 +76,10 @@ SMILE_BY_MODEL_MODES = {
 DEFAULT_GREEK = "gamma"
 
 
-def _import_surface_grids():
-    import surface_grids as sg
+def _import_vs_registry():
+    import Vol_Suite.module_registry as vsmr
 
-    return sg
+    return vsmr
 
 
 def _import_smile_by_model():
@@ -91,6 +103,39 @@ def _resolve_ticker(context: dict[str, Any]) -> str:
             "context['focus']['ticker'])."
         )
     return str(ticker).upper()
+
+
+def _resolve_td(context: dict[str, Any]) -> Any:
+    """Test/injection seam, same convention as `_output_dir_override`:
+    production callers never set this, but a test can inject a fake
+    ThetaDataController via context['_td'] without needing to monkeypatch
+    module internals."""
+    return context.get("_td")
+
+
+def _run_via_registry(
+    context: dict[str, Any],
+    ticker: str,
+    module_run_name: str,
+    result_key: str,
+) -> dict[str, Any]:
+    """Delegates to Vol_Suite/module_registry.py's matching `_run_surface_*`
+    module, then unwraps its ModuleResult back into the raw grid dict this
+    file's mode handlers have always worked with. Fail-loud, matching this
+    file's pre-existing "any downstream data failure raises" contract: a
+    module_result.status != 'ok' becomes a raised ValueError carrying the
+    module's real error text, never a silently empty/partial grid."""
+    vsmr = _import_vs_registry()
+    module_run = getattr(vsmr, module_run_name)
+    module_context = dict(context)
+    module_context["ticker"] = ticker
+    module_result = module_run(module_context, td=_resolve_td(context))
+    if module_result.status != "ok":
+        raise ValueError(
+            module_result.metrics.get("error")
+            or f"{module_run_name} failed with status {module_result.status!r}"
+        )
+    return dict(module_result.context_patch[result_key])
 
 
 # ---------------------------------------------------------------------------
@@ -267,11 +312,12 @@ def _chart_path(out_dir: str, ticker: str, tag: str) -> str:
 # ---------------------------------------------------------------------------
 # Mode handlers
 # ---------------------------------------------------------------------------
-def _run_greek_surface(context, sg, ticker, out_dir):
-    greek = str(context.get("greek") or DEFAULT_GREEK).strip().lower()
-    max_expiries = int(context.get("max_expiries") or 12)
+def _run_greek_surface(context, ticker, out_dir):
     dark_theme = bool(context.get("dark_theme"))
-    result = sg.build_greek_surface(ticker, greek, max_expiries=max_expiries)
+    result = _run_via_registry(
+        context, ticker, "_run_surface_greek", "surface_greek_result"
+    )
+    greek = result.get("greek", DEFAULT_GREEK)
 
     chart_path = None
     if out_dir:
@@ -294,14 +340,22 @@ def _run_greek_surface(context, sg, ticker, out_dir):
     return result
 
 
-def _run_iv_surface_market(context, sg, ticker, out_dir):
+def _run_iv_surface_market(context, ticker, out_dir):
     dark_theme = bool(context.get("dark_theme"))
+    # Pre-validate min_dte here (not in the registry module) so a bad value
+    # falls back to 0 exactly like this tool always has, rather than turning
+    # into a registry-module fail-loud ValueError -- a behavior change this
+    # dashboard page's existing callers don't expect.
     min_dte_raw = context.get("min_dte")
     try:
         min_dte = int(min_dte_raw) if min_dte_raw not in (None, "") else 0
     except (TypeError, ValueError):
         min_dte = 0
-    result = sg.build_market_iv_surface(ticker, min_dte=min_dte)
+    module_context = dict(context)
+    module_context["min_dte"] = min_dte
+    result = _run_via_registry(
+        module_context, ticker, "_run_surface_market_iv", "surface_market_iv_result"
+    )
 
     chart_path = None
     if out_dir:
@@ -324,9 +378,13 @@ def _run_iv_surface_market(context, sg, ticker, out_dir):
     return result
 
 
-def _run_flow_strike_time(context, sg, ticker, out_dir):
-    session = context.get("session")
-    result = sg.build_flow_strike_time(ticker, session=session)
+def _run_flow_strike_time(context, ticker, out_dir):
+    result = _run_via_registry(
+        context,
+        ticker,
+        "_run_surface_flow_strike_time",
+        "surface_flow_strike_time_result",
+    )
 
     chart_path = None
     if out_dir:
@@ -349,11 +407,12 @@ def _run_flow_strike_time(context, sg, ticker, out_dir):
     return result
 
 
-def _run_flow_strike_expiry(context, sg, ticker, out_dir):
-    session = context.get("session")
-    max_expiries = int(context.get("max_expiries") or 12)
-    result = sg.build_flow_strike_expiry(
-        ticker, session=session, max_expiries=max_expiries
+def _run_flow_strike_expiry(context, ticker, out_dir):
+    result = _run_via_registry(
+        context,
+        ticker,
+        "_run_surface_flow_strike_expiry",
+        "surface_flow_strike_expiry_result",
     )
 
     chart_path = None
@@ -422,16 +481,14 @@ def run(context: dict[str, Any]) -> dict[str, Any]:
         sbm = _import_smile_by_model()
         return _run_iv_smile_by_model(context, sbm, ticker, out_dir)
 
-    sg = _import_surface_grids()
-
     if mode in GREEK_SURFACE_MODES:
-        return _run_greek_surface(context, sg, ticker, out_dir)
+        return _run_greek_surface(context, ticker, out_dir)
     if mode in IV_SURFACE_MODES:
-        return _run_iv_surface_market(context, sg, ticker, out_dir)
+        return _run_iv_surface_market(context, ticker, out_dir)
     if mode in FLOW_TIME_MODES:
-        return _run_flow_strike_time(context, sg, ticker, out_dir)
+        return _run_flow_strike_time(context, ticker, out_dir)
     if mode in FLOW_EXPIRY_MODES:
-        return _run_flow_strike_expiry(context, sg, ticker, out_dir)
+        return _run_flow_strike_expiry(context, ticker, out_dir)
 
     raise ValueError(
         f"unknown surface-explorer mode {mode!r}. Expected one of: "

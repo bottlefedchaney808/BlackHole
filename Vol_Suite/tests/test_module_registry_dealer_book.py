@@ -116,7 +116,10 @@ class TestRepoRootImport:
             "import sys; "
             f"sys.path.insert(0, r'{REPO_ROOT}'); "
             + "import Vol_Suite.module_registry as m; "
-            "assert len(m.MODULES) == 6, m.MODULES; "
+            # 6 from Task 3/4 + 4 more from Task 5 (surface_greek/
+            # surface_market_iv/surface_flow_strike_time/
+            # surface_flow_strike_expiry) = 10.
+            "assert len(m.MODULES) == 10, m.MODULES; "
             "print('OK')"
         )
         proc = subprocess.run(

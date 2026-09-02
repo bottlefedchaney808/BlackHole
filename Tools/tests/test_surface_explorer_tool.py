@@ -1,11 +1,20 @@
 """test_surface_explorer_tool.py
 
 Covers Tools/tools/surface_explorer_tool.py -- the mode-dispatched wrapper
-around Vol_Suite/surface_grids.py's grid builders and
-Options_Suite/smile_by_model.py's iv_smile_by_model builder. Network-free:
-the tool's only seams to real data (_import_surface_grids,
+around Vol_Suite/module_registry.py's surface_greek/surface_market_iv/
+surface_flow_strike_time/surface_flow_strike_expiry modules (Task 5 of the
+modularization overhaul: this tool's four in-scope modes became thin
+compatibility shims over those registry modules, which in turn wrap
+Vol_Suite/surface_grids.py's grid builders) and
+Options_Suite/smile_by_model.py's iv_smile_by_model builder (untouched by
+Task 5). Network-free: the tool's seams to real data (_import_vs_registry,
 _import_smile_by_model) are patched with fakes, same pattern
-test_vrp_term_structure_tool.py uses.
+test_vrp_term_structure_tool.py uses. See
+TestRegistryDelegationParity at the bottom of this file for a second,
+stronger-guarantee regression suite that exercises the REAL
+Vol_Suite.module_registry + surface_grids code path end to end (only
+ThetaData itself is faked, via context['_td']) to prove the Task 5 shim's
+observable behavior didn't change.
 """
 
 import json
@@ -21,16 +30,25 @@ if str(_REPO_ROOT) not in sys.path:
 
 # Tools.registry FIRST -- see test_vrp_term_structure_tool.py's note on why.
 import Tools.registry  # noqa: F401
+from shared.module_registry import ModuleResult
 from Tools.tools import surface_explorer_tool as se_tool
 
 
-class _FakeSurfaceGrids:
+class _FakeVsRegistry:
+    """Stand-in for Vol_Suite.module_registry -- exposes the four
+    `_run_surface_*` module functions the tool now delegates to. Records
+    calls in the same (name, ticker, ...) shape the old _FakeSurfaceGrids
+    fake used, for easy comparison with pre-Task-5 assertions."""
+
     def __init__(self):
         self.calls = []
 
-    def build_greek_surface(self, ticker, greek, max_expiries=12):
+    def _run_surface_greek(self, context, *, td=None):
+        ticker = context["ticker"]
+        greek = context.get("greek") or "gamma"
+        max_expiries = context.get("max_expiries") or 12
         self.calls.append(("build_greek_surface", ticker, greek, max_expiries))
-        return {
+        result = {
             "ticker": ticker,
             "greek": greek,
             "spot": 100.0,
@@ -40,44 +58,75 @@ class _FakeSurfaceGrids:
             "grid": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
             "units": "shares",
             "skipped": [],
-            "meta": {},
+            "meta": {"n_expiries_used": 2},
         }
+        return ModuleResult(
+            status="ok",
+            artifacts=[],
+            metrics={},
+            context_patch={"surface_greek_result": result},
+        )
 
-    def build_market_iv_surface(self, ticker, min_dte=0):
+    def _run_surface_market_iv(self, context, *, td=None):
+        ticker = context["ticker"]
+        min_dte = context.get("min_dte", 0)
         self.calls.append(("build_market_iv_surface", ticker, min_dte))
-        return {
+        result = {
             "ticker": ticker,
             "spot": 100.0,
             "strikes": [90.0, 100.0, 110.0],
             "tenors_years": [0.08, 0.25],
             "grid": [[0.2, 0.22, 0.25], [0.21, 0.23, 0.26]],
             "raw_points": [],
-            "meta": {},
+            "meta": {"source": "fake"},
         }
+        return ModuleResult(
+            status="ok",
+            artifacts=[],
+            metrics={},
+            context_patch={"surface_market_iv_result": result},
+        )
 
-    def build_flow_strike_time(self, ticker, session=None):
+    def _run_surface_flow_strike_time(self, context, *, td=None):
+        ticker = context["ticker"]
+        session = context.get("session")
         self.calls.append(("build_flow_strike_time", ticker, session))
-        return {
+        result = {
             "ticker": ticker,
             "spot": 100.0,
             "session": session or "20260101",
             "strike_edges": [90.0, 100.0, 110.0],
             "time_labels": ["09:30", "10:00"],
             "grid": [[100.0, -50.0], [0.0, 25.0]],
-            "meta": {},
+            "meta": {"n_trades_used": 2, "n_trades_total": 2},
         }
+        return ModuleResult(
+            status="ok",
+            artifacts=[],
+            metrics={},
+            context_patch={"surface_flow_strike_time_result": result},
+        )
 
-    def build_flow_strike_expiry(self, ticker, session=None, max_expiries=12):
+    def _run_surface_flow_strike_expiry(self, context, *, td=None):
+        ticker = context["ticker"]
+        session = context.get("session")
+        max_expiries = context.get("max_expiries") or 12
         self.calls.append(("build_flow_strike_expiry", ticker, session, max_expiries))
-        return {
+        result = {
             "ticker": ticker,
             "spot": 100.0,
             "session": session or "20260101",
             "strike_edges": [90.0, 100.0, 110.0],
             "expiries": ["20260101", "20260201"],
             "grid": [[100.0, -50.0], [0.0, 25.0]],
-            "meta": {},
+            "meta": {"n_trades_total": 2},
         }
+        return ModuleResult(
+            status="ok",
+            artifacts=[],
+            metrics={},
+            context_patch={"surface_flow_strike_expiry_result": result},
+        )
 
 
 class _FakeSmileByModel:
@@ -120,8 +169,8 @@ class _FakeSmileByModel:
 
 
 def _install(monkeypatch):
-    fake = _FakeSurfaceGrids()
-    monkeypatch.setattr(se_tool, "_import_surface_grids", lambda: fake)
+    fake = _FakeVsRegistry()
+    monkeypatch.setattr(se_tool, "_import_vs_registry", lambda: fake)
     return fake
 
 
@@ -415,3 +464,174 @@ def test_tool_spec_is_well_formed():
     assert spec.name == "Surface Explorer"
     assert spec.description.strip()
     assert spec.run is se_tool.run
+
+
+# ---------------------------------------------------------------------------
+# TestRegistryDelegationParity -- Task 5's required regression coverage:
+# exercises the REAL Vol_Suite.module_registry._run_surface_* functions and
+# the REAL surface_grids.py builders end to end (no _import_vs_registry
+# mock), with only ThetaData faked via context['_td']. This proves the
+# Task 5 shim (se_tool.run -> Vol_Suite.module_registry -> surface_grids)
+# produces the exact same dict shape (grid fields + 'mode' + 'chart_path')
+# a pre-Task-5 direct se_tool -> surface_grids call would have produced --
+# not just that the mocked seam is called with the right arguments (the
+# tests above), but that the whole real chain actually works together.
+# _FakeTD mirrors Vol_Suite/tests/test_surface_grids.py's fake (same shape,
+# duplicated here rather than cross-imported since Tools/tests and
+# Vol_Suite/tests are independent test roots).
+# ---------------------------------------------------------------------------
+
+import math
+from datetime import date, timedelta
+from datetime import datetime as _dt
+
+_PARITY_SPOT = 100.0
+
+
+def _parity_theta(k: float) -> int:
+    return int(round(k * 1000))
+
+
+def _parity_smile_iv(strike: float, spot: float = _PARITY_SPOT) -> float:
+    x = math.log(strike / spot)
+    return max(0.20 + 0.30 * x * x, 0.05)
+
+
+class _FakeTD:
+    """Minimal stand-in exposing every ThetaDataController method
+    surface_grids.py calls -- no live network."""
+
+    def __init__(self, spot=_PARITY_SPOT, n_expiries=3, strikes=None):
+        self._spot = spot
+        self._strikes = strikes or list(range(70, 131, 5))
+        today = date.today()
+        self._exps = [
+            (today + timedelta(days=14 * (i + 1))).strftime("%Y%m%d")
+            for i in range(n_expiries)
+        ]
+        base_ts = _dt.combine(today, _dt.min.time()).replace(hour=9, minute=30)
+        self._trades = [
+            {
+                "strike_price": _parity_theta(k),
+                "trade_right": "C" if i % 2 == 0 else "P",
+                "expiration": self._exps[0],
+                "premium": 1000.0 + 10 * i,
+                "datetime": (base_ts + timedelta(minutes=i)).isoformat(),
+            }
+            for i, k in enumerate(self._strikes)
+        ]
+
+    def fetch_spot_price(self, ticker):
+        return self._spot
+
+    def fetch_dividend_yield(self, ticker):
+        return 0.0
+
+    def list_expirations(self, ticker):
+        return list(self._exps)
+
+    def option_bulk_greeks(self, ticker, expiry):
+        return [
+            {
+                "strike": _parity_theta(k),
+                "right": right,
+                "implied_vol": _parity_smile_iv(k, self._spot),
+            }
+            for k in self._strikes
+            for right in ("C", "P")
+        ]
+
+    def option_bulk_oi(self, ticker, expiry):
+        return [
+            {"strike": _parity_theta(k), "right": right, "open_interest": 100}
+            for k in self._strikes
+            for right in ("C", "P")
+        ]
+
+    def option_session_trades(self, ticker, session):
+        return list(self._trades)
+
+
+class TestRegistryDelegationParity:
+    @pytest.mark.unit
+    def test_greek_surface_real_registry_delegation(self, tmp_path):
+        result = se_tool.run(
+            {
+                "ticker": "AAPL",
+                "mode": "greek_surface",
+                "_td": _FakeTD(),
+                "output_dir": str(tmp_path),
+            }
+        )
+        assert result["mode"] == "greek_surface"
+        assert result["ticker"] == "AAPL"
+        assert result["greek"] == "gamma"
+        assert result["spot"] == _PARITY_SPOT
+        assert len(result["grid"]) == len(result["expiries"])
+        assert result["chart_path"] is not None
+        assert result["chart_path"].endswith(".png")
+
+    @pytest.mark.unit
+    def test_iv_surface_market_real_registry_delegation(self, tmp_path):
+        result = se_tool.run(
+            {
+                "ticker": "AAPL",
+                "mode": "iv_surface_market",
+                "_td": _FakeTD(strikes=list(range(60, 141, 2))),
+                "output_dir": str(tmp_path),
+            }
+        )
+        assert result["mode"] == "iv_surface_market"
+        assert result["ticker"] == "AAPL"
+        assert result["spot"] == _PARITY_SPOT
+        assert result["chart_path"] is not None
+
+    @pytest.mark.unit
+    def test_flow_strike_time_real_registry_delegation(self, tmp_path):
+        result = se_tool.run(
+            {
+                "ticker": "AAPL",
+                "mode": "flow_strike_time",
+                "_td": _FakeTD(strikes=list(range(85, 116, 5))),
+                "output_dir": str(tmp_path),
+            }
+        )
+        assert result["mode"] == "flow_strike_time"
+        assert result["ticker"] == "AAPL"
+        assert result["chart_path"] is not None
+
+    @pytest.mark.unit
+    def test_flow_strike_expiry_real_registry_delegation(self, tmp_path):
+        result = se_tool.run(
+            {
+                "ticker": "AAPL",
+                "mode": "flow_strike_expiry",
+                "_td": _FakeTD(n_expiries=3, strikes=list(range(85, 116, 5))),
+                "output_dir": str(tmp_path),
+            }
+        )
+        assert result["mode"] == "flow_strike_expiry"
+        assert result["ticker"] == "AAPL"
+        assert len(result["expiries"]) >= 1
+        assert result["chart_path"] is not None
+
+    @pytest.mark.unit
+    def test_no_output_dir_still_returns_grid_without_chart(self):
+        result = se_tool.run(
+            {"ticker": "AAPL", "mode": "greek_surface", "_td": _FakeTD()}
+        )
+        assert result["mode"] == "greek_surface"
+        assert result["chart_path"] is None
+        assert "grid" in result
+
+    @pytest.mark.unit
+    def test_build_failure_still_raises_not_silently_empty(self):
+        # spot=0.0 -> surface_grids.build_greek_surface raises ValueError
+        # ("no usable spot") -> Vol_Suite.module_registry._run_surface_greek
+        # catches it and returns status='failed' -> se_tool must re-raise,
+        # matching this tool's pre-existing "raises on real data failure"
+        # contract (never a silently empty/partial grid).
+        with pytest.raises(ValueError, match="no usable spot"):
+            se_tool.run(
+                {"ticker": "AAPL", "mode": "greek_surface", "_td": _FakeTD(spot=0.0)}
+            )

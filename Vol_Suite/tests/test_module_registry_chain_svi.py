@@ -97,7 +97,10 @@ class TestRepoRootImport:
             "import sys; "
             f"sys.path.insert(0, r'{REPO_ROOT}'); "
             + "import Vol_Suite.module_registry as m; "
-            "assert len(m.MODULES) == 6, m.MODULES; "
+            # 6 from Task 3/4 + 4 more from Task 5 (surface_greek/
+            # surface_market_iv/surface_flow_strike_time/
+            # surface_flow_strike_expiry) = 10.
+            "assert len(m.MODULES) == 10, m.MODULES; "
             "assert {ms.slug for ms in m.MODULES} >= {'chain_scanner', 'svi_smile'}; "
             "print('OK')"
         )
@@ -129,8 +132,7 @@ class TestRepoRootImport:
         all_modules() complete regardless of import order."""
         code = (
             "import sys; "
-            f"sys.path.insert(0, r'{REPO_ROOT}'); "
-            + "import Tools.registry; "
+            f"sys.path.insert(0, r'{REPO_ROOT}'); " + "import Tools.registry; "
             "from shared.module_registry import all_modules; "
             "modules = all_modules(); "
             "suites = {m.suite for m in modules}; "

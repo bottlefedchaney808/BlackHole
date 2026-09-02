@@ -13,8 +13,15 @@ already-tested, already-live Vol_Suite code (`expiry_book_production.py`,
 Task 4 adds two more: `chain_scanner` (a thin adapter over
 `options_chain_scanner.run_chain_scanner`, same pattern as Task 3) and
 `svi_smile` (new glue code -- see its section below for why it's different).
-`surface_grids` builders remain a separate follow-up task, not this file's
-concern yet.
+
+Task 5 adds four more: `surface_greek`, `surface_market_iv`,
+`surface_flow_strike_time`, `surface_flow_strike_expiry` -- thin adapters
+over `surface_grids.py`'s four strike x expiry / strike x time grid builders
+(build_greek_surface, build_market_iv_surface, build_flow_strike_time,
+build_flow_strike_expiry). `Tools/tools/surface_explorer_tool.py` (the
+existing dashboard-facing wrapper for these same builders) is a thin
+compatibility shim over these four modules as of this task -- see its own
+docstring.
 
 Flat cwd-relative imports fragile surface (see CLAUDE.md): the Vol_Suite-
 internal modules above import each other via flat top-level names (e.g.
@@ -81,6 +88,7 @@ import expiry_book_production as ebp
 import expiry_selector
 import options_chain_scanner as ocs
 import smile_by_model
+import surface_grids
 from dealer_exposure_module import fetch_dealer_exposure
 
 from shared.module_registry import ArchiveHint, ArtifactRef, ModuleResult, ModuleSpec
@@ -454,9 +462,7 @@ def _svi_chain_scanner_inputs(td: Any, ticker: str, expiration: str):
     if spot <= 0:
         raise ValueError(f"Could not fetch spot for {ticker}")
     dividend_yield = td.fetch_dividend_yield(ticker)
-    exp_date = datetime.strptime(expiration, "%Y%m%d").replace(
-        tzinfo=UTC
-    ).date()
+    exp_date = datetime.strptime(expiration, "%Y%m%d").replace(tzinfo=UTC).date()
     today = datetime.now(UTC).date()
     actual_T = max((exp_date - today).days, 0) / ocs.DEFAULT_A
     r_live = td.fetch_risk_free_rate(actual_T)
@@ -601,6 +607,151 @@ def _run_svi_smile(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
     return ModuleResult(status="ok", artifacts=[], metrics=metrics, context_patch=None)
 
 
+# ---------------------------------------------------------------------------
+# surface_greek / surface_market_iv / surface_flow_strike_time /
+# surface_flow_strike_expiry
+# ---------------------------------------------------------------------------
+#
+# Task 5's four modules: thin ModuleSpec adapters over surface_grids.py's
+# four strike x expiry / strike x time grid builders (build_greek_surface,
+# build_market_iv_surface, build_flow_strike_time, build_flow_strike_expiry
+# -- see that module's docstring). No suite-internal math changes here, and
+# no new PNG rendering: Tools/tools/surface_explorer_tool.py already renders
+# (and best-effort tolerates a plotting failure for) the exact same grid via
+# its own matplotlib helpers, and this task's compatibility shim there keeps
+# that behavior by calling THESE modules and rendering from their
+# `context_patch` rather than duplicating rendering here. The full grid dict
+# each builder returns (strikes/expiries/grid/skipped/meta, etc.) is the real
+# output -- threaded via `context_patch` under a `<slug>_result` key (same
+# convention as `dealer_exposure_result`/`dual_book_result` above) so a
+# caller that needs the whole grid, not just the summary `metrics`, can get
+# it without a second builder call. `metrics` itself only carries the small
+# scalar/summary fields each result dict already has -- no invented fields.
+
+
+def _run_surface_greek(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
+    """Thin adapter over surface_grids.build_greek_surface. `context['greek']`
+    defaults to 'gamma', matching surface_explorer_tool.py's DEFAULT_GREEK."""
+    try:
+        ticker = _resolve_ticker(context)
+        greek = str(context.get("greek") or "gamma").strip().lower()
+        max_expiries = int(context.get("max_expiries") or 12)
+        result = surface_grids.build_greek_surface(
+            ticker, greek, td=td, max_expiries=max_expiries
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    metrics: dict[str, Any] = {
+        "ticker": result["ticker"],
+        "greek": result["greek"],
+        "spot": result["spot"],
+        "n_expiries_used": result["meta"]["n_expiries_used"],
+        "units": result["units"],
+    }
+    return ModuleResult(
+        status="ok",
+        artifacts=[],
+        metrics=metrics,
+        context_patch={"surface_greek_result": result},
+    )
+
+
+def _run_surface_market_iv(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
+    """Thin adapter over surface_grids.build_market_iv_surface.
+    `context['min_dte']` is forwarded (default 0, per the builder's own
+    default)."""
+    try:
+        ticker = _resolve_ticker(context)
+        min_dte_raw = context.get("min_dte")
+        min_dte = int(min_dte_raw) if min_dte_raw not in (None, "") else 0
+        result = surface_grids.build_market_iv_surface(ticker, td=td, min_dte=min_dte)
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    metrics: dict[str, Any] = {
+        "ticker": result["ticker"],
+        "spot": result["spot"],
+        "n_strikes": len(result["strikes"]),
+        "n_tenors": len(result["tenors_years"]),
+        "source": result["meta"]["source"],
+    }
+    return ModuleResult(
+        status="ok",
+        artifacts=[],
+        metrics=metrics,
+        context_patch={"surface_market_iv_result": result},
+    )
+
+
+def _run_surface_flow_strike_time(
+    context: dict[str, Any], *, td: Any = None
+) -> ModuleResult:
+    """Thin adapter over surface_grids.build_flow_strike_time.
+    `context['session']` is forwarded (default None -> today, per the
+    builder's own default)."""
+    try:
+        ticker = _resolve_ticker(context)
+        session = context.get("session")
+        result = surface_grids.build_flow_strike_time(ticker, td=td, session=session)
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    metrics: dict[str, Any] = {
+        "ticker": result["ticker"],
+        "spot": result["spot"],
+        "session": result["session"],
+        "n_trades_used": result["meta"]["n_trades_used"],
+        "n_trades_total": result["meta"]["n_trades_total"],
+    }
+    return ModuleResult(
+        status="ok",
+        artifacts=[],
+        metrics=metrics,
+        context_patch={"surface_flow_strike_time_result": result},
+    )
+
+
+def _run_surface_flow_strike_expiry(
+    context: dict[str, Any], *, td: Any = None
+) -> ModuleResult:
+    """Thin adapter over surface_grids.build_flow_strike_expiry.
+    `context['session']`/`max_expiries`/`min_dte`/`max_dte` are all
+    forwarded (builder's own defaults apply when absent)."""
+    try:
+        ticker = _resolve_ticker(context)
+        session = context.get("session")
+        max_expiries = int(context.get("max_expiries") or 12)
+        min_dte_raw = context.get("min_dte")
+        min_dte = int(min_dte_raw) if min_dte_raw not in (None, "") else 0
+        max_dte_raw = context.get("max_dte")
+        max_dte = int(max_dte_raw) if max_dte_raw not in (None, "") else 60
+        result = surface_grids.build_flow_strike_expiry(
+            ticker,
+            td=td,
+            session=session,
+            max_expiries=max_expiries,
+            min_dte=min_dte,
+            max_dte=max_dte,
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    metrics: dict[str, Any] = {
+        "ticker": result["ticker"],
+        "spot": result["spot"],
+        "session": result["session"],
+        "n_expiries_used": len(result["expiries"]),
+        "n_trades_total": result["meta"]["n_trades_total"],
+    }
+    return ModuleResult(
+        status="ok",
+        artifacts=[],
+        metrics=metrics,
+        context_patch={"surface_flow_strike_expiry_result": result},
+    )
+
+
 MODULES: list[ModuleSpec] = [
     ModuleSpec(
         name="Dealer Exposure",
@@ -671,6 +822,50 @@ MODULES: list[ModuleSpec] = [
         suite="vol_suite",
         category="smile",
         run=_run_svi_smile,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Surface Greek",
+        slug="surface_greek",
+        suite="vol_suite",
+        category="surface",
+        run=_run_surface_greek,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Surface Market IV",
+        slug="surface_market_iv",
+        suite="vol_suite",
+        category="surface",
+        run=_run_surface_market_iv,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Surface Flow (Strike x Time)",
+        slug="surface_flow_strike_time",
+        suite="vol_suite",
+        category="surface",
+        run=_run_surface_flow_strike_time,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Surface Flow (Strike x Expiry)",
+        slug="surface_flow_strike_expiry",
+        suite="vol_suite",
+        category="surface",
+        run=_run_surface_flow_strike_expiry,
         cli_entry=None,
         default_selected=False,
         requires=[],
