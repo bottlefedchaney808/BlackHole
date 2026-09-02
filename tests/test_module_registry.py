@@ -16,6 +16,7 @@ import pytest
 
 from shared.module_registry import (
     ArchiveHint,
+    ArtifactRef,
     ModuleResult,
     ModuleSpec,
     all_modules,
@@ -142,3 +143,34 @@ def test_requires_cycle_not_yet_detected():
         requires=["cycle_a"],
     )
     raise NotImplementedError((a, b))  # placeholder body; test is skipped
+
+
+def test_module_result_supports_dict_like_get_for_legacy_callers():
+    """Covers the ModuleResult vs dict access fix for the dealer-book tab load path
+    (dashboard/app.py:dealer_book_load does res["results"][slug].get("artifacts") etc).
+    """
+    mr = ModuleResult(
+        status="ok",
+        artifacts=[ArtifactRef(path="chart.png", kind="png")],
+        metrics={"interp": "hello", "ticker": "SPY"},
+        context_patch={"foo": 1},
+    )
+    # .get works like dict for the supported keys (and falls back for unknown)
+    assert mr.get("status") == "ok"
+    assert mr.get("status", "def") == "ok"
+    assert mr.get("artifacts", []) == [ArtifactRef(path="chart.png", kind="png")]
+    assert mr.get("metrics", {})["interp"] == "hello"
+    assert mr.get("metrics", {}).get("interp", "") == "hello"
+    assert mr.get("context_patch") == {"foo": 1}
+    assert mr.get("nonexistent") is None
+    assert mr.get("nonexistent", "DEF") == "DEF"
+
+    # still works as dataclass attrs (no breakage)
+    assert mr.status == "ok"
+    assert mr.metrics["ticker"] == "SPY"
+
+    # also works for failed case (as produced by _failed)
+    failed = ModuleResult(status="failed", artifacts=[], metrics={"error": "boom"}, context_patch=None)
+    assert failed.get("status") == "failed"
+    assert failed.get("artifacts", []) == []
+    assert failed.get("metrics", {}).get("error") == "boom"

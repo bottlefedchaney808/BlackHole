@@ -131,6 +131,20 @@
 <p class="small muted alert-status-line">alerts last checked {{ alert_status.last_checked_utc }} &middot; 0 pending</p>
 {% endif %}
 
+<!-- Unified-run module picker (outside grid so it spans full width; uses
+     all discoverable modules). -->
+<div id="phase7-module-checkboxes" style="margin-bottom:12px; padding:8px; background:var(--panel-2); border:1px solid var(--border); border-radius:6px;">
+  <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Select modules for unified (repo-wide via shared.module_registry.all_modules(); new modules auto-appear; grouped by category):</div>
+  {% for cat, opts in unified_module_groups %}
+    <div style="margin: 6px 0 2px; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">{{ cat }}</div>
+    {% for opt in opts %}
+    <label style="display:inline-block; margin-right:12px; font-size:11px; white-space:nowrap;"><input type="checkbox" class="mod-sel" data-slug="{{ opt.slug }}" checked> {{ opt.slug }} ({{ opt.name }})</label>
+    {% endfor %}
+  {% else %}
+    <em style="font-size:11px;">(no modules discovered from registry)</em>
+  {% endfor %}
+</div>
+
 <div class="quant-grid">
   {% for m in modules %}
   <div class="quant-card" data-module-id="{{ m.id }}" data-suite="{{ m.suite }}"
@@ -583,6 +597,22 @@ function startModuleRun(btn) {
   var ticker = tickerInput.value.trim();
   if (!ticker) { tickerInput.focus(); return; }
 
+  var body = {ticker: ticker};
+  if (suite === 'unified') {
+    // Collect checked modules from the (now repo-wide) picker.
+    // Posts modules list -> dashboard/app.py routes to run_selected_modules
+    // (instead of full run_unified). This is how selectable unified works.
+    var cbs = document.querySelectorAll('#phase7-module-checkboxes .mod-sel:checked');
+    var mods = [];
+    for (var i = 0; i < cbs.length; i++) {
+      var s = cbs[i].getAttribute('data-slug');
+      if (s) mods.push(s);
+    }
+    if (mods.length) {
+      body.modules = mods;
+    }
+  }
+
   btn.disabled = true;
   btn.textContent = 'Starting...';
   var statusArea = card.querySelector('.run-status');
@@ -592,7 +622,7 @@ function startModuleRun(btn) {
   fetch('/run/' + encodeURIComponent(suite), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ticker: ticker})
+    body: JSON.stringify(body)
   })
     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, body: j}; }); })
     .then(function (res) {

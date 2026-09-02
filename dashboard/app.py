@@ -93,6 +93,47 @@ from Tools.context_loader import list_available_contexts, load_context
 from Tools.registry import TOOLS, get_tool
 
 
+# --------------------------------------------------------------------------#
+# Repo-wide module discovery for unified-run picker (this task t_5105c0b7).
+# Uses the exact same `shared.module_registry.all_modules()` that
+# orchestrator.py, CLI, archiver etc. use. No hardcoded list; every
+# registered module (dealer books + sentiment scanners + pricing models +
+# tools + future ones) appears automatically. See:
+#   shared/module_registry.py::_suite_modules + _tool_modules
+#   Vol_Suite/module_registry.py , sentiment-scanner/module_registry.py etc.
+# --------------------------------------------------------------------------#
+def _get_unified_module_groups() -> list[tuple[str, list[dict[str, str]]]]:
+    """Return [(category, [ {slug, name}, ... ]), ...] sorted for the picker UI.
+
+    Defensive import (mirrors dashboard/widget_archive_renderer.py) so a
+    missing/broken suite registry or missing third-party dep (e.g. scipy
+    inside Vol_Suite imports) never breaks the whole /quant page.
+    """
+    try:
+        from shared.module_registry import all_modules
+    except Exception:
+        return []
+
+    from collections import defaultdict
+
+    groups: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for m in all_modules():
+        cat = getattr(m, "category", "other") or "other"
+        groups[cat].append(
+            {
+                "slug": getattr(m, "slug", ""),
+                "name": getattr(m, "name", ""),
+            }
+        )
+    # stable order: category alpha, within cat by slug
+    result = []
+    for cat in sorted(groups.keys()):
+        opts = sorted(groups[cat], key=lambda o: o["slug"])
+        result.append((cat, opts))
+    return result
+
+
+
 def _ensure_vol_suite_expiry_selector() -> None:
     """Vol_Suite/expiry_selector.py and Options_Suite/expiry_selector.py share
     a bare module name. Tools/tools/surface_explorer_tool.py's sys.path
@@ -970,6 +1011,27 @@ def chart(request: Request):
 
 # Phase 7: Dealer Book tab (two parallel 4-panel sets + archive history)
 # Side A reuses dealer_exposure (already charts), Side B uses position_book (now charts via Phase 7)
+def _position_book_interp(side_b: dict) -> str:
+    """position_book's ModuleResult carries scalar metrics (total_net, spot,
+    band_z, regime) but no `interp` key -- build the tab's interpretation
+    line from them instead of rendering Side B textless."""
+    m = side_b.get("metrics", {}) or {}
+    if not m:
+        return ""
+    try:
+        regime = str(m.get("band_regime", "--"))
+        z = float(m.get("band_z", 0.0))
+        total = float(m.get("total_net", 0.0))
+        spot = float(m.get("spot", 0.0))
+        units = str(m.get("units", ""))
+        return (
+            f"Position book: net {total:+,.0f} {units} at spot ${spot:,.2f}; "
+            f"band z={z:+.2f} ({regime})"
+        )
+    except (TypeError, ValueError):
+        return ""
+
+
 @app.get("/dealer-book", response_class=HTMLResponse)
 def dealer_book(request: Request):
     return TEMPLATES.TemplateResponse(
@@ -985,29 +1047,63 @@ async def dealer_book_load(request: Request):
     ticker = str(body.get("ticker", "SPY")).strip().upper() or "SPY"
     expiry = str(body.get("expiry", "auto")).strip() or "auto"
 
-    # Use same resolution path as dealer_exposure_module (no 3rd point)
-    # (expiry auto handled inside the modules via their context)
-    context = {"ticker": ticker, "expiry": expiry, "output_dir": None}
+    # Charts for BOTH sides need a real output_dir: dealer_exposure writes
+    # into "." by default, but position_book skips ALL artifacts (json + the
+    # Phase 7 4-panel/heatmap pngs) when output_dir is None/falsy -- the
+    # original bug that left Side B of this tab permanently blank.
+    context = {
+        "ticker": ticker,
+        "expiry": expiry,
+        "output_dir": os.path.join(ROOT, "artifacts", "dealer_book"),
+    }
+    os.makedirs(context["output_dir"], exist_ok=True)
 
     try:
         # run the two in parallel via Phase 2 selectable run
         from orchestrator import run_selected_modules
+
+        def _arts(side):
+            """ArtifactRef dataclasses -> plain dicts for JSONResponse
+            (template reads a.path / a.kind)."""
+            return [
+                {"path": a.path, "kind": a.kind}
+                for a in (side.get("artifacts") or [])
+                if hasattr(a, "path")
+            ] or [
+                a for a in (side.get("artifacts") or []) if isinstance(a, dict)
+            ]
+
         res = run_selected_modules(["dealer_exposure", "position_book"], context)
         side_a = res.get("results", {}).get("dealer_exposure", {}) or {}
         side_b = res.get("results", {}).get("position_book", {}) or {}
         return JSONResponse({
             "status": "ok",
             "side_a": {
-                "artifacts": side_a.get("artifacts", []),
+                "artifacts": _arts(side_a),
                 "interp": side_a.get("metrics", {}).get("interp", ""),
             },
             "side_b": {
-                "artifacts": side_b.get("artifacts", []),
-                "interp": side_b.get("metrics", {}).get("interp", ""),
+                "artifacts": _arts(side_b),
+                "interp": side_b.get("metrics", {}).get("interp", "")
+                or _position_book_interp(side_b),
             },
         })
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/files")
+def files(path: str):
+    """Serve one artifact file for the Dealer Book tab (<img src>). Never
+    trusts `path` directly: it must resolve INSIDE the repo's artifacts/
+    tree (realpath check, no symlink/.. traversal escape)."""
+    root = os.path.realpath(os.path.join(ROOT, "artifacts"))
+    target = os.path.realpath(path)
+    if os.path.commonpath([root, target]) != root:
+        raise HTTPException(status_code=403, detail="path outside artifacts/")
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(target)
 
 
 @app.get("/dealer-book/history")
@@ -1963,6 +2059,7 @@ def quant_console(request: Request):
         {
             "active": "quant",
             "modules": MODULE_REGISTRY,
+            "unified_module_groups": _get_unified_module_groups(),
             "alerts": _fetch_pending_alerts(DB_PATH),
             "alert_status": _read_alert_status(),
         },

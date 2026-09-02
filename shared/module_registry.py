@@ -69,12 +69,30 @@ class ModuleResult:
     context_patch: optional fields to thread into downstream context
                    (generalized successor of
                    orchestrator.py::_thread_vol_stats_into_context)
+
+    Also supports legacy dict-style .get(key, default) for callers that
+    pre-date the dataclass (e.g. dashboard dealer-book tab).
     """
 
     status: str
     artifacts: list[ArtifactRef]
     metrics: dict[str, Any]
     context_patch: dict[str, Any] | None
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-like .get(key, default) for legacy callers (e.g. dashboard
+        /dealer-book/load) that treated run results as plain dicts before
+        ModuleResult existed. Matches the four fields; other keys -> default.
+        """
+        if key == "status":
+            return self.status
+        if key == "artifacts":
+            return self.artifacts
+        if key == "metrics":
+            return self.metrics
+        if key == "context_patch":
+            return self.context_patch
+        return default
 
 
 @dataclass(frozen=True)
