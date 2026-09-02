@@ -107,6 +107,11 @@ from shared.suite_validation import (  # noqa: E402  (path pinned immediately ab
     marker_filename,
     validate_suite_output,
 )
+from shared.module_registry import (  # noqa: E402  (path pinned immediately above)
+    ModuleSpec,
+    all_modules,
+    resolve_modules,
+)
 
 def _find_shared_python() -> str:
     """Locate the interpreter in the consolidated root `.venv`, cross-platform.
@@ -1200,6 +1205,147 @@ def _thread_vol_stats_into_context(context: Dict[str, Any], vol_result: Dict[str
         context.setdefault('focus', {})['expected_return'] = float(expected_return)
 
 
+# --------------------------------------------------------------------------
+# Module-registry execution path (Task 2 of the modularization overhaul).
+#
+# `run_selected_modules` is a new, additive, parallel path alongside
+# `run_suite`/`run_unified` -- it does not call, and is not called by,
+# either of them, and it does not touch `_thread_vol_stats_into_context`.
+# `shared/module_registry.py` (Task 1) defines the `ModuleSpec`/`ModuleResult`
+# contract this consumes; each suite's `module_registry.py::MODULES` list is
+# still empty as of this task -- later phases populate real modules.
+# --------------------------------------------------------------------------
+
+
+def _archive_module_result(module_slug: str, result: Any, context: Dict[str, Any]) -> None:
+    """Archiver hook, called once per executed module in `run_selected_modules`.
+
+    No-op stub in this task -- the real archiver is a later phase (Phase 6 of
+    the modularization overhaul). This call site exists now so that phase is
+    a pure implementation drop-in rather than a call-site hunt through
+    `run_selected_modules`.
+    """
+    # TODO: Phase 6 implements the real archiver.
+    pass
+
+
+def _expand_module_requires(selected: List[Any]) -> List[Any]:
+    """Transitively add every `requires` dependency not already selected.
+
+    `selected` are the explicitly-resolved ModuleSpecs; a dependency named in
+    one of their `.requires` lists is added even if the caller never named it,
+    and that dependency's own `.requires` are expanded in turn. Raises
+    ValueError naming the module/slug pair if a `requires` slug isn't
+    registered anywhere in `shared.module_registry.all_modules()`.
+    """
+    index = {module.slug: module for module in all_modules()}
+    included: Dict[str, Any] = {module.slug: module for module in selected}
+    pending = list(selected)
+    while pending:
+        module = pending.pop()
+        for req_slug in module.requires:
+            if req_slug in included:
+                continue
+            try:
+                req_module = index[req_slug]
+            except KeyError:
+                raise ValueError(
+                    f"Module {module.slug!r} requires unknown slug {req_slug!r}"
+                ) from None
+            included[req_slug] = req_module
+            pending.append(req_module)
+    return list(included.values())
+
+
+def _topo_sort_modules(modules: List[Any]) -> List[Any]:
+    """Order `modules` so every `requires` dependency runs before its
+    dependent (Kahn's algorithm). Only edges between modules present in
+    `modules` are honoured -- callers are expected to have already expanded
+    `requires` via `_expand_module_requires`. Raises ValueError naming the
+    remaining slugs if the requires graph among `modules` has a cycle.
+    """
+    by_slug = {module.slug: module for module in modules}
+    in_degree = {slug: 0 for slug in by_slug}
+    dependents: Dict[str, List[str]] = {slug: [] for slug in by_slug}
+    for module in modules:
+        for req_slug in module.requires:
+            if req_slug not in by_slug:
+                continue
+            in_degree[module.slug] += 1
+            dependents[req_slug].append(module.slug)
+
+    ready = sorted(slug for slug, degree in in_degree.items() if degree == 0)
+    ordered_slugs: List[str] = []
+    while ready:
+        slug = ready.pop(0)
+        ordered_slugs.append(slug)
+        for dependent_slug in sorted(dependents[slug]):
+            in_degree[dependent_slug] -= 1
+            if in_degree[dependent_slug] == 0:
+                ready.append(dependent_slug)
+        ready.sort()
+
+    if len(ordered_slugs) != len(modules):
+        remaining = sorted(set(by_slug) - set(ordered_slugs))
+        raise ValueError(
+            f"Cycle detected in module requires graph among: {', '.join(remaining)}"
+        )
+    return [by_slug[slug] for slug in ordered_slugs]
+
+
+def run_selected_modules(slugs: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve, expand, order and execute a set of registry modules.
+
+    New, additive execution path (Task 2 of the modularization overhaul),
+    parallel to `run_suite`/`run_unified` -- neither of those calls this, and
+    this does not call either of them.
+
+    - `slugs` is resolved via `shared.module_registry.resolve_modules`
+      (raises ValueError on an unknown slug). An empty `slugs` list falls
+      back to every module with `default_selected=True`.
+    - `requires` is expanded transitively via `_expand_module_requires`: a
+      dependency named by a selected module always runs even if the caller
+      didn't list it explicitly.
+    - Execution order is topological (`_topo_sort_modules`): a `requires`
+      dependency always runs before the module that requires it.
+    - After each module's `run(context)` call, if the returned
+      `ModuleResult.context_patch` is not None, it is merged into `context`
+      (dict update) so later modules in this same call see it -- the
+      generalized successor of `_thread_vol_stats_into_context`, but a
+      separate mechanism: this function never calls that one, and vice versa.
+    - `_archive_module_result` (currently a no-op stub) is called once per
+      executed module, after that module's `run(context)` returns.
+
+    Returns:
+        {
+            "status": "ok",
+            "order": [slug, ...],      # modules actually executed, in order
+            "results": {slug: ModuleResult, ...},
+        }
+    """
+    if slugs:
+        selected = resolve_modules(slugs)
+    else:
+        selected = [module for module in all_modules() if module.default_selected]
+
+    expanded = _expand_module_requires(selected)
+    ordered = _topo_sort_modules(expanded)
+
+    results: Dict[str, Any] = {}
+    for module in ordered:
+        result = module.run(context)
+        results[module.slug] = result
+        if result.context_patch is not None:
+            context.update(result.context_patch)
+        _archive_module_result(module.slug, result, context)
+
+    return {
+        "status": "ok",
+        "order": [module.slug for module in ordered],
+        "results": results,
+    }
+
+
 def run_unified(focus: Dict[str, Any],
                 fail_on_suite_error: Optional[bool] = None,
                 validate: bool = True) -> Dict[str, Any]:
@@ -1958,6 +2104,32 @@ def _focus_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     return focus
 
 
+def _print_modules_table() -> None:
+    """`--list-modules`: one line per registered module, name/slug/category/suite."""
+    modules = sorted(all_modules(), key=lambda m: m.slug)
+    if not modules:
+        print("No modules registered.")
+        return
+    header = f"{'SLUG':<30} {'NAME':<35} {'CATEGORY':<18} {'SUITE'}"
+    print(header)
+    print("-" * len(header))
+    for module in modules:
+        print(f"{module.slug:<30} {module.name:<35} {module.category:<18} {module.suite}")
+
+
+def _summarize_modules(combined: Dict[str, Any]) -> str:
+    """Human-readable summary for `run_selected_modules`' return value, the
+    --modules/--modules-category/--all-modules counterpart to `_summarize`
+    (which summarizes run_unified's return value)."""
+    lines = [f"status: {combined.get('status')}"]
+    results = combined.get("results", {})
+    for slug in combined.get("order", []):
+        result = results.get(slug)
+        status = getattr(result, "status", "?")
+        lines.append(f"  {slug}: {status}")
+    return "\n".join(lines)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog='orchestrator.py',
@@ -1991,6 +2163,20 @@ ADVANCED OPTIONS:
                       help='Run vol -> market signals -> options + var in dependency order.')
     mode.add_argument('--suite', choices=sorted(SUITE_ROOTS),
                       help='Run a single suite in context mode.')
+    parser.add_argument('--modules', default=None,
+                        help='Comma-separated module slugs to run via the module '
+                             'registry (shared.module_registry.run_selected_modules). '
+                             'New, additive path alongside --unified/--suite; '
+                             'mutually exclusive with --modules-category/--all-modules.')
+    parser.add_argument('--modules-category', default=None,
+                        help='Run every registered module whose .category matches '
+                             'this string. Mutually exclusive with --modules/--all-modules.')
+    parser.add_argument('--all-modules', action='store_true',
+                        help='Run every module returned by shared.module_registry.all_modules(). '
+                             'Mutually exclusive with --modules/--modules-category.')
+    parser.add_argument('--list-modules', action='store_true',
+                        help='Print name/slug/category/suite for every registered '
+                             'module and exit without running anything.')
     # Make --ticker optional (only required in CLI mode if --unified/--suite chosen)
     parser.add_argument('--ticker', required=False,
                         help='Focus ticker, e.g. NVDA. Required if --unified or --suite is used.')
@@ -2019,6 +2205,26 @@ ADVANCED OPTIONS:
 
     _warn_if_schema_outdated()
 
+    if args.list_modules:
+        _print_modules_table()
+        return 0
+
+    # Module-registry selection flags (Task 2 of the modularization overhaul):
+    # a new, additive path alongside --unified/--suite -- mutually exclusive with
+    # each other and with --unified/--suite, and requires --ticker just like they do.
+    _module_flags_given = sum(
+        bool(x) for x in (args.modules, args.modules_category, args.all_modules)
+    )
+    if _module_flags_given > 1:
+        parser.error('--modules, --modules-category, and --all-modules are '
+                     'mutually exclusive; pick one.')
+    if _module_flags_given and (args.unified or args.suite):
+        parser.error('--modules/--modules-category/--all-modules cannot be '
+                     'combined with --unified or --suite.')
+    if _module_flags_given and not args.ticker:
+        parser.error('--ticker is required when using --modules/'
+                     '--modules-category/--all-modules.')
+
     # Validate CLI args: if using --unified or --suite, --ticker must be provided
     if (args.unified or args.suite) and not args.ticker:
         parser.error('--ticker is required when using --unified or --suite')
@@ -2045,6 +2251,25 @@ ADVANCED OPTIONS:
     focus = _focus_from_args(args)
     focus['timeout'] = args.timeout
     focus['fail_on_suite_error'] = bool(args.fail_on_suite_error)
+
+    if _module_flags_given:
+        if args.all_modules:
+            module_slugs = [m.slug for m in all_modules()]
+        elif args.modules_category:
+            module_slugs = [
+                m.slug for m in all_modules()
+                if m.category == args.modules_category
+            ]
+        else:
+            module_slugs = [
+                s.strip() for s in (args.modules or '').split(',') if s.strip()
+            ]
+        context = build_context(focus)
+        combined = run_selected_modules(module_slugs, context)
+        print("\n" + ("=" * 60))
+        print(json.dumps(combined, indent=2, default=str) if args.json
+              else _summarize_modules(combined))
+        return 0 if combined['status'] == 'ok' else 1
 
     if args.unified:
         combined = run_unified(focus,

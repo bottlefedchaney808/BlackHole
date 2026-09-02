@@ -736,14 +736,35 @@ def _write_quant_summary(output_dir: str | None, run_id: Any, ticker: Any) -> No
             pass
 
 
-def _execute_run(run_id: Any, kind: str, focus: dict[str, Any]) -> None:
+def _execute_run(
+    run_id: Any,
+    kind: str,
+    focus: dict[str, Any],
+    modules: list[str] | None = None,
+) -> None:
     """Background worker. Sync on purpose: BackgroundTasks hands a `def` to the
     threadpool, and run_suite/run_unified are blocking subprocess drivers that
-    would stall the event loop for up to the 1800s child timeout."""
+    would stall the event loop for up to the 1800s child timeout.
+
+    `modules`, when non-None (even if empty -- see `trigger_run`), routes to
+    `orchestrator.run_selected_modules` instead of the existing run_suite/
+    run_unified dispatch below -- a new, additive path (Task 2 of the
+    modularization overhaul). `modules is None` (the default, and what every
+    existing caller passes) leaves this function's behavior byte-identical to
+    before that path existed.
+    """
     _set_run(run_id, status="running", started_at=_iso_utc_now())
     output_dir: str | None = None
     try:
-        if kind == "unified":
+        if modules is not None:
+            context = orchestrator.build_context(focus)
+            output_dir = context.get("output_dir")
+            _set_run(
+                run_id, output_dir=output_dir, orchestrator_run_id=context.get("run_id")
+            )
+            result = orchestrator.run_selected_modules(modules, context)
+            status = result.get("status", "ok")
+        elif kind == "unified":
             # run_unified builds (and re-validates) the context itself.
             result = orchestrator.run_unified(focus)
             status = result.get("status", "ok")
@@ -974,6 +995,17 @@ async def trigger_run(
     if error:
         return JSONResponse(status_code=400, content={"error": error})
 
+    # Task 2 of the modularization overhaul: an optional `modules` list in the
+    # POST body routes to orchestrator.run_selected_modules instead of the
+    # existing run_suite/run_unified dispatch. Absent or empty -> None, which
+    # leaves _execute_run's existing dispatch completely unchanged.
+    raw_modules = body.get("modules")
+    modules: list[str] | None = None
+    if isinstance(raw_modules, list) and raw_modules:
+        modules = [str(slug).strip() for slug in raw_modules if str(slug).strip()]
+        if not modules:
+            modules = None
+
     if not os.path.exists(orchestrator.SHARED_PYTHON):
         return JSONResponse(
             status_code=503,
@@ -1010,7 +1042,7 @@ async def trigger_run(
         persisted=isinstance(run_id, int),
     )
 
-    background_tasks.add_task(_execute_run, run_id, kind, focus)
+    background_tasks.add_task(_execute_run, run_id, kind, focus, modules)
 
     return JSONResponse(
         status_code=202,
