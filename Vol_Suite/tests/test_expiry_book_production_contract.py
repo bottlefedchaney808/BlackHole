@@ -281,7 +281,7 @@ def test_net_contracts_bid_ask_split():
     assert ebe.net_contracts_from_quote(100, 0, 0) == 0.0  # 50/50 → bought-sold=0
 
 
-def test_prior_plus_flow_is_current():
+def test_prior_plus_flow_is_current(monkeypatch):
     prior = [
         {"strike": 100_000, "right": "C", "open_interest": 500, "implied_vol": 0.20},
         {"strike": 100_000, "right": "P", "open_interest": 400, "implied_vol": 0.22},
@@ -290,6 +290,10 @@ def test_prior_plus_flow_is_current():
         {"strike": 100.0, "right": "C", "volume": 100, "bid_size": 60, "ask_size": 40},
         {"strike": 100.0, "right": "P", "volume": 50, "bid_size": 10, "ask_size": 40},
     ]
+    # Phase 6: flow layer now defaults OFF; this test's intent is the
+    # prior-close book + intraday flow composition, which lives behind the
+    # legacy toggle (deliberate default change, see PLAN §8.5 Phase 6).
+    monkeypatch.setenv("EXPOSURE_BOOK_FLOW", "1")
     result = production_result_from_rows(
         "MOCK", "20270115", 101.0, prior, dte=150,
         quote_rows=quotes, prior_eod_rows=prior, prior_close=100.0, prior_asof="20260820",
