@@ -8,7 +8,7 @@ A quant-finance development monorepo: four independent analysis suites (options 
 VaR, sentiment) plus a DTCC equity-swaps ingestion pipeline, tied together by an orchestrator and a
 local web dashboard. Everything shares one root `.venv` (Python 3.12) except `sentiment-scanner`,
 which keeps its own project-local venv. There is no cloud deployment path in active use — this is
-a single-machine, localhost-only setup (see `START_HERE.md` for the human-facing quick-start).
+a single-machine, localhost-only setup (see `docs/guides/START_HERE.md` for the human-facing quick-start).
 
 **Git structure (flattened 2026-08-12)**: the repo is a single flat git repo. `Options_Suite/` and
 `tradingview-mcp/` are tracked as ordinary files inside the root repo (their nested `.git` dirs were
@@ -34,7 +34,7 @@ git config core.hooksPath scripts/hooks   # enables the commit-msg subject-conve
 ```
 
 Every entrypoint ships as a matched `.bat` (Windows) / `.sh` (Linux/Mac) pair that do the same thing —
-see `CROSS_PLATFORM.md` for exactly how path/venv resolution works on each OS.
+see `docs/guides/CROSS_PLATFORM.md` for exactly how path/venv resolution works on each OS.
 
 | Task | Windows | Linux/Mac |
 |---|---|---|
@@ -42,6 +42,7 @@ see `CROSS_PLATFORM.md` for exactly how path/venv resolution works on each OS.
 | Tools module (`/tools`, same uvicorn process as dashboard) | `tools.bat` | — |
 | DTCC live poller (leave running, polls every 5 min) | `run_scheduler.bat` | `run_scheduler.sh` |
 | Orchestrator (cross-suite run) | `orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16` | `orchestrator.sh ...` |
+| Selectable modules (additive; default run unchanged) | `orchestrator.bat --modules dealer_exposure,chain_scanner --ticker SPY` | same (`--modules-category`, `--all-modules`, `--list-modules`) |
 | Single suite via orchestrator | `orchestrator.bat --suite options\|vol\|var\|sentiment --ticker AAPL` | same |
 | One-time full swap history backfill (resumable, hours-long) | `python backfill.py` | same |
 | Query swap DB directly | `python swaps_query.py`, or `from swaps_query import SwapsQuery` | same |
@@ -50,7 +51,8 @@ see `CROSS_PLATFORM.md` for exactly how path/venv resolution works on each OS.
 
 Only run **one** `dashboard.bat`/`tools.bat` and **one** `run_scheduler.bat` at a time — both scripts
 refuse to double-launch on their port, since a second instance racing the first against `swaps.db`
-causes "database is locked" errors.
+causes "database is locked" errors. Never stop or restart those processes while an orchestrator run
+is in flight — wait for completion or ask Jason.
 
 ### Tests
 
@@ -61,14 +63,15 @@ pytest tests/test_identifiers.py::test_some_case   # a single test
 pytest Vol_Suite/tests/         # one suite only
 ```
 `conftest.py` files add the repo root to `sys.path` so `shared.*` imports resolve inside suite tests.
+Every new `@pytest.mark.skip` / `skipif` must carry a reason string naming the unblocking condition.
 
 `Backtests/` is now a separate root-level package for pricing/greeks/signals evaluation. It complements, and does not replace, `Vol_Suite/backtest_stage3.py` or `Tools/tools/backtesting_tool.py`.
 
 
 ### Workflow helper scripts
 
-- `bash scripts/burst_checkpoint.sh vol` prints `git diff --stat` and runs the current narrow Vol_Suite checkpoint slice via `.venv\Scripts\python.exe`.
-- `git config core.hooksPath scripts/hooks` enables `scripts/hooks/commit-msg`, preserving the migrated subject policy (`feat|fix|test|docs|refactor|chore|security|improve` or `reconcile:`).
+- `bash scripts/burst_checkpoint.sh vol` prints `git diff --stat` and runs the current narrow Vol_Suite checkpoint slice via `.venv\Scripts\python.exe`. Commit (or run that script) **before** long test sweeps, mass ThetaData pulls, or worker dispatches.
+- `git config core.hooksPath scripts/hooks` enables `scripts/hooks/commit-msg`. Allowed subjects: `feat|fix|test|docs|refactor|chore|security|improve|data` (optional `(scope):`) or `reconcile:`. `Revert`/`Merge`/`journal`/`port`/`rh_monitor` subjects are rejected — rewrite to an allowed type.
 - `bash scripts/verify_tradingview_submodule.sh` checks `tradingview-mcp` gitlink state when the parent repo configures one, always verifies `tradingview-mcp/src/server.js`, and treats missing `hermes` or live CDP output as informational on this Windows repo.
 
 ### Lint
@@ -113,6 +116,15 @@ redoing the work. Schema owned by `Vol_Suite/suite_context.py`; validated by `sh
   before the next stage trusts it; `--fail-on-suite-error` turns a bad stage into a hard abort.
   `orchestrator_runs` in `swaps.db` logs every run.
 
+**Selectable-module path (additive, 2026-09-01/02):** `shared/module_registry.py`
+defines `ModuleSpec` / `ModuleResult` / `ArtifactRef` / `ArchiveHint`. Suites
+export `MODULES` lists (`Vol_Suite/module_registry.py` is populated;
+others still stubs). `orchestrator.py --modules slug,slug` /
+`--modules-category` / `--all-modules` / `--list-modules` runs
+`run_selected_modules` — **does not modify `run_unified`**. Default unified
+behavior with no `--modules` is unchanged. Archiver hook is still a no-op until
+Phase 6.
+
 ### `shared/` — the library every suite and the orchestrator import from
 
 - **Data access**: `data_source.py` (`DataSourceAdapter` ABC + `TradeRecord` — the pluggable-source
@@ -125,7 +137,7 @@ redoing the work. Schema owned by `Vol_Suite/suite_context.py`; validated by `sh
 - **Observability**: `context_audit.py` (audited, hashed, rollback-capable context mutations),
   `query_monitor.py` (slow-query detection, EXPLAIN analysis), `logging.py` (structured JSON logging).
 - **Infra**: `cache.py` (disk cache in `.shared_cache/`), `config.py` (single root `.env` loader).
-- **Market data client**: `thetadata.py` (43KB) — `ThetaDataController`, the merged replacement for
+- **Market data client**: `thetadata.py` (~85KB) — `ThetaDataController`, the merged replacement for
   what used to be separate `Options_Suite`/`Vol_Suite` ThetaData clients (`api.potatohedge.com`). All
   four suites, plus `Options_Suite/thetadata_controller.py` and `Vol_Suite/thetadata_client.py` (both
   now thin re-export stubs), route through this one implementation — despite `Options_Suite` having
@@ -170,14 +182,14 @@ summary.
 
 - **Options_Suite** — American option pricing/Greeks/IV across CRR, Leisen-Reimer, Newton-Raphson,
   brute-force IV, SABR, Vanna-Volga, plain and Heston Monte Carlo LSM, and Barone-Adesi-Whaley, compared
-  against live ThetaData quotes. `main.py` is 933 lines: a real interactive terminal mode (`main()`,
+  against live ThetaData quotes. `main.py` is ~926 lines: a real interactive terminal mode (`main()`,
   prompts for ticker/option type/strike/model choice) plus `--context`/`--context-out` headless mode
   (`run_context_mode`), which fetches live spot/rate/dividend-yield and prices via LeisenReimer, writing
   a schema-valid `options_result.json` (`method`/`sigma`/`price`/`greeks`) on success. (Corrected
   2026-08-17 — this used to describe `main.py` as a ~120-line stub with pricing code unwired; that was
   stale.) `chain_evaluation.py` → `reports.py` remains a genuinely separate multi-model reporting path
   `main.py` doesn't call into. Shares `shared/thetadata.py` for data.
-- **Vol_Suite** — the largest suite (`volatility_suite.py`, ~1850 lines): dealer positioning (three
+- **Vol_Suite** — the largest suite (`volatility_suite.py`, ~2913 lines): dealer positioning (three
   sign conventions — `oi_heuristic` v1, `replication` v2-1b, `vol_surface_replication` v2-1a+1b),
   variance-swap replication (Carr-Madan/Demeterfi) and VRP term structure, correlation/basket
   construction, GARCH(1,1), a multi-ticker screener, and a strategy recommender. Builds one shared
@@ -202,6 +214,11 @@ summary.
   it cut off artificially right at spot instead of decaying across the whole chain. Now mirrors the
   opposite-right leg's solved IV at the same strike (put-call parity) before dropping a row; only
   drops when neither side solved.
+  **Jump-diffusion default path (2026-08-30/31):** `Vol_Suite/jump_diffusion/` calibrates Bates/Merton
+  (Nelder-Mead in IV space, `MAX_CALIB_STRIKES=15`) early in `_run_core_analysis` and writes
+  `suite_context.jump_diffusion`. Failures persist `{status: error, error: ...}` — never `None`.
+  `rmse_iv` is scoped to the calibration mask, not the full smile. Results feed dealer
+  positioning / VRP / strategy recommender. Comparison mode stays standalone.
 - **VaR_Tools_Simulations** — a Python port of a legacy Excel VaR toolkit (`VaRtools Samples.xls` is
   the source spec), one `var_engine/` module per original sheet: `corr_sim.py` (correlated GBM Monte
   Carlo), `mc_sim.py`, `hist_sim.py` (basic/Hull-White/FHS-GARCH), `copulas.py` (Gaussian/Student-T/
@@ -276,9 +293,16 @@ localhost without adding real auth back first.
   expiry. SPX's *index price* (`fetch_spot_price`, `index_snapshot_quote`) stays correctly rooted under
   plain `"SPX"` — `shared/thetadata.py::_INDEX_PRICE_ROOT_ALIASES` maps `"SPXW"` back to `"SPX"` for
   price lookups at the source (`63382cf`, `43b7c6a`), but a new caller that resolves its own ticker
-  string instead of going through `fetch_spot_price` can still reintroduce this. Known still-open gap:
-  `Vol_Suite/correlation_engine.py::fetch_price_history` has the same root mismatch for its own
-  stock-EOD endpoint, used broadly across Vol_Suite's realized-vol inputs — unfixed as of `43b7c6a`.
+  string instead of going through `fetch_spot_price` can still reintroduce this. Stock-EOD is
+  fixed (2026-08-31): `shared/thetadata.py::hist_stock_eod` applies the same alias, so
+  `Vol_Suite/correlation_engine.py::fetch_price_history` is no longer an open gap
+  (`tests/test_thetadata_spxw_alias.py`). Keep chain-root SPXW vs price-root SPX.
+- **ThetaData mass pulls.** Any loop over `shared/thetadata.py` must rate-limit (sleep 0.3–0.5s,
+  never 6-way parallel) per the `theta-data` skill. A no-delay ~8000-request pull gets throttled.
+- **Hermes tool rules (this host).** `search_files` patterns must not start with `-` (rg treats
+  them as flags — `--modules` fails as `unrecognized flag`); escape regex metacharacters.
+  Re-read a file immediately before `patch`; unique surrounding context. Foreground `terminal`
+  timeout stays ≤600s — long builds/backtests/mass pulls use `background=true` + `notify`.
 
 ## Notable env vars
 

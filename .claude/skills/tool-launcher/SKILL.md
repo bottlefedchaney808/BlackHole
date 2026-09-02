@@ -17,6 +17,8 @@ Interactive: `python orchestrator.py --interactive` (requires a TTY; fails clean
 
 Unified (CLI): `python orchestrator.py --unified --ticker NVDA --expiry 2026-10-16 [--strike K] [--option-type call|put] [--index SPY] [--target-years 0.25] [--timeout SEC] [--json] [--fail-on-suite-error] [--no-validate]`. Runs vol -> {options, var} in dependency order.
 
+Selectable modules (additive; does not change `run_unified`): `python orchestrator.py --modules dealer_exposure,chain_scanner --ticker SPY` (also `--modules-category`, `--all-modules`, `--list-modules`). Resolves via `shared.module_registry`. Default with no `--modules` is unchanged.
+
 Single suite: `python orchestrator.py --suite {vol,options,var,sentiment} --ticker AAPL --target-years 0.25`. Builds context and launches only that one suite — no dependency chain, no sentiment-first pass.
 
 ## Debug — orchestrator failures given each sub-suite's known limits
@@ -60,6 +62,7 @@ Each run writes `orchestrator_output/<run_id>/`: `suite_context_<suite>.json` pe
 |---|---|
 | Interactive | `python orchestrator.py --interactive` |
 | Unified run | `python orchestrator.py --unified --ticker NVDA --expiry YYYY-MM-DD` |
+| Selectable modules | `python orchestrator.py --modules slug,slug --ticker T` (`--modules-category`, `--all-modules`, `--list-modules`) |
 | Single suite | `python orchestrator.py --suite {vol,options,var,sentiment} --ticker T --target-years 0.25` |
 | Abort on first bad stage | add `--fail-on-suite-error` |
 | Full JSON output | add `--json` |
