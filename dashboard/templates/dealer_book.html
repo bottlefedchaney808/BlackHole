@@ -2,9 +2,9 @@
 Dashboard{% endblock %} {% block content %}
 <h1>Dealer Book</h1>
 <p class="sub">
-  Side A: overall dealer exposure on the selected expiry (whole chain,
-  today's snapshot). Side B: dealer exposure built from flows (150d
-  ΔIV-signed accumulated book, priced with today's greeks). Both shown per
+  Side A: pure chain exposure on the selected expiry, as it sits (no dealer
+  attribution). Side B: the dealer position, built from 150 days of flow
+  (ΔIV-signed accumulated book, priced with today's greeks). Both shown per
   greek — A vs B.
 </p>
 
@@ -20,13 +20,13 @@ Dashboard{% endblock %} {% block content %}
 
 <!-- Full-width: combined 4-greek comparison + hedging heatmap (Side A) -->
 <div id="side-a" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 12px;">
-  <h3>Side A — Overall exposure, selected expiry (whole-chain snapshot)</h3>
+  <h3>Side A — Pure chain exposure, selected expiry (as it sits)</h3>
   <div id="side-a-content" class="db-side">—</div>
 </div>
 
 <!-- Side A big singles -->
 <div id="db-greeks" style="margin-top: 16px;">
-  <h3>Side A — exposure by strike, one greek per chart (whole chain)</h3>
+  <h3>Side A — exposure by strike, one greek per chart (chain as-it-sits)</h3>
   <div id="greeks-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
     <div class="greek-cell"><h4 style="margin:4px 0;">Gamma exposure</h4><div id="greek-gamma" class="db-side">—</div></div>
     <div class="greek-cell"><h4 style="margin:4px 0;">Delta exposure</h4><div id="greek-delta" class="db-side">—</div></div>
@@ -37,9 +37,9 @@ Dashboard{% endblock %} {% block content %}
 
 <!-- Side B: accumulated position book + its own big singles -->
 <div id="side-b" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 16px;">
-  <h3>Side B — Dealer exposure built from flows (150d ΔIV-signed accumulated book)</h3>
+  <h3>Side B — The dealer position, built from flows (150d ΔIV-signed accumulated book)</h3>
   <div id="side-b-content" class="db-side">—</div>
-  <h3 style="margin-top:16px;">Side B — same greeks, flow-built book priced with today's chains</h3>
+  <h3 style="margin-top:16px;">Side B — the dealer position priced with today's chain (same greeks, same axes)</h3>
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
     <div class="greek-cell"><h4 style="margin:4px 0;">Gamma (flow book)</h4><div id="greekb-gamma" class="db-side">—</div></div>
     <div class="greek-cell"><h4 style="margin:4px 0;">Delta (flow book)</h4><div id="greekb-delta" class="db-side">—</div></div>
@@ -52,6 +52,163 @@ Dashboard{% endblock %} {% block content %}
   <h3>History (from archive)</h3>
   <div id="history-list" class="small">—</div>
 </div>
+
+<details style="margin-top: 28px; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--card, transparent);">
+  <summary style="cursor: pointer; padding: 12px 16px; font-weight: 600; user-select: none;">
+    About this tab — the two methods, the engine, and the desk conventions
+  </summary>
+  <div style="padding: 4px 24px 20px; max-width: 980px;">
+<section>
+  <div style="font-family: var(--mono, monospace); font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted, #8b949e); margin: 26px 0 8px;">01 · The Idea</div>
+  <h4 style="font-size: 17px; font-weight: 600; margin: 18px 0 8px;">Two honest estimates beat one confident number</h4>
+  <p>
+    Every exposure chart answers a hidden question — <i>whose position is this?</i>
+    The standard answer is "nobody in particular; it's just what's on the chain."
+    That's one honest read: pure exposure, as it sits. But the desk also carries a
+    second, independent estimate: the dealer position, accumulated day by day from
+    observed volume-weighted flow, signed each day
+    by the direction of the at-the-money implied-voltage change (ΔIV). Where the two
+    agree, conviction is cheap. Where they diverge — that's the trade-relevant surface.
+  </p>
+  <div class="vs">
+    <div class="side a">
+      <div class="tag">A</div>
+      <h4>Pure chain exposure — what's on the chain, as it sits</h4>
+      <p>
+        Every listed strike on the selected expiry, OI as-is, greeks priced at live
+        spot and IV. No dealer attribution, no ownership claim — this is the raw
+        exposure surface of the chain itself: where the greeks sit, regardless of
+        who holds them or why.
+      </p>
+      <div class="meta">
+        <b>quantity</b> today's open interest<br>
+        <b>sign</b> dealer-frame convention per right<br>
+        <b>question answered</b> where is the exposure, as it sits?
+      </div>
+    </div>
+    <div class="side b">
+      <div class="tag">B</div>
+      <h4>The dealer position — built from flows</h4>
+      <p>
+        Start empty. Each trading day, take the change in open interest at every
+        strike, weight it by that contract's vanna, and sign the whole day by the
+        ATM ΔIV read: IV down ⇒ dealers likely sold (book long premium), IV up ⇒
+        bought. Days inside the ΔIV dead-band contribute exactly zero. Accumulate
+        150 days. Price that position with today's greeks.
+      </p>
+      <div class="meta">
+        <b>quantity</b> Σ ΔOI × vanna-wt, ΔIV-signed, 150d<br>
+        <b>sign</b> day-level ΔIV direction (dead-band gated)<br>
+        <b>question answered</b> what has flow actually built?
+      </div>
+    </div>
+  </div>
+  <p class="vs-caption" style="margin-top:14px">
+    <b>Like-for-like by construction.</b> B is priced with the <i>same</i> selected-expiry
+    chain, the <i>same</i> per-contract greeks, the <i>same</i> dollar-conversion
+    formulas as A. The only degree of freedom is the position itself — so any
+    difference on the chart is method, not scaling.
+  </p>
+</section><section>
+  <div style="font-family: var(--mono, monospace); font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted, #8b949e); margin: 26px 0 8px;">02 · The Engine</div>
+  <h4 style="font-size: 17px; font-weight: 600; margin: 18px 0 8px;">What actually computes</h4>
+  <p>
+    The pipeline is the modularization overhaul's payoff: one registry, one context,
+    one archive — and a dashboard that reads the registry instead of hardcoding.
+    The Dealer Book tab drives <code>run_selected_modules</code> through the same
+    topologically-ordered execution path the CLI and orchestrator use.
+  </p>
+  <table>
+    <tr><th>Stage</th><th>Mechanism</th><th>Detail that matters</th></tr>
+    <tr>
+      <td>Fetch</td>
+      <td class="mono">expiry_book_production.fetch_production_result</td>
+      <td>One ThetaData pass: full greek chain + OI for the selected expiry, plus near/mid/far bucket books. IV-solved rows only; put-call parity mirrors vendor's unsolved legs instead of dropping real OI.</td>
+    </tr>
+    <tr>
+      <td>Method A</td>
+      <td class="mono">dealer-frame greeks × OI × 100</td>
+      <td>GEX = γ·OI·100·S²·0.01; VEX = ±|ν|·OI·100·S·σ; CEX = χ·OI·100·S/365; DEX = δ·OI·100. Γ-flip from the execution-locus solve; gamma regime tagged AMPLIFYING/DAMPENING from net sign.</td>
+    </tr>
+    <tr>
+      <td>Method B · accumulate</td>
+      <td class="mono">dealer_position_book.accumulate_position_book</td>
+      <td>arm=<code>div_signed</code>: day sign from day-over-day ATM ΔIV; |ΔIV| in dead-band ⇒ day contributes 0 exactly. Per-strike weight = vanna / mean|vanna|. Sparse endpoint gaps skipped; 150-day rolling window with rollover.</td>
+    </tr>
+    <tr>
+      <td>Method B · price</td>
+      <td class="mono">plot_flow_book_single_greek</td>
+      <td>Book positions × <i>today's</i> chain greeks through A's exact formulas, aggregated per strike — the like-for-like pane. 221 strikes priced on the 2026-09-18 chain.</td>
+    </tr>
+    <tr>
+      <td>Render</td>
+      <td class="mono">dealer_book.html + /files</td>
+      <td>Full-width combined 4-greek comparison + hedging heatmap, then one large chart per greek per method (2×2 grids), then the position-book 4-panel + heatmap. Artifacts archived under <code>artifacts/dealer_book/</code>; served sandboxed to that tree.</td>
+    </tr>
+  </table>
+
+  <div class="strip">
+    <div class="cell">
+      <div class="k">Chain rows priced (A)</div>
+      <div class="v">442</div>
+      <div class="s">contracts, 2026-10-16 book</div>
+    </div>
+    <div class="cell">
+      <div class="k">Strikes priced (B)</div>
+      <div class="v">221</div>
+      <div class="s">flow-book positions on-chain</div>
+    </div>
+    <div class="cell">
+      <div class="k">Accumulation window</div>
+      <div class="v">150<span style="font-size:13px;color:var(--muted)">d</span></div>
+      <div class="s">2026-01-21 → 2026-08-25</div>
+    </div>
+    <div class="cell">
+      <div class="k">Registry modules exposed</div>
+      <div class="v">37</div>
+      <div class="s">repo-wide, zero hardcoding</div>
+    </div>
+  </div>
+</section><section>
+  <div style="font-family: var(--mono, monospace); font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted, #8b949e); margin: 26px 0 8px;">04 · The Build</div>
+  <h4 style="font-size: 17px; font-weight: 600; margin: 18px 0 8px;">One day, three commits, from dead tab to dual engine</h4>
+  <p>2026-09-02: went from permanently broken to the desk's main surface in three commits — <code>493bb58</code> (unblock tab + repo-wide picker), <code>bd27c2a</code> (fix four masked bugs: blank Side B, ArtifactRef serialization, missing /files endpoint, missing interp), <code>efb7b89</code> (this A-vs-B layout). Gate: 33 tests passed.</p>
+  
+  <p style="margin-top:6px">
+    Gate: <b>33 passed, 27 skipped</b> (module-registry, dealer-exposure acquisition,
+    dashboard-focus suites). Every chart on this page is a real artifact from the
+    live run at 17:53 CT — no mockups.
+  </p>
+</section><section>
+  <div style="font-family: var(--mono, monospace); font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted, #8b949e); margin: 26px 0 8px;">05 · Standing Conventions</div>
+  <h4 style="font-size: 17px; font-weight: 600; margin: 18px 0 8px;">What we believe while using it</h4>
+  <table>
+    <tr><th>Conviction</th><th>Consequence in the code</th></tr>
+    <tr>
+      <td>Dealers are structurally short charm</td>
+      <td>Charm panels are read as liability-with-a-calendar; a single −1 flip day flips <code>bs_charm</code> into the dealer book. The B-engine's ΔIV signing exists precisely to track that flip.</td>
+    </tr>
+    <tr>
+      <td>Holding is not a default</td>
+      <td>Nothing in the book assumes positions persist; B is rebuilt from flow daily, and the band layer (z, regime) judges whether today's net is unusual — not whether it's long or short.</td>
+    </tr>
+    <tr>
+      <td>Failure must be loud</td>
+      <td>A genuine fetch/render failure is <code>status="failed"</code> with the real error in metrics — never a fake <code>ok</code>. Charting failures are best-effort and logged, never silently swallowed into blank panes.</td>
+    </tr>
+    <tr>
+      <td>Units are contracts, not dollars</td>
+      <td>B's <code>total_net</code> is explicitly vanna-weighted ΔOI contracts — deliberately <i>not</i> comparable to A's dollar exposures. That's why B gets re-priced into A's units before any visual comparison.</td>
+    </tr>
+    <tr>
+      <td>Vendors leave gaps; parity fills them</td>
+      <td>Unsolved deep-ITM IVs are mirrored from the opposite right via put-call parity — dropping those rows would delete real OI from the book.</td>
+    </tr>
+  </table>
+</section>
+  </div>
+</details>
+
 {% endblock %} {% block scripts %}
 <script>
   function setImg(elId, path) {
