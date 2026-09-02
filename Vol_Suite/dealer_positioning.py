@@ -1189,8 +1189,14 @@ def plot_greek_exposure_comparison(result: DealerPositioningResult,
         'vol_surface_replication': "Vol-Surface + Replication (v2.1)",
     }
     sign_model_label = _SIGN_MODEL_LABELS.get(result.sign_model, result.sign_model)
+    # Dual-book provenance (Phase 8b): the legacy engine renders TODAY'S OI
+    # snapshot by default; only DEALER_ACCUMULATION=1 swaps in the 150-day
+    # assumed position. The title previously hid that distinction.
+    book_label = ("assumed accumulated position (DEALER_ACCUMULATION)"
+                  if getattr(result, "accumulate", False)
+                  else "assumed today's-OI position (snapshot)")
     fig.text(0.5, 0.96,
-              f"{result.ticker} Dealer Greek Exposure Comparison ({days_label}) — {sign_model_label}",
+              f"{result.ticker} Dealer Greek Exposure Comparison ({days_label}) — {sign_model_label} — {book_label}",
               color=TEXT_COLOR, fontsize=18, fontweight='bold', ha='center')
 
     K = result.strike_grid
@@ -1264,14 +1270,21 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
     fig = plt.figure(figsize=(16, 11), facecolor=DARK_BG)
     gs = fig.add_gridspec(2, 2, hspace=0.45, wspace=0.28,
                           left=0.07, right=0.96, top=0.90, bottom=0.07)
+    # Dual-book provenance (Phase 8b): say WHICH book this is and whether the
+    # intraday flow layer actually ran. Under the EXPOSURE_BOOK_FLOW=0 default
+    # the book is a pure snapshot — the old hardcoded "prior close + intraday
+    # flow" suffix was false there.
+    flow_on = getattr(result, "flow_layer", "snapshot_only") == "legacy_flow"
+    book_suffix = ("exposure snapshot + intraday flow" if flow_on
+                   else "exposure snapshot (no intraday flow)")
     fig.text(0.5, 0.96,
               f"{result.ticker} Dealer Greek Exposure Comparison (expiry {result.expiry}) "
-              f"— prior close + intraday flow",
+              f"— {book_suffix}",
               color=TEXT_COLOR, fontsize=18, fontweight='bold', ha='center')
 
     have_data = len(K) > 0
-    gamma_ylabel = 'GEX prior+dGEX ($ / 1%)'
-    vanna_ylabel = 'VEX prior+dVEX'
+    gamma_ylabel = ('GEX prior+dGEX ($ / 1%)' if flow_on else 'GEX ($ / 1%)')
+    vanna_ylabel = ('VEX prior+dVEX' if flow_on else 'VEX (shares / 1pp IV)')
     ax1 = fig.add_subplot(gs[0, 0])
     _greek_panel(ax1, K, _by_strike('gamma'), 'Gamma Exposure',
                  gamma_ylabel, spot, have_data)
@@ -1283,7 +1296,7 @@ def plot_expiry_book_greek_exposure(result, output_dir: Optional[str] = None) ->
                  vanna_ylabel, spot, have_data)
     ax4 = fig.add_subplot(gs[1, 1])
     _greek_panel(ax4, K, _by_strike('charm'), 'Charm Exposure',
-                 'CEX prior+dCEX / day', spot, have_data)
+                 ('CEX prior+dCEX / day' if flow_on else 'CEX ($ / day)'), spot, have_data)
 
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
@@ -1360,7 +1373,9 @@ def plot_expiry_book_heatmap(result, output_dir: Optional[str] = None) -> str:
 
     fig.text(0.08, 0.965, f"{result.ticker}  DEALER POSITIONING",
              fontsize=22, fontweight='bold', color=TEXT_COLOR, va='center')
-    fig.text(0.08, 0.935, "sign model: expiry-book engine",
+    fig.text(0.08, 0.935,
+             "sign model: expiry-book engine — exposure snapshot "
+             f"({getattr(result, 'flow_layer', 'snapshot_only')})",
              fontsize=12, fontweight='bold', color='#8b949e', va='center')
     fig.text(0.36, 0.90, f"Spot: ${spot:.2f}",
              fontsize=14, color=ACCENT_BLUE, va='center',

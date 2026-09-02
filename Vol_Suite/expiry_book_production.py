@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -16,6 +17,27 @@ VANNA_FLOW_LOOKBACK_DAYS = 7
 VANNA_FLOW_LOOKBACK_MAX = 14
 # Measured ΔIV below this is noise. Not applied to hypothetical ±1pt budget.
 VANNA_FLOW_DIV_DEADBAND = 0.01
+
+
+# Default fit path for the band wiring. Honors BAND_FIT_PATH (used by tests to
+# point at fixture JSON / a missing path); otherwise the Phase-1 fit location.
+_BAND_FIT_PATH = os.environ.get(
+    "BAND_FIT_PATH",
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "_expiry_falsifier_cache",
+        "opex_full_book",
+        "ou_band_fit.json",
+    ),
+)
+
+
+# Phase 6 (plan §8.5): the expiry exposure book is a PURE SNAPSHOT by default.
+# The intraday vannacharm flow layer (apply_vannacharm_flow) is OFF unless
+# EXPOSURE_BOOK_FLOW=1 (legacy behavior, kept for A/B and back-compat). The
+# position book still uses the flow layer directly; only this production
+# adapter gates it.
+SNAPSHOT_FLOW = os.environ.get("EXPOSURE_BOOK_FLOW", "0")
 
 
 class ExpiryBookUnavailable(RuntimeError):
@@ -109,6 +131,17 @@ class ProductionDealerExposure:
     flow_provenance: str = "quotes_missing"
     prior_spot: float | None = None
     prior_asof: str | None = None
+    # Band fields (Phase 2, additive): timing layer over the book. All
+    # defaulted so every existing consumer/constructor is untouched. Band
+    # failure NEVER fails the book — fields stay None with provenance set.
+    band_n: float | None = None
+    band_mu: float | None = None
+    band_sigma: float | None = None
+    band_z: float | None = None
+    band_regime: str | None = None
+    band_fit_provenance: str = ""
+    # Phase 6: 'snapshot_only' (default) or 'legacy_flow' (EXPOSURE_BOOK_FLOW=1)
+    flow_layer: str = "snapshot_only"
 
 
 def _trades_to_quote_rows(trades, expiry: str) -> list:
@@ -465,12 +498,20 @@ def production_result_from_rows(
     )
     if not snapshot.rows:
         raise ExpiryBookUnavailable("snapshot has no usable option rows")
-    n_vol = ebe.apply_vannacharm_flow(snapshot, quote_rows or [], book_spot)
-    flow_prov = (
-        f"{book_src}+flow_analysis"
-        if n_vol
-        else (f"{book_src}+flow_empty" if not quote_rows else f"{book_src}+volume_zero")
-    )
+    # Flow layer gate (Phase 6): read at call time so tests can monkeypatch
+    # EXPOSURE_BOOK_FLOW; SNAPSHOT_FLOW records the import-time default.
+    flow_on = os.environ.get("EXPOSURE_BOOK_FLOW", SNAPSHOT_FLOW) == "1"
+    flow_layer = "legacy_flow" if flow_on else "snapshot_only"
+    if flow_on:
+        n_vol = ebe.apply_vannacharm_flow(snapshot, quote_rows or [], book_spot)
+        flow_prov = (
+            f"{book_src}+flow_analysis"
+            if n_vol
+            else (f"{book_src}+flow_empty" if not quote_rows else f"{book_src}+volume_zero")
+        )
+    else:
+        n_vol = 0
+        flow_prov = f"{book_src}+snapshot_only"
 
     chain_iv = {
         (r.strike, r.right): r.iv for r in snapshot.rows if r.iv == r.iv and r.iv > 0
@@ -518,6 +559,49 @@ def production_result_from_rows(
         bk = _bucket(int(b["dte"]))
         if bk and bk not in buckets:
             buckets[bk] = b
+    # Band wiring (Phase 2, additive): bucketed net delta vs the bucketed OU
+    # fit. The exposure book is the production contract; the band is a timing
+    # layer and must NEVER fail it — any exception leaves fields None with
+    # provenance set. mu/sd always read from the fit object, never hardcoded.
+    band_fields: dict[str, Any] = {
+        "band_n": None,
+        "band_mu": None,
+        "band_sigma": None,
+        "band_z": None,
+        "band_regime": None,
+        "band_fit_provenance": "",
+    }
+    try:
+        import delta_band
+        from delta_band import band_position, load_band_fit, net_delta_from_books
+
+        fit_path = os.environ.get("BAND_FIT_PATH") or _BAND_FIT_PATH
+        fit = load_band_fit(fit_path)  # bucketed_0_10 = active_for_live
+        # net_delta_from_books needs raw delta on each row; the normalized
+        # snapshot rows drop it, so source from the raw merged rows per bucket.
+        raw_defs = [(int(dte), raw_rows)]
+        for extra in extra_books or []:
+            raw_defs.append((int(extra.get("dte") or 0), extra.get("rows") or []))
+        band_books = [
+            {"rows": brows} for bdte, brows in raw_defs if _bucket(bdte) in buckets
+        ]
+        n = net_delta_from_books(band_books)
+        pos = band_position(n, fit)
+        win_last = str(fit.fit_window.get("last", "") or "unknown")
+        band_fields.update(
+            band_n=float(pos.n),
+            band_mu=float(fit.mu),
+            band_sigma=float(fit.sigma_eq),
+            band_z=float(pos.z),
+            band_regime=str(pos.regime),
+            band_fit_provenance=(
+                f"band_fit_path={fit.source}; band_fit_window={win_last}; "
+                "band_bucket_definition=0-10,20-45,80-180"
+            ),
+        )
+        del delta_band
+    except Exception as exc:
+        band_fields["band_fit_provenance"] = f"unavailable: {type(exc).__name__}"
     regime = None
     if {"near", "mid", "far"} <= set(buckets):
         regime = ebe.build_structural_regime(list(buckets.values()), q=float(q))
@@ -567,8 +651,10 @@ def production_result_from_rows(
         residual_vanna_inventory=vanna_inv,
         flow_volume_rows=int(n_vol),
         flow_provenance=flow_prov,
+        flow_layer=flow_layer,
         prior_spot=book_spot if book_src.startswith("prior_close") else None,
         prior_asof=prior_asof if book_src.startswith("prior_close") else None,
+        **band_fields,
         units={
             "gex": "dollar_gamma_per_1pct_move_imported_call_put",
             "book_gamma": "dollar_gamma_per_1pct_svi_otm",
@@ -576,6 +662,7 @@ def production_result_from_rows(
             "vanna": "shares_per_vol_point",
             "residual_vanna_inventory": "shares_per_vol_point",
             "vanna_flow": "shares",
+            "band_n": "shares",
         },
         provenance={
             "source": "ThetaData snapshot",
@@ -587,6 +674,7 @@ def production_result_from_rows(
             "vendor_dealer": (vendor_dealer or {}).get("endpoint", "not_fetched"),
             "book": book_src,
             "intraday_flow": flow_prov,
+            "band_fit": band_fields["band_fit_provenance"],
         },
     )
 
@@ -620,7 +708,27 @@ def format_production_interp(result: ProductionDealerExposure) -> str:
             vd_txt = f"{vd.get('endpoint')} keys={vd.get('keys')}"
     else:
         vd_txt = vd.get("status", "not_fetched")
-    return (
+    lines = []
+    if result.band_n is not None:
+        prov = result.band_fit_provenance or ""
+        definition = "unknown definition"
+        window_last = "unknown"
+        for part in prov.split(";"):
+            part = part.strip()
+            if part.startswith("band_bucket_definition="):
+                definition = part.split("=", 1)[1]
+            elif part.startswith("band_fit_window="):
+                window_last = part.split("=", 1)[1]
+        band_line = (
+            f"Band: N=${result.band_n:,.0f} z={result.band_z:+.2f} {result.band_regime}"
+            f" (mu/sd from {definition} fit thru {window_last})"
+        )
+        if abs(result.band_z) >= 1:
+            band_line += " — band edge: hedges go lumpy"
+        lines.append(band_line)
+    if result.flow_layer == "legacy_flow":
+        lines.append("Intraday flow layer: ACTIVE (legacy mode)")
+    interp = (
         f"Ticker: {result.ticker}\n"
         f"Spot: ${result.spot:.2f}\n"
         f"GEX (imported call+/put- reference): ${result.gex_reference:,.0f}\n"
@@ -637,6 +745,9 @@ def format_production_interp(result: ProductionDealerExposure) -> str:
         f"Vendor PH dealer.positioning: {vd_txt}\n"
         f"Scenario budget: full hypothetical shocks (not a gate)"
     )
+    if lines:
+        interp = interp + "\n" + "\n".join(lines)
+    return interp
 
 
 def _summarize_vendor_dealer(payload, endpoint: str = "dealer.positioning") -> dict:
