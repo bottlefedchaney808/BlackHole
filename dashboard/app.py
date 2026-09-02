@@ -1059,7 +1059,6 @@ async def dealer_book_load(request: Request):
     os.makedirs(context["output_dir"], exist_ok=True)
 
     try:
-        # run the two in parallel via Phase 2 selectable run
         from orchestrator import run_selected_modules
 
         def _arts(side):
@@ -1073,9 +1072,65 @@ async def dealer_book_load(request: Request):
                 a for a in (side.get("artifacts") or []) if isinstance(a, dict)
             ]
 
-        res = run_selected_modules(["dealer_exposure", "position_book"], context)
-        side_a = res.get("results", {}).get("dealer_exposure", {}) or {}
-        side_b = res.get("results", {}).get("position_book", {}) or {}
+        # Method A (whole-chain exposure on the selected expiry) runs via
+        # the module; its ProductionDealerExposure result is needed below
+        # to price method B's flow-built book, so fetch it directly.
+        from shared.module_registry import resolve_modules
+
+        a_result = resolve_modules(["dealer_exposure"])[0].run(context)
+        if a_result.status != "ok":
+            raise RuntimeError(
+                f"dealer_exposure failed: {a_result.metrics.get('error')}"
+            )
+        prod = (a_result.context_patch or {}).get("dealer_exposure_result")
+        if prod is None:
+            raise RuntimeError(
+                "dealer_exposure returned no dealer_exposure_result patch"
+            )
+
+        res_b = resolve_modules(["position_book"])[0].run(context)
+        if res_b.status != "ok":
+            raise RuntimeError(
+                f"position_book failed: {res_b.metrics.get('error')}"
+            )
+        from Vol_Suite.dealer_position_book import (
+            load_history_days,
+            accumulate_position_book,
+        )
+
+        lookback = int(context.get("lookback") or 150)
+        days = load_history_days(lookback=lookback)
+        book = accumulate_position_book(
+            days,
+            lookback=lookback,
+            arm=str(context.get("arm") or "div_signed"),
+            ticker=ticker,
+        )
+
+        # Method B per-greek charts: book positions priced with TODAY'S
+        # greeks from A's fetched chains (primary + extra bucket books).
+        from Vol_Suite.dealer_positioning import plot_flow_book_single_greek
+
+        b_greeks: dict[str, str] = {}
+        for g in ("gamma", "delta", "vanna", "charm"):
+            try:
+                b_greeks[g] = plot_flow_book_single_greek(
+                    prod, book.position_by_strike, g,
+                    output_dir=context["output_dir"],
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "flow-book %s chart failed", g, exc_info=True
+                )
+
+        b_metrics = res_b.metrics or {}
+        side_a = {"artifacts": a_result.artifacts,
+                  "interp": a_result.metrics.get("interp", "")}
+        side_b = {
+            "artifacts": res_b.artifacts,
+            "interp": b_metrics.get("interp", "")
+            or _position_book_interp({"metrics": b_metrics}),
+        }
 
         # Route Side A's artifacts by filename tag: combined comparison +
         # heatmap stay in the top panel; the 4 big single-greek pngs go to
@@ -1098,13 +1153,13 @@ async def dealer_book_load(request: Request):
             "status": "ok",
             "side_a": {
                 "artifacts": top_panel,
-                "interp": side_a.get("metrics", {}).get("interp", ""),
+                "interp": side_a.get("interp", ""),
             },
             "greeks": greeks,
+            "greeks_b": b_greeks,
             "side_b": {
                 "artifacts": _arts(side_b),
-                "interp": side_b.get("metrics", {}).get("interp", "")
-                or _position_book_interp(side_b),
+                "interp": side_b.get("interp", ""),
             },
         })
     except Exception as exc:

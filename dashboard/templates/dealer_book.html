@@ -2,8 +2,10 @@
 Dashboard{% endblock %} {% block content %}
 <h1>Dealer Book</h1>
 <p class="sub">
-  Live chain snapshot (Side A) vs 150d accumulated position book (Side B).
-  History from archive (Phase 6), no re-fetch.
+  Side A: overall dealer exposure on the selected expiry (whole chain,
+  today's snapshot). Side B: dealer exposure built from flows (150d
+  ΔIV-signed accumulated book, priced with today's greeks). Both shown per
+  greek — A vs B.
 </p>
 
 <div class="db-controls">
@@ -18,13 +20,13 @@ Dashboard{% endblock %} {% block content %}
 
 <!-- Full-width: combined 4-greek comparison + hedging heatmap (Side A) -->
 <div id="side-a" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 12px;">
-  <h3>Side A — On the chain right now (dealer_exposure)</h3>
+  <h3>Side A — Overall exposure, selected expiry (whole-chain snapshot)</h3>
   <div id="side-a-content" class="db-side">—</div>
 </div>
 
-<!-- Individual big greeks: gamma / delta / vanna / charm, 2x2, full width -->
+<!-- Side A big singles -->
 <div id="db-greeks" style="margin-top: 16px;">
-  <h3>Exposure by strike — one greek per chart (same snapshot)</h3>
+  <h3>Side A — exposure by strike, one greek per chart (whole chain)</h3>
   <div id="greeks-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
     <div class="greek-cell"><h4 style="margin:4px 0;">Gamma exposure</h4><div id="greek-gamma" class="db-side">—</div></div>
     <div class="greek-cell"><h4 style="margin:4px 0;">Delta exposure</h4><div id="greek-delta" class="db-side">—</div></div>
@@ -33,10 +35,17 @@ Dashboard{% endblock %} {% block content %}
   </div>
 </div>
 
-<!-- Side B: accumulated position book, full width below -->
+<!-- Side B: accumulated position book + its own big singles -->
 <div id="side-b" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 16px;">
-  <h3>Side B — Accumulated positioning (position_book)</h3>
+  <h3>Side B — Dealer exposure built from flows (150d ΔIV-signed accumulated book)</h3>
   <div id="side-b-content" class="db-side">—</div>
+  <h3 style="margin-top:16px;">Side B — same greeks, flow-built book priced with today's chains</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="greek-cell"><h4 style="margin:4px 0;">Gamma (flow book)</h4><div id="greekb-gamma" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Delta (flow book)</h4><div id="greekb-delta" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Vanna (flow book)</h4><div id="greekb-vanna" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Charm (flow book)</h4><div id="greekb-charm" class="db-side">—</div></div>
+  </div>
 </div>
 
 <div id="db-history" style="margin-top: 20px;">
@@ -102,13 +111,22 @@ Dashboard{% endblock %} {% block content %}
       }
       // Side A: combined comparison + heatmap, full width on top
       renderSide("side-a-content", data.side_a || {});
-      // Big singles: route by filename tag -> grid cell
+      // Big singles: route by filename tag -> grid cells (A whole chain, B flow book)
       const singles = data.greeks || {};
       for (const g of ["gamma", "delta", "vanna", "charm"]) {
         if (singles[g]) {
           setImg("greek-" + g, singles[g]);
         } else {
           document.getElementById("greek-" + g).innerHTML =
+            '<div class="empty">no chart</div>';
+        }
+      }
+      const singlesB = data.greeks_b || {};
+      for (const g of ["gamma", "delta", "vanna", "charm"]) {
+        if (singlesB[g]) {
+          setImg("greekb-" + g, singlesB[g]);
+        } else {
+          document.getElementById("greekb-" + g).innerHTML =
             '<div class="empty">no chart</div>';
         }
       }

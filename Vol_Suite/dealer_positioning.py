@@ -1896,6 +1896,133 @@ def plot_expiry_book_single_greek(result, greek: str, output_dir: str | None = N
     return filename
 
 
+def plot_flow_book_single_greek(
+    result, position_by_strike: dict, greek: str, output_dir: str | None = None
+) -> str:
+    """One LARGE single-greek exposure chart for the FLOW-BUILT dealer book
+    (Side B method): the accumulated ΔIV-signed position_by_strike priced
+    with TODAY'S per-contract greeks from the same chains the snapshot used
+    (primary + extra bucket books). Same formulas as vannacharm_row /
+    delta exposure, but the 'OI' is the book's signed position (vanna-
+    weighted ΔOI contracts, NOT raw OI) -- the like-for-like companion to
+    plot_expiry_book_single_greek's whole-chain (method A) chart."""
+    if greek not in ("gamma", "delta", "vanna", "charm"):
+        raise ValueError(f"unknown greek: {greek}")
+    import expiry_book_exposure as ebe
+
+    spot = result.spot
+    d_attr = {"gamma": "d_gex", "vanna": "d_vex", "charm": "d_cex"}
+
+    def _book_value(r, pos: float, greek: str) -> float:
+        """Same per-contract exposure formulas, book position as quantity."""
+        if pos == 0.0:
+            return 0.0
+        iv = float(getattr(r, "iv", 0.0) or 0.0)
+        if iv != iv:
+            iv = 0.0
+        greeks = getattr(r, "greeks", {}) or {}
+        rs = 1.0 if str(getattr(r, "right", "C")).upper()[:1] == "C" else -1.0
+        if greek == "gamma":
+            return (
+                float(greeks.get("gamma", 0.0) or 0.0)
+                * pos
+                * ebe.CONTRACT_MULTIPLIER
+                * spot**2
+                * 0.01
+            )
+        if greek == "delta":
+            return (
+                float(greeks.get("delta", 0.0) or 0.0)
+                * pos
+                * ebe.CONTRACT_MULTIPLIER
+            )
+        if greek == "vanna":
+            return (
+                rs
+                * abs(float(greeks.get("vanna", 0.0) or 0.0))
+                * pos
+                * ebe.CONTRACT_MULTIPLIER
+                * spot
+                * iv
+            )
+        # charm
+        return (
+            float(greeks.get("charm", 0.0) or 0.0)
+            * pos
+            * ebe.CONTRACT_MULTIPLIER
+            * spot
+            / 365.0
+        )
+
+    # Like-for-like with method A: price the book on the SAME selected-expiry
+    # chain A uses (result.snapshot.rows, already dealer-frame NetExposureRow
+    # objects). Positions accumulated at strikes outside this expiry's chain
+    # contribute nothing -- exactly as A's own chart shows only this chain.
+    agg: dict[float, float] = defaultdict(float)
+    for r in result.snapshot.rows:
+        pos = float(position_by_strike.get(
+            (float(r.strike), str(getattr(r, "right", "C")).upper()[:1]), 0.0
+        ) or 0.0)
+        if pos == 0.0:
+            continue
+        agg[float(r.strike)] += _book_value(r, pos, greek)
+
+    strikes = sorted(agg)
+    K = np.asarray(strikes, dtype=float)
+    vals = np.asarray([agg[k] for k in strikes], dtype=float)
+    if not len(K):
+        raise ValueError(
+            f"flow book has no positions on today's chains for {greek}"
+        )
+
+    titles = {
+        "gamma": ("GAMMA EXPOSURE BY STRIKE", "GEX ($ / 1%)"),
+        "delta": ("DELTA EXPOSURE BY STRIKE", "Delta (shares)"),
+        "vanna": ("VANNA EXPOSURE BY STRIKE", "VEX (shares / 1pp IV)"),
+        "charm": ("CHARM EXPOSURE BY STRIKE", "CEX ($ / day)"),
+    }
+    title, ylabel = titles[greek]
+
+    fig = plt.figure(figsize=(16, 9), facecolor=DARK_BG)
+    ax = fig.add_axes([0.06, 0.07, 0.90, 0.84])
+    _style_axis(ax, f"{result.ticker} {title}", "Strike", ylabel)
+    norm = plt.Normalize(vmin=-max(abs(vals).max(), 1e-9),
+                         vmax=max(abs(vals).max(), 1e-9))
+    colors = [GAMMA_BAR_CMAP(norm(v)) for v in vals]
+    bar_width = (
+        (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5) * 0.7)
+        if len(K) else np.array([])
+    )
+    ax.bar(K, vals, width=bar_width, color=colors, alpha=0.9, edgecolor="none")
+    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.5,
+               alpha=0.9, zorder=5)
+    flip = getattr(getattr(result, "execution_locus", None), "local_gamma_boundary",
+                   None)
+    if flip:
+        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.5,
+                   alpha=0.9, zorder=5)
+        _add_annotation_box(ax, flip, ax.get_ylim()[1] * 0.85,
+                            f"Γ-Flip ${flip:.2f}", ACCENT_GOLD, ha="center")
+    ax.axhline(y=0, color="#8b949e", linewidth=0.8, alpha=0.5)
+    _add_annotation_box(ax, spot, ax.get_ylim()[1] * 0.97,
+                        f"Spot ${spot:.2f}", ACCENT_BLUE, ha="center")
+
+    fig.text(0.5, 0.965,
+             f"{result.ticker} Dealer Book (flow-built, 150d ΔIV-signed) — "
+             f"{greek.upper()} — {len(agg)} strikes priced",
+             color=TEXT_COLOR, fontsize=15, fontweight="bold", ha="center")
+    out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
+    os.makedirs(out_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(
+        out_dir, f"{result.ticker}_dealer_book_flow_{greek}_{timestamp}.png"
+    )
+    plt.savefig(filename, dpi=150, bbox_inches="tight", facecolor=DARK_BG,
+                edgecolor="none")
+    plt.close(fig)
+    return filename
+
+
 def plot_expiry_book_heatmap(result, output_dir: str | None = None) -> str:
     """4-panel hedging heatmap for a ProductionDealerExposure, matching
     plot_heatmap's legacy panel layout (gamma-by-strike, OI-by-strike, a
