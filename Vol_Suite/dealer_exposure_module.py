@@ -60,6 +60,7 @@ def fetch_dealer_exposure(
     from dealer_positioning import (
         plot_expiry_book_greek_exposure,
         plot_expiry_book_heatmap,
+        plot_expiry_book_single_greek,
     )
     from expiry_book_production import fetch_production_result, format_production_interp
     from thetadata_client import ThetaDataController
@@ -79,6 +80,19 @@ def fetch_dealer_exposure(
             plot_expiry_book_greek_exposure(result, output_dir=output_dir),
             plot_expiry_book_heatmap(result, output_dir=output_dir),
         ]
+        # Dealer Book tab extras (Jason: "more images, keep what we have,
+        # we have screen room"): one LARGE single-greek chart per greek,
+        # rendered from the SAME fetched snapshot -- no extra data pulls.
+        # Best-effort: a charting failure must not fail the fetch.
+        for _g in ("gamma", "delta", "vanna", "charm"):
+            try:
+                files.append(
+                    plot_expiry_book_single_greek(result, _g, output_dir=output_dir)
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "single-greek %s chart failed", _g, exc_info=True
+                )
         return files, interp, result
     finally:
         if owns_td:

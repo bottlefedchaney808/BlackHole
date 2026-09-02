@@ -1,117 +1,167 @@
-{% extends "base.html" %}
-{% block title %}Dealer Book -- FinancialDevelopment Dashboard{% endblock %}
-
-{% block content %}
+{% extends "base.html" %} {% block title %}Dealer Book -- FinancialDevelopment
+Dashboard{% endblock %} {% block content %}
 <h1>Dealer Book</h1>
-<p class="sub">Side-by-side: live chain snapshot (A) vs 150d accumulated position book (B). History from archive (Phase 6), no re-fetch.</p>
+<p class="sub">
+  Live chain snapshot (Side A) vs 150d accumulated position book (Side B).
+  History from archive (Phase 6), no re-fetch.
+</p>
 
 <div class="db-controls">
-  <label>Ticker: <input id="db-ticker" value="SPY" size="8"></label>
-  <label>Expiry: <input id="db-expiry" value="auto" size="10" placeholder="auto or YYYYMMDD"></label>
+  <label>Ticker: <input id="db-ticker" value="SPY" size="8" /></label>
+  <label>
+    Expiry: <input id="db-expiry" value="auto" size="10" placeholder="auto or YYYYMMDD" />
+  </label>
   <button onclick="loadDealerBook()">Load</button>
   <button onclick="loadHistory()">History</button>
   <span id="db-status" class="small muted"></span>
 </div>
 
-<div id="db-sides" style="display: flex; gap: 16px; margin-top: 12px;">
-  <div id="side-a" style="flex: 1; border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
-    <h3>Side A — On the chain right now (dealer_exposure)</h3>
-    <div id="side-a-content" class="db-side">—</div>
+<!-- Full-width: combined 4-greek comparison + hedging heatmap (Side A) -->
+<div id="side-a" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 12px;">
+  <h3>Side A — On the chain right now (dealer_exposure)</h3>
+  <div id="side-a-content" class="db-side">—</div>
+</div>
+
+<!-- Individual big greeks: gamma / delta / vanna / charm, 2x2, full width -->
+<div id="db-greeks" style="margin-top: 16px;">
+  <h3>Exposure by strike — one greek per chart (same snapshot)</h3>
+  <div id="greeks-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="greek-cell"><h4 style="margin:4px 0;">Gamma exposure</h4><div id="greek-gamma" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Delta exposure</h4><div id="greek-delta" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Vanna exposure</h4><div id="greek-vanna" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Charm exposure</h4><div id="greek-charm" class="db-side">—</div></div>
   </div>
-  <div id="side-b" style="flex: 1; border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
-    <h3>Side B — Accumulated positioning (position_book)</h3>
-    <div id="side-b-content" class="db-side">—</div>
-  </div>
+</div>
+
+<!-- Side B: accumulated position book, full width below -->
+<div id="side-b" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 16px;">
+  <h3>Side B — Accumulated positioning (position_book)</h3>
+  <div id="side-b-content" class="db-side">—</div>
 </div>
 
 <div id="db-history" style="margin-top: 20px;">
   <h3>History (from archive)</h3>
   <div id="history-list" class="small">—</div>
 </div>
-{% endblock %}
-
-{% block scripts %}
+{% endblock %} {% block scripts %}
 <script>
-async function loadDealerBook() {
-  const t = document.getElementById('db-ticker').value.trim().toUpperCase() || 'SPY';
-  const e = document.getElementById('db-expiry').value.trim() || 'auto';
-  const status = document.getElementById('db-status');
-  status.textContent = 'loading...';
-  try {
-    const r = await fetch('/dealer-book/load', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ticker: t, expiry: e})
-    });
-    const data = await r.json();
-    if (data.error) { status.textContent = data.error; return; }
-    renderSide('side-a-content', data.side_a || {});
-    renderSide('side-b-content', data.side_b || {});
-    status.textContent = 'ok';
-  } catch (err) {
-    status.textContent = 'error: ' + err;
+  function setImg(elId, path) {
+    const el = document.getElementById(elId);
+    el.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = "/files?path=" + encodeURIComponent(path);
+    img.style.maxWidth = "100%";
+    img.style.border = "1px solid var(--border)";
+    el.appendChild(img);
   }
-}
 
-function renderSide(elId, side) {
-  const el = document.getElementById(elId);
-  el.innerHTML = '';
-  if (!side || !side.artifacts || !side.artifacts.length) {
-    el.innerHTML = '<div class="empty">no artifacts</div>';
-    return;
-  }
-  side.artifacts.forEach(function (a) {
-    if (a.kind === 'png') {
-      const img = document.createElement('img');
-      img.src = '/files?path=' + encodeURIComponent(a.path);  // assume static file serve or adjust
-      img.style.maxWidth = '100%';
-      img.style.border = '1px solid var(--border)';
-      el.appendChild(img);
-      el.appendChild(document.createElement('br'));
-    } else {
-      const pre = document.createElement('pre');
-      pre.textContent = a.path;
-      el.appendChild(pre);
-    }
-  });
-  if (side.interp) {
-    const p = document.createElement('p');
-    p.className = 'small';
-    p.textContent = side.interp;
-    el.appendChild(p);
-  }
-}
-
-async function loadHistory() {
-  const t = document.getElementById('db-ticker').value.trim().toUpperCase() || 'SPY';
-  const e = document.getElementById('db-expiry').value.trim() || '';
-  const list = document.getElementById('history-list');
-  list.innerHTML = 'loading...';
-  try {
-    const r = await fetch('/dealer-book/history?ticker=' + encodeURIComponent(t) + '&expiry=' + encodeURIComponent(e));
-    const data = await r.json();
-    list.innerHTML = '';
-    if (!data.rows || !data.rows.length) {
-      list.innerHTML = '<div class="empty">no archived runs</div>';
+  function renderSide(elId, side) {
+    const el = document.getElementById(elId);
+    el.innerHTML = "";
+    if (!side || !side.artifacts || !side.artifacts.length) {
+      el.innerHTML = '<div class="empty">no artifacts</div>';
       return;
     }
-    data.rows.forEach(function (row) {
-      const d = document.createElement('div');
-      d.innerHTML = row.timestamp + ' ' + row.module_slug + ' <a href="#" onclick="showArchived(\'' + row.module_slug + '\', ' + row.id + ');return false;">view</a>';
-      list.appendChild(d);
+    side.artifacts.forEach(function (a) {
+      if (a.kind === "png") {
+        const img = document.createElement("img");
+        img.src = "/files?path=" + encodeURIComponent(a.path);
+        img.style.maxWidth = "100%";
+        img.style.border = "1px solid var(--border)";
+        el.appendChild(img);
+        el.appendChild(document.createElement("br"));
+      } else {
+        const pre = document.createElement("pre");
+        pre.textContent = a.path;
+        el.appendChild(pre);
+      }
     });
-  } catch (err) {
-    list.textContent = 'err: ' + err;
+    if (side.interp) {
+      const p = document.createElement("p");
+      p.className = "small";
+      p.textContent = side.interp;
+      el.appendChild(p);
+    }
   }
-}
 
-function showArchived(slug, id) {
-  alert('Archived view would re-render from archive row ' + id + ' for ' + slug + ' (stretch; see Phase 8)');
-}
+  async function loadDealerBook() {
+    const t = document.getElementById("db-ticker").value.trim().toUpperCase() || "SPY";
+    const e = document.getElementById("db-expiry").value.trim() || "auto";
+    const status = document.getElementById("db-status");
+    status.textContent = "loading...";
+    try {
+      const r = await fetch("/dealer-book/load", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: t, expiry: e }),
+      });
+      const data = await r.json();
+      if (data.error) {
+        status.textContent = data.error;
+        return;
+      }
+      // Side A: combined comparison + heatmap, full width on top
+      renderSide("side-a-content", data.side_a || {});
+      // Big singles: route by filename tag -> grid cell
+      const singles = data.greeks || {};
+      for (const g of ["gamma", "delta", "vanna", "charm"]) {
+        if (singles[g]) {
+          setImg("greek-" + g, singles[g]);
+        } else {
+          document.getElementById("greek-" + g).innerHTML =
+            '<div class="empty">no chart</div>';
+        }
+      }
+      // Side B below
+      renderSide("side-b-content", data.side_b || {});
+      status.textContent = "ok";
+    } catch (err) {
+      status.textContent = "error: " + err;
+    }
+  }
 
-// initial
-document.addEventListener('DOMContentLoaded', function () {
-  // optional auto load SPY
-});
+  async function loadHistory() {
+    const t = document.getElementById("db-ticker").value.trim().toUpperCase() || "SPY";
+    const e = document.getElementById("db-expiry").value.trim() || "";
+    const list = document.getElementById("history-list");
+    list.innerHTML = "loading...";
+    try {
+      const r = await fetch(
+        "/dealer-book/history?ticker=" + encodeURIComponent(t) + "&expiry=" + encodeURIComponent(e)
+      );
+      const data = await r.json();
+      list.innerHTML = "";
+      if (!data.rows || !data.rows.length) {
+        list.innerHTML = '<div class="empty">no archived runs</div>';
+        return;
+      }
+      data.rows.forEach(function (row) {
+        const d = document.createElement("div");
+        d.innerHTML =
+          row.timestamp +
+          " " +
+          row.module_slug +
+          ' <a href="#" onclick="showArchived(\'' +
+          row.module_slug +
+          "', " +
+          row.id +
+          ');return false;">view</a>';
+        list.appendChild(d);
+      });
+    } catch (err) {
+      list.textContent = "err: " + err;
+    }
+  }
+
+  function showArchived(slug, id) {
+    alert(
+      "Archived view would re-render from archive row " + id + " for " + slug + " (stretch; see Phase 8)"
+    );
+  }
+
+  // initial
+  document.addEventListener("DOMContentLoaded", function () {
+    // optional auto load SPY
+  });
 </script>
 {% endblock %}

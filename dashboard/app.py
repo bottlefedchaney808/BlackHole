@@ -1076,12 +1076,31 @@ async def dealer_book_load(request: Request):
         res = run_selected_modules(["dealer_exposure", "position_book"], context)
         side_a = res.get("results", {}).get("dealer_exposure", {}) or {}
         side_b = res.get("results", {}).get("position_book", {}) or {}
+
+        # Route Side A's artifacts by filename tag: combined comparison +
+        # heatmap stay in the top panel; the 4 big single-greek pngs go to
+        # their own grid cells.
+        greeks: dict[str, str] = {}
+        top_panel: list[dict] = []
+        for a in _arts(side_a):
+            name = os.path.basename(a["path"]).lower()
+            tag = next(
+                (g for g in ("gamma", "delta", "vanna", "charm")
+                 if f"_dealer_book_{g}_" in name),
+                None,
+            )
+            if tag:
+                greeks[tag] = a["path"]
+            else:
+                top_panel.append(a)
+
         return JSONResponse({
             "status": "ok",
             "side_a": {
-                "artifacts": _arts(side_a),
+                "artifacts": top_panel,
                 "interp": side_a.get("metrics", {}).get("interp", ""),
             },
+            "greeks": greeks,
             "side_b": {
                 "artifacts": _arts(side_b),
                 "interp": side_b.get("metrics", {}).get("interp", "")
