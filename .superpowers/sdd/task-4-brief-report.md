@@ -83,7 +83,10 @@ adapter pattern:
 - Full repo `pytest -q` (mid-session): 2661 passed / 8 failed / 7 errored — 7 dual_pipeline_gate
   failures + decode_upis/phase2 errors all in the documented pre-existing categories; the one new
   name, `test_module_registry.py`, was bug #2 above (since fixed).
-- Final full repo `pytest -q` after all fixes: **[PENDING — filled in below]**
+- Final full repo `pytest -q` after all fixes, controller-confirmed post-handoff: `Vol_Suite/tests/`
+  **1092 passed / 7 pre-existing failed / 10 skipped** (376s); module-registry test files **45 passed,
+  1 skipped**; phase-boundary pair **39 passed** — all three re-run synchronously by the controller
+  against the final committed state and matching this report's numbers exactly.
 - Transient, not a regression: `test_options_chain_scanner.py::test_chain_scanner_includes_strategy_recommendations`
   hit a live-ThetaData httpx ReadTimeout once under parallel suite load, passes in isolation
   (7.6s) — it is a live-network integration test, untouched by Task 4.
