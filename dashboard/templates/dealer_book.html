@@ -39,12 +39,12 @@ Dashboard{% endblock %} {% block content %}
 <div id="side-b" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 16px;">
   <h3>Side B — The dealer position, built from flows (150d ΔIV-signed accumulated book)</h3>
   <div id="side-b-content" class="db-side">—</div>
-  <h3 style="margin-top:16px;">Side B — the dealer position priced with today's chain (same greeks, same axes)</h3>
+  <h3 style="margin-top:16px;">Side B — the same book as $-exposures (one greek per chart, priced for A-vs-B)</h3>
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-    <div class="greek-cell"><h4 style="margin:4px 0;">Gamma (flow book)</h4><div id="greekb-gamma" class="db-side">—</div></div>
-    <div class="greek-cell"><h4 style="margin:4px 0;">Delta (flow book)</h4><div id="greekb-delta" class="db-side">—</div></div>
-    <div class="greek-cell"><h4 style="margin:4px 0;">Vanna (flow book)</h4><div id="greekb-vanna" class="db-side">—</div></div>
-    <div class="greek-cell"><h4 style="margin:4px 0;">Charm (flow book)</h4><div id="greekb-charm" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Gamma $-exposure (same book)</h4><div id="greekb-gamma" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Delta $-exposure (same book)</h4><div id="greekb-delta" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Vanna $-exposure (same book)</h4><div id="greekb-vanna" class="db-side">—</div></div>
+    <div class="greek-cell"><h4 style="margin:4px 0;">Charm $-exposure (same book)</h4><div id="greekb-charm" class="db-side">—</div></div>
   </div>
 </div>
 
