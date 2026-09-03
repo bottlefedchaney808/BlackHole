@@ -1,55 +1,67 @@
-# Task 6 Report — Cache ingest + localhost:8791 launcher
+# Task 6 Report: Comparison mode (all 5 models + Heston-vs-Bates jump contribution)
 
-**Status:** DONE
-**Commit:** `be5413f25b3919237b7a5fa571ae139421ddbb09`
-**Subject:** `feat(chart-app): cache ingest and localhost:8791 launcher`
-**Branch:** `feat/native-chart-app` (HEAD before this task: `3009528`)
+## What was implemented
 
-## Files
+- `Vol_Suite/jump_diffusion/comparison.py` — `run_comparison(chain, spot, T) -> dict`.
+  Calibrates all 5 models in `ALL_MODELS` against one option chain via the existing
+  model-agnostic `calibrate()` (Task 4), catching per-model exceptions so one model's
+  failure doesn't sink the comparison (result recorded as `None`, message printed).
+  Picks `best_fit` as the model with lowest `rmse_iv` among successful fits. When both
+  Heston and Bates calibrate successfully, re-prices both fitted models across the
+  chain's strikes via `lewis_price` + `implied_vol` and returns the strike-by-strike
+  Heston/Bates fitted IVs plus `delta_iv = bates_ivs - heston_ivs` (the "visible jump
+  contribution"). Not wired into `volatility_suite.py` or any pipeline call site, per
+  the brief.
+- `Vol_Suite/tests/test_jump_diffusion_comparison.py` — generates a synthetic chain
+  from a known `BatesModel` (with real jumps: `lam=0.6, mu_j=-0.06, sigma_j=0.1`),
+  runs `run_comparison`, and asserts all 5 model keys are present, `best_fit` is one
+  of them, and `jump_contribution["delta_iv"]` has one entry per strike.
 
-- Created: `chart_app/ingest.py`
-- Created: `chart_app/tests/test_ingest.py`
-- Created: `chart_app.bat` (verbatim brief)
-- Created: `chart_app.sh` (posix equivalent: unset PYTHONPATH/VIRTUAL_ENV, uvicorn `chart_app.server:app` on `127.0.0.1:8791`)
-- Modified: `chart_app/server.py`
+Implementation matches the brief's Step 3 code verbatim (interfaces to `ALL_MODELS`,
+`calibrate`, `lewis_price`, `implied_vol`, `ChainData` all confirmed against the real
+current files before writing — no deviations were needed).
 
-Only those five files were staged/committed. Pre-existing dirty/untracked paths (including `.superpowers/sdd/*`) were left untouched. This report is not committed.
+## TDD evidence
 
-## TDD
+1. Wrote the test file first, ran it: failed with
+   `ModuleNotFoundError: No module named 'jump_diffusion.comparison'` (confirmed).
+2. Implemented `comparison.py`.
+3. Ran again: `1 passed in 479.64s (0:07:59)` — full run, all 5 models calibrated
+   including the slow 7-parameter Bates model, well within expectations noted in the
+   task instructions (Bates calibration makes the run multi-minute; not a bug).
 
-1. **RED** — `test_refresh_cache_upserts` (brief verbatim, minus unused `SimpleNamespace`)
-   - Command: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest chart_app/tests/test_ingest.py::test_refresh_cache_upserts -q`
-   - Result: `ModuleNotFoundError: No module named 'chart_app.ingest'`
+## Files changed
 
-2. **GREEN** — `refresh_cache(cache, ticker, interval, lookback, *, daily_fn, intrad_fn) -> int`
-   - `interval == "1d"` → `daily_fn(ticker, lookback=lookback)`
-   - else → `intrad_fn(ticker, interval=interval, lookback=lookback)`
-   - upsert `payload.observations`; return row count
-   - `test_refresh_cache_upserts` passed (0.04s)
+- `C:\Users\bottl\FinancialDevelopment\Vol_Suite\jump_diffusion\comparison.py` (new)
+- `C:\Users\bottl\FinancialDevelopment\Vol_Suite\tests\test_jump_diffusion_comparison.py` (new)
 
-3. **Intrad path** — `test_refresh_cache_uses_intrad_fn` (injected `15m` payload, no network) passed.
+## Self-review
 
-4. **RED** — `test_api_refresh_uses_injected_fetchers`
-   - Result: `TypeError: create_app() got an unexpected keyword argument 'daily_fn'`
-
-5. **GREEN** — `create_app(..., daily_fn=..., intrad_fn=...)` defaults to `fetch_daily_candles` / `fetch_intraday_candles`. `POST /api/refresh` body `{"lookback": "30d"}` uses session ticker/interval. Module-level `app = create_app(BarCache(Path("artifacts/chart_app_bars.db")))` after `mkdir` of `artifacts/`.
-
-## Test summary
-
-- `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest chart_app/tests -q` → **16 passed in 0.98s**
-  - ingest: 6 new (fake payload upsert, intrad routing, injected `/api/refresh`, default fetchers, module `app` route, launchers 8791)
-  - prior chart_app tests: 10
-- `py_compile` on ingest/server/test_ingest → exit 0
-- `ruff check chart_app/ingest.py` → All checks passed
-- `git diff --check` on task files → exit 0
-- Import smoke (no network): `from chart_app.server import app` → FastAPI routes include `/api/refresh`, no `/api/order`
-
-No live 1y PH. No live 5d/15m or 30d/1d ThetaData call. Smoke was TestClient `POST /api/refresh` with an injected 1-bar `30d`/`1d` payload.
+- **Completeness**: `run_comparison` returns exactly the dict shape specified:
+  `models`, `best_fit`, `jump_contribution` (`strikes`/`heston_ivs`/`bates_ivs`/`delta_iv`).
+- **Quality**: reuses `calibrate`/`lewis_price`/`implied_vol` without reimplementing
+  any calibration or pricing logic; per-model try/except keeps the comparison robust
+  to a single model's Nelder-Mead failing to converge.
+- **Discipline**: no changes to `volatility_suite.py` or any pipeline/call-site file —
+  confirmed via `git status`/`git diff --stat` before commit; only the two new files
+  were staged and committed. No other in-flight working-tree changes (progress.md,
+  other task reports, unrelated scratch files under `VaR_Tools_Simulations/`,
+  `trading_journal/`, cron scripts) were touched or included in this commit.
+- **Testing rigor**: the test doesn't just check keys exist — it builds the synthetic
+  chain from a `BatesModel` with a real, nonzero jump component (`lam=0.6`), so the
+  test data genuinely has "jump content" for the Heston-vs-Bates overlay to be
+  measuring something real, and it asserts `delta_iv` has the correct length (one
+  value per strike), i.e., the overlay is actually computed across the full strike
+  grid rather than a stub/empty array. It does not assert `delta_iv` is nonzero or of
+  a particular sign — that's a reasonable scope boundary given the brief's own test
+  only requires length; a stronger assertion (e.g. "jump contribution should be
+  positive on average since Bates has fatter tails than the fitted Heston") is a
+  plausible follow-up but wasn't specified in the brief and calibration noise across
+  5 independent Nelder-Mead fits makes a directional assertion the brief itself
+  didn't ask for.
 
 ## Concerns
 
-- Importing `chart_app.server` now creates `artifacts/chart_app_bars.db` (gitignored) as a module-level side effect. Parent `mkdir` is extra vs the brief's one-liner so sqlite does not fail on a missing `artifacts/` dir.
-- `chart_app.sh` is not specified verbatim in the brief; it mirrors the bat (8791, clean env, `chart_app.server:app`) in dashboard.sh style and runs uvicorn in the foreground.
-- Ruff I001 / DTZ001 on `test_ingest.py` left to match the brief's naive `datetime(...)` and prior chart_app test import style. Server I001 on the long spot_history import also left.
-- Production `POST /api/refresh` without a prior `/api/symbol` uses default interval `15m`, so it calls `intrad_fn` (not daily).
-- Live bounded refresh is Task 8; this task did not hit ThetaData/PH.
+None. No blockers encountered — `calibration.py`, `models.py`, `pricer.py`,
+`implied_vol.py`, and `variance_swap_live.ChainData` all matched the brief's assumed
+interfaces exactly.

@@ -34,7 +34,8 @@ thetadata==1.0.9
 yfinance==1.5.1
 
 # --- Parsing / scraping ---
-beautifulsoup4==4.15.0
+# beautifulsoup4 removed 2026-08-31 (repo audit): zero importers repo-wide
+# (verified via git grep + sentiment-scanner sweep); lxml covers any parsing.
 xlrd==2.0.2
 
 # --- Charting / reporting ---

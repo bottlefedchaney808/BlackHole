@@ -1,0 +1,165 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"type": "text", "id": "title", "x": 430, "y": 12, "text": "FinancialDevelopment + obsidian-brain", "fontSize": 28, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "FinancialDevelopment + obsidian-brain", "autoResize": true},
+    {"type": "text", "id": "sub", "x": 470, "y": 48, "text": "code left, notes right. One note, one leg. Link, do not mix.", "fontSize": 16, "fontFamily": 1, "strokeColor": "#757575", "originalText": "code left, notes right. One note, one leg. Link, do not mix.", "autoResize": true},
+
+    {"type": "rectangle", "id": "z_repo", "x": 20, "y": 80, "width": 800, "height": 900, "backgroundColor": "#d3f9d8", "fillStyle": "solid", "strokeColor": "#22c55e", "strokeWidth": 1, "roundness": {"type": 3}, "opacity": 35},
+    {"type": "text", "id": "z_repo_t", "x": 40, "y": 90, "text": "FinancialDevelopment  (repo / code)", "fontSize": 20, "fontFamily": 1, "strokeColor": "#15803d", "originalText": "FinancialDevelopment  (repo / code)", "autoResize": true},
+
+    {"type": "rectangle", "id": "z_vault", "x": 860, "y": 80, "width": 920, "height": 900, "backgroundColor": "#e5dbff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "strokeWidth": 1, "roundness": {"type": 3}, "opacity": 35},
+    {"type": "text", "id": "z_vault_t", "x": 880, "y": 90, "text": "obsidian-brain  (vault / notes)", "fontSize": 20, "fontFamily": 1, "strokeColor": "#6d28d9", "originalText": "obsidian-brain  (vault / notes)", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_dtcc", "x": 40, "y": 140, "width": 140, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_dtcc", "type": "text"}, {"id": "a_s1", "type": "arrow"}]},
+    {"type": "text", "id": "t_dtcc", "x": 45, "y": 155, "width": 130, "height": 30, "text": "DTCC API", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_dtcc", "originalText": "DTCC API", "autoResize": true},
+
+    {"type": "arrow", "id": "a_s1", "x": 180, "y": 170, "width": 25, "height": 0, "points": [[0, 0], [25, 0]], "endArrowhead": "arrow", "strokeColor": "#1e1e1e", "startBinding": {"elementId": "r_dtcc", "fixedPoint": [1, 0.5]}, "endBinding": {"elementId": "r_load", "fixedPoint": [0, 0.5]}},
+
+    {"type": "rectangle", "id": "r_load", "x": 205, "y": 140, "width": 140, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_load", "type": "text"}, {"id": "a_s1", "type": "arrow"}, {"id": "a_s2", "type": "arrow"}]},
+    {"type": "text", "id": "t_load", "x": 210, "y": 155, "width": 130, "height": 30, "text": "db_loader", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_load", "originalText": "db_loader", "autoResize": true},
+
+    {"type": "arrow", "id": "a_s2", "x": 345, "y": 170, "width": 25, "height": 0, "points": [[0, 0], [25, 0]], "endArrowhead": "arrow", "strokeColor": "#1e1e1e", "startBinding": {"elementId": "r_load", "fixedPoint": [1, 0.5]}, "endBinding": {"elementId": "r_db", "fixedPoint": [0, 0.5]}},
+
+    {"type": "rectangle", "id": "r_db", "x": 370, "y": 140, "width": 140, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_db", "type": "text"}, {"id": "a_s2", "type": "arrow"}, {"id": "a_s3", "type": "arrow"}]},
+    {"type": "text", "id": "t_db", "x": 375, "y": 155, "width": 130, "height": 30, "text": "swaps.db", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_db", "originalText": "swaps.db", "autoResize": true},
+
+    {"type": "arrow", "id": "a_s3", "x": 510, "y": 170, "width": 25, "height": 0, "points": [[0, 0], [25, 0]], "endArrowhead": "arrow", "strokeColor": "#1e1e1e", "startBinding": {"elementId": "r_db", "fixedPoint": [1, 0.5]}, "endBinding": {"elementId": "r_orch", "fixedPoint": [0, 0.5]}},
+
+    {"type": "rectangle", "id": "r_orch", "x": 535, "y": 140, "width": 140, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_orch", "type": "text"}, {"id": "a_s3", "type": "arrow"}, {"id": "a_s4", "type": "arrow"}, {"id": "a_down", "type": "arrow"}]},
+    {"type": "text", "id": "t_orch", "x": 540, "y": 155, "width": 130, "height": 30, "text": "orchestrator", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_orch", "originalText": "orchestrator", "autoResize": true},
+
+    {"type": "arrow", "id": "a_s4", "x": 675, "y": 170, "width": 25, "height": 0, "points": [[0, 0], [25, 0]], "endArrowhead": "arrow", "strokeColor": "#1e1e1e", "startBinding": {"elementId": "r_orch", "fixedPoint": [1, 0.5]}, "endBinding": {"elementId": "r_dash", "fixedPoint": [0, 0.5]}},
+
+    {"type": "rectangle", "id": "r_dash", "x": 700, "y": 140, "width": 100, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "strokeColor": "#22c55e", "boundElements": [{"id": "t_dash", "type": "text"}, {"id": "a_s4", "type": "arrow"}]},
+    {"type": "text", "id": "t_dash", "x": 705, "y": 148, "width": 90, "height": 44, "text": "dash\n:8787", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_dash", "originalText": "dash\n:8787", "autoResize": true},
+
+    {"type": "text", "id": "spine_note", "x": 40, "y": 208, "text": "spine  |  one dashboard + one scheduler. CWD-only (worktrees invisible until merge)", "fontSize": 14, "fontFamily": 1, "strokeColor": "#757575", "originalText": "spine  |  one dashboard + one scheduler. CWD-only (worktrees invisible until merge)", "autoResize": true},
+
+    {"type": "arrow", "id": "a_down", "x": 605, "y": 200, "width": 0, "height": 40, "points": [[0, 0], [0, 40]], "endArrowhead": "arrow", "strokeColor": "#8b5cf6", "startBinding": {"elementId": "r_orch", "fixedPoint": [0.5, 1]}, "endBinding": {"elementId": "r_vol", "fixedPoint": [0.5, 0]}},
+
+    {"type": "rectangle", "id": "r_vol", "x": 40, "y": 250, "width": 175, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_vol", "type": "text"}, {"id": "a_down", "type": "arrow"}]},
+    {"type": "text", "id": "t_vol", "x": 45, "y": 258, "width": 165, "height": 54, "text": "Vol_Suite\ndealer / GEX / bands", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_vol", "originalText": "Vol_Suite\ndealer / GEX / bands", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_opt", "x": 230, "y": 250, "width": 175, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_opt", "type": "text"}]},
+    {"type": "text", "id": "t_opt", "x": 235, "y": 258, "width": 165, "height": 54, "text": "Options_Suite\npricing / greeks", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_opt", "originalText": "Options_Suite\npricing / greeks", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_var", "x": 420, "y": 250, "width": 175, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_var", "type": "text"}]},
+    {"type": "text", "id": "t_var", "x": 425, "y": 258, "width": 165, "height": 54, "text": "VaR_Tools\nmodule 1 in context", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_var", "originalText": "VaR_Tools\nmodule 1 in context", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_sent", "x": 610, "y": 250, "width": 190, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeColor": "#ef4444", "boundElements": [{"id": "t_sent", "type": "text"}]},
+    {"type": "text", "id": "t_sent", "x": 615, "y": 258, "width": 180, "height": 54, "text": "sentiment-scanner\nskipped in unified", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_sent", "originalText": "sentiment-scanner\nskipped in unified", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_dir", "x": 40, "y": 340, "width": 175, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_dir", "type": "text"}]},
+    {"type": "text", "id": "t_dir", "x": 45, "y": 350, "width": 165, "height": 40, "text": "Direction/", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_dir", "originalText": "Direction/", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_tools", "x": 230, "y": 340, "width": 175, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_tools", "type": "text"}]},
+    {"type": "text", "id": "t_tools", "x": 235, "y": 350, "width": 165, "height": 40, "text": "Tools/", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_tools", "originalText": "Tools/", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_bt", "x": 420, "y": 340, "width": 175, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_bt", "type": "text"}]},
+    {"type": "text", "id": "t_bt", "x": 425, "y": 350, "width": 165, "height": 40, "text": "Backtests/", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_bt", "originalText": "Backtests/", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_ui", "x": 610, "y": 340, "width": 190, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_ui", "type": "text"}]},
+    {"type": "text", "id": "t_ui", "x": 615, "y": 348, "width": 180, "height": 44, "text": "chart_app +\nswaps_dashboard", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_ui", "originalText": "chart_app +\nswaps_dashboard", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_shared", "x": 40, "y": 420, "width": 175, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_shared", "type": "text"}]},
+    {"type": "text", "id": "t_shared", "x": 45, "y": 428, "width": 165, "height": 54, "text": "shared/\nThetaData / PH", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_shared", "originalText": "shared/\nThetaData / PH", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_tv", "x": 230, "y": 420, "width": 175, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_tv", "type": "text"}]},
+    {"type": "text", "id": "t_tv", "x": 235, "y": 428, "width": 165, "height": 54, "text": "tradingview-mcp\nDesktop CDP", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_tv", "originalText": "tradingview-mcp\nDesktop CDP", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_k8s", "x": 420, "y": 420, "width": 175, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_k8s", "type": "text"}]},
+    {"type": "text", "id": "t_k8s", "x": 425, "y": 428, "width": 165, "height": 54, "text": "k8s / docker\ndeploy scaffold", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_k8s", "originalText": "k8s / docker\ndeploy scaffold", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_bh", "x": 610, "y": 420, "width": 190, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_bh", "type": "text"}]},
+    {"type": "text", "id": "t_bh", "x": 615, "y": 428, "width": 180, "height": 54, "text": "blackhole_investments\nown app", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_bh", "originalText": "blackhole_investments\nown app", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_tj", "x": 40, "y": 510, "width": 760, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_tj", "type": "text"}, {"id": "a_arch", "type": "arrow"}]},
+    {"type": "text", "id": "t_tj", "x": 45, "y": 520, "width": 750, "height": 40, "text": "trading_journal/   -- Trading leg inside the repo. Do not file as Development.", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_tj", "originalText": "trading_journal/   -- Trading leg inside the repo. Do not file as Development.", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_docs", "x": 40, "y": 590, "width": 370, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_docs", "type": "text"}]},
+    {"type": "text", "id": "t_docs", "x": 45, "y": 598, "width": 360, "height": 44, "text": "docs/  START_HERE + CLAUDE.md\nPH wiki, plans, audits", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_docs", "originalText": "docs/  START_HERE + CLAUDE.md\nPH wiki, plans, audits", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_dual", "x": 430, "y": 590, "width": 370, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_dual", "type": "text"}]},
+    {"type": "text", "id": "t_dual", "x": 435, "y": 598, "width": 360, "height": 44, "text": "dual-book on master 7570934\nexposure snapshot vs position book", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_dual", "originalText": "dual-book on master 7570934\nexposure snapshot vs position book", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_jason", "x": 880, "y": 130, "width": 200, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_jason", "type": "text"}]},
+    {"type": "text", "id": "t_jason", "x": 885, "y": 142, "width": 190, "height": 30, "text": "Jason", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_jason", "originalText": "Jason", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_home", "x": 1100, "y": 130, "width": 200, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_home", "type": "text"}]},
+    {"type": "text", "id": "t_home", "x": 1105, "y": 142, "width": 190, "height": 30, "text": "Home", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_home", "originalText": "Home", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_inbox", "x": 1320, "y": 130, "width": 200, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_inbox", "type": "text"}]},
+    {"type": "text", "id": "t_inbox", "x": 1325, "y": 142, "width": 190, "height": 30, "text": "Inbox  (unsorted)", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_inbox", "originalText": "Inbox  (unsorted)", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_daily", "x": 1540, "y": 130, "width": 210, "height": 55, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_daily", "type": "text"}]},
+    {"type": "text", "id": "t_daily", "x": 1545, "y": 142, "width": 200, "height": 30, "text": "Daily/YYYY-MM-DD", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_daily", "originalText": "Daily/YYYY-MM-DD", "autoResize": true},
+
+    {"type": "rectangle", "id": "h_con", "x": 880, "y": 210, "width": 270, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_hcon", "type": "text"}]},
+    {"type": "text", "id": "t_hcon", "x": 885, "y": 220, "width": 260, "height": 30, "text": "Construction", "fontSize": 20, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "h_con", "originalText": "Construction", "autoResize": true},
+
+    {"type": "rectangle", "id": "h_dev", "x": 1170, "y": 210, "width": 270, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_hdev", "type": "text"}]},
+    {"type": "text", "id": "t_hdev", "x": 1175, "y": 220, "width": 260, "height": 30, "text": "Development", "fontSize": 20, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "h_dev", "originalText": "Development", "autoResize": true},
+
+    {"type": "rectangle", "id": "h_trd", "x": 1460, "y": 210, "width": 290, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_htrd", "type": "text"}]},
+    {"type": "text", "id": "t_htrd", "x": 1465, "y": 220, "width": 280, "height": 30, "text": "Trading", "fontSize": 20, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "h_trd", "originalText": "Trading", "autoResize": true},
+
+    {"type": "rectangle", "id": "c_jobs", "x": 880, "y": 280, "width": 270, "height": 130, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_jobs", "type": "text"}, {"id": "a_link", "type": "arrow"}]},
+    {"type": "text", "id": "t_jobs", "x": 885, "y": 288, "width": 260, "height": 114, "text": "Jobs/\nFairchild, College, Napa\nManchester, Verdugo\nGarden, Aventine", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "c_jobs", "originalText": "Jobs/\nFairchild, College, Napa\nManchester, Verdugo\nGarden, Aventine", "autoResize": true},
+
+    {"type": "rectangle", "id": "c_est", "x": 880, "y": 430, "width": 270, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_est", "type": "text"}]},
+    {"type": "text", "id": "t_est", "x": 885, "y": 438, "width": 260, "height": 54, "text": "Estimating + Labor rates\nHOA LA market", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "c_est", "originalText": "Estimating + Labor rates\nHOA LA market", "autoResize": true},
+
+    {"type": "rectangle", "id": "c_tif", "x": 880, "y": 520, "width": 270, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeColor": "#ef4444", "boundElements": [{"id": "t_tif", "type": "text"}]},
+    {"type": "text", "id": "t_tif", "x": 885, "y": 528, "width": 260, "height": 54, "text": "Tiferet archive\n399 folders -- do not import", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "c_tif", "originalText": "Tiferet archive\n399 folders -- do not import", "autoResize": true},
+
+    {"type": "rectangle", "id": "c_gdrive", "x": 880, "y": 610, "width": 270, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "strokeColor": "#ef4444", "boundElements": [{"id": "t_gdrive", "type": "text"}]},
+    {"type": "text", "id": "t_gdrive", "x": 885, "y": 618, "width": 260, "height": 54, "text": "Google Drive bids\nlive dump -- do not import", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "c_gdrive", "originalText": "Google Drive bids\nlive dump -- do not import", "autoResize": true},
+
+    {"type": "rectangle", "id": "d_fd", "x": 1170, "y": 280, "width": 270, "height": 100, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_dfd", "type": "text"}, {"id": "a_map", "type": "arrow"}]},
+    {"type": "text", "id": "t_dfd", "x": 1175, "y": 288, "width": 260, "height": 84, "text": "FinancialDevelopment\nFD Map / Open work\nSuites, Swaps, Dashboard", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "d_fd", "originalText": "FinancialDevelopment\nFD Map / Open work\nSuites, Swaps, Dashboard", "autoResize": true},
+
+    {"type": "rectangle", "id": "d_cd", "x": 1170, "y": 400, "width": 270, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "strokeColor": "#4a9eed", "boundElements": [{"id": "t_dcd", "type": "text"}, {"id": "a_link", "type": "arrow"}]},
+    {"type": "text", "id": "t_dcd", "x": 1175, "y": 408, "width": 260, "height": 54, "text": "ConstructionDevelopment\nestimator product (code)", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "d_cd", "originalText": "ConstructionDevelopment\nestimator product (code)", "autoResize": true},
+
+    {"type": "rectangle", "id": "d_sd", "x": 1170, "y": 490, "width": 270, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_dsd", "type": "text"}]},
+    {"type": "text", "id": "t_dsd", "x": 1175, "y": 498, "width": 260, "height": 54, "text": "SoundDevelopment\nAmbiToolbox, Zinko, X-Fi", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "d_sd", "originalText": "SoundDevelopment\nAmbiToolbox, Zinko, X-Fi", "autoResize": true},
+
+    {"type": "rectangle", "id": "d_hermes", "x": 1170, "y": 580, "width": 270, "height": 100, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "strokeColor": "#8b5cf6", "boundElements": [{"id": "t_dh", "type": "text"}]},
+    {"type": "text", "id": "t_dh", "x": 1175, "y": 588, "width": 260, "height": 84, "text": "Hermes\nskill catalog, Qwen\nCloud instance, vault handoff", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "d_hermes", "originalText": "Hermes\nskill catalog, Qwen\nCloud instance, vault handoff", "autoResize": true},
+
+    {"type": "rectangle", "id": "tr_j", "x": 1460, "y": 280, "width": 290, "height": 70, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_trj", "type": "text"}]},
+    {"type": "text", "id": "t_trj", "x": 1465, "y": 295, "width": 280, "height": 40, "text": "Trading journal", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "tr_j", "originalText": "Trading journal", "autoResize": true},
+
+    {"type": "rectangle", "id": "tr_p", "x": 1460, "y": 370, "width": 290, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_trp", "type": "text"}]},
+    {"type": "text", "id": "t_trp", "x": 1465, "y": 385, "width": 280, "height": 30, "text": "Positions", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "tr_p", "originalText": "Positions", "autoResize": true},
+
+    {"type": "rectangle", "id": "tr_r", "x": 1460, "y": 450, "width": 290, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_trr", "type": "text"}]},
+    {"type": "text", "id": "t_trr", "x": 1465, "y": 458, "width": 280, "height": 64, "text": "Research\ndescriptive / conditional\nnothing auto-promotes", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "tr_r", "originalText": "Research\ndescriptive / conditional\nnothing auto-promotes", "autoResize": true},
+
+    {"type": "rectangle", "id": "tr_arch", "x": 1460, "y": 550, "width": 290, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_tra", "type": "text"}, {"id": "a_arch", "type": "arrow"}]},
+    {"type": "text", "id": "t_tra", "x": 1465, "y": 558, "width": 280, "height": 64, "text": "FD Journal archive\ndesk notes, alerts,\npowerhour, x_buzz", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "tr_arch", "originalText": "FD Journal archive\ndesk notes, alerts,\npowerhour, x_buzz", "autoResize": true},
+
+    {"type": "rectangle", "id": "tr_op", "x": 1460, "y": 650, "width": 290, "height": 60, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "strokeColor": "#0d9488", "boundElements": [{"id": "t_trop", "type": "text"}]},
+    {"type": "text", "id": "t_trop", "x": 1465, "y": 665, "width": 280, "height": 30, "text": "Operational", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "tr_op", "originalText": "Operational", "autoResize": true},
+
+    {"type": "arrow", "id": "a_arch", "x": 800, "y": 540, "width": 660, "height": 50, "points": [[0, 0], [660, 50]], "endArrowhead": "arrow", "strokeColor": "#f59e0b", "strokeWidth": 2, "startBinding": {"elementId": "r_tj", "fixedPoint": [1, 0.5]}, "endBinding": {"elementId": "tr_arch", "fixedPoint": [0, 0.5]}, "boundElements": [{"id": "t_aarch", "type": "text"}]},
+    {"type": "text", "id": "t_aarch", "x": 1040, "y": 545, "width": 140, "height": 20, "text": "copied archive", "fontSize": 14, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "a_arch", "originalText": "copied archive", "autoResize": true},
+
+    {"type": "arrow", "id": "a_link", "x": 1170, "y": 435, "width": -20, "height": -90, "points": [[0, 0], [-20, -90]], "endArrowhead": "arrow", "strokeColor": "#4a9eed", "strokeWidth": 2, "strokeStyle": "dashed", "startBinding": {"elementId": "d_cd", "fixedPoint": [0, 0.5]}, "endBinding": {"elementId": "c_jobs", "fixedPoint": [1, 0.7]}, "boundElements": [{"id": "t_alink", "type": "text"}]},
+    {"type": "text", "id": "t_alink", "x": 1090, "y": 370, "width": 90, "height": 20, "text": "link only", "fontSize": 14, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "a_link", "originalText": "link only", "autoResize": true},
+
+    {"type": "arrow", "id": "a_map", "x": 1170, "y": 330, "width": -350, "height": -80, "points": [[0, 0], [-350, -80]], "endArrowhead": "arrow", "strokeColor": "#4a9eed", "strokeWidth": 2, "strokeStyle": "dashed", "startBinding": {"elementId": "d_fd", "fixedPoint": [0, 0.5]}, "endBinding": {"elementId": "r_vol", "fixedPoint": [1, 0.5]}, "boundElements": [{"id": "t_amap", "type": "text"}]},
+    {"type": "text", "id": "t_amap", "x": 920, "y": 270, "width": 90, "height": 20, "text": "FD Map", "fontSize": 14, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "a_map", "originalText": "FD Map", "autoResize": true},
+
+    {"type": "rectangle", "id": "r_foot", "x": 40, "y": 670, "width": 760, "height": 280, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_foot", "type": "text"}]},
+    {"type": "text", "id": "t_foot", "x": 50, "y": 685, "width": 740, "height": 250, "text": "Also in repo (not all drawn):\nadapters, option_chains, orchestrator_output,\noutputs, scripts, system, tests, migrations,\n_broker_control, sqlite-tools, rh_exports\n\nGit: FinancialDevelopment (this tree)\nVault git: bottlefedchaney808/obsidian-brain\nClone: C:/Users/bottl/obsidian-vault", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "r_foot", "originalText": "Also in repo (not all drawn):\nadapters, option_chains, orchestrator_output,\noutputs, scripts, system, tests, migrations,\n_broker_control, sqlite-tools, rh_exports\n\nGit: FinancialDevelopment (this tree)\nVault git: bottlefedchaney808/obsidian-brain\nClone: C:/Users/bottl/obsidian-vault", "autoResize": true},
+
+    {"type": "rectangle", "id": "v_foot", "x": 880, "y": 700, "width": 870, "height": 250, "roundness": {"type": 3}, "backgroundColor": "#fff3bf", "fillStyle": "solid", "strokeColor": "#f59e0b", "boundElements": [{"id": "t_vfoot", "type": "text"}]},
+    {"type": "text", "id": "t_vfoot", "x": 890, "y": 715, "width": 850, "height": 220, "text": "Vault rule: a note belongs to one leg.\nIf it touches two, primary leg + [[wikilink]]. Never duplicate.\n\nAlso: Home/Lawn Repair Plan, Attachments/, Templates/\nTrading research stays descriptive. Software that prices jobs\nlives under Development, not Construction.", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "v_foot", "originalText": "Vault rule: a note belongs to one leg.\nIf it touches two, primary leg + [[wikilink]]. Never duplicate.\n\nAlso: Home/Lawn Repair Plan, Attachments/, Templates/\nTrading research stays descriptive. Software that prices jobs\nlives under Development, not Construction.", "autoResize": true}
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff"
+  }
+}

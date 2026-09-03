@@ -117,3 +117,14 @@ _live_scan*.py
 _live_scan_out.txt
 iv_sweep_results.json
 scratch_dealer_pkg/
+
+# Push-prep 2026-09-03: root run outputs + caches stay out of the clone
+*_greek_exposure_comparison_*.png
+Vol_Suite/_expiry_falsifier_cache/
+VaR_Tools_Simulations/var_*_run_*.json
+_iv_alert_result.json
+iv_alert_scan_results.json
+scripts/vol_watchdog_out.json
+_iv_alert_scratch.py
+_iv_verify_scratch.py
+scratch_iv_watch.py

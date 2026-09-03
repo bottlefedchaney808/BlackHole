@@ -1,54 +1,80 @@
-# Task 5 Report — ECharts window (vendored, no CDN)
+# Task 5 Report: Calibration round-trip tests for remaining 4 models
 
-**Status:** DONE
-**Commit:** `3009528607f28491f64123800a2158421270503b`
-**Subject:** `feat(chart-app): echarts window for one ticker`
-**Branch:** `feat/native-chart-app` (HEAD before this task: `897a80a`)
+## Status: DONE
 
-## Files
+## What was implemented
 
-- Created: `chart_app/static/index.html`
-- Created: `chart_app/static/vendor/echarts.min.js` (Apache ECharts 6.1.0, `npm pack echarts` once; 1,121,883 bytes)
-- Modified: `chart_app/server.py`
-- Modified: `chart_app/tests/test_server.py`
+Appended 4 new tests to `Vol_Suite/tests/test_jump_diffusion_calibration.py`, exactly as specified
+in the task brief:
 
-Only those four files were staged/committed. Pre-existing dirty/untracked paths (including `.superpowers/sdd/*`) were left untouched. This report is not committed.
+- `test_heston_calibration_recovers_known_params` — HestonModel(kappa=3.2, theta=0.06, xi=0.9,
+  rho=-0.75, v0=0.05), asserts `rmse_iv < 0.01`.
+- `test_bates_calibration_recovers_known_params` — BatesModel(kappa=3.0, theta=0.06, xi=0.8,
+  rho=-0.7, v0=0.05, lam=0.9, mu_j=-0.09, sigma_j=0.15), asserts `rmse_iv < 0.015` (looser
+  tolerance for the 7-param fit).
+- `test_kou_calibration_recovers_known_params` — KouModel(sigma=0.24, lam=0.8, p=0.35, eta1=12.0,
+  eta2=6.0), asserts `rmse_iv < 0.01`.
+- `test_vg_calibration_recovers_known_params` — VarianceGammaModel(sigma=0.19, nu=0.25,
+  theta_vg=-0.12), asserts `rmse_iv < 0.01`.
 
-## TDD
+Each true-parameter set was deliberately offset 20-50% from `calibration.py`'s `_DEFAULT_SEEDS`
+per the brief's CARL-review rationale, so Nelder-Mead has to actually search.
 
-1. **RED** — added `test_root_serves_chart_window`:
-   - `GET /` 200
-   - body contains `id="chart"`
-   - body contains `echarts` or `chart-app`
-   - body has no `cdn` substring
-   - `GET /static/vendor/echarts.min.js` 200 and payload > 10k
-   Command: `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest chart_app/tests/test_server.py::test_root_serves_chart_window -q`
-   Result: FAIL `assert 'id="chart"' in 'chart-app'`
+No changes were made to `calibration.py`, `models.py`, or `pricer.py` — `calibrate()` proved fully
+model-agnostic as expected; none of the 4 new tests revealed a defect.
 
-2. **GREEN** — vendored `echarts.min.js`, wrote vanilla `index.html`, mounted StaticFiles `/static`, serve `index.html` at `GET /`.
-   - Dark `#0e1117`; ticker/interval + live stamp only
-   - Candlestick from `state.bars`; volume second grid
-   - Lines: ema20, ema50, vwap, bb_upper/mid/lower
-   - Scatter markers: buy lime ▲, add gold ◆, hold gray ●, sell orchid ▼, none skip
-   - Poll `GET /api/state` every 5s
-   - Local script `/static/vendor/echarts.min.js` only
-   - No `/api/order`. No bind. No live PH.
+The added `from jump_diffusion.models import HestonModel, BatesModel, KouModel, VarianceGammaModel`
+import line was moved/reordered by the repo's ruff-format pre-commit hook to sit alongside the
+existing `VarianceGammaModel` import already present in the file (it now reads
+`from jump_diffusion.models import BatesModel, HestonModel, KouModel` — `VarianceGammaModel` was
+already imported at the top of the file for the pre-existing infeasible-log-domain test). This is a
+cosmetic formatter artifact, not a content change.
 
-3. **PASS**
-   - `env -u PYTHONPATH -u VIRTUAL_ENV .venv/Scripts/python.exe -m pytest chart_app/tests/test_server.py -q` → `3 passed in 0.93s`
-   - same interpreter `chart_app/tests` → `10 passed in 0.95s` (after HTML cleanup)
+## TDD evidence
 
-## Other verification
+Before adding the tests, the 4 new model classes were not imported/used anywhere in the test file,
+so collection would have failed (`NameError`/`ImportError`) per the brief's Step 2 expectation. I
+proceeded straight to Step 4 (brief explicitly says no new implementation is needed at Step 3) and
+ran the full file:
 
-- `py_compile chart_app/server.py chart_app/tests/test_server.py` → exit 0
-- `ruff check chart_app/server.py chart_app/tests/test_server.py` → I001 on `test_server.py` import order (pre-existing Task 4 style; file left matching prior tasks)
-- `git diff --check` on changed text files → exit 0
-- `index.html` has no `http` / `cdn` script tags
+```
+cd Vol_Suite && ../.venv/Scripts/python.exe -m pytest tests/test_jump_diffusion_calibration.py -v
+```
+
+Result: **6 passed** (2 pre-existing Merton/VG tests + 4 new ones), 3 warnings (pre-existing,
+from the infeasible-log-domain VG test's deliberate edge-case probing — `invalid value encountered
+in log`, a scipy `IntegrationWarning`, and `Mean of empty slice`; none from the 4 new tests).
+Runtime: 438.9s (~7.3 min) total for the whole file, entirely due to Nelder-Mead search cost across
+4 multi-parameter models with real seed offsets — no test needed a `maxiter` bump or any tolerance
+change from what the brief specified.
+
+## Files changed
+
+- `C:\Users\bottl\FinancialDevelopment\Vol_Suite\tests\test_jump_diffusion_calibration.py`
+  (+58 lines, purely additive — `git diff --stat` confirms 0 deletions)
+
+## Self-review findings
+
+- All 4 new tests present, passing, matching the brief's brief text verbatim (params, tolerances,
+  docstrings).
+- Pre-existing 2 tests (`test_merton_calibration_recovers_known_params`,
+  `test_variance_gamma_calibration_survives_infeasible_log_domain`) untouched and still passing —
+  confirmed via full-file diff (`git diff --stat` shows only insertions, no deletions/modifications
+  to existing lines).
+- No changes to `calibration.py`/`models.py`/`pricer.py`.
+- No scope creep: nothing else in the file restructured; new tests simply appended at the end.
+
+## Commit
+
+```
+5833fb3 test(vol-suite): verify calibration round-trip for all 5 jump-diffusion models
+```
+
+Committed exactly per the brief's specified git commands (`git add
+Vol_Suite/tests/test_jump_diffusion_calibration.py Vol_Suite/jump_diffusion/calibration.py` —
+`calibration.py` had no working-tree changes to stage, so the commit only contains the test file).
 
 ## Concerns
 
-- No browser open / visual smoke (Task 6).
-- Ruff I001 on `test_server.py` import order left as-is (same as Tasks 1–4).
-- Sell marker is ECharts `triangle` with `symbolRotate: 180`, not a custom path.
-- Vendored min.js is ~1.1MB text; git printed a CRLF warning on add. Functionally a single-line minified file.
-- Test also asserts vendor JS is served and the HTML has no `cdn` substring — slightly beyond the brief's `id="chart"` check.
+None. Convergence was slow (~7 min for the whole file) but every test passed on the first run at
+the brief's stated tolerances, with no need to raise `maxiter` or touch any "true" parameter value.
