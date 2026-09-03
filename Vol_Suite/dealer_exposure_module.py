@@ -58,7 +58,6 @@ def fetch_dealer_exposure(
     any failure -- see module docstring's fail-loud contract.
     """
     from dealer_positioning import (
-        plot_expiry_book_greek_exposure,
         plot_expiry_book_heatmap,
         plot_expiry_book_single_greek,
     )
@@ -77,13 +76,12 @@ def fetch_dealer_exposure(
         result = fetch_production_result(td, ticker, resolved_expiry)
         interp = format_production_interp(result)
         files = [
-            plot_expiry_book_greek_exposure(result, output_dir=output_dir),
             plot_expiry_book_heatmap(result, output_dir=output_dir),
         ]
-        # Dealer Book tab extras (Jason: "more images, keep what we have,
-        # we have screen room"): one LARGE single-greek chart per greek,
-        # rendered from the SAME fetched snapshot -- no extra data pulls.
-        # Best-effort: a charting failure must not fail the fetch.
+        # Chain exposure per greek, one LARGE chart each (gamma/delta/vanna/
+        # charm) -- replaces the old combined 2x2 comparison (same data,
+        # duplicated). Rendered from the SAME fetched snapshot -- no extra
+        # data pulls. Best-effort: a charting failure must not fail the fetch.
         for _g in ("gamma", "delta", "vanna", "charm"):
             try:
                 files.append(

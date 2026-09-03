@@ -18,7 +18,7 @@ Dashboard{% endblock %} {% block content %}
   <span id="db-status" class="small muted"></span>
 </div>
 
-<!-- Full-width: combined 4-greek comparison + hedging heatmap (Side A) -->
+<!-- Full-width: hedging heatmap (Side A overview) -->
 <div id="side-a" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 12px;">
   <h3>Side A — Pure chain exposure, selected expiry (as it sits)</h3>
   <div id="side-a-content" class="db-side">—</div>
@@ -143,7 +143,7 @@ Dashboard{% endblock %} {% block content %}
     <tr>
       <td>Render</td>
       <td class="mono">dealer_book.html + /files</td>
-      <td>Full-width combined 4-greek comparison + hedging heatmap, then one large chart per greek per method (2×2 grids), then the position-book 4-panel + heatmap. Artifacts archived under <code>artifacts/dealer_book/</code>; served sandboxed to that tree.</td>
+      <td>Full-width hedging heatmap, then one large chart per greek for the chain (Side A) and for the dealer position (Side B) in 2×2 grids, then the position-book 4-panel. The old combined 2×2 comparison was removed — same data as the big singles, duplicated. Artifacts archived under <code>artifacts/dealer_book/</code>; served sandboxed to that tree.</td>
     </tr>
   </table>
 
@@ -266,7 +266,7 @@ Dashboard{% endblock %} {% block content %}
         status.textContent = data.error;
         return;
       }
-      // Side A: combined comparison + heatmap, full width on top
+      // Side A: hedging heatmap, full width on top
       renderSide("side-a-content", data.side_a || {});
       // Big singles: route by filename tag -> grid cells (A whole chain, B flow book)
       const singles = data.greeks || {};

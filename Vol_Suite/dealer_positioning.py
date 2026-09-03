@@ -1857,33 +1857,37 @@ def plot_expiry_book_single_greek(result, greek: str, output_dir: str | None = N
                    else "exposure snapshot (no intraday flow)")
 
     fig = plt.figure(figsize=(16, 9), facecolor=DARK_BG)
-    ax = fig.add_axes([0.06, 0.07, 0.90, 0.84])
-    _style_axis(ax, f"{result.ticker} {title}", "Strike", ylabel)
-    norm = plt.Normalize(vmin=-max(abs(vals).max(), 1e-9),
-                         vmax=max(abs(vals).max(), 1e-9))
-    colors = [GAMMA_BAR_CMAP(norm(v)) for v in vals]
+    ax = fig.add_axes([0.06, 0.07, 0.90, 0.86])
+    # UI-standard styling (matches _greek_panel / position-book panels):
+    # flat pos/neg colors, Positive-Negative legend, spot/flip vlines.
+    _style_axis(ax, "", "Strike", ylabel)
+    pos_color, neg_color = ACCENT_BLUE, ACCENT_RED
+    colors = [pos_color if v >= 0 else neg_color for v in vals]
     bar_width = (
         (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5) * 0.7)
         if len(K) else np.array([])
     )
     ax.bar(K, vals, width=bar_width, color=colors, alpha=0.9, edgecolor="none")
-    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.5,
+    ax.axhline(y=0, color="#8b949e", linewidth=0.8, alpha=0.5)
+    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2,
                alpha=0.9, zorder=5)
     flip = getattr(getattr(result, "execution_locus", None), "local_gamma_boundary",
                    None)
     if flip:
-        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.5,
+        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.2,
                    alpha=0.9, zorder=5)
-        _add_annotation_box(ax, flip, ax.get_ylim()[1] * 0.85,
-                            f"Γ-Flip ${flip:.2f}", ACCENT_GOLD, ha="center")
-    ax.axhline(y=0, color="#8b949e", linewidth=0.8, alpha=0.5)
-    _add_annotation_box(ax, spot, ax.get_ylim()[1] * 0.97,
-                        f"Spot ${spot:.2f}", ACCENT_BLUE, ha="center")
+    from matplotlib.patches import Patch
+    ax.legend(
+        handles=[Patch(facecolor=pos_color, label="Positive"),
+                 Patch(facecolor=neg_color, label="Negative")],
+        loc="upper right", fontsize=10, facecolor=PANEL_BG,
+        edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, framealpha=0.85,
+    )
 
     fig.text(0.5, 0.965,
-             f"{result.ticker} Dealer Book — {greek.upper()} — expiry "
+             f"{result.ticker} Chain Exposure — {greek.upper()} — expiry "
              f"{result.expiry} · {book_suffix}",
-             color=TEXT_COLOR, fontsize=15, fontweight="bold", ha="center")
+             color=TEXT_COLOR, fontsize=16, fontweight="bold", ha="center")
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
