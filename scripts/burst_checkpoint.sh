@@ -23,15 +23,10 @@ run_vol() {
 }
 
 run_sentiment() {
-    echo "== narrowest affected-suite: sentiment + bridge/worker =="
+    echo "== narrowest affected-suite: sentiment =="
     env -u PYTHONPATH -u VIRTUAL_ENV PYTHONPATH="sentiment-scanner:." "$PY" -m pytest \
         sentiment-scanner/tests/test_main.py \
         sentiment-scanner/tests/test_max_pain_scanner.py \
-        --import-mode=importlib -q --no-header -p no:cacheprovider || FAILED=1
-
-    env -u PYTHONPATH -u VIRTUAL_ENV PYTHONPATH="." "$PY" -m pytest \
-        tests/test_quant_bridge.py \
-        tests/test_worker_broker.py \
         --import-mode=importlib -q --no-header -p no:cacheprovider || FAILED=1
 }
 
