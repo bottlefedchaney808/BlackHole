@@ -1867,15 +1867,16 @@ def plot_expiry_book_single_greek(result, greek: str, output_dir: str | None = N
         (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5) * 0.7)
         if len(K) else np.array([])
     )
-    ax.bar(K, vals, width=bar_width, color=colors, alpha=0.9, edgecolor="none")
-    ax.axhline(y=0, color="#8b949e", linewidth=0.8, alpha=0.5)
+    ax.bar(K, vals, width=bar_width, color=colors, alpha=1.0,
+           edgecolor=colors, linewidth=0.6)
+    ax.axhline(y=0, color=TEXT_COLOR, linewidth=1.0, alpha=0.85)
     ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2,
-               alpha=0.9, zorder=5)
+               alpha=0.95, zorder=5)
     flip = getattr(getattr(result, "execution_locus", None), "local_gamma_boundary",
                    None)
     if flip:
         ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.2,
-                   alpha=0.9, zorder=5)
+                   alpha=0.95, zorder=5)
     from matplotlib.patches import Patch
     ax.legend(
         handles=[Patch(facecolor=pos_color, label="Positive"),
@@ -1989,25 +1990,26 @@ def plot_flow_book_single_greek(
 
     fig = plt.figure(figsize=(16, 9), facecolor=DARK_BG)
     ax = fig.add_axes([0.06, 0.07, 0.90, 0.84])
+    # UI-standard styling: flat pos/neg, full opacity, matching Side A's charts.
     _style_axis(ax, f"{result.ticker} {title}", "Strike", ylabel)
-    norm = plt.Normalize(vmin=-max(abs(vals).max(), 1e-9),
-                         vmax=max(abs(vals).max(), 1e-9))
-    colors = [GAMMA_BAR_CMAP(norm(v)) for v in vals]
+    pos_color, neg_color = ACCENT_BLUE, ACCENT_RED
+    colors = [pos_color if v >= 0 else neg_color for v in vals]
     bar_width = (
         (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5) * 0.7)
         if len(K) else np.array([])
     )
-    ax.bar(K, vals, width=bar_width, color=colors, alpha=0.9, edgecolor="none")
-    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.5,
-               alpha=0.9, zorder=5)
+    ax.bar(K, vals, width=bar_width, color=colors, alpha=1.0,
+           edgecolor=colors, linewidth=0.6)
+    ax.axhline(y=0, color=TEXT_COLOR, linewidth=1.0, alpha=0.85)
+    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2,
+               alpha=0.95, zorder=5)
     flip = getattr(getattr(result, "execution_locus", None), "local_gamma_boundary",
                    None)
     if flip:
-        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.5,
-                   alpha=0.9, zorder=5)
+        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.2,
+                   alpha=0.95, zorder=5)
         _add_annotation_box(ax, flip, ax.get_ylim()[1] * 0.85,
                             f"Γ-Flip ${flip:.2f}", ACCENT_GOLD, ha="center")
-    ax.axhline(y=0, color="#8b949e", linewidth=0.8, alpha=0.5)
     _add_annotation_box(ax, spot, ax.get_ylim()[1] * 0.97,
                         f"Spot ${spot:.2f}", ACCENT_BLUE, ha="center")
 
