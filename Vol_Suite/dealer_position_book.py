@@ -207,6 +207,10 @@ def accumulate_position_book(
 
     position: dict[tuple[float, str], float] = {}
     daily_trace: list[dict] = []
+    # Last-observed OI per (expiry, strike, right), carried forward across
+    # days where the vendor drops a strike -- the baseline that turns
+    # "sparse endpoint gap" from a skip into a solved delta.
+    _last_oi_by_key: dict[tuple[str, float, str], float] = {}
 
     # Neutral seed: day 1 contributes nothing (no prev day to Δ against).
     if days:
@@ -343,12 +347,26 @@ def accumulate_position_book(
                 except (TypeError, ValueError):
                     continue
                 if (k, right) not in rows_p_map:
-                    # Sparse endpoint gap: strike missing in prev day -> skip
-                    # (mirror replication_reference.py:899-905).
+                    # NEW-STRIKE RESOLUTION (was: sparse endpoint gap -> skip).
+                    # Absence in prev day is ambiguous: brand-new strike
+                    # (baseline truly 0) or vendor dropped it that day (baseline
+                    # exists but unobserved). SOLVE rather than skip: carry the
+                    # strike's LAST OBSERVED OI forward as the baseline and
+                    # attribute the whole observed change as flow. Unobserved
+                    # days contribute nothing by construction (no rows that
+                    # day), so this converges to "change since last seen" --
+                    # the same quantity a complete vendor feed would give,
+                    # without fabricating flow for missing days.
+                    baseline = _last_oi_by_key.get((expiry, k, right))
+                    if baseline is None:
+                        # Never observed before -> genuinely new listing.
+                        baseline = 0.0
+                    delta_oi = oi_t - baseline
                     n_new_strikes += 1
-                    continue
-                delta_oi = oi_t - rows_p_map[(k, right)]
+                else:
+                    delta_oi = oi_t - rows_p_map[(k, right)]
                 if delta_oi == 0:
+                    _last_oi_by_key[(expiry, k, right)] = oi_t
                     continue
 
                 if day_sign == 0.0:
@@ -384,6 +402,7 @@ def accumulate_position_book(
                 position[(k, right)] = position.get((k, right), 0.0) + signed_change
                 day_change += signed_change
                 n_included += 1
+                _last_oi_by_key[(expiry, k, right)] = oi_t
 
         daily_trace.append(
             {

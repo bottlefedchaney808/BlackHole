@@ -133,12 +133,12 @@ Dashboard{% endblock %} {% block content %}
     <tr>
       <td>Method B · accumulate</td>
       <td class="mono">dealer_position_book.accumulate_position_book</td>
-      <td>arm=<code>div_signed</code>: day sign from day-over-day ATM ΔIV; |ΔIV| in dead-band ⇒ day contributes 0 exactly. Per-strike weight = vanna / mean|vanna|. Sparse endpoint gaps skipped; 150-day rolling window with rollover.</td>
+      <td>arm=<code>div_signed</code>: day sign from day-over-day ATM ΔIV; |ΔIV| in dead-band ⇒ day contributes 0 exactly. Per-strike weight = vanna / mean|vanna|. New/stale-vendor strikes are SOLVED, not skipped: the strike's last observed OI carries forward as the baseline, so the day's observed change prices as flow even across vendor gaps (≈8% of strike-days recovered; unobserved days cost nothing). 150-day rolling window with rollover.</td>
     </tr>
     <tr>
       <td>Method B · price</td>
       <td class="mono">plot_flow_book_single_greek</td>
-      <td>Book positions × <i>today's</i> chain greeks through A's exact formulas, aggregated per strike — the like-for-like pane. 221 strikes priced on the 2026-09-18 chain.</td>
+      <td>The book is a per-strike contract count (vanna-weighted, ΔIV-signed). To chart it against A, each position is valued with the identical per-contract exposure formulas and the identical chain snapshot A's charts use — same spot, IVs, DTE, multiplier. Same units, same axes; the only difference between the charts is the position itself: A = what the chain shows, B = what flow built. 221 strikes priced on the 2026-09-18 chain.</td>
     </tr>
     <tr>
       <td>Render</td>
