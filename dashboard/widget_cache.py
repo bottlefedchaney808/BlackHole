@@ -54,9 +54,41 @@ class WidgetCache:
                 )
                 """
             )
+            # Scoped cache backing the generic widget-run API
+            # (POST /api/widgets/{slug}/run -> GET /api/widgets/{slug}/state).
+            # Composite key: one row per (slug, scope_key) so the same widget
+            # can cache results for many scopes (SPY, QQQ, baskets, ...)
+            # without clobbering each other. Deliberately separate from the
+            # legacy single-id `widget_cache` table so the fixed Overview ids
+            # (widget_id PK) are untouched.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS widget_cache_scoped (
+                    slug TEXT NOT NULL,
+                    scope_key TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    computed_at TEXT NOT NULL,
+                    PRIMARY KEY (slug, scope_key)
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
+        # WAL + busy_timeout, matching shared/connection_pool.py's pattern.
+        # Phase 3 makes every widget run write to this same file (the scoped
+        # row AND any context_patch via shared/context_store.py), which is the
+        # racing-writers shape CLAUDE.md documents as the "database is locked"
+        # failure mode -- enable WAL and a busy timeout so concurrent writers
+        # queue instead of failing immediately.
+        conn = sqlite3.connect(self._path, timeout=30.0)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=30000;")
+        except sqlite3.Error:
+            # PRAGMA failures are non-fatal -- the connection still works.
+            pass
+        return conn
 
     def set(self, widget_id: str, payload: Any, status: str = "ok") -> None:
         computed_at = datetime.now(UTC).isoformat()
@@ -83,6 +115,59 @@ class WidgetCache:
             row = conn.execute(
                 "SELECT payload, status, computed_at FROM widget_cache WHERE widget_id = ?",
                 (widget_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload_raw, status, computed_at = row
+        return {
+            "payload": json.loads(payload_raw),
+            "status": status,
+            "computed_at": computed_at,
+        }
+
+    def set_scoped(
+        self,
+        slug: str,
+        scope_key: str,
+        payload: Any,
+        status: str = "ok",
+    ) -> None:
+        """Write one (slug, scope_key) row to the generic widget cache.
+
+        Backs the generic widget-run API: every POST /api/widgets/{slug}/run
+        caches its result here, keyed by the widget's scope, so a later
+        GET /api/widgets/{slug}/state?scope=<scope_key> returns it without a
+        re-run. Payload is sanitized for NaN/Infinity exactly like set().
+        """
+        computed_at = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO widget_cache_scoped (slug, scope_key, payload, status, computed_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (slug, scope_key) DO UPDATE SET
+                    payload = excluded.payload,
+                    status = excluded.status,
+                    computed_at = excluded.computed_at
+                """,
+                (
+                    slug,
+                    scope_key,
+                    json.dumps(_sanitize_for_json(payload)),
+                    status,
+                    computed_at,
+                ),
+            )
+
+    def get_scoped(self, slug: str, scope_key: str) -> dict[str, Any] | None:
+        """Return the last cached (slug, scope_key) row, or None if absent."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload, status, computed_at
+                FROM widget_cache_scoped WHERE slug = ? AND scope_key = ?
+                """,
+                (slug, scope_key),
             ).fetchone()
         if row is None:
             return None

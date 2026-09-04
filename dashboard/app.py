@@ -39,6 +39,7 @@ import sys
 import threading
 import traceback
 import uuid
+from pathlib import Path
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs
@@ -181,6 +182,12 @@ SWAPS_DASHBOARD_SNAPSHOT_PATH = os.path.join(
 CHART_APP_URL = "http://127.0.0.1:8791"
 WIDGET_CACHE_PATH = os.path.join(ROOT, "artifacts", "widget_cache.db")
 WIDGET_SURFACES_OUTPUT_DIR = os.path.join(ROOT, "artifacts", "widget_surfaces")
+# Phase 3 generic widget API reuses the same SQLite file as the widget cache
+# for the Context Store (shared/context_store.py creates a context_entries
+# table alongside widget_cache). Defaults to the cache file so tests can
+# monkeypatch both to the same tmp_path; CONTEXT_STORE_PATH env var (used by
+# shared/context_store.py itself) also wins when present.
+CONTEXT_STORE_PATH = os.environ.get("CONTEXT_STORE_PATH") or WIDGET_CACHE_PATH
 
 # Widget 2's watchlist -- plain list, easy to extend (per Jason: "make it
 # easy to add to"). "SPXW" not "SPX": on this ThetaData feed, SPX's actual
@@ -300,6 +307,31 @@ def _widget_cache() -> WidgetCache:
     same convention as _db() reading DB_PATH, so tests can monkeypatch the
     module-level constant instead of a captured value."""
     return WidgetCache(WIDGET_CACHE_PATH)
+
+
+# Lazily-built singleton ContextStore (Phase 3). Building a ContextStore spins
+# up a ConnectionPool, so we hold one process-wide instance and only rebuild it
+# when the path changes (tests monkeypatch CONTEXT_STORE_PATH per-test). Reads
+# the path at call time -- same convention as _widget_cache() -- so a
+# monkeypatched constant is honored without a captured value.
+_CONTEXT_STORE: Any = None
+
+
+def _context_store():
+    global _CONTEXT_STORE
+    from shared.context_store import ContextStore
+
+    if _CONTEXT_STORE is not None:
+        current = str(getattr(_CONTEXT_STORE, "_db_path", ""))
+        if current != str(Path(CONTEXT_STORE_PATH).resolve()):
+            try:
+                _CONTEXT_STORE.close()
+            except Exception:
+                pass
+            _CONTEXT_STORE = None
+    if _CONTEXT_STORE is None:
+        _CONTEXT_STORE = ContextStore(CONTEXT_STORE_PATH)
+    return _CONTEXT_STORE
 
 
 # --------------------------------------------------------------------------
@@ -2087,6 +2119,158 @@ async def ack_alert(alert_id: int):
     if updated == 0:
         return JSONResponse(status_code=404, content={"error": f"no alert {alert_id}"})
     return JSONResponse(content={"id": alert_id, "acknowledged": True})
+
+
+# --------------------------------------------------------------------------
+# Phase 3 -- generic widget API (catalog / run / state / context).
+# Registered BEFORE the parameterized GET /api/widgets/{widget_id} route below
+# so the literal path /api/widgets/catalog is matched by the catalog route, not
+# captured as widget_id="catalog". No per-widget backend code: every real
+# ModuleSpec from all_modules() is runnable and fetchable through these four
+# routes.
+# --------------------------------------------------------------------------
+
+def _scope_key_for_context(context: dict[str, Any]) -> str:
+    """Normalize a run context into the cache/Context-Store scope key.
+
+    Falls back to the sentinel ``"global"`` when the context carries no usable
+    scope (no ticker/basket) or carries an ambiguous one (both ticker and
+    basket, which ContextStore's Scope rejects) -- those widget runs still
+    cache, just under the global scope key.
+    """
+    try:
+        from shared.context_store import Scope
+
+        return Scope.from_dict(context).to_db_key()
+    except Exception:
+        return "global"
+
+
+def _artifact_to_dict(artifact: Any) -> dict[str, Any]:
+    """ArtifactRef dataclass -> plain dict for JSON output (matches the
+    dealer_book_load helper's conversion)."""
+    if isinstance(artifact, dict):
+        return artifact
+    return {"path": getattr(artifact, "path", ""), "kind": getattr(artifact, "kind", "")}
+
+
+@app.get("/api/widgets/catalog")
+def widgets_catalog():
+    """Serialize all_modules() preview metadata -- no run callable, so this
+    is safe to call for every registered module regardless of whether its run()
+    needs network."""
+    from shared.module_registry import all_modules
+
+    entries = []
+    for m in all_modules():
+        entries.append(
+            {
+                "name": m.name,
+                "slug": m.slug,
+                "suite": m.suite,
+                "category": m.category,
+                "description": m.description,
+                "inputs": {
+                    "ticker": m.inputs.ticker,
+                    "expiry": m.inputs.expiry,
+                    "basket": m.inputs.basket,
+                },
+                "output_kind": m.output_kind,
+                "sample": m.sample,
+                "default_selected": m.default_selected,
+                "requires": list(m.requires),
+            }
+        )
+    return {"widgets": entries}
+
+
+@app.post("/api/widgets/{slug}/run")
+async def run_widget(slug: str, request: Request):
+    """Resolve one module, run it synchronously on the body as context, write
+    the result to the scoped cache and any context_patch to the Context Store,
+    and return the ModuleResult JSON. Unknown slug -> 404. Module-level
+    failures surface as status=error/failed in the body, not a 500."""
+    from shared.module_registry import ModuleResult, resolve_modules
+
+    body = await _parse_body(request)
+    try:
+        spec = resolve_modules([slug])[0]
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"unknown widget slug {slug!r}")
+
+    context = body
+    try:
+        result = spec.run(context)
+    except Exception as exc:  # defensive: a raw raise from a module run
+        result = ModuleResult(
+            status="error",
+            artifacts=[],
+            metrics={"error": str(exc)},
+            context_patch=None,
+        )
+
+    scope_key = _scope_key_for_context(context)
+    cache = _widget_cache()
+    cache.set_scoped(
+        slug,
+        scope_key,
+        {
+            "artifacts": [_artifact_to_dict(a) for a in (result.artifacts or [])],
+            "metrics": result.metrics,
+        },
+        status=result.status,
+    )
+
+    # Persist any context_patch into the Context Store (Phase 1), keyed by the
+    # same scope, so downstream widgets can read it back. A failure here must
+    # never 500 the run -- the widget result is still valid.
+    patch = result.context_patch
+    if patch:
+        try:
+            from shared.context_store import Scope
+
+            scope = Scope.from_dict(context)
+            store = _context_store()
+            for key, value in patch.items():
+                store.put(scope, key, value, source_slug=slug)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "context_patch write failed for widget %s", slug
+            )
+
+    return {
+        "status": result.status,
+        "slug": slug,
+        "scope": scope_key,
+        "artifacts": [_artifact_to_dict(a) for a in (result.artifacts or [])],
+        "metrics": result.metrics,
+        "context_patch": result.context_patch,
+    }
+
+
+@app.get("/api/widgets/{slug}/state")
+def get_widget_state(slug: str, scope: str = "global"):
+    """Last cached result for (slug, scope_key), no re-run. 404 if none."""
+    row = _widget_cache().get_scoped(slug, scope)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no cached state for widget {slug!r} scope {scope!r}",
+        )
+    return {"slug": slug, "scope": scope, **row}
+
+
+@app.get("/api/context")
+def get_context(scope: str | None = None):
+    """Read-only Context Store provenance view. scope, when given, is the
+    normalized scope_key string (e.g. 'ticker:SPY'); without it, every entry
+    is returned. Empty store -> 200 with an empty entries list."""
+    rows = _context_store().describe()
+    if scope:
+        rows = [r for r in rows if r["scope"] == scope]
+    return {"scope": scope, "entries": rows}
 
 
 @app.get("/api/widgets/{widget_id}")
