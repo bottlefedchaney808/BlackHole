@@ -212,20 +212,28 @@ def test_stage_never_mutates_the_context_vol(isolated_stage):
         assert payload['focus']['garch_conditional_vol'] == pytest.approx(0.29)
 
 
-def test_thread_vol_stats_populates_fair_vol_and_expected_return(monkeypatch):
-    """Vol_Suite's fair vol and (basket) expected return are threaded into the
-    market-signals context so the IV-rank scanner and VaR sims consume them."""
-    # Avoid the VaR data_loader network fallback.
-    monkeypatch.setattr(orchestrator, '_import_var_engine_builders', lambda: None)
-    context = {'focus': {'ticker': 'SPY'}, 'basket': {'tickers': ['SPY']}}
-    vol_result = {
-        'vol_surface': {
-            'garch_conditional_vol': 0.31,
-            'fair_vol_pct': 26.5,
-        },
-        'correlation_engine': {'basket_expected_return': 0.09},
-    }
-    orchestrator._thread_vol_stats_into_context(context, vol_result)
-    assert context['focus']['garch_conditional_vol'] == pytest.approx(0.31)
-    assert context['focus']['fair_vol_pct'] == pytest.approx(26.5)
-    assert context['focus']['expected_return'] == pytest.approx(0.09)
+def test_vol_stats_fair_vol_flows_through_context_store(monkeypatch):
+    """Phase 1 replaced `_thread_vol_stats_into_context` with the Context
+    Store. fair_vol_pct/expected_return reach consumers via put/get under
+    the ticker scope -- round-trip pinned here (was: direct context dict
+    mutation by the removed suite runner)."""
+    import os
+    import tempfile
+
+    from shared.context_store import ContextStore
+
+    with tempfile.TemporaryDirectory() as td:
+        store = ContextStore(db_path=os.path.join(td, "ctx.db"))
+        # close before tmpdir cleanup: pooled connections hold the file open on Windows
+        store.put(
+            {"ticker": "NVDA"},
+            "vol_stats",
+            {"fair_vol_pct": 41.7, "expected_return": 0.12},
+            source_slug="vol_suite",
+        )
+        got = store.get({"ticker": "NVDA"}, "vol_stats")
+        assert got["fair_vol_pct"] == pytest.approx(41.7)
+        assert got["expected_return"] == pytest.approx(0.12)
+        assert not hasattr(orchestrator, "_thread_vol_stats_into_context")
+        store.close()
+

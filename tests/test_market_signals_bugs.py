@@ -255,15 +255,26 @@ def test_unusual_oi_baseline_stays_fixed_within_ttl_window(monkeypatch):
     assert uoi._baseline_is_stale("UUUU") is True
 
 
-def test_thread_vol_stats_reads_nested_focus_fair_vol_pct():
-    context = {"focus": {"ticker": "UUUU"}, "basket": {"tickers": ["UUUU"]}}
-    vol_result = {
-        "vol_surface": {
-            "focus": {"fair_vol_pct": 41.7},
-        },
-    }
-    orchestrator._thread_vol_stats_into_context(context, vol_result)
-    assert context["focus"]["fair_vol_pct"] == pytest.approx(41.7)
+def test_vol_stats_channel_is_context_store_not_context_threading():
+    """Phase 7 removed `_thread_vol_stats_into_context` (the suite-runner's
+    context-mutation path). Vol stats now flow through the Context Store
+    (Phase 1): a producer `put()`s fair_vol_pct under the ticker scope and
+    consumers `get()` it back -- this pins that channel works round-trip."""
+    import os
+    import tempfile
+
+    from shared.context_store import ContextStore
+
+    with tempfile.TemporaryDirectory() as td:
+        store = ContextStore(db_path=os.path.join(td, "ctx.db"))
+        # close before tmpdir cleanup: pooled connections hold the file open on Windows
+        store.put({"ticker": "UUUU"}, "fair_vol_pct", 41.7, source_slug="vol_suite")
+        assert store.get({"ticker": "UUUU"}, "fair_vol_pct") == pytest.approx(41.7)
+        store.close()
+        # and the removed attribute stays removed (no silent resurrection)
+        store.close()
+        assert not hasattr(orchestrator, "_thread_vol_stats_into_context")
+        store.close()
 
 
 def test_build_context_horizon_days_default_and_alias(monkeypatch):

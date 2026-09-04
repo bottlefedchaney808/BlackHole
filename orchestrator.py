@@ -1,71 +1,37 @@
-"""orchestrator.py -- root-level driver for the four sibling suites.
+"""orchestrator.py -- module-runner CLI + shared helpers (post-Phase 7).
 
-This does NOT invent a handoff format. It reuses the one that already exists:
-`Vol_Suite/suite_context.py`'s validated schema_version=1 object, written to
-disk once per run and passed to each child via `--context`, with each child
-writing its own standardized result JSON to `--context-out`. That is exactly
-the contract `Vol_Suite/volatility_suite.py::_run_child_suite` already speaks,
-so this file is a re-implementation of that runner at the repo root rather
-than a parallel protocol.
+Suite-level launching (``--unified`` / ``--suite`` / ``--interactive``,
+subprocess child runs, marker-file validation, the in-memory run registry)
+was removed 2026-09-04 in Phase 7 of the widget-native quant console plan.
+The replacement paths:
 
-Two things differ from `_run_child_suite`, both deliberate:
+- Interactive/programmatic runs: the dashboard's generic widget API --
+  ``POST /api/widgets/{slug}/run`` (synchronous, in-process, no child
+  processes). Catalog: ``GET /api/widgets/catalog``.
+- Scripted/CI runs: this file's ``--modules`` / ``--modules-category`` /
+  ``--all-modules`` CLI, which calls
+  ``shared.module_execution.run_selected_modules`` in-process (the same
+  machinery, relocated there in Phase 7 step 2; this module re-exports it).
 
-1. It launches `SHARED_PYTHON` (the consolidated root `.venv`) instead of
-   `sys.executable`. `_run_child_suite` inherits whichever interpreter started
-   Vol_Suite, which was correct when each suite had its own virtualenv. Now
-   there is one merged environment at the root and the orchestrator is
-   frequently going to be run from a bare `python` on PATH, so pinning the
-   interpreter is the only way the children reliably see their dependencies.
+What still lives here, deliberately:
 
-2. It knows that not every suite speaks `--context/--context-out`. Options_Suite,
-   VaR_Tools_Simulations and Vol_Suite all do (each exposes `run_context_mode`).
-   sentiment-scanner does not -- it exposes `--export-context <path>` instead,
-   since it is a standalone context producer. Note that `run_unified` does not
-   actually invoke sentiment-scanner as a subprocess stage: it is hard-skipped
-   by default ("unreliable network dependency") and the "market signals"
-   stage -- option-chain scanners run in-process via `run_market_signals_stage`
-   -- takes its place, running after Vol_Suite rather than before it.
+- ``build_context`` -- the shared suite-context builder every module run
+  starts from.
+- ``run_market_signals_stage`` -- the in-process option-chain scanner stage
+  (vol -> market-signals ordering is preserved by callers that need it).
+- ``shared/module_execution`` shim -- ``run_selected_modules`` and friends
+  re-exported so existing importers keep working; the archiver hook
+  (``_archive_module_result``) is routed through by that machinery.
+- DB helpers used across the repo: ``DB_PATH``, ``get_recent_swap_activity``,
+  ``log_run`` (writes ``orchestrator_runs`` history rows).
+- ``discover_adapters`` -- external data-source adapters (dashboard reads it).
+- ``_find_shared_python`` / ``SHARED_PYTHON`` -- the consolidated root venv
+  interpreter path, still referenced by external tooling.
 
-Vol_Suite used to be the exception, and it was the weakest joint in this file.
-`volatility_suite.py` had no argparse at all -- `main()` went straight to
-`input()` -- so driving it headless meant feeding its prompt sequence on
-scripted stdin ("1", "1", ticker, then a run of blank lines and y/n answers),
-coupled to the exact prompt ORDER inside `run_focus_workflow`. And because it
-wrote nothing to `--context-out`, its result payload had to be *synthesized*
-here by listing files in the output directory -- which meant a run where every
-data fetch failed and a run that worked perfectly were nearly indistinguishable,
-since both leave files behind.
-
-Vol_Suite now has a real `--context/--context-out` mode and publishes its own
-validated `vol_result.json` (schema: `shared/schemas.py::validate_vol_result`)
-carrying the vol surface, dealer positioning and gamma records it actually
-computed. Both hacks are therefore gone: no scripted stdin, no synthesized
-payload, and Vol_Suite goes through the identical launch/validate path as every
-other consumer suite.
-
-Dependency edges between stages are validated explicitly rather than inferred
-from exit codes. Every suite must leave a marker file in the run's output_dir
-(`<suite>_result.json`), and `_validate_suite_output` checks it for presence,
-parseability, schema conformance and -- for Vol_Suite -- the required CSV side
-artifacts before the next stage is allowed to consume it. The rules live in
-`shared/suite_validation.py`; each PASS/FAIL verdict is written to
-`orchestrator_runs` so a bad handoff is diagnosable from the audit trail alone.
-By default a FAIL is reported and the chain continues degraded (the historical
-behaviour); `--fail-on-suite-error` turns it into a hard abort.
-
-The context itself gets the same treatment where it is mutated. Vol_Suite's
-result is folded back into the shared context via
-`_thread_vol_stats_into_context`, and that is the one write to an object every
-later stage reads. The in-process market-signals stage does not mutate
-`suite_context.json` at all (it has no producer/consumer handoff to audit),
-so its verdict is recorded via the lightweight `_MarketSignalsAudit` stand-in
-rather than a real `shared/context_audit.py` transaction. Neither of these
-paths currently writes a `context_audit:sentiment` row into `orchestrator_runs`
--- that row type is only emitted by `_audit_market_signals_fold`, an audited
-`shared/context_audit.py` transaction helper that exists for a real
-producer-fold use case but is not currently called by `run_unified`.
+The historical ``run_unified``/``run_suite`` design notes are preserved in
+git history (pre-Phase-7 revisions of this file) and in
+docs/superpowers/plans/2026-09-03-widget-native-quant-console-plan.md.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -369,9 +335,9 @@ def run_market_signals_stage(ticker: str, context: dict[str, Any]) -> dict[str, 
     # (old scanner reimpl removed; Phase 4 registry active)
 
     # ---- 1-year-out simulations (MC, copula, correlation) ----
-    # This stage now runs AFTER Vol_Suite (see run_unified) specifically so
+    # This stage runs after Vol_Suite in dashboard-driven runs specifically so
     # `context['focus']['garch_conditional_vol']` -- threaded in by
-    # `_thread_vol_stats_into_context` from Vol_Suite's own GARCH(1,1) fit --
+    # reading vol stats from the Context Store (Vol_Suite's GARCH(1,1) fit) --
     # is already present. The builders' own vol resolution prefers that
     # context value and only falls back to fitting GARCH themselves (once,
     # not once-per-builder -- see `_resolve_vol_and_quality`) when it's
@@ -767,594 +733,6 @@ def _timedelta_days(days: int):
 # --------------------------------------------------------------------------
 
 
-def _validate_suite_output(
-    suite_name: str,
-    output_dir: str,
-    payload: dict[str, Any] | None = None,
-    focus: dict[str, Any] | None = None,
-    strict: bool | None = None,
-) -> ValidationResult:
-    """Check that *suite_name* left usable output in *output_dir*, and log it.
-
-    Thin orchestrator-side wrapper over
-    `shared.suite_validation.validate_suite_output`: it resolves the focus
-    ticker for the `{ticker}` glob patterns, prints the PASS/FAIL breakdown, and
-    writes one `validate:<suite>` row into `orchestrator_runs` carrying every
-    individual check. The verdict is returned rather than raised so the caller
-    decides whether a FAIL degrades the run or aborts it.
-    """
-    focus = focus or {}
-    started_at = _iso_utc_now()
-
-    result = validate_suite_output(
-        suite_name,
-        output_dir,
-        payload=payload,
-        ticker=focus.get("ticker"),
-        strict=strict,
-    )
-
-    print("  " + result.report().replace("\n", "\n  "))
-
-    log_run(
-        f"validate:{result.suite}",
-        focus,
-        started_at,
-        _iso_utc_now(),
-        result.status,
-        result.to_dict(),
-    )
-    return result
-
-
-def _audit_market_signals_fold(
-    context: dict[str, Any],
-    sentiment_result: dict[str, Any] | None,
-    focus: dict[str, Any] | None = None,
-) -> ContextMutationAudit:
-    """Fold the market-signals stage's block into *context* under audit, and log it.
-
-    Thin orchestrator-side wrapper over
-    `shared.context_audit.audit_sentiment_mutation`, in the same shape as
-    `_validate_suite_output` above: it runs the baseline -> mutate -> re-validate
-    transaction, prints the concise before/after diff, and writes one
-    `context_audit:sentiment` row into `orchestrator_runs` whose `results_json`
-    is the full audit entry (before/after hashes and snapshots, the changed
-    keys, the per-check breakdown, and whether a rollback happened).
-
-    Not currently called by `run_unified`: the in-process market-signals stage
-    (`run_market_signals_stage`) does not mutate `suite_context.json`, so its
-    verdict is recorded via the lighter `_MarketSignalsAudit` stand-in instead.
-    Kept for the case a future market-signals block needs a real audited
-    context mutation again.
-
-    The verdict is returned rather than raised. `context` comes back either
-    mutated-and-valid (PASS) or restored to the pre-mutation baseline (FAIL) --
-    never in the rejected intermediate state.
-    """
-    focus = focus if focus is not None else context.get("focus", {})
-    started_at = _iso_utc_now()
-
-    audit = audit_sentiment_mutation(context, sentiment_result)
-
-    print("  " + audit.report().replace("\n", "\n  "))
-
-    log_run(
-        "context_audit:sentiment",
-        focus,
-        started_at,
-        _iso_utc_now(),
-        audit.status,
-        audit.to_dict(),
-    )
-    return audit
-
-
-def run_suite(
-    name: str, context: dict, timeout: int = 1800, validate: bool = True
-) -> dict:
-    """Launch one child suite in context mode and return its result JSON.
-
-    Same command shape as Vol_Suite's `_run_child_suite` -- context written to
-    a JSON file, `--context`/`--context-out` on argv, `SUITE_CONTEXT_PATH` /
-    `SUITE_CONTEXT_MODE` / `VS_OUTPUT_DIR` in the environment, cwd set to the
-    suite root, output captured, hard timeout -- but launched with
-    SHARED_PYTHON.
-
-    On success returns the parsed `--context-out` payload. On non-zero exit,
-    timeout, or an unreadable/absent result file, returns a dict with an
-    `error` key and the captured stderr, so a caller can branch on
-    `'error' in result` without exception handling.
-
-    With `validate=True` (the default) the child's marker file is checked
-    against `shared/suite_validation.py` before the payload is returned. A
-    failed check is folded into the same `error` key rather than raising, so a
-    suite that exits 0 with unusable output is indistinguishable to callers from
-    one that crashed -- which is the point: both mean "do not feed this
-    downstream". The verdict is attached under `_validation` either way, so a
-    PASS is auditable too. Pass `validate=False` to get the raw pre-validation
-    behaviour (used by the tests that exercise the runner itself).
-    """
-    if name not in SUITE_ROOTS:
-        raise ValueError(
-            f"Unknown suite {name!r}; expected one of {sorted(SUITE_ROOTS)}"
-        )
-
-    started_at = _iso_utc_now()
-    start_time = time.time()
-    spec = _SUITE_SPECS[name]
-    suite_root = SUITE_ROOTS[name]
-    entrypoint = os.path.join(suite_root, spec["entrypoint"])
-
-    output_dir = context.get("output_dir") or tempfile.mkdtemp(prefix="orch_")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # The context file goes in the run's own output dir when there is one so it
-    # survives the run for debugging; a temp file otherwise.
-    ctx_path = os.path.join(output_dir, f"suite_context_{name}.json")
-    # The child's `--context-out` target IS the marker validation looks for, so
-    # the filename comes from the validation module rather than being spelled
-    # twice and left to drift.
-    out_path = os.path.join(output_dir, marker_filename(name))
-
-    def _fail(message: str, stderr: str = "", returncode: int | None = None) -> dict:
-        result = {
-            "suite": name,
-            "error": message,
-            "stderr": stderr,
-            "returncode": returncode,
-            "command": None,
-            "started_at": started_at,
-        }
-        log_run(
-            f"suite:{name}",
-            context.get("focus", {}),
-            started_at,
-            _iso_utc_now(),
-            "error",
-            result,
-        )
-        return result
-
-    if not os.path.exists(SHARED_PYTHON):
-        return _fail(f"Shared interpreter not found: {SHARED_PYTHON}")
-    if not os.path.exists(entrypoint):
-        return _fail(f"Entrypoint not found for suite {name!r}: {entrypoint}")
-
-    try:
-        with open(ctx_path, "w", encoding="utf-8") as f:
-            json.dump(context, f, indent=2)
-            f.write("\n")
-    except Exception as e:
-        return _fail(f"Could not write context file {ctx_path}: {e}")
-
-    # Canonical copy: bridge latest_run()/_module_latest() and the dashboard's
-    # run discovery key on the canonical suite_context.json inside the run dir
-    # (run_unified writes it explicitly at the end). A single-suite run must
-    # publish it too, or the plugin/dashboard cannot see the run and fall back
-    # to an older one. Written with the same context dict, so content is
-    # identical to the unified path's canonical file.
-    canonical_path = os.path.join(output_dir, "suite_context.json")
-    try:
-        with open(canonical_path, "w", encoding="utf-8") as f:
-            json.dump(context, f, indent=2)
-            f.write("\n")
-    except Exception as e:
-        print(
-            f"  [{name}] WARNING: could not write canonical suite_context.json: {e}",
-            file=sys.stderr,
-        )
-
-    # Stale result from an earlier run must not be mistaken for this run's
-    # output if the child dies before writing.
-    if os.path.exists(out_path):
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
-
-    command = [SHARED_PYTHON, entrypoint] + list(spec["flags"](ctx_path, out_path))
-
-    env = os.environ.copy()
-    # Ensure shared module is in PYTHONPATH for all child suites
-    env["PYTHONPATH"] = f"{ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
-    env["SUITE_CONTEXT_PATH"] = ctx_path
-    env["SUITE_CONTEXT_MODE"] = "1"
-    env["VS_OUTPUT_DIR"] = output_dir
-    # PYTHONIOENCODING fixes the captured pipes; PYTHONUTF8 also makes the
-    # children's bare `open(path)` calls default to UTF-8. Without the latter,
-    # a child reading its own JSON/markdown with the Windows cp1252 locale
-    # encoding dies on any non-ASCII byte -- observed as a UnicodeDecodeError
-    # out of charmap_decode partway through a Vol_Suite run.
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUTF8"] = "1"
-    # Vol_Suite's context mode skips the options chain scanner by default
-    # (it's the one step expensive enough to opt out of in a headless batch)
-    # unless VS_RUN_CHAIN_SCANNER is set. Orchestrator-driven runs -- unified
-    # or single-suite -- should always produce chain_strategies.json so
-    # Tools/tools/options_strategy_tool.py's cached mode has something to
-    # read; an operator can still override by exporting the var themselves.
-    env.setdefault("VS_RUN_CHAIN_SCANNER", "1")
-
-    print(
-        f"  [{name}] running {spec['entrypoint']} (timeout {timeout}s)... "
-        f"output is captured, so this will look idle until it finishes."
-    )
-    if spec["note"]:
-        print(f"  [{name}] note: {spec['note']}")
-
-    try:
-        proc = subprocess.run(
-            command,
-            cwd=suite_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            # stdin closed for every child, with no exceptions. Vol_Suite used
-            # to be fed a scripted prompt sequence here; now that it has a real
-            # --context mode, a child that reaches an interactive prompt is a
-            # bug, and EOF makes it die with a readable traceback instead of
-            # hanging on a pipe nobody is watching.
-            stdin=subprocess.DEVNULL,
-        )
-    except subprocess.TimeoutExpired as e:
-        stderr = (
-            e.stderr
-            if isinstance(e.stderr, str)
-            else (e.stderr or b"").decode(errors="replace")
-        )
-        result = {
-            "suite": name,
-            "error": f"TIMEOUT after {timeout}s -- child killed.",
-            "stderr": "\n".join(stderr.splitlines()[-20:]),
-            "returncode": -1,
-            "command": " ".join(command),
-            "started_at": started_at,
-        }
-        log_run(
-            f"suite:{name}",
-            context.get("focus", {}),
-            started_at,
-            _iso_utc_now(),
-            "timeout",
-            result,
-        )
-        return result
-    except Exception as e:
-        return _fail(f"Failed to launch {name}: {e}")
-
-    stderr_tail = "\n".join((proc.stderr or "").splitlines()[-20:])
-    stdout_tail = "\n".join((proc.stdout or "").splitlines()[-20:])
-
-    if proc.returncode != 0:
-        result = {
-            "suite": name,
-            "error": f"{name} exited with returncode {proc.returncode}",
-            "stderr": stderr_tail or stdout_tail,
-            "returncode": proc.returncode,
-            "command": " ".join(command),
-            "started_at": started_at,
-        }
-        log_run(
-            f"suite:{name}",
-            context.get("focus", {}),
-            started_at,
-            _iso_utc_now(),
-            "error",
-            result,
-        )
-        return result
-
-    def _finalize(payload: Any, context_out: str | None) -> Any:
-        """Attach provenance, validate the marker, log, return.
-
-        Every success path ends here so validation cannot be bypassed by
-        whichever branch a future edit adds a `return` to.
-        """
-        if isinstance(payload, dict):
-            payload.setdefault("suite", name)
-            payload["_orchestrator"] = {
-                "command": " ".join(command),
-                "context_path": ctx_path,
-                "context_out": context_out,
-                "returncode": proc.returncode,
-                "started_at": started_at,
-                "completed_at": _iso_utc_now(),
-            }
-
-        if not validate:
-            log_run(
-                f"suite:{name}",
-                context.get("focus", {}),
-                started_at,
-                _iso_utc_now(),
-                "ok",
-                payload,
-            )
-            return payload
-
-        verdict = _validate_suite_output(
-            name,
-            output_dir,
-            payload=payload if isinstance(payload, dict) else None,
-            focus=context.get("focus", {}),
-        )
-
-        if isinstance(payload, dict):
-            payload["_validation"] = verdict.to_dict()
-
-        if not verdict.passed:
-            result = {
-                "suite": name,
-                "error": (
-                    f"{name} output validation FAILED: " + "; ".join(verdict.errors)
-                ),
-                "stderr": stderr_tail or stdout_tail,
-                "returncode": proc.returncode,
-                "command": " ".join(command),
-                "started_at": started_at,
-                "validation": verdict.to_dict(),
-                "payload": payload,
-            }
-            log_run(
-                f"suite:{name}",
-                context.get("focus", {}),
-                started_at,
-                _iso_utc_now(),
-                "invalid",
-                result,
-            )
-            return result
-
-        log_run(
-            f"suite:{name}",
-            context.get("focus", {}),
-            started_at,
-            _iso_utc_now(),
-            "ok",
-            payload,
-        )
-        return payload
-
-    if not os.path.exists(out_path):
-        result = {
-            "suite": name,
-            "error": f"{name} exited 0 but wrote no context-out at {out_path}",
-            "stderr": stderr_tail or stdout_tail,
-            "returncode": 0,
-            "command": " ".join(command),
-            "started_at": started_at,
-        }
-        log_run(
-            f"suite:{name}",
-            context.get("focus", {}),
-            started_at,
-            _iso_utc_now(),
-            "error",
-            result,
-        )
-        return result
-
-    try:
-        with open(out_path, "r", encoding="utf-8-sig") as f:
-            payload = json.load(f)
-    except Exception as e:
-        result = {
-            "suite": name,
-            "error": f"Could not parse {name} context-out {out_path}: {e}",
-            "stderr": stderr_tail,
-            "returncode": 0,
-            "command": " ".join(command),
-            "started_at": started_at,
-        }
-        log_run(
-            f"suite:{name}",
-            context.get("focus", {}),
-            started_at,
-            _iso_utc_now(),
-            "error",
-            result,
-        )
-        return result
-
-    return _finalize(payload, out_path)
-
-
-# --------------------------------------------------------------------------
-# unified flow
-# --------------------------------------------------------------------------
-
-
-def _print_phase_header(phase_num: int, phase_name: str, description: str) -> None:
-    """Print a formatted phase header for status display."""
-    print(f"\n[{phase_num}/3] {phase_name}")
-    print(f"       {description}")
-    print("-" * 60)
-
-
-def _build_swaps_result(context: dict[str, Any]) -> dict[str, Any]:
-    """Builds the swaps_result.json artifact from context['swap_activity']
-    (already populated by build_context via get_recent_swap_activity).
-
-    Deliberately not added to `run_unified`'s `results` dict: swaps is a
-    same-process DB read with no subprocess/validation-gate lifecycle like
-    the other suites, so it never contributes to the unified run's ok/error
-    suite tally -- it's enrichment surfaced for visibility, with its own
-    artifact and its own Output-tab panel (see output_runs.py's
-    SUITE_MARKER_FILES['swaps']).
-    """
-    from shared.schemas import validate_swaps_result
-
-    ticker = (context.get("focus") or {}).get("ticker")
-    rows = context.get("swap_activity") or []
-    result = {
-        "schema_version": 1,
-        "suite": "swaps",
-        "status": "ok" if rows else "no_data",
-        "ticker": ticker,
-        "timestamp": _iso_utc_now(),
-        "row_count": len(rows),
-        "top_notional": rows[:20],
-        "effective_date": rows[0].get("effective_date") if rows else None,
-    }
-    try:
-        validate_swaps_result(result)
-    except Exception as e:
-        print(
-            f"  [swaps] WARNING: swaps_result failed validation: {e}", file=sys.stderr
-        )
-    return result
-
-
-def _print_swaps_block(swaps_result: dict[str, Any]) -> None:
-    """Bounded, clearly-delimited swaps summary in unified-run stdout --
-    at most 10 product lines regardless of how many rows swap_activity has,
-    with a graceful message when there is nothing to show (cold swaps.db or
-    no recent DTCC activity for this ticker)."""
-    print(f"\n{'-' * 60}")
-    print("  SWAPS (recent DTCC activity)")
-    print(f"{'-' * 60}")
-    if swaps_result["status"] != "ok":
-        print(
-            "  No swap activity available -- swaps.db may be cold, or there is "
-            "no recent DTCC-reported activity for this ticker."
-        )
-    else:
-        print(
-            f"  {swaps_result['row_count']} product row(s) as of "
-            f"{swaps_result['effective_date']}"
-        )
-        for row in swaps_result["top_notional"][:10]:
-            notional = row.get("total_notional")
-            notional_str = (
-                f"${notional:,.0f}" if isinstance(notional, (int, float)) else "--"
-            )
-            product = str(row.get("product") or "?")[:40]
-            print(
-                f"    {product:40s} {notional_str:>18s}  ({row.get('trade_count')} trades)"
-            )
-        if swaps_result["row_count"] > 10:
-            print(
-                f"    ... and {swaps_result['row_count'] - 10} more (see swaps_result.json)"
-            )
-    print(f"{'-' * 60}")
-
-
-def _thread_vol_stats_into_context(
-    context: dict[str, Any], vol_result: dict[str, Any]
-) -> None:
-    """Vol_Suite computes a real per-ticker realized annualized vol and a
-    pairwise correlation matrix for the resolved basket (correlation_engine.py
-    ::compute_basket_stats) and now publishes both in vol_result.json's basket
-    block. Options/VaR are launched off the SAME context object built before
-    vol ran (see run_unified's docstring: "consume Vol_Suite's context"), so
-    without this mutation they never actually saw vol's numbers -- VaR's
-    context mode silently fell back to an identity correlation matrix and a
-    flat 0.25 annual vol for every basket ticker on every orchestrator run,
-    independent of what vol just measured for that exact basket.
-
-    Mutates `context` in place. Only injects data when the vol-side ticker
-    ordering matches the context's basket ordering exactly (or, for
-    volatilities, when every basket ticker has one) -- a mismatch usually
-    means a data fetch failure trimmed vol's ticker list, and silently
-    reindexing/subsetting a correlation matrix is worse than leaving VaR to
-    fall back to its own documented defaults.
-    """
-    basket_out = ((vol_result or {}).get("vol_surface") or {}).get("basket") or {}
-    ctx_tickers = list(context.get("basket", {}).get("tickers") or [])
-
-    corr_tickers = basket_out.get("correlation_tickers")
-    corr_matrix = basket_out.get("correlation_matrix")
-    if corr_tickers and corr_matrix and list(corr_tickers) == ctx_tickers:
-        context["basket"]["correlation_matrix"] = corr_matrix
-    elif corr_matrix:
-        print(
-            f"WARNING: vol's correlation ticker order {corr_tickers} doesn't match "
-            f"the basket {ctx_tickers}; not threading a correlation matrix into VaR."
-        )
-
-    individual_vols = basket_out.get("individual_vols") or {}
-    if ctx_tickers and all(t in individual_vols for t in ctx_tickers):
-        context.setdefault("var", {})["volatilities"] = [
-            float(individual_vols[t]) for t in ctx_tickers
-        ]
-    elif individual_vols:
-        missing = [t for t in ctx_tickers if t not in individual_vols]
-        print(
-            f"WARNING: vol's individual_vols is missing {missing}; "
-            f"not threading volatilities into VaR."
-        )
-
-    # Vol_Suite fits GARCH(1,1) for the focus ticker as part of its own
-    # analysis (vol_surface.garch_conditional_vol). Thread it into
-    # `focus.garch_conditional_vol` so the Market Signals stage's 1yr-out
-    # sims (which now run AFTER vol -- see run_unified) reuse this one real
-    # fit via their existing context-vol-preferred resolution instead of
-    # fitting GARCH a second time for the same ticker in the same run.
-    garch_vol = ((vol_result or {}).get("vol_surface") or {}).get(
-        "garch_conditional_vol"
-    )
-    if (
-        isinstance(garch_vol, (int, float))
-        and not isinstance(garch_vol, bool)
-        and garch_vol > 0
-    ):
-        context.setdefault("focus", {})["garch_conditional_vol"] = float(garch_vol)
-
-    # Fair variance-strike vol for the focus leg (vol_surface block). The
-    # IV-rank scanner reads fair_vol_pct to compute the RICH/CHEAP regime and
-    # VRP; without it the scanner silently degrades to 0.0 and reports UNKNOWN.
-    focus_surface = (vol_result or {}).get("vol_surface") or {}
-    focus_leg = focus_surface.get("focus")
-    fair_vol_pct = (
-        focus_leg.get("fair_vol_pct") if isinstance(focus_leg, dict) else None
-    )
-    if fair_vol_pct is None:
-        fair_vol_pct = focus_surface.get("fair_vol_pct")
-    if fair_vol_pct is None:
-        fair_vol_pct = focus_surface.get("fair_variance_swap_strike_vol_pct")
-    if isinstance(fair_vol_pct, (int, float)) and not isinstance(fair_vol_pct, bool):
-        context.setdefault("focus", {})["fair_vol_pct"] = float(fair_vol_pct)
-
-    # Expected return for the focus leg. Prefer a Vol_Suite-published value;
-    # else the correlation engine's basket expected return; else fall back to
-    # VaR's realized geometric annualized return for the focus ticker so the
-    # 1yr-out sims' `_resolve_drift_and_quality` reports source="context".
-    expected_return = focus_surface.get("expected_return")
-    if expected_return is None:
-        expected_return = ((vol_result or {}).get("correlation_engine") or {}).get(
-            "basket_expected_return"
-        )
-    if expected_return is None:
-        try:
-            from var_engine import data_loader  # VaR's drift estimator
-
-            _tk = (context.get("focus") or {}).get("ticker")
-            if _tk:
-                expected_return = data_loader.estimate_geometric_return(_tk)
-        except Exception:
-            expected_return = None
-    if isinstance(expected_return, (int, float)) and not isinstance(
-        expected_return, bool
-    ):
-        context.setdefault("focus", {})["expected_return"] = float(expected_return)
-
-
-# --------------------------------------------------------------------------
-# Module-registry execution path (Task 2 of the modularization overhaul).
-#
-# `run_selected_modules` is a new, additive, parallel path alongside
-# `run_suite`/`run_unified` -- it does not call, and is not called by,
-# either of them, and it does not touch `_thread_vol_stats_into_context`.
-# `shared/module_registry.py` (Task 1) defines the `ModuleSpec`/`ModuleResult`
-# contract this consumes; each suite's `module_registry.py::MODULES` list is
-# still empty as of this task -- later phases populate real modules.
-# --------------------------------------------------------------------------
-
-
 def _archive_module_result(
     module_slug: str, result: Any, context: dict[str, Any]
 ) -> None:
@@ -1412,283 +790,6 @@ from shared.module_execution import (  # noqa: F401 — Phase 7 relocation shim
 )
 
 
-def run_unified(
-    focus: dict[str, Any],
-    fail_on_suite_error: bool | None = None,
-    validate: bool = True,
-) -> dict[str, Any]:
-    """Mirror of Vol_Suite's mode-2 dependency order, headless.
-
-    vol -> sentiment (market signals) -> {options, var}. Vol_Suite runs first
-    now: it's the sole GARCH(1,1) fit for the focus ticker, and its result is
-    threaded into `context['focus']['garch_conditional_vol']` by
-    `_thread_vol_stats_into_context` so the Market Signals stage's 1yr-out
-    MC/copula/corr sims reuse it instead of each falling back to (or, before
-    this reorder, unconditionally doing) their own separate fit -- this used
-    to run market signals first and fit GARCH a second time just for its own
-    sims, doubling ThetaData load for the ticker every unified run. Options
-    and VaR run last and are siblings -- neither reads the other's output,
-    exactly as `run_unified_flow` launches them independently off the one
-    context file.
-
-    Each stage's output is validated before the next stage is allowed to
-    consume it -- `run_suite` checks the marker file and folds any validation
-    failure into the same `error` key a crash produces, so "exited 0 but wrote
-    nothing usable" and "died" are handled identically here.
-
-    What happens next depends on `fail_on_suite_error`:
-
-    * False (default) -- a failing upstream stage does not abort the run: the
-      chain continues with whatever context it has and each stage's error dict
-      is returned under its own key. This matches `run_unified_flow`, which
-      reports per-child `failed(rc=...)` in its summary rather than raising.
-    * True -- the first failing stage aborts the chain. Downstream stages are
-      recorded as `skipped` with the name of the stage that blocked them, rather
-      than being run against input already known to be bad and failing later for
-      a reason that has nothing to do with their own logic.
-    """
-    started_at = _iso_utc_now()
-    results: dict[str, Any] = {}
-    if fail_on_suite_error is None:
-        fail_on_suite_error = bool(focus.get("fail_on_suite_error", False))
-
-    controls = {
-        "run_options_suite": True,
-        "run_var_suite": True,
-        "compile_pdf": bool(focus.get("compile_pdf", False)),
-    }
-    context = build_context(focus, controls=controls)
-    output_dir = context["output_dir"]
-    timeout = int(focus.get("timeout") or DEFAULT_TIMEOUT_SEC)
-    print(f"\n[unified] run_id={context['run_id']} output_dir={output_dir}")
-    if fail_on_suite_error:
-        print(
-            "[unified] --fail-on-suite-error: the first invalid or failed "
-            "stage aborts the chain."
-        )
-
-    swaps_result = _build_swaps_result(context)
-    try:
-        with open(
-            os.path.join(output_dir, "swaps_result.json"), "w", encoding="utf-8"
-        ) as f:
-            json.dump(swaps_result, f, indent=2, default=str)
-            f.write("\n")
-    except Exception as e:
-        print(
-            f"  [swaps] WARNING: could not write swaps_result.json: {e}",
-            file=sys.stderr,
-        )
-    _print_swaps_block(swaps_result)
-
-    aborted_by: str | None = None
-
-    def _skip(stage: str) -> dict[str, Any]:
-        # A context-audit abort is unconditional; a suite abort only happens
-        # under --fail-on-suite-error. The reason has to say which, or a reader
-        # of the skipped record goes looking for a flag that was never set.
-        reason = (
-            "the context mutation audit FAILED and the context was rolled back"
-            if aborted_by == "context_audit"
-            else f"upstream stage {aborted_by!r} failed validation "
-            "and --fail-on-suite-error is set"
-        )
-        return {
-            "suite": stage,
-            "status": "skipped",
-            "skipped": True,
-            "error": f"skipped: {reason}",
-            "blocked_by": aborted_by,
-            "timestamp": _iso_utc_now(),
-        }
-
-    # ---- 1. Vol_Suite (produces vol surface / dealer positioning / GARCH fit) ----
-    _print_phase_header(
-        1, "VOL SUITE", "Dealer positioning / vol surface / gamma exposure"
-    )
-    results["vol"] = run_suite("vol", context, timeout=timeout, validate=validate)
-    if "error" in results["vol"] and fail_on_suite_error:
-        aborted_by = "vol"
-    elif "error" not in results["vol"]:
-        _thread_vol_stats_into_context(context, results["vol"])
-    elif isinstance(results["vol"].get("payload"), dict):
-        # Validation FAILED (e.g. a downstream step like dealer_positioning
-        # left a required file missing -- see run_suite/_finalize), but the
-        # suite still computed and returned real numbers (vol_surface's GARCH
-        # fit, fair vol, correlation matrix, ...) in `payload`. Don't let an
-        # unrelated required-file check silently blank out the Market Signals
-        # stage's context threading -- that used to mean garch_conditional_vol
-        # /fair_vol_pct stayed None (scanners degrading to 0.0/UNKNOWN) purely
-        # because, say, the gamma_records CSV never got written, which has
-        # nothing to do with whether the GARCH fit itself succeeded.
-        _thread_vol_stats_into_context(context, results["vol"]["payload"])
-
-    # ---- 2. MARKET SIGNALS (option-chain scanners + 1yr sims + direction suite) ----
-    # Replaces the old sentiment-scanner stage (StockTwits/Reddit/YouTube/GEX),
-    # which was hard-skipped here as an unreliable network dependency. This
-    # stage runs in-process (no subprocess, no producer/consumer context
-    # handoff) since the ticker is already known. Runs AFTER Vol_Suite so its
-    # sims can reuse Vol_Suite's GARCH fit via context instead of re-fitting.
-    class _MarketSignalsAudit:
-        def __init__(self, status: str):
-            self.passed = status != "error"
-            self._status = status
-
-        def to_dict(self):
-            return {
-                "validation_status": "PASS" if self.passed else "FAIL",
-                "mutations_detected": [],
-                "rolled_back": False,
-                "validation_errors": (
-                    []
-                    if self.passed
-                    else [f"market signals stage status={self._status}"]
-                ),
-                "reason": f"market signals stage status={self._status}; no context mutation performed",
-            }
-
-    if aborted_by:
-        # Blocked by an earlier (vol) abort -- a skip here is not itself a new
-        # failure, so it must not touch `aborted_by` (which already names the
-        # real cause). `_skip()`'s dict always carries an `'error'` key, so
-        # this branch is kept structurally apart from the "did market signals
-        # itself fail" check below rather than trying to except it out there.
-        print(f"\n[2/3] MARKET SIGNALS (SKIPPED — blocked by {aborted_by})")
-        sentiment_result = _skip("sentiment")
-        results["sentiment"] = sentiment_result
-        context_audit = _MarketSignalsAudit("skipped")
-    else:
-        _print_phase_header(
-            2,
-            "MARKET SIGNALS",
-            "IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite",
-        )
-        sentiment_result = run_market_signals_stage(context["focus"]["ticker"], context)
-        results["sentiment"] = sentiment_result
-
-        # Write the same two marker files a subprocess suite would have written,
-        # so the dashboard's existing 'sentiment' file-claiming logic picks this
-        # bundle up under the (relabeled) unified Output tab section unchanged.
-        try:
-            sentiment_marker = os.path.join(output_dir, "sentiment_result.json")
-            with open(sentiment_marker, "w", encoding="utf-8") as f:
-                json.dump(sentiment_result, f, indent=2, default=str)
-                f.write("\n")
-            sentiment_ctx_copy = os.path.join(
-                output_dir, "suite_context_sentiment.json"
-            )
-            with open(sentiment_ctx_copy, "w", encoding="utf-8") as f:
-                json.dump(context, f, indent=2, default=str)
-                f.write("\n")
-        except Exception as e:
-            print(f"  [market-signals] WARNING: could not write marker files: {e}")
-
-        # ---- 2b. context audit ----
-        # Nothing mutates suite_context.json's sentiment block anymore (there
-        # is no producer/consumer handoff for this stage), so there is no
-        # real mutation to audit -- this just records the stage's own status.
-        print("\n[unified] Stage 2b/3: context mutation audit (sentiment block)...")
-        context_audit = _MarketSignalsAudit(sentiment_result.get("status", "ok"))
-        if not context_audit.passed:
-            # Unlike a suite failure, this is not degradable by
-            # --fail-on-suite-error: the context is the input to every
-            # remaining stage, so running them against one that just failed
-            # validation would only produce failures that say nothing about
-            # the suites themselves.
-            aborted_by = "context_audit"
-        elif "error" in sentiment_result and fail_on_suite_error:
-            aborted_by = "sentiment"
-
-    # ---- 3. Options_Suite + VaR_Tools_Simulations (consume Vol_Suite's context) ----
-    if aborted_by:
-        print(f"\n[3/3] OPTIONS & VAR SUITES (SKIPPED — blocked by {aborted_by})")
-        results["options"] = _skip("options")
-        results["var"] = _skip("var")
-    else:
-        _print_phase_header(
-            3,
-            "OPTIONS & VAR SUITES",
-            "Option pricing + value-at-risk analysis (parallel)",
-        )
-        results["options"] = run_suite(
-            "options", context, timeout=timeout, validate=validate
-        )
-        results["var"] = run_suite("var", context, timeout=timeout, validate=validate)
-
-    combined = {
-        "run_id": context["run_id"],
-        "output_dir": output_dir,
-        "context_path": os.path.join(output_dir, "suite_context.json"),
-        "focus": context["focus"],
-        "swap_activity_rows": len(context.get("swap_activity") or []),
-        "swaps": swaps_result,
-        "results": results,
-        "fail_on_suite_error": bool(fail_on_suite_error),
-        "aborted_by": aborted_by,
-        "validation": {
-            stage: (r.get("_validation") or r.get("validation") or {}).get("status")
-            for stage, r in results.items()
-        },
-        # Kept out of `results` on purpose: that dict is the per-suite tally
-        # (`ok == len(results)` decides the run status), and the audit is not a
-        # suite. It has its own row in orchestrator_runs either way.
-        "context_audit": context_audit.to_dict(),
-        "started_at": started_at,
-        "completed_at": _iso_utc_now(),
-    }
-
-    # One canonical copy of the context alongside the per-suite copies, same
-    # filename Vol_Suite writes so existing tooling finds it.
-    try:
-        sc = _import_suite_context()
-        sc.write_suite_context(context, combined["context_path"])
-    except Exception as e:
-        print(
-            f"  [unified] WARNING: could not write suite_context.json: {e}",
-            file=sys.stderr,
-        )
-
-    ok = sum(1 for r in results.values() if "error" not in r)
-    if not context_audit.passed:
-        # 'error', not 'aborted': nothing here was a judgement call about how
-        # much failure to tolerate. The context mutation did not survive
-        # validation, the context was rolled back, and the run failed.
-        status = "error"
-    elif aborted_by:
-        # 'aborted' rather than 'partial': the missing stages were never
-        # attempted, so reporting them as partial results would overstate what
-        # the run actually knows.
-        status = "aborted"
-    else:
-        status = "ok" if ok == len(results) else ("partial" if ok else "error")
-    combined["status"] = status
-
-    # ---- Completion summary ----
-    total = len(results)
-    print(f"\n{'=' * 60}")
-    print(f"  Suites completed: {ok}/{total}")
-    if context_audit.passed:
-        print("  Context audit: PASSED")
-    else:
-        print("  Context audit: FAILED (context rolled back)")
-    print(f"{'=' * 60}")
-
-    log_run(
-        "unified",
-        context["focus"],
-        started_at,
-        combined["completed_at"],
-        status,
-        combined,
-    )
-    return combined
-
-
-# --------------------------------------------------------------------------
-# multi-source orchestration
-# --------------------------------------------------------------------------
-
-
 def discover_adapters() -> list[str]:
     """Discover enabled data sources via DATA_SOURCES environment variable.
 
@@ -1705,535 +806,6 @@ def discover_adapters() -> list[str]:
     sources = [s.strip().upper() for s in data_sources_str.split(",") if s.strip()]
     logger.info(f"Discovered {len(sources)} enabled data sources: {', '.join(sources)}")
     return sources or ["DTCC"]
-
-
-def _get_adapter_for_source(source_name: str) -> Any | None:
-    """Load the adapter module for a given source name.
-
-    Maps source names (DTCC, CME, OTC) to adapter modules in adapters/ directory.
-    Adapters are expected to have a class named <Source>Adapter.
-
-    Returns:
-        Instantiated adapter, or None if the source is not available.
-    """
-    adapters_dir = os.path.join(ROOT, "adapters")
-    if not os.path.isdir(adapters_dir):
-        logger.warning(f"adapters/ directory not found at {adapters_dir}")
-        return None
-
-    source_lower = source_name.lower()
-    module_path = os.path.join(adapters_dir, f"{source_lower}_adapter.py")
-
-    if not os.path.exists(module_path):
-        logger.warning(f"Adapter module not found for {source_name}: {module_path}")
-        return None
-
-    try:
-        # Dynamically import the adapter module
-        spec = importlib.util.spec_from_file_location(
-            f"adapters.{source_lower}_adapter", module_path
-        )
-        if not spec or not spec.loader:
-            logger.error(f"Could not load spec for {source_name} adapter")
-            return None
-
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        # Find the adapter class (e.g., DTCCAdapter, CMEAdapter, OTCAdapter)
-        adapter_class_name = f"{source_name.upper()}Adapter"
-        if not hasattr(module, adapter_class_name):
-            logger.error(
-                f"Adapter class {adapter_class_name} not found in {module_path}"
-            )
-            return None
-
-        adapter_class = getattr(module, adapter_class_name)
-        return adapter_class()
-
-    except Exception as e:
-        logger.error(f"Failed to load adapter for {source_name}: {e}")
-        return None
-
-
-def run_unified_sources(
-    tickers: list[str],
-    target_years: float = 0.25,
-    sources: list[str] | None = None,
-    timeout: int = None,
-) -> dict[str, Any]:
-    """Orchestrate parallel data ingestion from multiple sources, then run unified suite.
-
-    This is the main entry point for cross-source analytics. It:
-    1. Discovers or validates enabled data sources (env var DATA_SOURCES)
-    2. Launches parallel adapters for each source to ingest swap data
-    3. Aggregates results before passing to Vol_Suite
-    4. Runs the unified suite (vol -> market signals -> options + var)
-
-    Args:
-        tickers: List of focus ticker(s) to analyze
-        target_years: Time to expiration in fractional years (default 0.25)
-        sources: Override list of sources to use (if None, uses discover_adapters())
-        timeout: Per-suite timeout in seconds (default uses DEFAULT_TIMEOUT_SEC)
-
-    Returns:
-        Dict with:
-            - run_id: Unique run identifier
-            - sources_ingested: List of sources that provided data
-            - trades_by_source: Dict mapping source name -> trade count
-            - total_trades_ingested: Sum across all sources
-            - unified_result: The combined suite output
-            - started_at: ISO timestamp
-            - completed_at: ISO timestamp
-
-    Raises:
-        ValueError: If tickers list is empty or sources list is invalid.
-    """
-    if not tickers:
-        raise ValueError("tickers list cannot be empty")
-
-    if timeout is None:
-        timeout = DEFAULT_TIMEOUT_SEC
-
-    if sources is None:
-        sources = discover_adapters()
-    else:
-        sources = [s.upper() for s in sources]
-        logger.info(f"Using override sources: {', '.join(sources)}")
-
-    started_at = _iso_utc_now()
-    run_id = _run_id_now()
-
-    print(f"\n[multi-source] run_id={run_id}")
-    print(f"[multi-source] Tickers: {', '.join(tickers)}")
-    print(f"[multi-source] Sources to ingest: {', '.join(sources)}")
-    print(f"[multi-source] Target years: {target_years}")
-
-    # ---- Stage 1: Parallel data ingestion from all sources ----
-    print("\n[multi-source] Stage 1/3: Parallel data ingestion...")
-
-    trades_by_source: dict[str, int] = {}
-    ingestion_errors: dict[str, str] = {}
-
-    # Import here to avoid circular dependency
-    try:
-        if ROOT not in sys.path:
-            sys.path.insert(0, ROOT)
-        from db_loader import SwapsLoader
-    except Exception as e:
-        raise RuntimeError(f"Failed to import db_loader: {e}")
-
-    loader = SwapsLoader(DB_PATH)
-
-    # Ingest from each source sequentially (can be parallelized with threading/multiprocessing)
-    for source in sources:
-        logger.info(f"Ingesting from {source}...")
-        adapter = _get_adapter_for_source(source)
-
-        if not adapter:
-            msg = f"Adapter not available for {source}"
-            ingestion_errors[source] = msg
-            trades_by_source[source] = 0
-            logger.warning(msg)
-            continue
-
-        try:
-            # Fetch trades from this source (no date filter for full backfill)
-            trades = adapter.fetch_trades()
-            trade_records = [t.to_dict() for t in trades] if trades else []
-
-            if trade_records:
-                result = loader.upsert_trades(trade_records, data_source=adapter)
-                trades_by_source[source] = len(trade_records)
-                logger.info(
-                    f"  {source}: upserted {len(trade_records)} trades "
-                    f"(inserted={result.get('inserted')}, updated={result.get('updated')})"
-                )
-            else:
-                trades_by_source[source] = 0
-                logger.info(f"  {source}: no trades fetched")
-
-        except Exception as e:
-            msg = f"Ingestion from {source} failed: {e}"
-            ingestion_errors[source] = msg
-            trades_by_source[source] = 0
-            logger.error(msg)
-
-    # ---- Stage 2: Run unified suite with aggregated data ----
-    total_trades = sum(trades_by_source.values())
-    print(
-        f"\n[multi-source] Stage 2/3: Aggregated {total_trades} trades from {len(sources)} sources"
-    )
-
-    # Build focus for the first ticker (orchestrator is single-ticker-focused for now)
-    focus = {
-        "ticker": tickers[0].upper(),
-        "option_type": "call",
-        "target_years": float(target_years),
-        "data_sources": sources,  # Pass sources to context
-    }
-
-    print(
-        f"[multi-source] Stage 3/3: Running unified suite (ticker={focus['ticker']})..."
-    )
-    unified_result = run_unified(focus, fail_on_suite_error=False, validate=True)
-
-    # ---- Combine results ----
-    combined = {
-        "run_id": run_id,
-        "sources_requested": sources,
-        "sources_ingested": [s for s in sources if trades_by_source.get(s, 0) > 0],
-        "trades_by_source": trades_by_source,
-        "total_trades_ingested": total_trades,
-        "ingestion_errors": ingestion_errors or None,
-        "unified_result": unified_result,
-        "started_at": started_at,
-        "completed_at": _iso_utc_now(),
-    }
-
-    # Log the multi-source orchestration run
-    log_run(
-        "multi_source",
-        focus,
-        started_at,
-        combined["completed_at"],
-        "ok" if total_trades > 0 else "partial",
-        combined,
-    )
-
-    return combined
-
-
-# --------------------------------------------------------------------------
-# CLI
-# --------------------------------------------------------------------------
-
-
-def _stdin_is_available() -> bool:
-    """Check if stdin is available (interactive terminal vs redirected/piped).
-
-    Returns True if stdin is a terminal. Returns False if stdin is redirected,
-    piped, or unavailable (CI, task scheduler, etc.).
-    """
-    try:
-        # Use isatty() on all platforms (Windows, POSIX, Mac).
-        # This is the standard Python check for TTY availability.
-        return sys.stdin.isatty()
-    except Exception:
-        # Any error -> assume no stdin (safe default for headless/CI)
-        return False
-
-
-def _summarize(combined: dict[str, Any]) -> str:
-    lines = [
-        f"run_id={combined['run_id']}",
-        f"focus={combined['focus']['ticker']} {combined['focus']['expiration_date']} "
-        f"{combined['focus']['option_type']}"
-        + (
-            f" K={combined['focus']['strike']}"
-            if combined["focus"].get("strike") is not None
-            else ""
-        ),
-        f"output_dir={combined['output_dir']}",
-        f"swap_activity_rows={combined['swap_activity_rows']}",
-        f"status={combined['status']}",
-    ]
-    if combined.get("aborted_by"):
-        reason = (
-            "context mutation audit FAILED"
-            if combined["aborted_by"] == "context_audit"
-            else "--fail-on-suite-error"
-        )
-        lines.append(f"aborted_by={combined['aborted_by']} ({reason})")
-
-    audit = combined.get("context_audit") or {}
-    if audit:
-        mutated = audit.get("mutations_detected") or []
-        line = (
-            f"context_audit={audit.get('validation_status')} mutations={len(mutated)}"
-        )
-        if audit.get("rolled_back"):
-            line += " ROLLED_BACK"
-        lines.append(line)
-        # Concise diff: the changed keys, not the values and not the contexts.
-        for key in mutated[:8]:
-            lines.append(f"  mutated: {key}")
-        if len(mutated) > 8:
-            lines.append(f"  ... and {len(mutated) - 8} more mutated key(s)")
-        for err in audit.get("validation_errors") or []:
-            lines.append(f"  context_audit: {err}")
-
-    for name, result in combined["results"].items():
-        validation = result.get("_validation") or result.get("validation") or {}
-        verdict = validation.get("status")
-        if result.get("skipped"):
-            lines.append(f"{name}=SKIPPED ({result.get('blocked_by')} failed upstream)")
-            continue
-        if "error" in result:
-            lines.append(f"{name}=FAILED: {result['error']}")
-            for err in validation.get("errors") or []:
-                lines.append(f"  {name} validation: {err}")
-            if result.get("stderr"):
-                first = result["stderr"].splitlines()
-                lines.append(f"  {name} stderr tail: {first[-1] if first else ''}")
-        else:
-            suffix = f", validation={verdict}" if verdict else ""
-            lines.append(f"{name}=ok ({result.get('status', 'ok')}{suffix})")
-            for warning in validation.get("warnings") or []:
-                lines.append(f"  {name} validation WARN: {warning}")
-    return "\n".join(lines)
-
-
-def _check_ticker_exists(ticker: str) -> bool:
-    """Validate that a ticker resolves via ThetaData.
-
-    Returns True on any inconclusive result (network error, connection timeout, etc.)
-    so validation failures never block a valid run.
-
-    Contract: Reuses Vol_Suite.thetadata_client.ThetaDataController.
-    Expected behavior: fetch_spot_price(ticker) returns float > 0 for valid tickers.
-    """
-    try:
-        from Vol_Suite.thetadata_client import ThetaDataController
-
-        td = ThetaDataController()
-        try:
-            spot = td.fetch_spot_price(ticker)
-            return isinstance(spot, (int, float)) and spot > 0
-        finally:
-            td.close()
-    except Exception:
-        # Any error (import, network, API): assume valid to avoid blocking
-        return True
-
-
-def _prompt_ticker_interactive() -> str:
-    """Prompt for focus ticker with validation, re-prompting on invalid symbol."""
-    while True:
-        t = input("Focus ticker (e.g. NVDA): ").strip().upper()
-        if not t:
-            t = "NVDA"
-            print(f"  Using default: {t}")
-            return t
-        if _check_ticker_exists(t):
-            return t
-        print(f"  '{t}' doesn't resolve to a tradable symbol -- check spelling.")
-        retry = (
-            input("  Try a different ticker, or press Enter to use it anyway: ")
-            .strip()
-            .upper()
-        )
-        if not retry:
-            return t
-        if _check_ticker_exists(retry):
-            return retry
-        print(f"  '{retry}' doesn't resolve either -- continuing with it.")
-        return retry
-
-
-def _prompt_run_mode() -> str:
-    """Prompt for run mode with accurate suite dependency labels."""
-    print("\n" + "=" * 60)
-    print("  ORCHESTRATOR — Run Mode")
-    print("=" * 60)
-    print("\n  (1) UNIFIED (recommended)")
-    print("      Runs: vol → market signals → options + var")
-    print("\n  (2) VOL SUITE")
-    print("      Runs: vol only (fastest)")
-    print("\n  (3) OPTIONS SUITE")
-    print("      Runs: vol → market signals → options")
-    print("\n  (4) VAR TOOLS")
-    print("      Runs: vol → market signals → var")
-    print("\n  (5) CUSTOM")
-    print("      Choose individual suites")
-
-    while True:
-        choice = input("\nSelect mode [default 1]: ").strip() or "1"
-        if choice in "12345":
-            return choice
-        print(f"  Invalid choice '{choice}'. Enter 1-5.")
-
-
-def _prompt_expiration_interactive() -> tuple[str | None, float | None]:
-    """Prompt for expiration date OR target years.
-
-    Returns tuple (expiration_date, target_years) where exactly one is not None:
-      - If user chooses ISO date: (YYYY-MM-DD, None)
-      - If user chooses target years: (None, 0.25)
-    """
-    while True:
-        choice = (
-            input(
-                "\nExpiration method: (1) ISO date YYYY-MM-DD, (2) target years [default 2]: "
-            ).strip()
-            or "2"
-        )
-        if choice == "1":
-            while True:
-                exp = input("  Enter expiration (YYYY-MM-DD): ").strip()
-                if exp and len(exp) == 10 and exp.count("-") == 2:
-                    return exp, None
-                print("  Invalid format. Use YYYY-MM-DD (e.g., 2026-10-16).")
-        elif choice == "2":
-            while True:
-                years = (
-                    input(
-                        "  Target years (e.g., 0.25, 0.5, 1.0) [default 0.25]: "
-                    ).strip()
-                    or "0.25"
-                )
-                try:
-                    y = float(years)
-                    if y > 0:
-                        return None, y
-                    print("  Years must be greater than 0.")
-                except ValueError:
-                    print(f"  Invalid: '{years}' is not a number.")
-        else:
-            print(f"  Invalid choice '{choice}'. Enter 1 or 2.")
-
-
-def run_interactive_orchestrator() -> int:
-    """Main entry point for interactive mode.
-
-    Guides user through mode selection, ticker, expiration, and optional parameters,
-    then executes run_unified(). Validates all inputs and re-prompts on errors.
-    """
-    print("\n" + "=" * 60)
-    print("  ORCHESTRATOR — Interactive Mode")
-    print("=" * 60)
-    print("\nThis mode guides you through a full run with sensible defaults.")
-    print("Press Enter to accept defaults (shown in brackets).\n")
-
-    # Step 1: Mode selection
-    mode_choice = _prompt_run_mode()
-
-    # Map mode to suite list (includes required dependencies)
-    suite_map: dict[str, list[str]] = {
-        "1": ["sentiment", "vol", "options", "var"],  # Unified
-        "2": ["sentiment", "vol"],  # Vol only
-        "3": ["sentiment", "vol", "options"],  # Options suite
-        "4": ["sentiment", "vol", "var"],  # VaR tools
-        "5": None,  # Custom (handled below)
-    }
-
-    requested_suites = suite_map.get(mode_choice)
-    if requested_suites is None:
-        print("\nCustom mode: select suites (space or comma separated)")
-        print("Available: options vol var sentiment")
-        while True:
-            suite_input = input("Suites [default: vol options var]: ").strip()
-            if not suite_input:
-                requested_suites = ["vol", "options", "var"]
-                break
-            # Parse comma or space separated
-            requested_suites = [
-                s.strip().lower()
-                for s in suite_input.replace(",", " ").split()
-                if s.strip()
-            ]
-            valid = all(
-                s in ["options", "vol", "var", "sentiment"] for s in requested_suites
-            )
-            if valid and requested_suites:
-                break
-            print("  Invalid suite name(s). Use: options vol var sentiment")
-
-    # Step 2: Ticker
-    print("\n" + "-" * 60)
-    ticker = _prompt_ticker_interactive()
-
-    # Step 3: Expiration
-    print("\n" + "-" * 60)
-    print("Expiration / Time Horizon")
-    expiration, target_years = _prompt_expiration_interactive()
-
-    # Step 4: Optional parameters
-    print("\n" + "-" * 60)
-    print("Additional Options (press Enter for defaults)")
-
-    strike_input = input("  Strike (optional, ATM if blank): ").strip()
-    strike: float | None = None
-    if strike_input:
-        try:
-            strike = float(strike_input)
-        except ValueError:
-            print(f"  Warning: '{strike_input}' is not valid; using ATM instead.")
-
-    option_type = (
-        input("  Option type (call/put) [default call]: ").strip().lower() or "call"
-    )
-    if option_type not in ["call", "put"]:
-        print(f"  Warning: '{option_type}' is invalid; using 'call' instead.")
-        option_type = "call"
-
-    index = input("  Benchmark index [default SPY]: ").strip().upper() or "SPY"
-
-    compile_pdf_input = (
-        input("  Compile results to PDF? (y/n) [default n]: ").strip().lower() or "n"
-    )
-    compile_pdf = compile_pdf_input == "y"
-
-    # Step 5: Build and validate focus dict
-    focus: dict[str, Any] = {
-        "ticker": ticker,
-        "option_type": option_type,
-        "strike": strike,
-        "index_ticker": index,
-        "fail_on_suite_error": False,
-        "compile_pdf": compile_pdf,
-    }
-    if expiration:
-        focus["expiration_date"] = expiration
-    else:
-        focus["target_years"] = target_years
-
-    # Validate focus before proceeding
-    if not focus.get("ticker"):
-        print("\nERROR: Ticker is required.")
-        return 1
-    if focus.get("strike") is not None and not isinstance(
-        focus["strike"], (int, float)
-    ):
-        print("\nERROR: Strike must be a number.")
-        return 1
-    if not (focus.get("expiration_date") or focus.get("target_years")):
-        print("\nERROR: Expiration or target_years is required.")
-        return 1
-
-    # Step 6: Confirmation summary
-    exp_display = expiration if expiration else f"{target_years:.4f}yr"
-    print("\n" + "=" * 60)
-    print("  ORCHESTRATOR — Run Summary")
-    print("=" * 60)
-    print(f"  Ticker       : {ticker}")
-    print(f"  Expiration   : {exp_display}")
-    print(f"  Strike       : {strike or 'ATM'}")
-    print(f"  Option Type  : {option_type}")
-    print(f"  Index        : {index}")
-    print(f"  Suites       : {', '.join(requested_suites)}")
-    print(f"  Compile PDF  : {'Yes' if compile_pdf else 'No'}")
-
-    while True:
-        confirm = input("\nProceed? (y/n) [default y]: ").strip().lower() or "y"
-        if confirm in ["y", "yes"]:
-            break
-        elif confirm in ["n", "no"]:
-            print("Cancelled.")
-            return 0
-        else:
-            print("  Enter 'y' or 'n'.")
-
-    # Step 7: Execute the run
-    print("\n" + "=" * 60)
-    print("  Starting run...")
-    print("=" * 60)
-
-    combined = run_unified(focus, fail_on_suite_error=False, validate=True)
-
-    print("\n" + ("=" * 60))
-    print(_summarize(combined))
-    return 0 if combined["status"] == "ok" else 1
 
 
 def _focus_from_args(args: argparse.Namespace) -> dict[str, Any]:
@@ -2269,7 +841,7 @@ def _print_modules_table() -> None:
 def _summarize_modules(combined: dict[str, Any]) -> str:
     """Human-readable summary for `run_selected_modules`' return value, the
     --modules/--modules-category/--all-modules counterpart to `_summarize`
-    (which summarizes run_unified's return value)."""
+    (the human-readable module-run summary)."""
     lines = [f"status: {combined.get('status')}"]
     results = combined.get("results", {})
     for slug in combined.get("order", []):
@@ -2280,60 +852,47 @@ def _summarize_modules(combined: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Module-runner CLI (the only mode left after Phase 7).
+
+    Runs one or more registry modules in-process via
+    ``shared.module_execution.run_selected_modules`` -- the same machinery the
+    dashboard's generic widget-run API uses. Suite-level ``--unified`` /
+    ``--suite`` / ``--interactive`` launching was removed 2026-09-04 (Phase 7
+    of the widget-native console plan); use the dashboard (POST
+    /api/widgets/{slug}/run) or this CLI's module flags instead.
+    """
     parser = argparse.ArgumentParser(
         prog="orchestrator.py",
-        description="Run the sibling suites over the shared suite_context handoff.",
+        description="Run registered modules in-process over the module registry.",
         epilog="""
-INTERACTIVE MODE (Recommended):
-  orchestrator.py --interactive
-    Guided prompts for mode selection, ticker, expiration, and optional parameters.
-    Auto-validates input and re-prompts on errors. Requires interactive terminal.
+EXAMPLES:
+  orchestrator.py --list-modules
+    Print name/slug/category/suite for every registered module.
 
-UNIFIED RUN (CLI flags):
-  orchestrator.py --unified --ticker NVDA --expiry 2026-10-16
-    Runs: vol -> market signals -> options + var (sentiment-scanner is
-    hard-skipped by default; see module docstring)
+  orchestrator.py --modules hist_sim,mc_sim --ticker SPY
+    Run the named modules for SPY.
 
-SINGLE SUITE (CLI flags):
-  orchestrator.py --suite vol --ticker AAPL --target-years 0.25
-    Runs only Vol Suite
+  orchestrator.py --modules-category var --ticker SPY --json
+    Run every module in a category, full JSON output.
 
-ADVANCED OPTIONS:
-  orchestrator.py --unified --ticker SPY --expiry 2026-08-15 --fail-on-suite-error
-    Abort on first suite failure instead of continuing degraded.
+  orchestrator.py --all-modules --ticker SPY
+    Run every registered module (respecting requires/order).
+
+Dashboard equivalent (interactive): POST /api/widgets/{slug}/run on the
+localhost dashboard -- see docs/guides/START_HERE.md.
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    # Make mode mutually exclusive, but --interactive optional (not required)
-    mode = parser.add_mutually_exclusive_group(required=False)
-    mode.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Launch in interactive mode: guided prompts for all parameters.",
-    )
-    mode.add_argument(
-        "--unified",
-        action="store_true",
-        help="Run vol -> market signals -> options + var in dependency order.",
-    )
-    mode.add_argument(
-        "--suite",
-        choices=sorted(SUITE_ROOTS),
-        help="Run a single suite in context mode.",
     )
     parser.add_argument(
         "--modules",
         default=None,
-        help="Comma-separated module slugs to run via the module "
-        "registry (shared.module_registry.run_selected_modules). "
-        "New, additive path alongside --unified/--suite; "
-        "mutually exclusive with --modules-category/--all-modules.",
+        help="Comma-separated module slugs to run via the module registry.",
     )
     parser.add_argument(
         "--modules-category",
         default=None,
-        help="Run every registered module whose .category matches "
-        "this string. Mutually exclusive with --modules/--all-modules.",
+        help="Run every registered module whose .category matches this string. "
+        "Mutually exclusive with --modules/--all-modules.",
     )
     parser.add_argument(
         "--all-modules",
@@ -2344,27 +903,19 @@ ADVANCED OPTIONS:
     parser.add_argument(
         "--list-modules",
         action="store_true",
-        help="Print name/slug/category/suite for every registered "
-        "module and exit without running anything.",
+        help="Print name/slug/category/suite for every registered module and "
+        "exit without running anything.",
     )
-    # Make --ticker optional (only required in CLI mode if --unified/--suite chosen)
     parser.add_argument(
         "--ticker",
         required=False,
-        help="Focus ticker, e.g. NVDA. Required if --unified or --suite is used.",
-    )
-    parser.add_argument(
-        "--strike",
-        type=float,
-        default=None,
-        help="Optional strike; null means the child picks ATM.",
+        help="Focus ticker, e.g. NVDA. Required with --modules/--modules-category/--all-modules.",
     )
     parser.add_argument(
         "--expiry",
         default=None,
         help="Expiration YYYY-MM-DD (or YYYYMMDD; normalized to ISO).",
     )
-    parser.add_argument("--option-type", default="call", choices=["call", "put"])
     parser.add_argument(
         "--index", default=None, help="Basket index ticker (default SPY)."
     )
@@ -2375,30 +926,9 @@ ADVANCED OPTIONS:
         help="Used only when --expiry is omitted (default 0.25).",
     )
     parser.add_argument(
-        "--timeout",
-        type=int,
-        default=DEFAULT_TIMEOUT_SEC,
-        help=f"Per-child timeout in seconds (default {DEFAULT_TIMEOUT_SEC}).",
-    )
-    parser.add_argument(
         "--json",
         action="store_true",
         help="Print the full combined result as JSON instead of a summary.",
-    )
-    parser.add_argument(
-        "--fail-on-suite-error",
-        action="store_true",
-        help="Abort the unified chain at the first suite whose "
-        "output fails validation, instead of continuing "
-        "downstream against known-bad input. Downstream "
-        "stages are reported as skipped. Exit code 1.",
-    )
-    parser.add_argument(
-        "--no-validate",
-        action="store_true",
-        help="Skip explicit output validation entirely "
-        "(pre-validation behaviour; for debugging a suite "
-        "whose marker contract is in flux).",
     )
     args = parser.parse_args(argv)
 
@@ -2408,9 +938,6 @@ ADVANCED OPTIONS:
         _print_modules_table()
         return 0
 
-    # Module-registry selection flags (Task 2 of the modularization overhaul):
-    # a new, additive path alongside --unified/--suite -- mutually exclusive with
-    # each other and with --unified/--suite, and requires --ticker just like they do.
     _module_flags_given = sum(
         bool(x) for x in (args.modules, args.modules_category, args.all_modules)
     )
@@ -2419,93 +946,39 @@ ADVANCED OPTIONS:
             "--modules, --modules-category, and --all-modules are "
             "mutually exclusive; pick one."
         )
-    if _module_flags_given and (args.unified or args.suite):
-        parser.error(
-            "--modules/--modules-category/--all-modules cannot be "
-            "combined with --unified or --suite."
-        )
     if _module_flags_given and not args.ticker:
         parser.error(
             "--ticker is required when using --modules/"
             "--modules-category/--all-modules."
         )
-
-    # Validate CLI args: if using --unified or --suite, --ticker must be provided
-    if (args.unified or args.suite) and not args.ticker:
-        parser.error("--ticker is required when using --unified or --suite")
-
-    if args.no_validate and args.fail_on_suite_error:
+    if not _module_flags_given:
         parser.error(
-            "--no-validate and --fail-on-suite-error are contradictory: "
-            "there is nothing to fail on with validation disabled."
+            "nothing to run: pass --modules, --modules-category, or "
+            "--all-modules (suite-level --unified/--suite launching was "
+            "removed 2026-09-04; use the dashboard widget API)."
         )
-
-    # If --interactive, check for stdin and dispatch
-    if args.interactive:
-        if not _stdin_is_available():
-            print(
-                "ERROR: --interactive requires an interactive terminal.",
-                file=sys.stderr,
-            )
-            print(
-                "stdin is redirected or not available (piped input, CI, etc.).",
-                file=sys.stderr,
-            )
-            print(file=sys.stderr)
-            print("Fallback: use CLI flags instead:", file=sys.stderr)
-            print(
-                "  orchestrator.py --unified --ticker TICKER [--expiry YYYY-MM-DD]",
-                file=sys.stderr,
-            )
-            return 1
-        return run_interactive_orchestrator()
 
     focus = _focus_from_args(args)
-    focus["timeout"] = args.timeout
-    focus["fail_on_suite_error"] = bool(args.fail_on_suite_error)
 
-    if _module_flags_given:
-        if args.all_modules:
-            module_slugs = [m.slug for m in all_modules()]
-        elif args.modules_category:
-            module_slugs = [
-                m.slug for m in all_modules() if m.category == args.modules_category
-            ]
-        else:
-            module_slugs = [
-                s.strip() for s in (args.modules or "").split(",") if s.strip()
-            ]
-        context = build_context(focus)
-        combined = run_selected_modules(module_slugs, context)
-        print("\n" + ("=" * 60))
-        print(
-            json.dumps(combined, indent=2, default=str)
-            if args.json
-            else _summarize_modules(combined)
-        )
-        return 0 if combined["status"] == "ok" else 1
-
-    if args.unified:
-        combined = run_unified(
-            focus,
-            fail_on_suite_error=bool(args.fail_on_suite_error),
-            validate=not args.no_validate,
-        )
-        print("\n" + ("=" * 60))
-        print(
-            json.dumps(combined, indent=2, default=str)
-            if args.json
-            else _summarize(combined)
-        )
-        return 0 if combined["status"] == "ok" else 1
-
+    if args.all_modules:
+        module_slugs = [m.slug for m in all_modules()]
+    elif args.modules_category:
+        module_slugs = [
+            m.slug for m in all_modules() if m.category == args.modules_category
+        ]
+    else:
+        module_slugs = [
+            s.strip() for s in (args.modules or "").split(",") if s.strip()
+        ]
     context = build_context(focus)
-    result = run_suite(
-        args.suite, context, timeout=args.timeout, validate=not args.no_validate
-    )
+    combined = run_selected_modules(module_slugs, context)
     print("\n" + ("=" * 60))
-    print(json.dumps(result, indent=2, default=str))
-    return 1 if "error" in result else 0
+    print(
+        json.dumps(combined, indent=2, default=str)
+        if args.json
+        else _summarize_modules(combined)
+    )
+    return 0 if combined["status"] == "ok" else 1
 
 
 if __name__ == "__main__":
