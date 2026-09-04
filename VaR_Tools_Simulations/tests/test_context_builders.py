@@ -110,6 +110,29 @@ def test_mc_sim_ignores_non_positive_context_vol(stub_market):
     assert result["data_quality"]["vol_source"] == "garch_fit"
 
 
+def test_mc_sim_prefers_context_store_vol_over_legacy_context(stub_market, tmp_path, monkeypatch):
+    """Context Store is the new widget-native source and must win over legacy
+    suite_context focus values."""
+    from shared.context_store import ContextStore
+
+    db = tmp_path / "ctx.db"
+    store = ContextStore(db)
+    store.put({"ticker": "AAPL"}, "garch_conditional_vol", 0.99, "vol_suite")
+    store.put({"ticker": "AAPL"}, "expected_return", 0.05, "vol_suite")
+
+    monkeypatch.setenv("CONTEXT_STORE_PATH", str(db))
+    try:
+        result = var_main._build_mc_sim_from_context(
+            _base_payload(garch_vol=0.22, expected_return=0.07), "AAPL"
+        )
+    finally:
+        monkeypatch.delenv("CONTEXT_STORE_PATH", raising=False)
+    assert result["vol"] == pytest.approx(0.99)
+    assert result["data_quality"]["vol_source"] == "context_store"
+    assert result["expected_return"] == pytest.approx(0.05)
+    assert result["data_quality"]["expected_return_source"] == "context_store"
+
+
 # ── copula ────────────────────────────────────────────────────────────────
 
 

@@ -367,34 +367,91 @@ def _histogram_bins(values: np.ndarray, n_bins: int = 20) -> list:
 
 
 def _resolve_vol_and_quality(payload: dict, tk: str) -> tuple:
-    """Prefer suite_context's Vol_Suite-computed GARCH vol; fall back to VaR's
-    own GARCH fit, then to a fixed default. Returns (vol, vol_source)."""
+    """Prefer Context Store vol; then suite_context's Vol_Suite-computed GARCH
+    vol; fall back to VaR's own GARCH fit, then to a fixed default.
+    Returns (vol, vol_source)."""
     from var_engine import data_loader
+
     focus = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
-    ctx_vol = focus.get("garch_conditional_vol")
-    if isinstance(ctx_vol, (int, float)) and not isinstance(ctx_vol, bool) and ctx_vol > 0:
-        return float(ctx_vol), "context"
+    expiry = focus.get("expiration_date") if isinstance(focus, dict) else None
+
+    # 1) Context Store lookup (new widget-native path)
+    try:
+        from shared.context_store import ContextStore
+
+        store = ContextStore()
+        scope: dict[str, Any] = {"ticker": tk}
+        if expiry:
+            scope["expiry"] = expiry
+        stored = store.get(scope, "garch_conditional_vol")
+        if stored is None and "basket" in payload:
+            basket = payload["basket"]
+            if isinstance(basket, dict):
+                basket_tickers = basket.get("tickers")
+            else:
+                basket_tickers = basket
+            if isinstance(basket_tickers, (list, tuple)):
+                stored = store.get({"basket": list(basket_tickers)}, "garch_conditional_vol")
+        if isinstance(stored, (int, float)) and not isinstance(stored, bool) and stored > 0:
+            return float(stored), "context_store"
+    except Exception:  # noqa: BLE001,S110  # transient store failures must not break VaR
+        pass
+
+    # 2) Legacy suite_context threading (still populated by orchestrator)
+    if isinstance(focus, dict):
+        ctx_vol = focus.get("garch_conditional_vol")
+        if isinstance(ctx_vol, (int, float)) and not isinstance(ctx_vol, bool) and ctx_vol > 0:
+            return float(ctx_vol), "context"
+
+    # 3) VaR's own GARCH fit
     fit_vol = data_loader.estimate_garch_vol(tk)
     if fit_vol is not None:
         return float(fit_vol), "garch_fit"
+
     return 0.25, "fallback"
 
 
 def _resolve_drift_and_quality(payload: dict, tk: str) -> tuple:
-    """Prefer suite_context's focus.expected_return (published by Vol_Suite
-    when it computes one); fall back to VaR's own historical geometric drift.
-    Returns (drift, expected_return_source).
+    """Prefer Context Store drift; then suite_context's focus.expected_return;
+    fall back to VaR's own historical geometric drift. Returns
+    (drift, expected_return_source).
 
-    Mirrors _resolve_vol_and_quality: read the context first so an upstream
-    estimate wins, only fall back to a locally-computed value when the context
-    carries none. A missing drift is 0.0 with source "unavailable" -- never a
-    fabricated-looking nonzero value.
+    Mirrors _resolve_vol_and_quality: read the store first, then the context,
+    then fall back to locally-computed values.
     """
     from var_engine import data_loader
+
     focus = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
-    ctx_drift = focus.get("expected_return")
-    if isinstance(ctx_drift, (int, float)) and not isinstance(ctx_drift, bool):
-        return float(ctx_drift), "context"
+    expiry = focus.get("expiration_date") if isinstance(focus, dict) else None
+
+    # 1) Context Store lookup
+    try:
+        from shared.context_store import ContextStore
+
+        store = ContextStore()
+        scope: dict[str, Any] = {"ticker": tk}
+        if expiry:
+            scope["expiry"] = expiry
+        stored = store.get(scope, "expected_return")
+        if stored is None and "basket" in payload:
+            basket = payload["basket"]
+            if isinstance(basket, dict):
+                basket_tickers = basket.get("tickers")
+            else:
+                basket_tickers = basket
+            if isinstance(basket_tickers, (list, tuple)):
+                stored = store.get({"basket": list(basket_tickers)}, "expected_return")
+        if isinstance(stored, (int, float)) and not isinstance(stored, bool):
+            return float(stored), "context_store"
+    except Exception:  # noqa: BLE001,S110
+        pass
+
+    # 2) Legacy suite_context threading
+    if isinstance(focus, dict):
+        ctx_drift = focus.get("expected_return")
+        if isinstance(ctx_drift, (int, float)) and not isinstance(ctx_drift, bool):
+            return float(ctx_drift), "context"
+
     drift = data_loader.estimate_geometric_return(tk)
     if drift is None:
         return 0.0, "unavailable"

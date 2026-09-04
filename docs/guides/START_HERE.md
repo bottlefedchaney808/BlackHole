@@ -1,11 +1,106 @@
-# Start Here
+# Start Here — FinDev in one sitting
 
-One shared environment (`.venv`), four analysis suites, a DTCC swap data
-pipeline, an orchestrator that ties them together, and a live dashboard.
-Everything below is a double-click `.bat` file — nothing needs a terminal
-left open except the two long-running ones (dashboard, scheduler).
+> For a new reader who wants the method first, the commands second, and the full
+> wiki after that. No trading, no construction pricing, no auto-promotion from a
+> chart to a position.
 
-## First time only
+This page answers one question: **How do I get from zero to a first successful
+run of FinDev, and what should I be looking at once I get there?**
+
+If you want file trees, every suite’s module map, and the full architecture, see
+the wiki. Start Here is the one-page lesson.
+
+---
+
+## 1. What FinDev is for
+
+FinDev is a dealer-style reading of option-market positioning. It does not tell
+you what *will* happen. It tells you how the market is already positioned, so
+you can ask better questions about where pressure might build and where the next
+hedge flow could push.
+
+**Audience:** You can run Python, you know what a call and a put are, and you
+want to stop reading consensus dashboards and start reading the book.
+
+The central idea is that there are *two honest estimates* of the same
+underlying:
+
+1. **Chain as it sits.** Open interest, dealer-frame sign, per expiry — the
+   static snapshot of where exposure already lives.
+2. **Flow-built book.** Signed by measured changes — delta of implied volatility
+   (ΔIV), not the level — accumulated on a clock.
+
+Where they agree, conviction is cheap. Where they diverge is the trade-relevant
+surface. If you fuse them into one number, you lose the only thing that matters.
+
+---
+
+## 2. The three objects you will meet first
+
+| Object | Quantity | Sign | Question answered |
+|--------|----------|------|-------------------|
+| **Chain-as-it-sits** | Open interest by strike/expiry | Dealer-frame per right: call +, put − | Where does the exposure already live? |
+| **Flow-built book** | Signed position accumulated from ΔIV flow | ΔIV tells you whether the flow added long or short delta | What flow actually built this positioning? |
+| **Priced book** | Same greeks, same dollar formulas, different position input | N/A — the position is the only allowed degree of freedom | Are the two reads methodologically comparable? |
+
+**What you must not fuse:**
+
+- GEX (imported call+/put− from a scanner) is **not** the book.
+- Book gamma is **not** GEX.
+- Persist / carry is **not** live residual vanna.
+
+Say the inequality once, then compare what is actually comparable.
+
+---
+
+## 3. The walk — six steps of thinking
+
+FinDev is a sequence of questions, not a list of scripts.
+
+1. **Fetch the chain as it sits.** Strikes, expiries, open interest, implied
+   vols. No narrative yet.
+2. **Apply the dealer-frame sign.** For every right, ask: if this were dealer
+   inventory, is it long delta or short delta? Calls read one way, puts the
+   other.
+3. **Build the flow-built book.** Look at measured *changes* in implied
+   volatility (ΔIV), not the IV level itself. Accumulate with a sign that comes
+   from the flow, not your opinion of the tape.
+4. **Price both books with the same greeks.** Same chain, same dollar formulas.
+   The only degree of freedom must be the position itself.
+5. **Read agreement vs divergence.** Where the two books agree, stop arguing.
+   Where they diverge, you have found the surface worth reading.
+6. **Interpret conditionally.** A divergence is not a trade signal. It is a
+   place to ask the next question: what flow would have to arrive to resolve it?
+
+That is the method. The commands below are just the mechanism.
+
+---
+
+## 4. What good output looks like
+
+After a successful run you should be able to open the output directory and see
+two things side by side:
+
+- A `vol_result.json` with a dealer-positioning block that says **where** the
+  exposure lives by expiry, and **what sign** it carries.
+- An `options_result.json` with a priced option — method, IV, price, greeks —
+  built from the same context.
+
+A healthy run is loud about failure. Missing data shows up as `status: failed`,
+`delta_iv_missing`, or a named gap. A quiet zero is a bug, not a clean run.
+
+A good first-run ticker has liquid options, a near-dated expiry, and enough
+open interest that the chain-as-it-sits is not empty. SPY, QQQ, NVDA, AAPL are
+reasonable starting points. 0-DTE looks empty by construction — do not start
+there.
+
+---
+
+## 5. First run
+
+### 5.1 Setup
+
+From the repo root:
 
 ```bash
 python -m venv .venv
@@ -13,77 +108,100 @@ python -m venv .venv
 python setup_db.py
 ```
 
-Credentials (ThetaData) live in one place: the root `.env` file. Nothing
-else needs its own `.env` anymore.
+Create a root `.env` with your ThetaData credentials:
 
-## The pieces
+```text
+THETADATA_CF_ACCESS_CLIENT_ID=...
+THETADATA_CF_ACCESS_CLIENT_SECRET=...
+```
 
-| What | Run it with | What it does |
-|---|---|---|
-| **Dashboard** | `dashboard.bat` | Opens `http://127.0.0.1:8787` — live swap data, ingestion status, and buttons to trigger orchestrator runs. This is the main control surface; start here. Only run one at a time — double-clicking it again while one's already up just opens your existing dashboard instead of starting a duplicate. |
-| **DTCC scheduler** | `run_scheduler.bat` | Leave running. Polls DTCC's public API every 5 minutes and loads new swap trades — no manual downloads, ever. Only run one at a time — a second instance fights the first for database writes and silently stalls ingestion progress. It'll refuse to start if one's already running. |
-| **DTCC backfill** | `python backfill.py` | One-time (or re-run anytime): pulls the full available history for SEC + CFTC equity swaps. Real volume is large (roughly 1.5M rows/day for SEC alone) — expect this to run for hours the first time. Safe to interrupt and re-run; it resumes where it left off. |
-| **Orchestrator** | `orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16` | Runs sentiment-scanner → Vol_Suite → Options_Suite + VaR_Tools_Simulations in dependency order, or a single suite with `--suite options\|vol\|var\|sentiment`. Also reachable from the dashboard's "Trigger a run" panel. |
-| **Individual suites** | `Options_Suite\options_suite.bat`, `Vol_Suite\vol_suite.bat`, `VaR_Tools_Simulations\var.bat`, `sentiment-scanner\sentiment.bat` | Run any suite standalone and interactively, same as before — they now share the one root `.venv` instead of their own. |
-| **Backtest tournament** | `.venv\Scripts\python.exe Backtests\main.py --harness all --ticker SPY,QQQ --lookback-days 1` | Runs the transferred standalone Backtests package for pricing, greeks, and signal evaluation. Writes text/JSON artifacts to `Backtests\outputs\` and keeps existing `Vol_Suite` backtests separate. |
+These credentials are required for any run that touches live market data.
 
-## Query swap data directly
+### 5.2 Run the pipeline
 
 ```bash
-python swaps_query.py
+orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16
 ```
 
-Or from Python:
+Or on Linux / Mac:
 
-```python
-from swaps_query import SwapsQuery
-q = SwapsQuery()
-q.get_database_stats()
-q.top_notional_products()          # top instruments by notional, most recent day
-q.query_by_upi("QZBTF5S5TCDR")     # trades identify instruments by UPI, not ticker
+```bash
+./orchestrator.sh --unified --ticker NVDA --expiry 2026-10-16
 ```
 
-See `DTCC_LOCAL_SETUP.md` for how the DTCC pipeline itself works (it pulls
-straight from DTCC's public API — no manual downloads).
+The orchestrator runs three phases in order:
 
-## Typical order of operations
+1. **Vol_Suite** — volatility surface, dealer positioning, gamma exposure.
+2. **Market Signals** — option-chain scanners, simulations, Direction suite.
+3. **Options + VaR** — priced option greeks and a one-day 99% portfolio risk
+   number.
 
-1. `dashboard.bat` — leave it open, this is your window into everything.
-2. `run_scheduler.bat` in a second window — keeps swap data current.
-3. `python backfill.py` once, if you want the full historical swap dataset
-   (can also be kicked off and left running unattended).
-4. Trigger orchestrator runs from the dashboard, or `orchestrator.bat`
-   directly, whenever you want a cross-suite analysis for a ticker.
+Output lands in `orchestrator_output/<run_id>/`.
 
+### 5.3 Inspect the result
 
-## Workflow helpers
+```bash
+cd orchestrator_output/<run_id>
+cat vol_result.json | python -m json.tool | head -40
+cat options_result.json | python -m json.tool
+cat var_result.json | python -m json.tool
+```
 
-Run these from Git Bash at the repo root when you need a quick workflow check:
+A healthy `options_result.json` looks like this:
 
-- `bash scripts/burst_checkpoint.sh vol` - prints `git diff --stat` and runs the narrow Vol_Suite checkpoint slice before another burst of changes.
-- `git config core.hooksPath scripts/hooks` - installs `scripts/hooks/commit-msg`, which enforces the repo's commit-subject policy on each commit.
-- `bash scripts/verify_tradingview_submodule.sh` - verifies the `tradingview-mcp` checkout (gitlink when configured, source entrypoint always) and treats the live Hermes/CDP probe as informational on this Windows repo.
+```json
+{
+  "suite": "options",
+  "status": "ok",
+  "ticker": "NVDA",
+  "method": "LeisenReimer",
+  "sigma": 0.4878,
+  "price": 12.34,
+  "greeks": {
+    "delta": 0.52,
+    "gamma": 0.03,
+    "theta": -0.15,
+    "vega": 0.21,
+    "rho": 0.08
+  }
+}
+```
 
-## Sharing the dashboard publicly
+If any marker file says `"status": "error"`, read the `error` field and the
+orchestrator log before re-running.
 
-The dashboard has a built-in **Share** control in the top bar. Start the
-dashboard, click **Start sharing**, and confirm — a public HTTPS link
-(e.g. `https://<random-words>.trycloudflare.com`) appears that proxies to your
-local dashboard for as long as your machine and the dashboard stay running.
-Click **Stop sharing** (or close the dashboard) to take it down.
+---
 
-Under the hood it runs Cloudflare's free, account-less "quick tunnel"
-(`cloudflared tunnel --url http://127.0.0.1:8787`). The URL changes each time
-you start a new one, and `cloudflared` must be installed and on PATH.
+## 6. What to ignore on day one
 
-**Stopping cleanly on Windows.** The Stop button and Ctrl+C both clean up the
-tunnel automatically. But a *hard* kill of the dashboard process (Task
-Manager "End task", or `taskkill /F`) bypasses the app's shutdown hook and can
-leave a `cloudflared` process running with the public URL still live. If that
-happens, stop it manually: `taskkill /F /IM cloudflared.exe` (in cmd) or
-`taskkill //F //IM cloudflared.exe` (in git-bash).
+1. **GEX print is not the book.** A scanner’s call+/put− GEX number is a rough
+   reference. It is not the flow-built book and it is not a hedge-flow forecast.
+2. **A blank pane is a bug, not “no positioning.”** If a chart is empty, check
+   that the ticker has options data, that the expiry is not 0-DTE, and that your
+   credentials are valid.
+3. **The `auto` expiry is usually 1-DTE and often looks empty.** Pick an
+   explicit expiry for your first run.
 
-**There is no password on the dashboard.** Anyone with the link can see all
-swap data and trigger orchestrator runs (which call real, billed ThetaData
-API requests). Only share the link with people you trust, and stop the
-tunnel when you're done.
+---
+
+## 7. Where to go next
+
+- **Method:** `docs/guides/FINANCIALDEVELOPMENT_ANALYSIS_PIPELINE_RUNBOOK.md`
+  — the full pipeline, its inputs and outputs, and how to tell a healthy run
+  from a broken one.
+- **Architecture:** `docs/guides/FINANCIAL_DEVELOPMENT_INVENTORY.md` — repo
+  layout, suites, key modules, and known gotchas.
+- **Wiki:** `docs/wiki/` — the full method book. Start with
+  `docs/wiki/README.md` and `docs/wiki/01-the-idea.md`.
+- **Style:** `docs/guides/FINDEV_DEALER_BOOK_DOC_STYLE.md` — the dealer-book
+  voice used across the wiki.
+- **Quick reference:** `CLAUDE.md` — the canonical agent and developer
+  context.
+
+When you are ready to dig into a suite, run a single suite first:
+
+```bash
+orchestrator.bat --suite vol --ticker AAPL --target-years 0.25
+```
+
+That is the smallest step from here to fluency.
