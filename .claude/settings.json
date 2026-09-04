@@ -24,6 +24,7 @@
       "mcp__robinhood__get_scans",
       "mcp__robinhood__get_watchlists",
       "mcp__robinhood__get_earnings_results",
+      "mcp__robinhood__run_scan",
       "mcp__tradingview__tv_health_check",
       "mcp__obsidian__list_allowed_directories",
       "mcp__obsidian__search_files",

@@ -87,7 +87,7 @@
             <td class="small mono">{{ r.started_at | ts }}</td>
             <td class="small mono">{{ r.completed_at | ts }}</td>
             <td><span class="pill {{ (r.status or 'plain') | lower }}">{{ r.status or '--' }}</span></td>
-            <td><a href="/runs/{{ r.id }}" target="_blank">JSON</a></td>
+            <td class="small mono muted">{{ r.id }}</td>
           </tr>
         {% endfor %}
         </tbody>

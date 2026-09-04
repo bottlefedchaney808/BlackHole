@@ -5,7 +5,7 @@ description: Use when debugging dashboard/app.py (the FastAPI control surface at
 
 ## Overview
 
-`dashboard/app.py` is a single long-lived `uvicorn` process (started by `dashboard.bat`) serving the swap-data browser, orchestrator trigger UI, the periodic overview widgets, and the `/tools/*` pages (`Tools/registry.py`'s tool surface, including Surface Explorer). It is the repo's single highest fix-ratio area — dashboard-touching commits run 60-75% `fix` type across every worktree sampled (added 2026-08-17, `.claude/skills/tool-launcher/SKILL.md`'s original note). This skill collects dashboard-specific debugging knowledge that doesn't belong in `tool-launcher` (orchestrator/child-suite dispatch) or `launching-dashboard` (the user-level skill for actually starting the process).
+`dashboard/app.py` is a single long-lived `uvicorn` process (started by `dashboard.bat`) serving the swap-data browser, the widget-run surface (`GET /api/widgets/catalog`, `POST /api/widgets/{slug}/run`), the periodic overview widgets, and the `/tools/*` pages (`Tools/registry.py`'s tool surface, including Surface Explorer). It is the repo's single highest fix-ratio area — dashboard-touching commits run 60-75% `fix` type across every worktree sampled (added 2026-08-17, `.claude/skills/tool-launcher/SKILL.md`'s original note). This skill collects dashboard-specific debugging knowledge that doesn't belong in `tool-launcher` (in-process module/widget dispatch) or `launching-dashboard` (the user-level skill for actually starting the process).
 
 ## Debug / Common Mistakes
 
@@ -26,6 +26,6 @@ See also `.claude/skills/tool-launcher/SKILL.md`'s "Dashboard quant-summary gotc
 | Task | Where |
 |---|---|
 | Start/restart the process | `launching-dashboard` skill (user-level) |
-| Orchestrator/child-suite dispatch issues | `.claude/skills/tool-launcher/SKILL.md` |
+| Widget/module-run dispatch issues | `.claude/skills/tool-launcher/SKILL.md` |
 | Widget cache | `artifacts/widget_cache.db` (`widget_cache` table: `widget_id`, `payload`, `status`, `computed_at`) |
 | Surface Explorer / Tools pages | `Tools/tools/surface_explorer_tool.py`, `dashboard/templates/tools_surface_explorer.html` |

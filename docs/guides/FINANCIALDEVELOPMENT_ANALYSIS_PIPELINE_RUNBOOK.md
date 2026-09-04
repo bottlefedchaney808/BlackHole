@@ -4,21 +4,21 @@
 
 ## 1. What this runbook covers
 
-This repo (`C:\Users\bottl\FinancialDevelopment`) turns live option-chain / swap / sentiment data into cross-suite quantitative analysis. The entry point for most analysis work is the orchestrator: a headless dependency runner that feeds a single `suite_context.json` through the suites in the correct order and records what happened.
+This repo (`C:\Users\bottl\FinancialDevelopment`) turns live option-chain / swap / sentiment data into cross-suite quantitative analysis. Since Phase 7 (2026-09-04) each registered module runs **in-process** via `shared/module_execution.run_selected_modules(slugs, context)` (scripted/agent) or the dashboard's `POST /api/widgets/{slug}/run` route; a module's `context_patch` is persisted to the Context Store so later modules read it without recomputing. There is no cross-suite subprocess orchestrator anymore (`run_suite`/`run_unified`/`--unified`/`--suite`, removed 2026-09-04).
 
-This runbook focuses on the **analysis pipeline** — the orchestrator-driven path that produces `vol_result.json`, `options_result.json`, `var_result.json`, and `sentiment_result.json` for a given ticker. It does not cover trading, order placement, or the DTCC ingestion back-end in depth; those are documented in `DTCC_LOCAL_SETUP.md` and `START_HERE.md`.
+This runbook focuses on the **analysis pipeline** — the module run that produces `vol_result.json`, `options_result.json`, `var_result.json`, and `sentiment_result.json` for a given ticker. It does not cover trading, order placement, or the DTCC ingestion back-end in depth; those are documented in `DTCC_LOCAL_SETUP.md` and `START_HERE.md`.
 
 ## 2. Pipeline stages (in order)
 
-A standard unified run executes three phases. Each phase is gated: the orchestrator validates the marker file from a stage before the next stage is allowed to consume it.
+A full analysis run executes three stages. Each maps to a group of registered modules; a stage's output context feeds the next via the Context Store.
 
-| Phase | Stage | What it answers | Runs in |
+| Phase | Modules | What it answers | Where it runs |
 |---|---|---|---|
-| 1 | **Vol_Suite** | What is the volatility surface, dealer gamma exposure, variance-swap fair strike, GARCH conditional vol, and peer basket correlation for this ticker? | Subprocess (`Vol_Suite/volatility_suite.py`) |
+| 1 | **Vol_Suite** (`dealer_exposure`, surface/vol-stats modules) | What is the volatility surface, dealer gamma exposure, variance-swap fair strike, GARCH conditional vol, and peer basket correlation for this ticker? | In-process module run |
 | 2 | **Market Signals** | What do option-chain scanners (IV rank, max pain, skew, unusual OI) plus 1-year simulations and the Direction 5-tool suite say about the ticker? | In-process (`run_market_signals_stage`) |
-| 3 | **Options + VaR** | What is the option price/Greeks and the 1-day/99% portfolio VaR/CVaR, using the vol/correlation context Vol_Suite produced? | Subprocesses in parallel (`Options_Suite/main.py`, `VaR_Tools_Simulations/main.py`) |
+| 3 | **Options + VaR** | What is the option price/Greeks and the 1-day/99% portfolio VaR/CVaR, using the vol/correlation context Vol_Suite produced? | In-process module runs |
 
-Historical note: the old `sentiment-scanner` subprocess (social-media scraping) is hard-skipped by default and replaced by the in-process Market Signals stage. The scanner slugs still live under `sentiment-scanner/module_registry.py`, but the unified pipeline reaches them through the in-process registry call, not a subprocess.
+Historical note: the old `sentiment-scanner` subprocess (social-media scraping) is hard-skipped by default and replaced by the in-process Market Signals stage. The scanner slugs still live under `sentiment-scanner/module_registry.py`, but a full run reaches them through the in-process registry call, not a subprocess.
 
 ### 2.1 Phase detail
 
@@ -61,32 +61,34 @@ Optional inputs include strike, option type (`call`/`put`, default `call`), bask
 
 ### 3.2 Configuration knobs
 
-| Knob | Default | Effect |
+Modules take their inputs from the run context dict (not CLI flags). Common
+keys:
+
+| Key | Default | Effect |
 |---|---|---|
-| `--target-years` | `0.25` | Horizon for vol/GARCH/variance-swap analysis when no explicit expiry is given |
-| `--expiry` | none | Explicit expiration in `YYYY-MM-DD` |
-| `--strike` | ATM | Optional strike for the options pricer |
-| `--option-type` | `call` | `call` or `put` |
-| `--index` | `SPY` | Basket benchmark index |
-| `--timeout` | `1800` | Per-suite timeout in seconds |
-| `--fail-on-suite-error` | off | Abort the chain at the first failing suite instead of continuing degraded |
-| `--no-validate` | off | Skip explicit output validation (debug only) |
-| `SUITE_VALIDATION_STRICT=0` | `1` | Downgrade missing side-artifact checks from FAIL to WARN |
-| `VS_RUN_CHAIN_SCANNER=1` | `1` in orchestrator runs | Ensures `chain_strategies.json` is produced by Vol_Suite |
+| `target_years` | `0.25` | Horizon for vol/GARCH/variance-swap analysis when no explicit expiry is given |
+| `expiration_date` | none | Explicit expiration in `YYYY-MM-DD` |
+| `strike` | ATM | Optional strike for the options pricer |
+| `option_type` | `call` | `call` or `put` |
+| `index_ticker` | `SPY` | Basket benchmark index |
+| `SUITE_VALIDATION_STRICT=0` (env) | `1` | Downgrade missing side-artifact checks from FAIL to WARN |
+| `VS_RUN_CHAIN_SCANNER=1` (env) | `1` in orchestrator runs | Ensures `chain_strategies.json` is produced by Vol_Suite |
 
 ### 3.3 Output artifacts
 
-All outputs for a run land under `orchestrator_output/<run_id>/`.
+A module returns a `ModuleResult` (status/artifacts/metrics) and may also write
+suite result files (e.g. `vol_result.json`, `options_result.json`) for the
+suites that produce them. Every module's `context_patch` is persisted to the
+Context Store (`artifacts/widget_cache.db`), keyed by run scope.
 
 | Artifact | Producer | Contains |
 |---|---|---|
-| `suite_context.json` | Orchestrator | The canonical shared context: focus, basket, var settings, swap_activity, controls |
-| `suite_context_<suite>.json` | Orchestrator | Per-suite copy of the context used to launch that suite |
+| `ModuleResult` | Any registered module | status, artifacts, metrics, context_patch |
+| Context-Store entries | module run route | `context_patch` values keyed by scope (tables `context_entries`, `context_store_audit`) |
 | `vol_result.json` | Vol_Suite | Vol surface, dealer positioning, gamma records, correlation matrix metadata, produced files list |
 | `options_result.json` | Options_Suite | Pricing method, IV, price, Greeks, and any error detail |
 | `var_result.json` | VaR_Tools_Simulations | VaR/CVaR, confidence, horizon, notes on fallback assumptions |
 | `sentiment_result.json` | Market-signals stage | Scanner metrics, 1-year simulations, Direction conviction |
-| `swaps_result.json` | Orchestrator | Recent DTCC top-notional rows (optional enrichment) |
 | `correlation_matrix_*.csv` / `correlation_pairs_*.csv` | Vol_Suite | Basket correlation data |
 | `*_garch_*.png`, `*_hedging_heatmap_*.png`, `*_greek_exposure_comparison_*.png` | Vol_Suite | Visual summaries |
 | `NVDA_*_variance_swap_*.csv/png` | Vol_Suite | Variance-swap strike tables and plots |
@@ -94,49 +96,36 @@ All outputs for a run land under `orchestrator_output/<run_id>/`.
 
 ## 4. Minimal end-to-end example
 
-### 4.1 Run the pipeline from the command line
+### 4.1 Run the pipeline
 
-Open a terminal at the repo root and run:
-
-```bash
-orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16
-```
-
-Linux/Mac equivalent:
+Open a terminal at the repo root and run registered modules in-process (no
+subprocess, no interpreter lookup):
 
 ```bash
-./orchestrator.sh --unified --ticker NVDA --expiry 2026-10-16
+.venv\Scripts\python.exe -c "import shared.module_execution as me; r = me.run_selected_modules(['chain_scanner','dealer_exposure'], {'ticker':'NVDA','expiration_date':'2026-10-16'}); print(r['status'], r['order'])"
 ```
 
-The orchestrator prints phase headers and a final summary block similar to:
+Or drive the same modules as widgets from the dashboard (`dashboard.bat`, then
+`POST /api/widgets/{slug}/run` / the Quant Console at `http://127.0.0.1:8787`).
+
+The run prints a summary similar to:
 
 ```text
-[unified] run_id=20260730T085905Z output_dir=...\orchestrator_output\20260730T085905Z
-
-[1/3] VOL SUITE
-       Dealer positioning / vol surface / gamma exposure
-
-[2/3] MARKET SIGNALS
-       IV Rank / Max Pain / Skew / Unusual OI + MC/copula/corr sims + Direction suite
-
-[3/3] OPTIONS & VAR SUITES
-       Option pricing + value-at-risk analysis (parallel)
-
-============================================================
-  Suites completed: 2/3
-  Context audit: PASSED
-============================================================
+[module run] status=ok  order=['dealer_exposure', 'chain_scanner', ...]
 ```
 
-A successful run returns exit code 0; a degraded run (some suite failed) returns exit code 1.
+A module run returns status `ok`; a degraded run (some module failed) returns
+`partial`/`error` on the affected `ModuleResult`.
 
 ### 4.2 Read the report
 
-Navigate to the output directory and inspect the marker files:
+A module run's `ModuleResult` carries its `status`, `artifacts`, and `metrics`
+(the widget-run route also caches them for later `GET /api/widgets/{slug}/state`
+reads). The suites that write result files still produce them for inspection:
 
 ```bash
-cd orchestrator_output/20260730T085905Z
-cat vol_result.json | python -m json.tool | head -40
+# e.g. after running Vol_Suite / pricing / VaR modules:
+cat vol_result.json | python -m json.tool | head -40    # where a suite wrote it
 cat options_result.json
 cat var_result.json
 ```
@@ -173,70 +162,76 @@ A healthy `var_result.json` looks like:
 }
 ```
 
-If `options_result.json` shows `"status": "error"`, read the `error` field and the suite stderr tail in the orchestrator log.
+If `options_result.json` shows `"status": "error"`, read the `error` field; a
+failing module also surfaces `status: error`/`failed` with a `metrics.error` on
+its `ModuleResult`.
 
 ## 5. Common failure modes and what they mean
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | `options_result.json`: "Could not fetch spot for ..." | Invalid ticker, bad ThetaData credentials, or network/API issue | Check ticker spelling; verify `.env` credentials; check ThetaData connectivity |
-| `var_result.json` notes say "correlation matrix missing; used identity matrix" and/or "volatilities missing; used default annual volatility 0.25" | Vol_Suite failed or basket resolution returned no peers | Check Vol_Suite logs; verify ticker has option-chain data; the run continues with conservative defaults |
+| `var_result.json` notes say "correlation matrix missing; used identity matrix" and/or "volatilities missing; used default annual volatility 0.25" | Context-Store lookup for the vol/correlation context failed or the producing module didn't run | Run the Vol_Suite context producer first (or confirm the Context-Store entries under the same scope); the run continues with conservative defaults |
 | `vol_result.json`: validation FAIL on `required_file[correlation_matrix_*.csv]` | Basket was single-name or correlation step failed | Set `SUITE_VALIDATION_STRICT=0` if a single-name run is expected, or investigate the vol failure |
-| Orchestrator summary says `options=FAILED: ... validation=FAIL` | Options_Suite exited 0 but wrote a marker that failed `shared/schemas.py` validation | Check the validation errors in the orchestrator log; the most common cause is a missing `method`/`sigma`/`price`/`greeks` block |
-| Suite timeout (returncode -1) | Slow network, heavy chain pull, or the suite is genuinely hanging | Increase `--timeout`; check ThetaData rate limits; avoid running multiple heavy vol runs in parallel |
+| A widget/module returns `status: error` with `metrics.error` naming a suite result | The module's underlying analysis failed | Read `metrics.error`; check the failing module's own logs; fix input/credentials and re-run that module |
+| Module run hangs on a slow chain pull | Heavy chain fetch under ThetaData rate limits | Check ThetaData rate limits; avoid running multiple heavy vol modules in parallel |
 | `sentiment_result.json` status `error` or `partial` | One or more market-signals scanners failed | Check the `errors` list inside `sentiment_result.json`; Direction or VaR-engine import failures are logged but non-fatal |
 | `swaps_result.json` status `no_data` | `swaps.db` is cold or DTCC has no recent activity for the ticker | Run `python backfill.py` and/or leave `run_scheduler.bat` running |
-| Orchestrator exits with "Shared interpreter not found" | Root `.venv` is missing or corrupt | Re-run `python -m venv .venv` and `pip install -r requirements.txt` |
+| `ImportError` when running modules | Root `.venv` is missing or corrupt | Re-run `python -m venv .venv` and `pip install -r requirements.txt` |
 
 ## 6. Alternative ways to run
 
-### 6.1 Single suite
+### 6.1 Run only Vol_Suite's modules
 
-Run only Vol_Suite for a ticker with an explicit horizon:
-
-```bash
-orchestrator.bat --suite vol --ticker AAPL --target-years 0.25
-```
-
-Valid suite names: `vol`, `options`, `var`, `sentiment`.
-
-### 6.2 Modular runs
-
-Run individual registered modules (additive path, does not use `run_unified`):
+Vol_Suite's modules (dealer positioning, vol surface, variance-swap, GARCH)
+are registered under slugs like `dealer_exposure` / `dealer_flow`. Run just
+them for a ticker with an explicit horizon:
 
 ```bash
-orchestrator.bat --modules dealer_exposure,dealer_flow --ticker SPY --target-years 0.25
+.venv\Scripts\python.exe -c "import shared.module_execution as me; me.run_selected_modules(['dealer_exposure'], {'ticker':'AAPL','target_years':0.25})"
 ```
 
-List every available module:
+### 6.2 Choose which registered modules run
+
+`run_selected_modules` takes an explicit slug list and expands every
+`requires` dependency transitively:
 
 ```bash
-orchestrator.bat --list-modules
+.venv\Scripts\python.exe -c "import shared.module_execution as me; me.run_selected_modules(['dealer_flow'], {'ticker':'SPY','target_years':0.25})"
 ```
+
+List every available module from the shell:
+
+```bash
+.venv\Scripts\python.exe -c "from shared.module_registry import all_modules; [print(m.slug, '::', m.suite) for m in all_modules()]"
+```
+
+Or browse them on the dashboard: `GET /api/widgets/catalog`.
 
 ### 6.3 From the dashboard
 
 1. Start the dashboard: `dashboard.bat`
 2. Open `http://127.0.0.1:8787`
-3. Use the **Quant Console** (`/quant`) cards or `POST /run/unified` with a JSON body:
+3. Use the **Quant Console** (`/quant`) to add a widget and run it, or call
+   `POST /api/widgets/{slug}/run` directly:
 
-```json
-{
-  "ticker": "NVDA",
-  "expiration_date": "2026-10-16"
-}
+```bash
+curl -s -X POST http://127.0.0.1:8787/api/widgets/dealer_exposure/run \
+  -H "Content-Type: application/json" -d '{"ticker":"NVDA","expiration_date":"2026-10-16"}'
 ```
 
-The dashboard returns a `run_id`; poll `GET /runs/{run_id}` until `done` is true.
+The run returns the `ModuleResult` synchronously (status/artifacts/metrics);
+fetch the last cached result later with `GET /api/widgets/{slug}/state`.
 
 ## 7. Key files to know
 
 | File | Role |
 |---|---|
-| `orchestrator.py` | Main driver; `run_unified`, `run_suite`, `run_selected_modules` |
-| `shared/suite_validation.py` | Marker-file validation rules (`SUITE_REQUIREMENTS`) |
-| `shared/schemas.py` | JSON validators for each suite result |
+| `orchestrator.py` | Surviving shell: re-exports `run_selected_modules`; `build_context`, `run_market_signals_stage`, `log_run`, DB helpers, `--modules`/`--interactive` CLI |
+| `shared/module_execution.py` | `run_selected_modules`, `_expand_module_requires`, `_topo_sort_modules` — the in-process module runner |
 | `shared/module_registry.py` | `ModuleSpec` / `ModuleResult` contract and `all_modules()` aggregator |
+| `shared/context_store.py` | Context Store: persists module `context_patch` values keyed by scope (audit table `context_store_audit`) |
+| `shared/schemas.py` | JSON validators for each suite result |
 | `Vol_Suite/module_registry.py` | Vol_Suite modules: `dealer_exposure`, `dealer_flow`, `chain_scanner`, surface modules, etc. |
 | `Options_Suite/module_registry.py` | Pricing modules: `crr`, `leisen_reimer`, `sabr`, `vanna_volga`, `mc`, etc. |
 | `VaR_Tools_Simulations/module_registry.py` | VaR modules: `corr_sim`, `mc_sim`, `hist_sim`, `copulas`, etc. |
@@ -245,7 +240,7 @@ The dashboard returns a `run_id`; poll `GET /runs/{run_id}` until `done` is true
 ## 8. Typical workflow
 
 1. **Prepare data**: ensure `swaps.db` is populated (`backfill.py` once, `run_scheduler.bat` ongoing).
-2. **Run Vol_Suite first** if you only need volatility/dealer metrics: `--suite vol` is the fastest path.
-3. **Run unified** when you want cross-suite consistency: `orchestrator.bat --unified --ticker TICKER --expiry YYYY-MM-DD`.
-4. **Inspect outputs**: read `*_result.json` in `orchestrator_output/<run_id>/`.
-5. **Iterate**: if a suite fails, fix the input/credentials and re-run only that suite, or use `--fail-on-suite-error` to fail fast during debugging.
+2. **Run Vol_Suite's modules first** if you only need volatility/dealer metrics: `dealer_exposure` / `dealer_flow` are the fastest path.
+3. **Run a fuller module set** when you want cross-suite consistency: pass the pricing + VaR slugs to `run_selected_modules` in dependency order.
+4. **Inspect outputs**: read each module's `ModuleResult` (dashboard `GET /api/widgets/{slug}/state`, or `run_selected_modules`'s returned `results` dict).
+5. **Iterate**: if a module fails, fix the input/credentials and re-run only that module.

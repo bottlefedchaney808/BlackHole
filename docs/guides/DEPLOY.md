@@ -49,14 +49,15 @@ anyone. Set it on every target. The Kubernetes manifest marks it
 `optional: false` so a missing key fails pod startup rather than degrading
 silently.
 
-**4. `orchestrator.SHARED_PYTHON` is a Windows path.**
-It is hardcoded to `<repo root>/.venv/Scripts/python.exe`. On Linux the
-interpreter is at `.venv/bin/python`, so `run_suite` returns
-`"Shared interpreter not found"` and `POST /run/{suite}` fails. The read-only
-dashboard views, the `/swaps` pages and the whole ingestion pipeline are
-unaffected — only triggering suite runs from the web UI is. `GET /health`
-reports this directly as `shared_python_exists: false`; check it after any
-Linux deploy.
+**4. Suite runs are now in-process (no Windows-path subprocess dependency).**
+Since Phase 7 (2026-09-04), registered modules run in-process — either from
+`POST /api/widgets/{slug}/run` or via `shared.module_execution.run_selected_modules`
+— so there is no longer a "Shared interpreter not found" failure mode for the
+run path on Linux. (The old `POST /run/{suite}` route and its `run_suite`
+subprocess driver were removed.) The dashboard's read-only views, the `/swaps`
+pages and the whole ingestion pipeline were already unaffected by that old
+Windows-path issue; `GET /health` still reports `shared_python_exists` as an
+informational field.
 
 **5. Multi-source data ingestion via `DATA_SOURCES` env var (optional).**
 The system defaults to DTCC-only ingestion. To enable ingestion from multiple

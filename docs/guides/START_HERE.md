@@ -119,35 +119,39 @@ These credentials are required for any run that touches live market data.
 
 ### 5.2 Run the pipeline
 
-```bash
-orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16
-```
-
-Or on Linux / Mac:
+Start the dashboard and run modules as widgets (the widget-native path):
 
 ```bash
-./orchestrator.sh --unified --ticker NVDA --expiry 2026-10-16
+dashboard.bat        # Windows; dashboard.sh on Linux/Mac
 ```
 
-The orchestrator runs three phases in order:
+Open `http://127.0.0.1:8787` and use the **Quant Console** — browse what's
+available via `GET /api/widgets/catalog`, then run any registered module with
+`POST /api/widgets/{slug}/run`. Or, for a scripted/agent run that never touches
+the web UI, call the module-execution entry point directly in-process (no
+subprocess, no interpreter lookup):
 
-1. **Vol_Suite** — volatility surface, dealer positioning, gamma exposure.
-2. **Market Signals** — option-chain scanners, simulations, Direction suite.
-3. **Options + VaR** — priced option greeks and a one-day 99% portfolio risk
-   number.
+```bash
+.venv\Scripts\python.exe -c "import shared.module_execution as me, json; r = me.run_selected_modules(['chain_scanner'], {'ticker':'NVDA'}); print(r['status'], list(r['results']))"
+```
 
-Output lands in `orchestrator_output/<run_id>/`.
+A run goes module-by-module in dependency order (each `ModuleSpec.requires`
+dependency runs first), then writes the module's `context_patch` into the
+Context Store so downstream modules/tools can read it back without recomputing.
 
 ### 5.3 Inspect the result
 
+Each module's result is cached on the dashboard under the run's scope — read it
+back without re-running via `GET /api/widgets/{slug}/state?scope=...`, or see
+every module's persisted context patch via `GET /api/context`. From the shell:
+
 ```bash
-cd orchestrator_output/<run_id>
-cat vol_result.json | python -m json.tool | head -40
-cat options_result.json | python -m json.tool
-cat var_result.json | python -m json.tool
+curl -s "http://127.0.0.1:8787/api/widgets/chain_scanner/state?scope=ticker:NVDA"
+curl -s "http://127.0.0.1:8787/api/context?scope=ticker:NVDA"
 ```
 
-A healthy `options_result.json` looks like this:
+The suite modules themselves still return the same rich payload shapes they
+always did (a pricing module's result carries `method`/`price`/`greeks`, e.g.):
 
 ```json
 {
@@ -167,8 +171,8 @@ A healthy `options_result.json` looks like this:
 }
 ```
 
-If any marker file says `"status": "error"`, read the `error` field and the
-orchestrator log before re-running.
+If a widget comes back `"status": "error"`/`"failed"`, read its `metrics.error`
+field before re-running.
 
 ---
 
@@ -198,10 +202,11 @@ orchestrator log before re-running.
 - **Quick reference:** `CLAUDE.md` — the canonical agent and developer
   context.
 
-When you are ready to dig into a suite, run a single suite first:
+When you are ready to dig into a suite, run one of its registered modules first
+(Vol_Suite's focus/dealer modules, say, as a dashboard widget, or in-process):
 
 ```bash
-orchestrator.bat --suite vol --ticker AAPL --target-years 0.25
+.venv\Scripts\python.exe -c "import shared.module_execution as me; me.run_selected_modules(['dealer_exposure'], {'ticker':'AAPL','target_years':0.25})"
 ```
 
 That is the smallest step from here to fluency.

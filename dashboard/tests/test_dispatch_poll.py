@@ -15,7 +15,9 @@ test_dispatch.py already established: `dashboard.job_object.run_with_job_object`
 stands in for the real subprocess launch.
 """
 import json
+import sqlite3
 import sys
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -25,6 +27,8 @@ from fastapi.testclient import TestClient
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from setup_db import migrate  # noqa: E402
 
 import dashboard.app as dashboard_app  # noqa: E402
 
@@ -38,25 +42,29 @@ AUTH_HEADERS = {}
 
 
 @pytest.fixture(autouse=True)
-def _isolate_dispatch_state(monkeypatch):
-    """Clean `_RUNS` / `_DISPATCH_JOBS` / `_DISPATCH_IDEMPOTENCY` slate.
+def _isolate_dispatch_state(monkeypatch, tmp_path):
+    """Point the app at a disposable orchestrator_runs DB and give each test a
+    clean `_DISPATCH_JOBS` / `_DISPATCH_IDEMPOTENCY` slate.
 
-    Also stubs `_insert_run_row` -- see test_dispatch.py's fixture docstring
-    for why (this file's dispatch-launch helper calls the same route and
-    was contributing to the same real-DB pollution).
+    Phase 7 removed the in-memory `_RUNS` run registry, so the dispatch
+    launch route (exercised by the end-to-end report-write tests below)
+    resolves its target run from the `orchestrator_runs` DB -- this fixture
+    migrates a tmp DB and monkeypatches `dashboard_app.DB_PATH` to it. Also
+    stubs `_insert_run_row` (see test_dispatch.py's fixture docstring for
+    why dispatch's best-effort worker-audit write is stubbed).
     """
-    saved_runs = dict(dashboard_app._RUNS)
+    db_path = str(tmp_path / "dispatch.db")
+    migrate(db_path)
+    monkeypatch.setattr(dashboard_app, "DB_PATH", db_path)
+
     saved_jobs = dict(dashboard_app._DISPATCH_JOBS)
     saved_idem = dict(dashboard_app._DISPATCH_IDEMPOTENCY)
-    dashboard_app._RUNS.clear()
     dashboard_app._DISPATCH_JOBS.clear()
     dashboard_app._DISPATCH_IDEMPOTENCY.clear()
     monkeypatch.setattr(dashboard_app, '_insert_run_row', MagicMock(return_value=None))
 
     yield
 
-    dashboard_app._RUNS.clear()
-    dashboard_app._RUNS.update(saved_runs)
     dashboard_app._DISPATCH_JOBS.clear()
     dashboard_app._DISPATCH_JOBS.update(saved_jobs)
     dashboard_app._DISPATCH_IDEMPOTENCY.clear()
@@ -79,11 +87,32 @@ def _patch_launch(monkeypatch, proc=None):
     return mock_launch
 
 
-def _make_done_run(tmp_path, run_key='test-poll-1'):
-    output_dir = tmp_path / run_key
+def _seed_run(status='ok', output_dir=None, run_type='dashboard:suite:vol',
+              focus=None, started='2026-08-01T00:00:00Z'):
+    """Insert one orchestrator_runs row and return its integer id."""
+    conn = sqlite3.connect(dashboard_app.DB_PATH)
+    try:
+        cur = conn.execute(
+            "INSERT INTO orchestrator_runs "
+            "(run_type, focus_json, started_at, completed_at, status, results_json) "
+            "VALUES (?, ?, ?, ?, ?, ?);",
+            (run_type, json.dumps(focus or {'ticker': 'NVDA'}), started, started,
+             status, json.dumps({'output_dir': output_dir} if output_dir else {})),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _make_done_run(tmp_path, status='ok'):
+    """A completed run seeded as an orchestrator_runs row with a real
+    output_dir on disk holding a quant_summary.json."""
+    output_dir = tmp_path / ('run-' + uuid.uuid4().hex[:8])
     output_dir.mkdir()
-    (output_dir / 'quant_summary.json').write_text('{"schema_version": 1}', encoding='utf-8')
-    dashboard_app._RUNS[run_key] = {'status': 'ok', 'output_dir': str(output_dir)}
+    (output_dir / 'quant_summary.json').write_text(
+        '{"schema_version": 1}', encoding='utf-8')
+    run_key = _seed_run(status=status, output_dir=str(output_dir))
     return run_key, output_dir
 
 
@@ -364,49 +393,3 @@ class TestWorkerReportWritePath:
 # manual round trip.
 # --------------------------------------------------------------------------
 
-class TestQuantViewDispatchWiring:
-    def test_quant_route_wires_dispatch_buttons_for_all_three_actions(self):
-        resp = client.get('/quant')
-        html = resp.text
-        for action in ('interpret', 'investigate', 'explain'):
-            assert f'data-action="{action}"' in html, action
-
-    def test_quant_route_client_js_calls_dispatch_endpoints(self):
-        resp = client.get('/quant')
-        html = resp.text
-        assert '/dispatch/' in html
-        assert 'dispatchWorker' in html
-        assert 'pollDispatchJob' in html
-
-    def test_render_worker_report_prefers_report_status_over_job_status(self):
-        """Fix for a review finding on this task: a malformed worker report
-        file makes the backend return `result.status == "degraded"` while
-        `job.status` itself stays "completed" (the *process* exited fine --
-        it's the report file that's bad). `renderWorkerReport` must read
-        `report.status` first, falling back to `job.status` only when there
-        is no report (done-but-no-report-file case) -- otherwise a degraded
-        report silently renders with "completed" styling/text, defeating the
-        whole point of the `status-degraded` CSS treatment already defined
-        in this file. String/structure assertion, same "mechanically
-        checkable without a browser" posture as this class's other tests.
-        """
-        resp = client.get('/quant')
-        html = resp.text
-        assert "var status = (report && report.status) || job.status || 'running';" in html
-
-    def test_run_pill_classes_cover_dispatch_job_vocabulary(self):
-        """Second half of the same finding: RUN_PILL_CLASSES was built for
-        the orchestrator run-status vocabulary (ok/partial/running/queued/
-        error/timeout/failed) and didn't recognize 'completed' or
-        'timed_out' -- the dispatch job vocabulary this task introduces --
-        so both fell back to the neutral `.pill.plain` treatment. They must
-        now map onto a non-plain pill class (and 'degraded' must map onto
-        the existing amber `.pill.degraded` rule modulePillClass already
-        uses), so a completed/timed-out/degraded dispatch job's status pill
-        is visually distinct from the "not run yet" default.
-        """
-        resp = client.get('/quant')
-        html = resp.text
-        assert "completed: 'ok'" in html
-        assert "timed_out: 'failed'" in html
-        assert "degraded: 'degraded'" in html

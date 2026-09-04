@@ -121,5 +121,12 @@ scan you expect to return a large universe.
   \"null, array\"").
 - `place_option_order` rejects any top-level property outside its schema — e.g. `underlying_type`,
   `chain_symbol` — with "unexpected additional properties"; only pass the fields the schema defines.
-  Multi-leg/spread orders are **not supported at all** for the agentic account (B) — single-leg only,
-  even though account A already holds spread positions opened outside this agent.
+  **Re-verified 2026-09-03 against a live 400**: multi-leg orders (2+ legs in one `place_option_order`
+  call) are rejected for account B with `"Multi-leg options orders aren't supported in Robinhood
+  agentic accounts yet."` — this is a Robinhood-side restriction on agentic accounts specifically, NOT
+  gated by `option_level` (B is `option_level_3`, same as A). The tool's own schema/description doesn't
+  surface this restriction — it only mentions option_level gating — so don't trust the schema text
+  alone here; the 400 message is the ground truth. **A straddle/strangle is still achievable** by
+  placing the call leg and the put leg as two independent single-leg orders (each reviewed and placed
+  separately) — this gives the same economic position, just without atomic net-debit execution (one
+  leg can fill without the other; check both fills before treating the position as fully on).

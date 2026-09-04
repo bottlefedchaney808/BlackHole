@@ -1,21 +1,26 @@
 """test_quant_view.py
 
-Covers Task 6 of docs/superpowers/plans/2026-08-01-quant-console.md:
-`GET /quant`, the module-card view.
+Covers the Phase 5 step 3 rebuild of `GET /quant` (widget-native console hub,
+2026-09-03 plan; replaced the Task 6 launch-card view of the 2026-08-01 plan).
 
-Task 6's own checklist is explicitly UI/manual verification ("this is UI, not
-unit-testable in the usual sense"), not a TDD-with-fixtures task like Tasks
-1-5 -- there is no prescribed failing-test step in the plan for this task.
-These tests cover what *is* mechanically checkable without a browser: the
-route exists, renders one card per `dashboard.quant_modules.MODULE_REGISTRY`
-entry, and gives the Options module (`runnable=False`) a statically distinct
-"unsupported" treatment rather than folding it into a generic status -- the
-concrete, checkable form of Task 6 Step 2 (spec Open Question 2). Real
-browser rendering / click-through of Run -> poll -> summary is NOT covered
-here; see the task report for what was and wasn't manually verified.
+The launch-card UI (per-suite cards, module picker, POST /run/{suite},
+/runs/{run_id} polling, dispatch-worker buttons) was removed when Phase 7
+retired the orchestrator run-tracking machinery. These tests pin what *is*
+mechanically checkable without a browser about the new hub:
 
-`dashboard.app` is imported in-process, same convention as
-test_quant_summary_route.py -- no .env-loading behavior is under test here.
+- the route exists and renders the shell (alerts + alert_status carried);
+- the page loads the widget JS modules (sync-bus, quant-widget) that talk to
+  the generic widget API;
+- the launch-card machinery is *gone* (no data-module-id cards, no
+  POST /run/ or /runs/ polling JS, no dispatch buttons);
+- the nav link survives.
+
+Real browser rendering / click-through of catalog -> add -> run is NOT
+covered here; that's the manual smoke pass (see CLAUDE.md's UI-change
+verification convention).
+
+`dashboard.app` is imported in-process, same convention as the other
+dashboard tests -- no .env-loading behavior is under test here.
 """
 import sys
 from pathlib import Path
@@ -28,7 +33,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import dashboard.app as dashboard_app  # noqa: E402
-from dashboard.quant_modules import MODULE_REGISTRY  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -41,68 +45,51 @@ def test_quant_route_returns_200():
     assert 'text/html' in resp.headers['content-type']
 
 
-def test_quant_route_renders_one_card_per_registry_entry():
-    resp = client.get('/quant')
-    html = resp.text
-
-    # One `data-module-id="<id>"` card per registry entry, no more/no fewer.
-    for entry in MODULE_REGISTRY:
-        assert f'data-module-id="{entry["id"]}"' in html, entry["id"]
-        assert entry['name'] in html
-    assert html.count('class="quant-card"') == len(MODULE_REGISTRY) or \
-        html.count('quant-card') >= len(MODULE_REGISTRY)
-
-
-def test_quant_route_wires_run_button_to_registry_suite():
-    """Each card's Run control must target its own registry `suite` (used as
-    the `POST /run/{suite_or_unified}` path segment client-side), not a
-    generic/shared value -- otherwise every card would trigger the same run.
+def test_quant_route_loads_widget_js_modules():
+    """The hub page must load the shared widget frontend (sync bus +
+    custom element). The catalog browser, console grid, and provenance
+    panel all run through these; without them the page is a dead shell.
     """
     resp = client.get('/quant')
     html = resp.text
-    for entry in MODULE_REGISTRY:
-        assert f'data-suite="{entry["suite"]}"' in html, entry['id']
+    assert '/static/js/sync-bus.js' in html
+    assert '/static/js/quant-widget.js' in html
+    assert 'quant-widget' in html  # the custom element tag or its registry
 
 
-def test_options_card_is_marked_unsupported_statically_and_distinctly():
-    """Options (`runnable=False`) must render a distinct, visible marker
-    *before* any run happens (the registry already knows this) -- and no
-    runnable module's card should carry that same marker in its initial
-    state.
+def test_quant_route_talks_to_generic_widget_api():
+    """The page's own JS (catalog browser / console grid / provenance) must
+    target the Phase 3 generic routes -- not the removed orchestrator
+    launching endpoints. Cheap regression guard against a typo'd path.
     """
     resp = client.get('/quant')
     html = resp.text
-
-    options_start = html.index('data-module-id="options"')
-    # Slice out roughly this one card's markup (next card boundary or EOF).
-    next_card = html.find('data-module-id="', options_start + 1)
-    options_card_html = html[options_start:next_card if next_card != -1 else len(html)]
-
-    assert 'unsupported' in options_card_html
-    assert 'data-runnable="false"' in options_card_html
-
-    for entry in MODULE_REGISTRY:
-        if entry['id'] == 'options':
-            continue
-        start = html.index(f'data-module-id="{entry["id"]}"')
-        nxt = html.find('data-module-id="', start + 1)
-        card_html = html[start:nxt if nxt != -1 else len(html)]
-        assert 'data-runnable="true"' in card_html
-        # A runnable module's card must not carry the same static
-        # "unsupported" marker Options gets.
-        assert 'class="pill unsupported"' not in card_html
+    assert '/api/widgets/catalog' in html
+    assert '/api/layout/quant' in html
+    assert '/api/context' in html
 
 
-def test_quant_route_client_js_wires_run_poll_and_summary_endpoints():
-    """The frontend must call the *existing* endpoints this task reuses
-    (POST /run/{suite}, GET /runs/{run_id}, GET /runs/{run_id}/summary) --
-    not invent new ones. Cheap regression guard against a typo'd path.
+def test_quant_route_launch_card_ui_is_gone():
+    """Phase 7 removed POST /run/{suite}, GET /runs/{run_id} polling, and
+    the dispatch-worker buttons. The rebuilt page must not reference any
+    of them -- a stray reference would 404 in the browser.
     """
     resp = client.get('/quant')
     html = resp.text
-    assert "'/run/'" in html or '"/run/"' in html
-    assert "'/runs/'" in html or '"/runs/"' in html
-    assert '/summary' in html
+    assert "data-module-id=" not in html
+    assert "startModuleRun" not in html
+    assert "pollDispatchJob" not in html
+    assert "'/run/'" not in html and '"/run/"' not in html
+    assert "'/runs/'" not in html and '"/runs/"' not in html
+
+
+def test_quant_route_carries_alerts_contract():
+    """The alerts banner markup + ackAlert() survive the rebuild (the route
+    still passes `alerts` + `alert_status`)."""
+    resp = client.get('/quant')
+    html = resp.text
+    assert 'ackAlert' in html
+    assert '/ack' in html
 
 
 def test_quant_nav_link_present_and_marked_active():

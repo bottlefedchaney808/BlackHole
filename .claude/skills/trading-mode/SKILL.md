@@ -43,12 +43,15 @@ sessions. At the start of trading-mode, note what's actually available:
      ThetaData quotes, for sizing/pricing the specific structure once a candidate is chosen.
    - `VaR_Tools_Simulations` — correlated Monte Carlo / historical sim for portfolio-level risk once a
      position is on or being sized against existing exposure.
-   - `orchestrator.py --unified` chains sentiment → vol → {options, var} in one run and writes
-     `suite_context.json` for cross-suite handoff — use this instead of running suites one-by-one when
-     a candidate needs the full pipeline.
+   - Run the full set of this repo's analysis modules as **widgets on the dashboard** or
+     in-process via `shared.module_execution.run_selected_modules(slugs, context)` (see
+     `CLAUDE.md`/`tool-launcher`). In the widget-native path each module's `context_patch`
+     lands in the Context Store for downstream modules, replacing the old
+     `orchestrator.py --unified` subprocess chain (removed 2026-09-04).
 4. **Dashboard** (`dashboard.bat`, `http://127.0.0.1:8787`) — browse swap data (DTCC equity-swaps
-   ingestion), trigger orchestrator runs from a UI, cross-source analytics. Useful for a quick visual
-   check without shelling out to each suite's CLI.
+   ingestion), run registered modules as widgets (`GET /api/widgets/catalog` /
+   `POST /api/widgets/{slug}/run`), read Context-Store provenance, cross-source analytics. Useful for
+   a quick visual check without shelling out to each suite's CLI.
 5. **Trading journal** (`trading_journal/` at repo root, e.g. `desk_note_YYYYMMDD.md`,
    `powerhour_prep_YYYYMMDD.md`) — the user already keeps dated markdown notes here. Write plan output
    here to match existing convention, not to a new location.
@@ -68,7 +71,8 @@ Pull from multiple independent sources so you're not blind to one screener's bia
   IV rank / IV−HV delta / unusual options volume across the broad market.
 - The **"Sell Vol Plays"** watchlist (already curated by the user for post-earnings IV-crush candidates)
   and any other custom watchlist relevant to the current thesis.
-- `Vol_Suite`'s multi-ticker screener (via `orchestrator.bat --suite vol` or direct CLI) for a basket
+- `Vol_Suite`'s multi-ticker screener (via the dashboard widget `GET /api/widgets/catalog` /
+  `POST /api/widgets/{slug}/run`, or `shared.module_execution.run_selected_modules` in-process) for a basket
   the user cares about, or `sentiment-scanner`'s contested-narrative + 7-scanner output for
   flow-driven candidates the Robinhood screeners might miss.
 - Upcoming earnings (`get_earnings_calendar`) as an event-driven IV-crush/expansion source.

@@ -1,6 +1,6 @@
 ---
 name: fragile-surfaces-reviewer
-description: Use before committing or opening a PR for changes touching orchestrator.py, Vol_Suite, Options_Suite, VaR_Tools_Simulations, or suite_context.json handling — checks the diff against this repo's documented recurring regressions (LR-vs-CRR default, --unified context threading, flat cwd-relative imports, dealer-exposure fail-loud-vs-backtest-loop). Not a general code reviewer; defers everything else to code-review/coderabbit.
+description: Use before committing or opening a PR for changes touching orchestrator.py, shared/context_store.py, Vol_Suite, Options_Suite, VaR_Tools_Simulations, or suite_context/context_patch handling — checks the diff against this repo's documented recurring regressions (LR-vs-CRR default, Context-Store vol-stats threading, flat cwd-relative imports, dealer-exposure fail-loud-vs-backtest-loop). Not a general code reviewer; defers everything else to code-review/coderabbit.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -20,14 +20,20 @@ For the diff you're given, check specifically for:
    interactive pricing path to resolve sigma or Greeks via CRR instead of
    Leisen-Reimer? A regression here has been reported more than once.
 
-2. **`--unified` context-threading breakage.** Does the change touch
-   `orchestrator.py`'s run order, `orchestrator.py::_thread_vol_stats_into_context`,
-   the `suite_context` focus/basket schema, or VaR's `_resolve_vol_and_quality`/
+2. **Context-Store vol-stats threading breakage.** Does the change touch
+   `shared/context_store.py` (scope-key normalization, `context_entries` /
+   `context_store_audit` writes, `get` staleness), the widget-run route that
+   persists `context_patch` (`dashboard/app.py::run_widget`), the
+   `suite_context` focus/basket schema, or VaR's `_resolve_vol_and_quality`/
    `_resolve_drift_and_quality`? If so, flag that
    `tests/test_orchestrator_market_signals.py` and
    `VaR_Tools_Simulations/tests/test_context_builders.py` must be run and
    check whether the diff already accounts for how VaR silently falls back to
-   an identity correlation matrix + flat 0.25 vol if this thread breaks.
+   an identity correlation matrix + flat 0.25 vol if this threading breaks.
+   (This is the successor to the removed `orchestrator.py::_thread_vol_stats_into_context`,
+   which mutated the shared suite_context object; producers now write their
+   `context_patch` to the Context Store keyed by scope and consumers read it back
+   via `context_store.get`.)
 
 3. **Flat cwd-relative import breakage.** Does the change add or move a
    top-level import in a suite entry point (`Options_Suite/main.py`,

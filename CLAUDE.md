@@ -20,7 +20,7 @@ suite's launch conventions, quirks, and known bugs — read the relevant one bef
 failure instead of re-deriving it:
 - `quant-suite-launch-conventions.md` — shared reference (venv/port/env-var checks, `suite_context.json` contract, `Tools/registry.py` pattern). Read first; the others link to it.
 - `options-suite`, `vol-suite`, `var-tools`, `sentiment-scanner` — per-suite entry points, flags, and known bugs.
-- `tool-launcher` — orchestrator.py / dashboard `Tools/` layer, how child-suite failures surface as PASS/FAIL.
+- `tool-launcher` — module-execution / widget-run layer: how a module's `ModuleResult` surfaces as status/error, plus `Tools/` framework notes.
 
 ## Setup and common commands
 
@@ -41,9 +41,9 @@ see `docs/guides/CROSS_PLATFORM.md` for exactly how path/venv resolution works o
 | Dashboard (main control surface, `http://127.0.0.1:8787`) | `dashboard.bat` | `dashboard.sh` |
 | Tools module (`/tools`, same uvicorn process as dashboard) | `tools.bat` | — |
 | DTCC live poller (leave running, polls every 5 min) | `run_scheduler.bat` | `run_scheduler.sh` |
-| Orchestrator (cross-suite run) | `orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16` | `orchestrator.sh ...` |
-| Selectable modules (additive; default run unchanged) | `orchestrator.bat --modules dealer_exposure,chain_scanner --ticker SPY` | same (`--modules-category`, `--all-modules`, `--list-modules`) |
-| Single suite via orchestrator | `orchestrator.bat --suite options\|vol\|var\|sentiment --ticker AAPL` | same |
+| Run registered modules as widgets (dashboard / Quant Console) | open `http://127.0.0.1:8787`, browse `GET /api/widgets/catalog`, run `POST /api/widgets/{slug}/run` | same (any browser) |
+| Run registered modules in-process (scripted/agent) | `.venv\Scripts\python.exe -c "import shared.module_execution as me; print(me.run_selected_modules(['dealer_exposure'], {'ticker':'SPY'}))"` | same |
+| Orchestrator module-CLI shell (interactive/`--modules` mode; the only surviving orchestrator CLI) | `orchestrator.py --modules slug,slug --ticker SPY` (`--modules-category`, `--all-modules`, `--list-modules`) | same |
 | One-time full swap history backfill (resumable, hours-long) | `python backfill.py` | same |
 | Query swap DB directly | `python swaps_query.py`, or `from swaps_query import SwapsQuery` | same |
 | Run a suite standalone/interactively | `Options_Suite\options_suite.bat`, `Vol_Suite\vol_suite.bat`, `VaR_Tools_Simulations\var.bat`, `sentiment-scanner\sentiment.bat` | `.sh` equivalents |
@@ -81,24 +81,35 @@ Every new `@pytest.mark.skip` / `skipif` must carry a reason string naming the u
 
 ## Architecture
 
-### The spine: swaps DB → orchestrator → four suites → dashboard
+### The spine: swaps DB → suites → dashboard (widget-native)
 
 ```
 DTCC public API ──(dtcc_api_client.py, dtcc_parser.py)──> db_loader.py ──> swaps.db (SQLite, WAL)
                                                                               ^
 scheduled_ingest.py (5-min poll, APScheduler) / backfill.py (full history) ─┘
 
-orchestrator.py --unified  ──>  sentiment-scanner ──> Vol_Suite ──> {Options_Suite, VaR_Tools_Simulations}
-  (subprocess per suite, via SHARED_PYTHON = .venv/Scripts/python.exe, never sys.executable)
-
-dashboard/app.py (FastAPI, :8787)  ──>  triggers orchestrator runs, browses swaps.db, serves Tools/
+dashboard/app.py (FastAPI, :8787)  ──>  runs registered modules as widgets, browses swaps.db, serves Tools/
+     │   GET  /api/widgets/catalog      (browse every registered ModuleSpec)
+     │   POST /api/widgets/{slug}/run   (run one module synchronously; writes cache + Context Store)
+     │   GET  /api/widgets/{slug}/state / GET /api/context  (cached results / provenance)
+     │
+     └─> shared.module_execution.run_selected_modules(slugs, context)   (in-process; no subprocess)
+             └─ resolves / expands `requires` / topo-sorts / runs each module's `run(context)`
 ```
 
-**Suite dependency graph**, per `orchestrator.py::run_unified`: `sentiment → vol → {options, var}`
-(options and var are parallel siblings; neither reads the other). Note: sentiment is currently
-hard-skipped by default in `run_unified` ("unreliable network dependency", stubbed with `_DummyAudit`)
-even though the module docstring describes it running first — check the actual code, not just the doc,
-if a run's behavior around sentiment looks surprising.
+**Run path (Phase 7, widget-native):** there is no cross-suite subprocess launcher anymore. The CLI
+`--unified`/`--suite` and `run_suite`/`run_unified` were removed (removed 2026-09-04).
+Each registered `ModuleSpec` runs in-process, either from the dashboard
+(`POST /api/widgets/{slug}/run`) or scripted/agent code
+(`shared.module_execution.run_selected_modules(slugs, context)`). `orchestrator.py` survives only
+as: the module-CLI shell (`--modules`/`--interactive`), `build_context`, `run_market_signals_stage`,
+`log_run`, DB helpers, and the re-export shim of the module-execution machinery.
+
+**Suite dependency graph** (what a `run_selected_modules`/widget run of the full set honours):
+`sentiment → vol → {options, var}` — modules declare their dependencies via `ModuleSpec.requires`,
+expanded and topologically ordered by `shared.module_execution`. Sentiment is hard-skipped as a
+registered default (replaced by an in-process market-signals stage after vol); check the actual
+registry, not a docstring, if a run's behavior around sentiment looks surprising.
 
 **Cross-suite handoff (`suite_context.json` contract)**: one run writes `suite_context.json` — ticker,
 expiry, basket, sentiment data, recommended strategies — that other suites/tools consume without
@@ -112,18 +123,25 @@ redoing the work. Schema owned by `Vol_Suite/suite_context.py`; validated by `sh
   site actually uses.
 - **VaR_Tools_Simulations is a partial consumer**: `run_context_mode` only implements the corr_sim
   module (module 1); any other `--module` value returns a `status: error` payload in context mode.
-- Each stage's output marker file is validated (`shared/suite_validation.py::validate_suite_output`)
-  before the next stage trusts it; `--fail-on-suite-error` turns a bad stage into a hard abort.
-  `orchestrator_runs` in `swaps.db` logs every run.
+- Each suite still validates its output artifact via `shared/suite_validation.py`
+  / `shared/schemas.py`; in the widget-native path a failing module surfaces as
+  `status: error`/`failed` on its `ModuleResult` (never a silent fallback), and
+  result persistence no longer depends on the `orchestrator_runs` per-run log
+  (the run trigger that wrote it was removed with `run_unified`).
 
-**Selectable-module path (additive, 2026-09-01/02):** `shared/module_registry.py`
+**Module-execution path (Phase 7 widget-native):** `shared/module_registry.py`
 defines `ModuleSpec` / `ModuleResult` / `ArtifactRef` / `ArchiveHint`. Suites
 export `MODULES` lists (`Vol_Suite/module_registry.py` is populated;
-others still stubs). `orchestrator.py --modules slug,slug` /
-`--modules-category` / `--all-modules` / `--list-modules` runs
-`run_selected_modules` — **does not modify `run_unified`**. Default unified
-behavior with no `--modules` is unchanged. Archiver hook is still a no-op until
-Phase 6.
+others still stubs). The reusable execution machinery lives in
+`shared/module_execution.py` (`run_selected_modules`, `_expand_module_requires`,
+`_topo_sort_modules`); orchestrator.py re-exports it and drives it from the
+surviving module-CLI shell (`orchestrator.py --modules slug,slug` /
+`--modules-category` / `--all-modules` / `--list-modules`), and the dashboard
+runs the same function per-widget via `POST /api/widgets/{slug}/run`.
+`ModuleSpec.context_patch` values are written to the Context Store
+(`shared/context_store.py`, table `context_store_audit`) as the run path's
+successor to the removed `_thread_vol_stats_into_context`. Archiver hook is
+still a no-op stub.
 
 ### `shared/` — the library every suite and the orchestrator import from
 
@@ -241,8 +259,10 @@ summary.
 
 ### Dashboard and Tools
 
-`dashboard/app.py` (FastAPI, `:8787`, localhost-only) serves the swap-data browser, orchestrator
-trigger UI (`POST /run/{suite_or_unified}`), run status, cross-source analytics, and query-monitor
+`dashboard/app.py` (FastAPI, `:8787`, localhost-only) serves the swap-data browser, the widget
+surface (run any registered module via `POST /api/widgets/{slug}/run`, browse
+`GET /api/widgets/catalog`, read cached results / Context-Store provenance via
+`GET /api/widgets/{slug}/state` and `GET /api/context`), cross-source analytics, and query-monitor
 metrics; `tools.bat` opens the same uvicorn process at `/tools` instead of `/`. `Tools/` is a
 lighter-weight plugin surface for one-off tools (distinct from adding a whole new suite): implement
 `run(context: dict) -> dict` in `Tools/tools/`, wrap it in a `ToolSpec`, register it in
@@ -250,22 +270,26 @@ lighter-weight plugin surface for one-off tools (distinct from adding a whole ne
 `suite_context.json` files from any suite's output directory.
 
 There is no auth on the dashboard — it's a deliberate, permanent decision (`dashboard/auth.py` only has
-a `get_client_ip` helper left; the API-key gate on `POST /run/*` and the worker-dispatch routes was
-removed since this is a single-user, localhost-only tool that already keeps its real secrets
-(ThetaData credentials) in plaintext in `.env`). Sharing it publicly (e.g. via `cloudflared tunnel`)
-exposes all swap data and lets anyone trigger billed ThetaData-backed orchestrator runs, including
-worker-dispatch (an LLM-driven subprocess with filesystem write access). Don't expose it beyond
-localhost without adding real auth back first.
+a `get_client_ip` helper left; the API-key gate was removed since this is a single-user, localhost-only
+tool that already keeps its real secrets (ThetaData credentials) in plaintext in `.env`).
+**localhost-only discipline is now load-bearing: `/api/quant-console/agent` turns free text into
+potentially billed ThetaData-backed runs — never expose the dashboard beyond `127.0.0.1`.** Sharing
+it publicly (e.g. via `cloudflared tunnel`) would expose all swap data and let anyone trigger billed
+widget runs from arbitrary text. Don't expose it beyond localhost without adding real auth back first.
 
 ## Known fragile surfaces (read before changing these)
 
-- **`--unified` context-threading path.** Vol_Suite computes real per-ticker realized vol, a pairwise
-  correlation matrix, and GARCH conditional vol, then `orchestrator.py::_thread_vol_stats_into_context`
-  mutates the shared `suite_context` object so VaR's context mode actually sees them (it otherwise
-  silently falls back to an identity correlation matrix + flat 0.25 vol). Any change to the unified
-  run order, the `suite_context` focus/basket schema, or VaR's `_resolve_vol_and_quality` /
-  `_resolve_drift_and_quality` can silently re-break this. Run `tests/test_orchestrator_market_signals.py`
-  + `VaR_Tools_Simulations/tests/test_context_builders.py` after touching it.
+- **Context Store threading of vol stats.** Vol_Suite computes real per-ticker realized vol, a pairwise
+  correlation matrix, and GARCH conditional vol; in the widget-native path these `context_patch` values
+  are persisted by the run route into the Context Store (`shared/context_store.py`, table
+  `context_entries`/`context_store_audit`) keyed by scope, and VaR's `_resolve_vol_and_quality` /
+  `_resolve_drift_and_quality` read them back via `context_store.get(...)` before falling back to an
+  identity correlation matrix + flat 0.25 vol. (This replaces the removed `run_unified`'s
+  `_thread_vol_stats_into_context`, which mutated the shared suite_context object in place.) Any change
+  to the Context-Store scope-key normalization, the `suite_context` focus/basket schema, or VaR's
+  `_resolve_vol_and_quality` / `_resolve_drift_and_quality` can silently re-break this. Run
+  `tests/test_orchestrator_market_signals.py` + `VaR_Tools_Simulations/tests/test_context_builders.py`
+  after touching it.
 - **Options_Suite default pricing method is Leisen-Reimer, not CRR.** `main.py` resolves sigma via
   `method="LeisenReimer"` and derives Greeks from LR's tree (better strike/step convergence for
   American options). A regression to plain CRR for the default path is a bug Jason has reported

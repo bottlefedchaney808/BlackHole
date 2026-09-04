@@ -5,8 +5,8 @@ dashboard.quant_alerts.check_for_alerts, the durable (no LLM, no active
 Claude Code session required) detection half of the Phase 3 proactive
 layer. Detection reads orchestrator_output/*/quant_summary.json history
 directly rather than joining through orchestrator_runs -- a suite-kind
-run's DB row does not durably carry its output_dir (see _execute_run in
-dashboard/app.py), while every quant_summary.json is self-describing
+run's DB row does not durably carry its output_dir, while every
+quant_summary.json is self-describing
 (run_id, ticker, created_at_utc, modules[]), so it's the only source
 detection needs. Must never trigger a new suite/orchestrator run (plan
 Global Constraints) -- these tests never touch orchestrator.py's

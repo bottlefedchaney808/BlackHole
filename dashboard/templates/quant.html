@@ -3,95 +3,17 @@
 
 {% block content %}
 <style>
-/* Ported from .claude/skills/vol-suite.py::generate_dashboard_html's
-   dead-end <style> block (metric-grid/metric-card/tabs) -- that script never
-   rendered anywhere, so this is the first place that CSS is actually used.
-   Re-mapped onto base.html's own design tokens (var(--panel-2)/(--border)/
-   etc.) instead of copied verbatim, since the original used a different
-   token set (var(--surface-1), var(--fill-accent), ...) that doesn't exist
-   here. */
-.quant-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-  gap: 18px; margin-bottom: 20px;
-}
-.quant-card {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  padding: 16px; display: flex; flex-direction: column; gap: 10px;
-}
-.quant-card > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.quant-card .focus { margin: -4px 0 0; }
-.quant-card .unsupported-note {
-  background: var(--panel-2); border: 1px dashed var(--border); border-radius: 8px;
-  padding: 8px 10px; color: var(--muted);
-}
-.quant-card .run-meta { margin-top: 8px; }
+/* Widget-native Quant Console hub (Phase 5). This page is a thin shell that
+   drives the shared <quant-widget> custom element (dashboard/static/js/
+   quant-widget.js) — a catalog browser, a persisted console grid, a
+   page-global scope bar and a provenance side panel. All module rendering
+   and run/poll machinery lives inside the element's shadow DOM; nothing
+   below re-implements it. Dark theme re-maps onto base.html's :root design
+   tokens (var(--panel)/(--border)/(--accent)...). */
 
-/* Fourth status color, alongside the existing .pill.ok / .pill.error --
-   `degraded` (amber, source result present but only partially extractable)
-   and `unsupported` (neutral grey, module gated off by runnable=False) are
-   the two new visual treatments this task's schema addition (Task 2) exists
-   to make possible -- see the design spec's Phase 1 table. */
-.pill.degraded { background: var(--warn-soft); color: var(--warn); }
-.pill.unsupported { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
-
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-.tab {
-  padding: 6px 10px; cursor: pointer; background: transparent; border: none;
-  font: inherit; font-size: 12px; font-weight: 600; color: var(--muted);
-  border-bottom: 2px solid transparent;
-}
-.tab.active { color: var(--text); border-bottom-color: var(--accent); }
-.tab:hover { color: var(--text); }
-.tab-content { display: none; padding-top: 10px; }
-.tab-content.active { display: block; }
-
-.metric-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 8px; margin: 8px 0;
-}
-.metric-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-.metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
-.metric-value { font-size: 14px; font-weight: 620; word-break: break-word; }
-
-.module-entry-head { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.warnings-list { margin: 6px 0 0; padding-left: 18px; color: var(--warn); }
-
-/* Terminal-distribution histograms (Task 11). mc_sim / copula / corr_sim /
-   price_dist are single-step-to-horizon simulators -- they retain no per-step
-   path data, only the spread of terminal outcomes across n_sims draws -- so
-   this charts that terminal distribution rather than a (fabricated) path fan.
-   The bars are drawn as inline SVG: no chart library is loaded on this page,
-   and the dashboard is deliberately offline/localhost-only.
-   (.dist-chart/.dist-bar/etc. now live in base.html -- shared with index.html's
-   widget 3, which draws the same shape of chart.) */
-
-/* Worker dispatch (Quant Console Task 12) -- a completed dispatch job's
-   report is a Claude worker's *interpretation* of a module's already-run
-   quant_summary.json/*_result.json, not the automated suite's own output,
-   so it gets a visually distinct treatment (accent-tinted box, not the
-   plain metric-grid the summary tab above uses) with explicit provenance
-   (worker name / action / timestamp) so it's never mistaken for the run's
-   own result. */
-.dispatch-area { margin-top: 4px; border-top: 1px dashed var(--border); padding-top: 10px; }
-.dispatch-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.dispatch-jobs { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.worker-report {
-  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 8px;
-  padding: 10px 12px;
-}
-.worker-report.status-failed, .worker-report.status-timed_out, .worker-report.status-degraded {
-  background: var(--warn-soft); border-color: var(--warn);
-}
-.worker-report .provenance {
-  font-size: 11px; color: var(--muted); margin-bottom: 6px;
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-}
-.worker-report .headline { font-weight: 620; margin-bottom: 4px; }
-.worker-report .detail { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
-
-/* Alerts banner (Task 15) -- durable, no-LLM detection (Task 14) surfaced
-   here read-only; amber/warn treatment matches the existing .pill.partial
-   tone rather than inventing a new color for "needs attention". */
+/* Alerts banner (kept from the pre-widget console) — durable, no-LLM
+   detection surfaced read-only; amber/warn treatment matches .pill.partial
+   rather than inventing a color. */
 .alert-banner {
   background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 10px;
   padding: 12px 14px; margin-bottom: 18px;
@@ -101,12 +23,124 @@
 .alert-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .alert-item .alert-detail { flex: 1; min-width: 200px; font-size: 13px; }
 .alert-status-line { margin: 0 0 12px; }
+
+/* Shared status-pill extension vocabulary (module cards used ok/error/
+   degraded/unsupported; harmless to keep for catalog badges). */
+.pill.degraded { background: var(--warn-soft); color: var(--warn); }
+.pill.unsupported { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
+
+/* Tabs (base convention, kept for reuse) */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tab {
+  padding: 6px 10px; cursor: pointer; background: transparent; border: none;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab:hover { color: var(--text); }
+
+/* Page scope bar — page-global ticker/expiry/basket bound to syncBus. */
+.scope-bar {
+  display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 18px;
+}
+.scope-bar .field { flex-direction: column; display: flex; gap: 4px; }
+.scope-bar .field label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.scope-bar input {
+  font: inherit; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px;
+}
+.scope-bar input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.scope-bar .scope-note { color: var(--muted); font-size: 11px; align-self: center; margin-left: auto; }
+
+/* Three-pane console layout: catalog browser | console grid | provenance. */
+.console-layout {
+  display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(230px, 290px);
+  gap: 16px; align-items: start;
+}
+.pane {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden; display: flex; flex-direction: column;
+}
+.pane > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--panel-2);
+}
+.pane > header h2 { font-size: 13px; }
+.pane > header .note { color: var(--muted); font-size: 11px; }
+.pane > .pane-body { padding: 10px 12px; overflow: auto; }
+
+/* Catalog browser */
+#catalogSearch {
+  width: 100%; font: inherit; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; margin-bottom: 10px;
+}
+.catalog-list { display: flex; flex-direction: column; gap: 10px; }
+.catalog-card {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.catalog-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.catalog-card .cname { font-weight: 650; font-size: 13px; }
+.catalog-card .cslug { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.catalog-card .cdesc { color: var(--muted); font-size: 12px; }
+.catalog-card .meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.catalog-card .sample-wrap { position: relative; }
+.catalog-card pre.sample {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 8px; font-size: 11px; font-family: var(--mono); margin: 0;
+  max-height: 96px; overflow: auto; color: var(--muted); white-space: pre-wrap; word-break: break-word;
+}
+.catalog-card pre.sample:empty { display: none; }
+
+/* Console grid — cells host <quant-widget> plus per-instance chrome. */
+.grid-actions { display: flex; gap: 6px; align-items: center; }
+.grid-actions button { font-size: 11px; padding: 5px 10px; }
+.console-grid { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 12px; }
+.console-cell { display: flex; flex-direction: column; gap: 8px; }
+.cell-chrome {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 5px 8px;
+}
+.cell-chrome .cell-title { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-chrome .cell-title .ci-slug { color: var(--muted); font-weight: 400; font-family: var(--mono); font-size: 10px; }
+.cell-chrome .spacer { flex: 1; }
+.cell-chrome .mini {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  width: 22px; height: 22px; padding: 0; line-height: 1; border-radius: 6px; cursor: pointer;
+  font-size: 12px; box-shadow: none;
+}
+.cell-chrome .mini:hover { filter: brightness(1.2); }
+.cell-chrome .mini:disabled { opacity: .35; cursor: not-allowed; }
+.cell-chrome .mini.rem { color: var(--err); }
+.empty-grid { color: var(--muted); font-size: 13px; }
+
+/* Provenance panel */
+.prov-entry {
+  display: flex; flex-direction: column; gap: 2px; padding: 7px 2px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.prov-entry:last-child { border-bottom: none; }
+.prov-entry .prov-line { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.prov-entry .prov-key { font-family: var(--mono); font-weight: 600; }
+.prov-entry .prov-src { color: var(--muted); font-size: 11px; }
+.prov-entry .prov-when { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.prov-entry .prov-scope { color: var(--muted); font-size: 10px; font-family: var(--mono); }
+.prov-empty { color: var(--muted); font-size: 12px; padding: 6px 2px; }
+.prov-note { color: var(--muted); font-size: 11px; }
+
+@media (max-width: 1180px) {
+  .console-layout { grid-template-columns: 1fr; }
+  .console-layout .pane.catalog-pane { max-height: 40vh; }
+}
 </style>
 
 <h1>Quant Console</h1>
 <p class="sub">
-  One card per module &middot; Run &rarr; polls the existing <code>/runs/{run_id}</code> &middot;
-  once done, fetches <code>/runs/{run_id}/summary</code> (<code>quant_summary.json</code>)
+  Widget-native hub &middot; browse the module catalog, add widgets to your console grid
+  (persisted server-side), and run them from the shared page scope
 </p>
 
 {% if alerts %}
@@ -131,551 +165,515 @@
 <p class="small muted alert-status-line">alerts last checked {{ alert_status.last_checked_utc }} &middot; 0 pending</p>
 {% endif %}
 
-<!-- Unified-run module picker (outside grid so it spans full width; uses
-     all discoverable modules). -->
-<div id="phase7-module-checkboxes" style="margin-bottom:12px; padding:8px; background:var(--panel-2); border:1px solid var(--border); border-radius:6px;">
-  <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Select modules for unified (repo-wide via shared.module_registry.all_modules(); new modules auto-appear; grouped by category):</div>
-  {% for cat, opts in unified_module_groups %}
-    <div style="margin: 6px 0 2px; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">{{ cat }}</div>
-    {% for opt in opts %}
-    <label style="display:inline-block; margin-right:12px; font-size:11px; white-space:nowrap;"><input type="checkbox" class="mod-sel" data-slug="{{ opt.slug }}" checked> {{ opt.slug }} ({{ opt.name }})</label>
-    {% endfor %}
-  {% else %}
-    <em style="font-size:11px;">(no modules discovered from registry)</em>
-  {% endfor %}
+<!-- Page-global scope bar. Synced widgets follow it via syncBus. -->
+<div class="scope-bar">
+  <div class="field"><label for="scopeTicker">Ticker</label><input id="scopeTicker" placeholder="SPY" autocomplete="off"></div>
+  <div class="field"><label for="scopeExpiry">Expiry</label><input id="scopeExpiry" placeholder="2026-12-18" autocomplete="off"></div>
+  <div class="field"><label for="scopeBasket">Basket</label><input id="scopeBasket" placeholder="SPY, QQQ" autocomplete="off"></div>
+  <span class="scope-note">Synced widgets share this scope &mdash; set it, then Run.</span>
 </div>
 
-<div class="quant-grid">
-  {% for m in modules %}
-  <div class="quant-card" data-module-id="{{ m.id }}" data-suite="{{ m.suite }}"
-       data-runnable="{{ 'true' if m.runnable else 'false' }}">
+<div class="console-layout">
+  <!-- Catalog browser -->
+  <section class="pane catalog-pane">
+    <header><h2>Catalog</h2><span class="note" id="catalogCount">…</span></header>
+    <div class="pane-body">
+      <input id="catalogSearch" type="search" placeholder="Filter by name / slug / suite / category…" autocomplete="off">
+      <div class="catalog-list" id="catalogList"><span class="empty-grid">loading catalog…</span></div>
+    </div>
+  </section>
+
+  <!-- My console grid -->
+  <section class="pane console-pane">
     <header>
-      <h2>{{ m.name }}</h2>
-      {% if m.runnable %}
-        <span class="pill plain" data-role="module-badge">not run yet</span>
-      {% else %}
-        <span class="pill unsupported" data-role="module-badge">unsupported</span>
-      {% endif %}
+      <h2>My console</h2>
+      <div class="grid-actions">
+        <button type="button" id="saveLayoutBtn" class="ghost">Save layout</button>
+        <span class="note" id="saveStatus"></span>
+      </div>
     </header>
-    <p class="focus small muted">{{ m.focus }}</p>
+    <div class="console-grid" id="consoleGrid"><div class="empty-grid">loading your console…</div></div>
+  </section>
 
-    {% if not m.runnable %}
-      <div class="unsupported-note small">
-        Known limitation, not a new failure: this module's context-mode output
-        does not currently pass validation (see the <code>tool-launcher</code>
-        skill). A run can still be triggered, but its summary will always show
-        <span class="pill unsupported">unsupported</span> rather than
-        attempting to extract a result.
-      </div>
-    {% endif %}
-
-    <form class="runform" onsubmit="return false;">
-      <div class="field">
-        <label>Ticker</label>
-        <input type="text" class="ticker-input" placeholder="NVDA" autocomplete="off">
-      </div>
-      <button type="button" class="run-btn" onclick="startModuleRun(this)">Run</button>
-    </form>
-
-    <div class="run-status" style="display:none;">
-      <div class="kv run-meta"></div>
+  <!-- Provenance panel -->
+  <aside class="pane prov-pane">
+    <header><h2>Provenance</h2><span class="note" id="provScopeLabel"></span></header>
+    <div class="pane-body">
+      <div class="prov-note">Context-store entries feeding this scope. Refreshes after every widget run.</div>
+      <div id="provList"><div class="prov-empty">no entries yet</div></div>
     </div>
-
-    <div class="summary-area" style="display:none;">
-      <div class="tabs">
-        <button type="button" class="tab active" data-tab="summary" onclick="switchQuantTab(event, this)">Summary</button>
-        <button type="button" class="tab" data-tab="raw" onclick="switchQuantTab(event, this)">Raw</button>
-      </div>
-      <div class="tab-content active" data-tab-content="summary"></div>
-      <div class="tab-content" data-tab-content="raw">
-        <pre class="json raw-json"></pre>
-      </div>
-    </div>
-
-    <div class="dispatch-area" style="display:none;">
-      <div class="dispatch-actions">
-        <button type="button" class="ghost dispatch-btn" data-action="interpret"
-                onclick="dispatchWorker(this)">Ask Quant to interpret</button>
-        <button type="button" class="ghost dispatch-btn" data-action="investigate"
-                onclick="dispatchWorker(this)">Ask coder to investigate</button>
-        <button type="button" class="ghost dispatch-btn" data-action="explain"
-                onclick="dispatchWorker(this)">Ask research to explain</button>
-      </div>
-      <div class="dispatch-jobs"></div>
-    </div>
-  </div>
-  {% endfor %}
+  </aside>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// No framework, no CDN -- matches index.html's runform script (offline-first).
-
+/* ---- vanilla helpers (kept / shared with the widget element) ---- */
 function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+  return String(s == null ? '' : s).replace(/[&<>\"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
   });
 }
 
-// Orchestrator run-status vocabulary (ok/partial/running/queued/error/
-// timeout/failed) mapped onto their own identically-named pill classes.
-// Task 9/12 added a *second*, differently-spelled vocabulary -- dispatch
-// jobs use queued/running/completed/failed/timed_out -- so 'completed' and
-// 'timed_out' are aliased onto the existing ok/failed treatments here
-// rather than growing new CSS for them, and 'degraded' (Task 3's pattern,
-// surfaced by a malformed worker report -- see renderWorkerReport below) is
-// aliased onto modulePillClass's existing amber `.pill.degraded` rule.
-var RUN_PILL_CLASSES = {
-  ok: 'ok', partial: 'partial', running: 'running', queued: 'queued',
-  error: 'error', timeout: 'timeout', failed: 'failed',
-  completed: 'ok', timed_out: 'failed', degraded: 'degraded'
-};
-function runPillClass(status) {
-  var cls = (status || '').toLowerCase();
-  return RUN_PILL_CLASSES[cls] || 'plain';
-}
-
-// Distinct visual treatment per quant_summary module status -- the whole
-// point of Task 2's schema addition (ok/error/degraded/unsupported), so this
-// must not collapse back to a generic 'plain'/'error' pair.
-var MODULE_PILL_CLASSES = {ok: 'ok', error: 'error', degraded: 'degraded', unsupported: 'unsupported'};
-function modulePillClass(status) {
-  return MODULE_PILL_CLASSES[status] || 'plain';
-}
-
-function fmtMetricValue(v) {
-  if (v === null || v === undefined || v === '') return '--';
-  if (typeof v === 'number') {
-    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(4);
-  }
-  return String(v);
-}
-
-function renderModuleEntry(container, entry) {
-  var head = document.createElement('div');
-  head.className = 'module-entry-head';
-  head.innerHTML = '<span class="pill ' + modulePillClass(entry.status) + '">' +
-    esc(entry.status) + '</span> <strong>' + esc(entry.module) + '</strong>';
-  container.appendChild(head);
-
-  var headline = document.createElement('div');
-  headline.className = 'small';
-  headline.textContent = entry.headline || '';
-  container.appendChild(headline);
-
-  var metrics = entry.metrics || {};
-  var keys = Object.keys(metrics);
-  if (keys.length) {
-    var grid = document.createElement('div');
-    grid.className = 'metric-grid';
-    keys.forEach(function (k) {
-      var card = document.createElement('div');
-      card.className = 'metric-card';
-      card.innerHTML = '<div class="metric-label">' + esc(k) + '</div>' +
-        '<div class="metric-value">' + esc(fmtMetricValue(metrics[k])) + '</div>';
-      grid.appendChild(card);
-    });
-    container.appendChild(grid);
-  }
-
-  if (entry.warnings && entry.warnings.length) {
-    var ul = document.createElement('ul');
-    ul.className = 'warnings-list small';
-    entry.warnings.forEach(function (w) {
-      var li = document.createElement('li');
-      li.textContent = w;
-      ul.appendChild(li);
-    });
-    container.appendChild(ul);
-  }
-
-  (entry.distributions || []).forEach(function (dist) {
-    var chart = renderDistribution(dist);
-    if (chart) container.appendChild(chart);
-  });
-}
-
-// corr_sim sums positions across up to three tickers, so its bins are terminal
-// PORTFOLIO VALUES, not one ticker's price -- the producing builder says which
-// via `histogram_unit`, carried here as `unit`. Never default an unrecognized
-// unit to "price": mislabeling a portfolio-value chart as a price chart is the
-// exact failure this field exists to prevent.
-var DIST_UNIT_LABELS = {
-  price: 'terminal price distribution',
-  portfolio_value: 'terminal portfolio-value distribution',
-  unknown: 'terminal distribution (units unreported)'
-};
-function distUnitLabel(unit) {
-  return DIST_UNIT_LABELS[unit] || DIST_UNIT_LABELS.unknown;
-}
-
-var SVG_NS = 'http://www.w3.org/2000/svg';
-
-function renderDistribution(dist) {
-  var bins = (dist && dist.bins) || [];
-  if (!bins.length) return null;
-
-  var wrap = document.createElement('div');
-  wrap.className = 'dist-chart';
-
-  var title = document.createElement('div');
-  title.className = 'small dist-chart-title';
-  title.textContent = (dist.label || 'simulation') + ' — ' + distUnitLabel(dist.unit);
-  wrap.appendChild(title);
-
-  var W = 320, H = 80, PAD = 2;
-  var barW = W / bins.length;
-  // An all-zero histogram would divide by zero; floor the scale at 1 so the
-  // chart renders flat-empty rather than producing NaN geometry.
-  var maxCount = bins.reduce(function (m, b) {
-    return Math.max(m, typeof b.count === 'number' ? b.count : 0);
-  }, 0) || 1;
-
-  var svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', String(H));
-  svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', title.textContent);
-
-  bins.forEach(function (b, i) {
-    var count = typeof b.count === 'number' ? b.count : 0;
-    var barH = (count / maxCount) * (H - PAD);
-    var rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(i * barW));
-    rect.setAttribute('y', String(H - barH));
-    rect.setAttribute('width', String(Math.max(barW - 1, 0.5)));
-    rect.setAttribute('height', String(barH));
-    rect.setAttribute('class', 'dist-bar');
-    var tip = document.createElementNS(SVG_NS, 'title');
-    tip.textContent = fmtMetricValue(b.low) + '–' + fmtMetricValue(b.high) +
-      ': ' + fmtMetricValue(count);
-    rect.appendChild(tip);
-    svg.appendChild(rect);
-  });
-  wrap.appendChild(svg);
-
-  // Percentiles are omitted upstream (not zero-filled) when the sim doesn't
-  // publish them -- corr_sim and price_dist ship a histogram but no
-  // terminal_price_p* fields -- so render only the ones that exist.
-  var pct = dist.percentiles || {};
-  var parts = ['p5', 'p50', 'p95'].filter(function (k) {
-    return typeof pct[k] === 'number';
-  }).map(function (k) {
-    return k + ': ' + fmtMetricValue(pct[k]);
-  });
-  var line = document.createElement('div');
-  line.className = 'small dist-percentiles';
-  line.textContent = parts.length
-    ? parts.join('  ·  ')
-    : 'percentiles not reported by this simulation';
-  wrap.appendChild(line);
-
-  return wrap;
-}
-
-function renderSummary(card, summary) {
-  var moduleId = card.getAttribute('data-module-id');
-  var summaryArea = card.querySelector('.summary-area');
-  var summaryTab = summaryArea.querySelector('[data-tab-content="summary"]');
-  var rawTab = summaryArea.querySelector('[data-tab-content="raw"] .raw-json');
-  summaryTab.innerHTML = '';
-
-  var entries = (summary.modules || []).filter(function (m) {
-    return moduleId === 'unified' ? true : m.module === moduleId;
-  });
-
-  if (!entries.length) {
-    var none = document.createElement('div');
-    none.className = 'empty';
-    none.textContent = 'quant_summary.json has no entry for this module yet.';
-    summaryTab.appendChild(none);
-  } else {
-    entries.forEach(function (entry) { renderModuleEntry(summaryTab, entry); });
-  }
-
-  rawTab.textContent = JSON.stringify(summary, null, 2);
-  summaryArea.style.display = 'block';
-
-  // Single-module cards (everything except 'unified') also reflect their
-  // module's status on the card-level badge next to the name.
-  if (entries.length === 1) {
-    var badge = card.querySelector('[data-role="module-badge"]');
-    badge.className = 'pill ' + modulePillClass(entries[0].status);
-    badge.textContent = entries[0].status;
-  }
-}
-
-// --------------------------------------------------------------------------
-// Browser notification on completion (Quant Console Task 16) -- fires when
-// a polled run or dispatch job transitions to `done` while its card is on
-// screen. Frontend-only, no backend involvement (dashboard/app.py's Task
-// 14/15 alert banner is the separate, durable, tab-closed-safe channel for
-// that job -- this one is real-time but only reaches the user while this
-// tab is open, an accepted limitation per the design spec, not a bug to
-// fix here). Permission is requested at most once: the first call this
-// page makes while `Notification.permission` is still the browser's
-// unasked default ('default') triggers the one prompt; a user who denies
-// it is never re-prompted (calling requestPermission() again after
-// 'denied' wouldn't show UI anyway, but checking first keeps that explicit
-// rather than relying on browser behavior).
-function notifyCompletion(title, body) {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'granted') {
-    new Notification(title, {body: body});
-  } else if (Notification.permission === 'default') {
-    Notification.requestPermission().then(function (permission) {
-      if (permission === 'granted') { new Notification(title, {body: body}); }
-    });
-  }
-  // 'denied' -- stay silent, no reprompt.
-}
-
-function fetchSummary(card, runId) {
-  fetch('/runs/' + encodeURIComponent(runId) + '/summary')
-    .then(function (r) {
-      if (!r.ok) {
-        return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
-      }
-      return r.json();
-    })
-    .then(function (summary) { renderSummary(card, summary); })
-    .catch(function (e) {
-      var summaryArea = card.querySelector('.summary-area');
-      var summaryTab = summaryArea.querySelector('[data-tab-content="summary"]');
-      summaryArea.style.display = 'block';
-      summaryTab.innerHTML = '<div class="errbox">' + esc(e.message || String(e)) + '</div>';
-    });
-}
-
-function pollRun(card, runId) {
-  var metaEl = card.querySelector('.run-meta');
-
-  function tick() {
-    fetch('/runs/' + encodeURIComponent(runId))
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        metaEl.innerHTML =
-          '<div>run_id</div><div class="val">' + esc(data.run_id) + '</div>' +
-          '<div>status</div><div class="val"><span class="pill ' + runPillClass(data.status) +
-            '">' + esc(data.status || '--') + '</span></div>' +
-          '<div>started</div><div class="val">' + esc(data.started_at || '--') + '</div>' +
-          '<div>completed</div><div class="val">' + esc(data.completed_at || '--') + '</div>';
-
-        if (data.done) {
-          clearInterval(timer);
-          var btn = card.querySelector('.run-btn');
-          btn.disabled = false;
-          btn.textContent = 'Run';
-          fetchSummary(card, runId);
-
-          // Worker dispatch (Task 12) needs a done run_id to dispatch
-          // against -- record it on the card and reveal the action buttons
-          // now that one exists.
-          card.setAttribute('data-run-id', String(data.run_id));
-          card.querySelector('.dispatch-area').style.display = 'block';
-
-          var moduleName = card.querySelector('h2').textContent;
-          notifyCompletion('Quant Console: ' + moduleName + ' run ' + (data.status || 'done'),
-                           'run ' + data.run_id);
-        }
-      })
-      .catch(function (e) { console.error('poll failed', e); });
-  }
-
-  var timer = setInterval(tick, 4000);
-  tick();
-}
-
-// --------------------------------------------------------------------------
-// Worker dispatch (Quant Console Task 12) -- POST /runs/{run_id}/dispatch/
-// {action}, then poll GET /runs/{run_id}/dispatch/{job_id} (same 'done'/
-// status-pill polling convention pollRun already uses above) until the job
-// finishes, then render its report inline, visually distinct from the
-// quant_summary.json content in the Summary/Raw tabs above it.
-// --------------------------------------------------------------------------
-
-function workerReportProvenance(job, report) {
-  var worker = (report && report.worker) || 'claude';
-  var when = job.completed_at || job.started_at || '';
-  return 'worker: ' + worker + ' · action: ' + job.action + (when ? ' · ' + when : '');
-}
-
-function renderWorkerReport(entryEl, job) {
-  var report = job.result;
-  // The backend can synthesize a report.status of "degraded" (Task 3's
-  // pattern) when the worker's report file is malformed, while job.status
-  // itself stays "completed" (the *process* exited fine -- it's the report
-  // file that's bad). report.status must win when present so a degraded
-  // report is never visually indistinguishable from a clean one; job.status
-  // is only the fallback for the done-but-no-report-file case where there
-  // is no report.status to read.
-  var status = (report && report.status) || job.status || 'running';
-  var headline = report ? (report.headline || '(no headline)') : ('dispatch ' + status + ', no report file found');
-  var detail = report ? (report.detail || '') : '';
-
-  entryEl.className = 'worker-report status-' + status;
-  entryEl.innerHTML =
-    '<div class="provenance">' + esc(workerReportProvenance(job, report)) +
-      ' <span class="pill ' + runPillClass(status) + '">' + esc(status) + '</span></div>' +
-    '<div class="headline">' + esc(headline) + '</div>' +
-    (detail ? '<div class="detail">' + esc(detail) + '</div>' : '');
-}
-
-function pollDispatchJob(runId, jobId, entryEl) {
-  function tick() {
-    fetch('/runs/' + encodeURIComponent(runId) + '/dispatch/' + encodeURIComponent(jobId))
-      .then(function (r) {
-        return r.json().then(function (j) { return {ok: r.ok, body: j}; });
-      })
-      .then(function (res) {
-        if (!res.ok) {
-          clearInterval(timer);
-          entryEl.className = 'errbox';
-          entryEl.textContent = res.body.error || ('HTTP error polling dispatch job');
-          return;
-        }
-        var job = res.body;
-        if (!job.done) {
-          entryEl.innerHTML = '<div class="small muted">' + esc(job.action) + ' ' +
-            esc(job.status) + '...</div>';
-          return;
-        }
-        clearInterval(timer);
-        renderWorkerReport(entryEl, job);
-
-        var report = job.result;
-        var headline = report ? (report.headline || '(no headline)') : ('dispatch ' + job.status);
-        notifyCompletion('Quant Console: ' + job.action + ' ' + job.status, headline);
-      })
-      .catch(function (e) { console.error('dispatch poll failed', e); });
-  }
-
-  var timer = setInterval(tick, 3000);
-  tick();
-}
-
-function dispatchWorker(btn) {
-  var card = btn.closest('.quant-card');
-  var runId = card.getAttribute('data-run-id');
-  if (!runId) return;
-  var action = btn.getAttribute('data-action');
-
-  var entryEl = document.createElement('div');
-  entryEl.className = 'small muted';
-  entryEl.textContent = 'dispatching ' + action + '...';
-  card.querySelector('.dispatch-jobs').appendChild(entryEl);
-
-  fetch('/runs/' + encodeURIComponent(runId) + '/dispatch/' + encodeURIComponent(action), {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({})
-  })
-    .then(function (r) {
-      return r.json().then(function (j) { return {ok: r.ok, body: j}; });
-    })
-    .then(function (res) {
-      if (!res.ok) {
-        entryEl.className = 'errbox';
-        entryEl.textContent = res.body.error || 'dispatch failed';
-        return;
-      }
-      pollDispatchJob(runId, res.body.job_id, entryEl);
-    })
-    .catch(function (e) {
-      entryEl.className = 'errbox';
-      entryEl.textContent = String(e);
-    });
-}
-
-function startModuleRun(btn) {
-  var card = btn.closest('.quant-card');
-  var suite = card.getAttribute('data-suite');
-  var tickerInput = card.querySelector('.ticker-input');
-  var ticker = tickerInput.value.trim();
-  if (!ticker) { tickerInput.focus(); return; }
-
-  var body = {ticker: ticker};
-  if (suite === 'unified') {
-    // Collect checked modules from the (now repo-wide) picker.
-    // Posts modules list -> dashboard/app.py routes to run_selected_modules
-    // (instead of full run_unified). This is how selectable unified works.
-    var cbs = document.querySelectorAll('#phase7-module-checkboxes .mod-sel:checked');
-    var mods = [];
-    for (var i = 0; i < cbs.length; i++) {
-      var s = cbs[i].getAttribute('data-slug');
-      if (s) mods.push(s);
-    }
-    if (mods.length) {
-      body.modules = mods;
-    }
-  }
-
-  btn.disabled = true;
-  btn.textContent = 'Starting...';
-  var statusArea = card.querySelector('.run-status');
-  statusArea.style.display = 'block';
-  card.querySelector('.run-meta').innerHTML = '<div>status</div><div class="val">submitting...</div>';
-
-  fetch('/run/' + encodeURIComponent(suite), {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  })
-    .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, body: j}; }); })
-    .then(function (res) {
-      if (!res.ok) {
-        card.querySelector('.run-meta').innerHTML =
-          '<div>error</div><div class="val">' + esc(res.body.error || 'request failed') + '</div>';
-        btn.disabled = false;
-        btn.textContent = 'Run';
-        return;
-      }
-      btn.textContent = 'Running...';
-      pollRun(card, res.body.run_id);
-    })
-    .catch(function (e) {
-      card.querySelector('.run-meta').innerHTML =
-        '<div>error</div><div class="val">' + esc(e) + '</div>';
-      btn.disabled = false;
-      btn.textContent = 'Run';
-    });
-}
-
-// --------------------------------------------------------------------------
-// Alerts banner (Task 15) -- dismiss (ack) removes the row from the DOM
-// immediately on success; the row itself stays in quant_alerts (Task 15's
-// own contract -- acknowledge, not delete) so no re-fetch is needed to
-// reflect that.
-// --------------------------------------------------------------------------
-
+/* Alerts banner dismissal — removes the row on success (acknowledge, not
+   delete), matching the pre-widget console behaviour. */
 function ackAlert(btn, alertId) {
   btn.disabled = true;
-  fetch('/alerts/' + encodeURIComponent(alertId) + '/ack', {method: 'POST'})
+  fetch('/alerts/' + encodeURIComponent(alertId) + '/ack', { method: 'POST' })
     .then(function (r) {
-      if (!r.ok) { throw new Error('HTTP ' + r.status); }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       var item = btn.closest('.alert-item');
       var list = item.parentElement;
       item.remove();
-      if (!list.children.length) {
-        list.closest('.alert-banner').remove();
-      }
+      if (!list.children.length) list.closest('.alert-banner').remove();
+    })
+    .catch(function (e) { console.error('ack failed', e); btn.disabled = false; });
+}
+
+/* id generator for layout instances the server never saw (client adds). */
+function genInstanceId() {
+  return 'wi_' + Math.random().toString(36).slice(2, 10);
+}
+</script>
+
+<script type="module">
+import { syncBus } from '/static/js/sync-bus.js';
+import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-renderers.js
+
+const PAGE = 'quant';
+const $ = (sel) => document.querySelector(sel);
+
+const catalog = [];                 // catalog entry objects (slug-keyed lookup below)
+const catalogBySlug = {};
+const instances = [];               // in-DOM-order console instances (mirrors GET /api/layout/quant)
+const persistedIds = new Set();     // ids that exist server-side (so Remove can DELETE them)
+
+/* ---------------------------------------------------------------- state UI */
+const catalogList = $('#catalogList');
+const consoleGrid = $('#consoleGrid');
+const provList = $('#provList');
+const saveStatus = $('#saveStatus');
+
+function flash(msg) {
+  saveStatus.textContent = msg;
+  clearTimeout(flash._t);
+  flash._t = setTimeout(function () { saveStatus.textContent = ''; }, 2600);
+}
+
+/* --------------------------------------------------------- provenance */
+function relTime(iso) {
+  if (!iso) return '';
+  var t = new Date(iso).getTime();
+  if (isNaN(t)) return iso;
+  var sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return sec + 's ago';
+  var min = Math.round(sec / 60);
+  if (min < 60) return min + 'm ago';
+  var hr = Math.round(min / 60);
+  if (hr < 24) return hr + 'h ago';
+  var d = Math.round(hr / 24);
+  return d + 'd ago';
+}
+
+function scopeToLabel(scope) {
+  const parts = [];
+  if (scope.ticker) parts.push('ticker:' + scope.ticker);
+  if (scope.expiry) parts.push('expiry:' + scope.expiry);
+  if (scope.basket && scope.basket.length) parts.push('basket:' + scope.basket.join(','));
+  return parts.join(' ');
+}
+
+function renderProvenance(entries) {
+  provList.innerHTML = '';
+  if (!entries || !entries.length) {
+    provList.innerHTML = '<div class="prov-empty">no context entries yet — run a widget that publishes context_patch</div>';
+    return;
+  }
+  // Most recent first (backend orders by computed_at DESC); cap for readability.
+  entries.slice(0, 60).forEach(function (e) {
+    const row = document.createElement('div');
+    row.className = 'prov-entry';
+    const when = relTime(e.computed_at);
+    const src = e.source_slug || 'external';
+    const line = document.createElement('div');
+    line.className = 'prov-line';
+    line.innerHTML = '<span class="prov-key">' + esc(e.key) + '</span>' +
+      '<span class="prov-src">by ' + esc(src) + '</span>' +
+      (when ? '<span class="prov-when">' + esc(when) + '</span>' : '');
+    row.appendChild(line);
+    if (e.scope) {
+      const sc = document.createElement('div');
+      sc.className = 'prov-scope';
+      sc.textContent = e.scope;
+      row.appendChild(sc);
+    }
+    row.title = 'computed ' + (e.computed_at || '?') + (e.scope ? ' · scope ' + e.scope : '');
+    provList.appendChild(row);
+  });
+}
+
+function refreshProvenance() {
+  // No scope param: fetch the full store and show entries client-side so an
+  // exact scope-key round-trip can never zero-out the panel on mismatch.
+  fetch('/api/context', { headers: { Accept: 'application/json' } })
+    .then(function (r) { return r.ok ? r.json() : { entries: [] }; })
+    .then(function (body) { renderProvenance(body.entries); })
+    .catch(function () { /* read-only best effort */ });
+}
+
+/* --------------------------------------------------------- catalog */
+function inputSpecLabel(entry) {
+  const spec = (entry && entry.inputs) || {};
+  const reqs = [];
+  ['ticker', 'expiry', 'basket'].forEach(function (k) {
+    if (spec[k] === 'required') reqs.push(k);
+    else if (spec[k] && spec[k] !== 'none' && spec[k] !== 'optional') reqs.push(k + ':' + spec[k]);
+  });
+  const opts = ['ticker', 'expiry', 'basket'].filter(function (k) {
+    const v = spec[k];
+    return v === 'optional' || v === undefined || v === null || v === 'none';
+  });
+  return { req: reqs, opt: opts };
+}
+
+function sampleText(entry) {
+  if (entry.sample === undefined || entry.sample === null) return '';
+  try {
+    const s = JSON.stringify(entry.sample, null, 1);
+    return s.length > 400 ? s.slice(0, 400) + '…' : s;
+  } catch (e) { return ''; }
+}
+
+function catalogMatches(entry, q) {
+  if (!q) return true;
+  const hay = (entry.name + ' ' + entry.slug + ' ' + entry.suite + ' ' +
+               (entry.category || '') + ' ' + (entry.description || '')).toLowerCase();
+  return q.split(/\s+/).every(function (tok) { return hay.indexOf(tok) !== -1; });
+}
+
+function renderCatalog(filter) {
+  const added = {};
+  instances.forEach(function (i) { added[i.slug] = true; });
+  catalogList.innerHTML = '';
+  const q = (filter || '').toLowerCase().trim();
+  let shown = 0;
+  catalog.forEach(function (entry) {
+    if (!catalogMatches(entry, q)) return;
+    shown += 1;
+    const specs = inputSpecLabel(entry);
+    const card = document.createElement('div');
+    card.className = 'catalog-card';
+
+    const head = document.createElement('header');
+    head.innerHTML = '<span class="cname">' + esc(entry.name || entry.slug) +
+      '</span><span class="cslug">' + esc(entry.slug) + '</span>';
+    card.appendChild(head);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML =
+      '<span class="pill plain">' + esc(entry.suite || 'misc') + '</span>' +
+      (entry.category ? '<span class="pill unsupported">' + esc(entry.category) + '</span>' : '') +
+      '<span class="pill ok">' + esc(entry.output_kind || 'metrics') + '</span>';
+    card.appendChild(meta);
+
+    if (entry.description) {
+      const d = document.createElement('div');
+      d.className = 'cdesc';
+      d.textContent = entry.description;
+      card.appendChild(d);
+    }
+    if (specs.req.length || specs.opt.length) {
+      const m2 = document.createElement('div');
+      m2.className = 'meta';
+      m2.innerHTML =
+        (specs.req.length ? '<span class="pill partial">needs ' + esc(specs.req.join(', ')) + '</span>' : '') +
+        (specs.opt.length ? '<span class="small muted">optional: ' + esc(specs.opt.join(', ')) + '</span>' : '') +
+        ((entry.requires && entry.requires.length) ? '<span class="small muted">requires ' + esc(entry.requires.join(', ')) + '</span>' : '');
+      card.appendChild(m2);
+    }
+    const sample = sampleText(entry);
+    if (sample) {
+      const sw = document.createElement('div');
+      sw.className = 'sample-wrap';
+      const pre = document.createElement('pre');
+      pre.className = 'sample';
+      pre.textContent = sample;
+      sw.appendChild(pre);
+      card.appendChild(sw);
+    }
+
+    const btnWrap = document.createElement('div');
+    btnWrap.style.display = 'flex';
+    btnWrap.style.justifyContent = 'flex-end';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = added[entry.slug] ? 'Added' : 'Add to console';
+    btn.disabled = !!added[entry.slug];
+    btn.className = 'ghost';
+    btn.addEventListener('click', function () { addInstance(entry.slug); });
+    btnWrap.appendChild(btn);
+    card.appendChild(btnWrap);
+    catalogList.appendChild(card);
+  });
+  if (!shown) catalogList.innerHTML = '<div class="empty-grid">no catalog matches</div>';
+}
+
+function loadCatalog() {
+  fetch('/api/widgets/catalog', { headers: { Accept: 'application/json' } })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (body) {
+      const list = Array.isArray(body) ? body : (body.widgets || []);
+      catalog.length = 0;
+      list.forEach(function (w) { if (w && w.slug) { catalog.push(w); catalogBySlug[w.slug] = w; } });
+      $('#catalogCount').textContent = catalog.length + ' modules';
+      renderCatalog($('#catalogSearch').value);
     })
     .catch(function (e) {
-      console.error('ack failed', e);
-      btn.disabled = false;
+      catalogList.innerHTML = '<div class="errbox">catalog unavailable: ' + esc(e.message || String(e)) + '</div>';
     });
 }
 
-function switchQuantTab(evt, btn) {
-  var card = btn.closest('.quant-card');
-  card.querySelectorAll('.tab-content').forEach(function (el) { el.classList.remove('active'); });
-  card.querySelectorAll('.tab').forEach(function (el) { el.classList.remove('active'); });
-  var name = btn.getAttribute('data-tab');
-  card.querySelector('[data-tab-content="' + name + '"]').classList.add('active');
-  btn.classList.add('active');
+/* --------------------------------------------------------- console grid */
+function makeWidgetElement(inst) {
+  const el = document.createElement('quant-widget');
+  el.setAttribute('slug', inst.slug);
+  if (inst.sync_enabled === false) el.setAttribute('synced', 'false');
+  const entry = catalogBySlug[inst.slug];
+  if (entry && entry.output_kind) el.setAttribute('data-output-kind', entry.output_kind);
+  // data-context: extra run fields. scope_override keys ticker/expiry/basket
+  // override scope at run; everything else (incl. config_json) goes to params.
+  const ctx = {};
+  if (inst.scope_override && typeof inst.scope_override === 'object') {
+    Object.keys(inst.scope_override).forEach(function (k) { ctx[k] = inst.scope_override[k]; });
+  }
+  if (inst.config_json && typeof inst.config_json === 'object') {
+    Object.keys(inst.config_json).forEach(function (k) { if (!(k in ctx)) ctx[k] = inst.config_json[k]; });
+  }
+  if (Object.keys(ctx).length) el.setAttribute('data-context', JSON.stringify(ctx));
+  return el;
 }
+
+function buildCell(inst) {
+  const cell = document.createElement('div');
+  cell.className = 'console-cell';
+  cell.dataset.instanceId = inst.widget_instance_id;
+
+  const chrome = document.createElement('div');
+  chrome.className = 'cell-chrome';
+  const entry = catalogBySlug[inst.slug];
+  const title = document.createElement('span');
+  title.className = 'cell-title';
+  title.innerHTML = esc((entry && entry.name) || inst.slug) +
+    '<span class="ci-slug"> ' + esc(inst.slug) + '</span>' +
+    (inst.sync_enabled === false ? ' <span class="pill plain" style="font-size:9px">unsynced</span>' : '');
+  chrome.appendChild(title);
+  const spacer = document.createElement('span');
+  spacer.className = 'spacer';
+  chrome.appendChild(spacer);
+
+  const upBtn = document.createElement('button');
+  upBtn.type = 'button'; upBtn.className = 'mini'; upBtn.title = 'Move earlier'; upBtn.textContent = '\u2191';
+  const dnBtn = document.createElement('button');
+  dnBtn.type = 'button'; dnBtn.className = 'mini'; dnBtn.title = 'Move later'; dnBtn.textContent = '\u2193';
+  const rmBtn = document.createElement('button');
+  rmBtn.type = 'button'; rmBtn.className = 'mini rem'; rmBtn.title = 'Remove from console'; rmBtn.textContent = '\u2715';
+
+  upBtn.addEventListener('click', function () { moveInstance(inst.widget_instance_id, -1); });
+  dnBtn.addEventListener('click', function () { moveInstance(inst.widget_instance_id, 1); });
+  rmBtn.addEventListener('click', function () { removeInstance(inst.widget_instance_id); });
+  chrome.appendChild(upBtn);
+  chrome.appendChild(dnBtn);
+  chrome.appendChild(rmBtn);
+
+  cell.appendChild(chrome);
+  cell.appendChild(makeWidgetElement(inst));
+
+  // update button enabledness based on DOM neighbours after insertion
+  return { cell: cell, upBtn: upBtn, dnBtn: dnBtn };
+}
+
+function syncChromeDisable() {
+  const cells = Array.prototype.slice.call(consoleGrid.querySelectorAll('.console-cell'));
+  cells.forEach(function (c) {
+    const ups = c.querySelector('.mini[title="Move earlier"]');
+    const dns = c.querySelector('.mini[title="Move later"]');
+    if (ups) ups.disabled = c === cells[0];
+    if (dns) dns.disabled = c === cells[cells.length - 1];
+  });
+}
+
+function refreshConsole() {
+  consoleGrid.innerHTML = '';
+  if (!instances.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-grid';
+    empty.textContent = 'Your console is empty — add widgets from the catalog.';
+    consoleGrid.appendChild(empty);
+  } else {
+    instances.forEach(function (inst) { consoleGrid.appendChild(buildCell(inst).cell); });
+    syncChromeDisable();
+  }
+  renderCatalog($('#catalogSearch').value);
+}
+
+function loadLayout() {
+  fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } })
+    .then(function (r) { return r.ok ? r.json() : []; })
+    .then(function (list) {
+      instances.length = 0;
+      persistedIds.clear();
+      (list || []).forEach(function (inst) {
+        instances.push(inst);
+        if (inst.widget_instance_id) persistedIds.add(inst.widget_instance_id);
+      });
+      refreshConsole();
+    })
+    .catch(function (e) {
+      consoleGrid.innerHTML = '<div class="empty-grid">could not load layout: ' + esc(e.message || String(e)) + '</div>';
+    });
+}
+
+function payload() {
+  // Full-replace PUT body; positions are reassigned from DOM order.
+  return instances.map(function (inst, idx) {
+    return {
+      widget_instance_id: inst.widget_instance_id,
+      slug: inst.slug,
+      position: idx,
+      scope_override: inst.scope_override || null,
+      sync_enabled: inst.sync_enabled !== false,
+      config_json: inst.config_json || null
+    };
+  });
+}
+
+function persist() {
+  return fetch('/api/layout/' + PAGE, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ instances: payload() })
+  }).then(function (r) {
+    if (!r.ok) {
+      return r.json().then(function (j) { throw new Error(j.detail || ('HTTP ' + r.status)); });
+    }
+    // every instance now exists server-side
+    instances.forEach(function (i) { persistedIds.add(i.widget_instance_id); });
+  });
+}
+
+function addInstance(slug) {
+  const inst = {
+    widget_instance_id: genInstanceId(),
+    slug: slug,
+    position: instances.length,
+    scope_override: null,
+    sync_enabled: true,
+    config_json: null
+  };
+  instances.push(inst);
+  consoleGrid.querySelectorAll('.empty-grid').forEach(function (e) { e.remove(); });
+  const built = buildCell(inst);
+  consoleGrid.appendChild(built.cell);
+  syncChromeDisable();
+  renderCatalog($('#catalogSearch').value);
+  flash('added ' + slug + ' — click Save layout to persist');
+}
+
+function removeInstance(id) {
+  const idx = instances.findIndex(function (i) { return i.widget_instance_id === id; });
+  if (idx === -1) return;
+  const wasPersisted = persistedIds.has(id);
+  instances.splice(idx, 1);
+  const cell = consoleGrid.querySelector('.console-cell[data-instance-id="' + id + '"]');
+  if (cell) cell.remove();
+  syncChromeDisable();
+  renderCatalog($('#catalogSearch').value);
+  // Persist the removal for ids the server knew about (silent best-effort;
+  // the next Save is authoritative via full-replace PUT).
+  if (wasPersisted) {
+    persistedIds.delete(id);
+    fetch('/api/layout/' + PAGE + '/' + encodeURIComponent(id), { method: 'DELETE' })
+      .catch(function (e) { console.error('layout delete failed', e); });
+  }
+  flash('removed from console');
+}
+
+function moveInstance(id, dir) {
+  const idx = instances.findIndex(function (i) { return i.widget_instance_id === id; });
+  const to = idx + dir;
+  if (idx === -1 || to < 0 || to >= instances.length) return;
+  // Keep the logical array in sync with the DOM (which preserves each
+  // widget's live state — never rebuild a widget to reorder it).
+  const node = consoleGrid.querySelector('.console-cell[data-instance-id="' + id + '"]');
+  if (!node) return;
+  if (dir < 0) {
+    if (node.previousElementSibling) consoleGrid.insertBefore(node, node.previousElementSibling);
+  } else {
+    if (node.nextElementSibling) consoleGrid.insertBefore(node.nextElementSibling, node);
+  }
+  const a = instances[idx], b = instances[to];
+  instances[idx] = b; instances[to] = a;
+  syncChromeDisable();
+}
+
+/* --------------------------------------------------------- page scope */
+const scopeInputs = {
+  ticker: $('#scopeTicker'),
+  expiry: $('#scopeExpiry'),
+  basket: $('#scopeBasket')
+};
+
+function seedScopeInputs(scope) {
+  if (typeof scope.ticker === 'string' && scopeInputs.ticker.value !== scope.ticker) scopeInputs.ticker.value = scope.ticker;
+  if (typeof scope.expiry === 'string' && scopeInputs.expiry.value !== scope.expiry) scopeInputs.expiry.value = scope.expiry;
+  const bt = (scope.basket || []).join(', ');
+  if (scopeInputs.basket.value !== bt) scopeInputs.basket.value = bt;
+}
+
+function bindScopeInput(kind, input) {
+  input.addEventListener('input', function () {
+    if (kind === 'basket') syncBus.setScope({ basket: input.value });
+    else syncBus.setScope({ [kind]: input.value });
+  });
+}
+bindScopeInput('ticker', scopeInputs.ticker);
+bindScopeInput('expiry', scopeInputs.expiry);
+bindScopeInput('basket', scopeInputs.basket);
+
+/* --------------------------------------------------------- events / boot */
+document.addEventListener('qw:run-start', function () {
+  $('#provScopeLabel').textContent = scopeToLabel(syncBus.getScope()) || '';
+});
+// The element emits qw:run-success / qw:run-error (no unified run-end); both
+// mark the end of a run, so refresh provenance on either.
+function onRunEnd() { refreshProvenance(); }
+document.addEventListener('qw:run-success', onRunEnd);
+document.addEventListener('qw:run-error', onRunEnd);
+
+// Mirror bus changes back into the page scope inputs (a synced widget typing
+// publishes to the bus — keep the scope bar in sync).
+syncBus.subscribe(function (scope) { seedScopeInputs(scope); });
+
+$('#saveLayoutBtn').addEventListener('click', function () {
+  const btn = $('#saveLayoutBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  persist()
+    .then(function () { flash('layout saved (' + instances.length + ' widgets)'); })
+    .catch(function (e) { flash('save failed: ' + (e.message || String(e))); })
+    .finally(function () { btn.disabled = false; btn.textContent = 'Save layout'; });
+});
+
+$('#catalogSearch').addEventListener('input', function () {
+  renderCatalog(this.value);
+});
+
+loadCatalog();
+loadLayout();
+refreshProvenance();
 </script>
 {% endblock %}

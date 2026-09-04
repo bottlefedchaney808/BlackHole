@@ -19,8 +19,11 @@ Everything that would actually shell out is mocked:
 Depends on Task 8 (`build_worker_env`), already landed and imported
 directly here.
 """
+import json
+import sqlite3
 import sys
 import threading
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -30,6 +33,8 @@ from fastapi.testclient import TestClient
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from setup_db import migrate  # noqa: E402
 
 import dashboard.app as dashboard_app  # noqa: E402
 from dashboard.worker_env import build_worker_env  # noqa: E402
@@ -44,50 +49,64 @@ AUTH_HEADERS = {}
 
 
 @pytest.fixture(autouse=True)
-def _isolate_dispatch_state(monkeypatch):
-    """Give each test a clean `_RUNS` / `_DISPATCH_JOBS` /
-    `_DISPATCH_IDEMPOTENCY` slate.
+def _isolate_dispatch_state(monkeypatch, tmp_path):
+    """Point the app at a disposable orchestrator_runs DB and give each test a
+    clean `_DISPATCH_JOBS` / `_DISPATCH_IDEMPOTENCY` slate.
 
-    Also stubs out `_insert_run_row` -- `dispatch_worker`'s best-effort
-    `_log_dispatch_job_row` call writes real rows into the live production
-    `swaps.db` (`DB_PATH` is a module-level constant, not test-overridable
-    per-request) otherwise; every test in this file that POSTs to the
-    dispatch route was doing exactly that, which is how ~360 stray
-    `dashboard:worker:*` rows (run_id `test-dispatch-1`/`test-poll-1`)
-    ended up in the real DB and how 2 of them were collaterally deleted by
-    an unrelated cleanup query in an earlier session.
+    Phase 7 removed the in-memory `_RUNS` run registry, so dispatch_worker now
+    resolves its target run from the `orchestrator_runs` DB -- this fixture
+    migrates a tmp DB and monkeypatches `dashboard_app.DB_PATH` to it. Also
+    stubs `_insert_run_row` so dispatch's best-effort worker-audit write never
+    touches a real DB (same reason test_dispatch_poll.py did it).
     """
-    saved_runs = dict(dashboard_app._RUNS)
+    db_path = str(tmp_path / "dispatch.db")
+    migrate(db_path)
+    monkeypatch.setattr(dashboard_app, "DB_PATH", db_path)
+
     saved_jobs = dict(dashboard_app._DISPATCH_JOBS)
     saved_idem = dict(dashboard_app._DISPATCH_IDEMPOTENCY)
-    dashboard_app._RUNS.clear()
     dashboard_app._DISPATCH_JOBS.clear()
     dashboard_app._DISPATCH_IDEMPOTENCY.clear()
     monkeypatch.setattr(dashboard_app, '_insert_run_row', MagicMock(return_value=None))
 
     yield
 
-    dashboard_app._RUNS.clear()
-    dashboard_app._RUNS.update(saved_runs)
     dashboard_app._DISPATCH_JOBS.clear()
     dashboard_app._DISPATCH_JOBS.update(saved_jobs)
     dashboard_app._DISPATCH_IDEMPOTENCY.clear()
     dashboard_app._DISPATCH_IDEMPOTENCY.update(saved_idem)
 
 
-def _make_done_run(tmp_path, run_key='test-dispatch-1', with_results=True):
-    """A completed run in `_RUNS` with a real output_dir on disk, optionally
-    containing a quant_summary.json + one *_result.json (the evidence paths
-    the dispatch prompt is supposed to reference).
-    """
-    output_dir = tmp_path / run_key
+def _seed_run(status='ok', output_dir=None, run_type='dashboard:suite:vol',
+              focus=None, started='2026-08-01T00:00:00Z'):
+    """Insert one orchestrator_runs row and return its integer id."""
+    conn = sqlite3.connect(dashboard_app.DB_PATH)
+    try:
+        cur = conn.execute(
+            "INSERT INTO orchestrator_runs "
+            "(run_type, focus_json, started_at, completed_at, status, results_json) "
+            "VALUES (?, ?, ?, ?, ?, ?);",
+            (run_type, json.dumps(focus or {'ticker': 'NVDA'}), started, started,
+             status, json.dumps({'output_dir': output_dir} if output_dir else {})),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _make_done_run(tmp_path, status='ok', with_results=True):
+    """A completed run seeded as an orchestrator_runs row with a real
+    output_dir on disk, optionally containing a quant_summary.json + one
+    *_result.json (the evidence paths the dispatch prompt references)."""
+    output_dir = tmp_path / ('run-' + uuid.uuid4().hex[:8])
     output_dir.mkdir()
     if with_results:
-        (output_dir / 'quant_summary.json').write_text('{"schema_version": 1}', encoding='utf-8')
-        (output_dir / 'vol_result.json').write_text('{"status": "ok"}', encoding='utf-8')
-    dashboard_app._RUNS[run_key] = {
-        'status': 'ok', 'output_dir': str(output_dir),
-    }
+        (output_dir / 'quant_summary.json').write_text(
+            '{"schema_version": 1}', encoding='utf-8')
+        (output_dir / 'vol_result.json').write_text(
+            '{"status": "ok"}', encoding='utf-8')
+    run_key = _seed_run(status=status, output_dir=str(output_dir))
     return run_key, output_dir
 
 
@@ -184,20 +203,20 @@ class TestValidation:
         launch.assert_not_called()
 
     def test_running_run_returns_409_not_400(self, monkeypatch):
-        dashboard_app._RUNS['test-still-running'] = {'status': 'running'}
+        run_key = _seed_run(status='running')
         launch = _patch_launch(monkeypatch)
 
-        resp = client.post('/runs/test-still-running/dispatch/interpret',
+        resp = client.post(f'/runs/{run_key}/dispatch/interpret',
                            headers=AUTH_HEADERS, json={})
 
         assert resp.status_code == 409
         launch.assert_not_called()
 
     def test_queued_run_also_returns_409(self, monkeypatch):
-        dashboard_app._RUNS['test-still-queued'] = {'status': 'queued'}
+        run_key = _seed_run(status='queued')
         launch = _patch_launch(monkeypatch)
 
-        resp = client.post('/runs/test-still-queued/dispatch/interpret',
+        resp = client.post(f'/runs/{run_key}/dispatch/interpret',
                            headers=AUTH_HEADERS, json={})
 
         assert resp.status_code == 409

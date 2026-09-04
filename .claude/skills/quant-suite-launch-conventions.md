@@ -4,7 +4,7 @@ Not an invocable skill itself (no YAML frontmatter, by design) — a shared refe
 
 ## Which skill do I need?
 
-Debugging a suite you launched directly (`.bat`/`.sh` or its own `main.py`)? Read that suite's own skill: `var-tools`, `vol-suite`, `options-suite`, or `sentiment-scanner`. Debugging a run driven through `orchestrator.py`, `dashboard.bat`, or `tools.bat`? Read `tool-launcher` — it explains how each suite's own quirks (documented in their individual skills) surface as orchestrator-level PASS/FAIL verdicts, which is usually the more useful frame when the failure showed up from a `--unified`/`--suite` run rather than a direct launch.
+Debugging a suite you launched directly (`.bat`/`.sh` or its own `main.py`)? Read that suite's own skill: `var-tools`, `vol-suite`, `options-suite`, or `sentiment-scanner`. Debugging a module run driven in-process (via `shared.module_execution.run_selected_modules` or the dashboard's widget routes) or the dashboard `Tools/` layer? Read `tool-launcher` — it explains how each suite's own quirks (documented in their individual skills) surface as `ModuleResult` status/error verdicts, which is usually the more useful frame when a failure showed up from a widget/module run rather than a direct launch.
 
 Loaded by: `vol-suite`, `options-suite`, `var-tools`, `sentiment-scanner`, `tool-launcher`. Don't copy this content into those skills — link here instead, so a repo change only needs one edit.
 
@@ -18,15 +18,36 @@ Every launcher failure in this repo traces back to one of these three, and check
    - Port `4416` — sentiment-scanner's `bgutil` PO-token server (`http://127.0.0.1:4416/ping`), required only for YouTube caption transcripts. `sentiment.bat` auto-starts it from `C:\Users\bottl\bgutil-ytdlp-pot-provider\server\build\main.js` if it isn't already reachable. If that build output doesn't exist, the scanner still runs — it just silently skips YouTube captions, which shows up later as unexpectedly thin sentiment data, not as a launch error.
 3. **Stale environment variables.** `vol_suite.bat`, `options_suite.bat`, and `var.bat` each run `set PYTHONPATH=` and `set PYTHONHOME=` before invoking Python, to stop an unrelated "Hermes" venv from leaking into this repo's imports. `sentiment.bat` does the same. Verified: none of the four `.bat` files touch `PATH` itself — only `PYTHONPATH`/`PYTHONHOME` — despite `sentiment.bat`'s own comment claiming PATH is stripped too (that comment is stale; the code doesn't do it). If you're troubleshooting an import that's resolving to the wrong package, check these two env vars specifically, not PATH.
 
-## `orchestrator.bat` interactive-mode gotchas (added 2026-08-17)
+## Module-CLI / in-process run gotchas (Phase 7)
 
-`orchestrator.bat`'s interactive mode detects whether stdin is a real TTY by shelling out to PowerShell (`[console]::isInputRedirected()`). Two established fixes, both still present in current source, worth knowing before touching this file again:
-- **Don't add `2^>nul` (or similar batch-escaped stderr redirection) inside the PowerShell command string** — it was incorrectly added once and broke TTY detection outright; removed in `ab32828`, current `orchestrator.bat` calls `powershell -NoProfile -Command "[console]::isInputRedirected()"` with no redirection inside the quoted command.
-- **`orchestrator.py::run_suite` must inject `PYTHONPATH=ROOT` into the child env dict explicitly** (`env['PYTHONPATH'] = f"{ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"`, `orchestrator.py:873`) — child processes do NOT automatically see the repo root on their import path just by inheriting `os.environ.copy()`; this is what lets each suite's own `shared.*` imports resolve when launched as a child of the orchestrator (fixed `1c78cf8`).
+`orchestrator.py` survived Phase 7 only as the module-CLI shell (`--modules` /
+`--interactive`) plus `build_context` / `run_market_signals_stage` / `log_run` /
+DB helpers / the re-export shim of `shared.module_execution`. The old
+`orchestrator.bat`/`orchestrator.sh` subprocess launchers were removed
+2026-09-04, so:
+- **No child-interpreter PYTHONPATH injection is needed anymore.** The removed
+  `run_suite` had to inject `PYTHONPATH=ROOT` into each child's env so a
+  subprocess suite could resolve `shared.*`. Modules now run in the same process
+  that imports them, so this is moot — but only if you invoke the run from a
+  context where the repo root is on `sys.path` (import `shared.module_execution`
+  from the repo root, or run under the root `.venv` interpreter from the repo
+  root; see the "Flat cwd-relative imports" fragile surface in `CLAUDE.md`).
+- **Interactive mode still needs a real TTY** (`orchestrator.py --interactive`
+  fails cleanly with a CLI-flag fallback message otherwise) — same behaviour as
+  before, just without the `.bat` wrapper.
 
 ## The `suite_context.json` contract
 
-One run of any suite's unified/orchestrated flow writes `suite_context.json` into that run's output folder — a snapshot of what the run was about (ticker, expiry, basket, sentiment data, recommended strategies) that other suites/tools can consume without redoing the work. Schema lives in `Vol_Suite/suite_context.py`; consumers read it through `Tools/context_loader.py` (`list_available_contexts()`, `load_context(path)`), which re-validates against the same schema so a corrupt/half-written context fails immediately rather than confusing a downstream tool.
+A suite run still writes `suite_context.json` into that run's output folder — a
+snapshot of what the run was about (ticker, expiry, basket, sentiment data,
+recommended strategies) that other suites/tools can consume without redoing the
+work. Schema lives in `Vol_Suite/suite_context.py`; consumers read it through
+`Tools/context_loader.py` (`list_available_contexts()`, `load_context(path)`),
+which re-validates against the same schema so a corrupt/half-written context
+fails immediately rather than confusing a downstream tool. Separately, module
+`context_patch` values in the widget-native path are persisted to the Context
+Store (`shared/context_store.py`) keyed by scope rather than written into a
+shared object.
 
 Producer/consumer roles differ by suite:
 - **sentiment-scanner** is the producer for the sentiment block — it doesn't take `--context`/`--context-out` like the other three; it exposes `--export-context <path>` instead.

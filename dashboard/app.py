@@ -11,16 +11,12 @@ them:
   * runs            -> orchestrator.build_context / run_suite / run_unified,
                        durably logged by orchestrator.log_run into orchestrator_runs
 
-Run tracking is deliberately two-layer:
-
-  * orchestrator_runs (SQLite) is the durable record. The dashboard inserts its
-    own `dashboard:*` row per triggered run and updates it on completion; the
-    orchestrator additionally writes its own `suite:*` / `unified` rows from
-    inside log_run, so a single dashboard-triggered unified run shows up as one
-    `dashboard:unified` row plus the four `suite:*` rows it fanned out to.
-  * _RUNS (in-memory dict) is only for fast polling of in-flight runs, which is
-    what /runs/{run_id} reads first. It is intentionally not persisted -- if the
-    server restarts mid-run the DB row is the surviving truth.
+Runs are read-only history now (Phase 7): orchestration is synchronous and
+lives in the widget layer, which durably records each run via
+orchestrator.log_run into orchestrator_runs. The dashboard no longer launches
+or fast-polls runs -- it lists recent orchestrator_runs rows as history and
+dispatches historical-analysis workers (POST /runs/{run_id}/dispatch/{action})
+against completed runs.
 
 Everything degrades to an empty state rather than a 500: a cold swaps.db, an
 empty orchestrator_runs, or a suite that has never produced output all render.
@@ -37,14 +33,13 @@ import os
 import sqlite3
 import sys
 import threading
-import traceback
 import uuid
 from pathlib import Path
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, WebSocket
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -52,7 +47,6 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.concurrency import run_in_threadpool
-from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable
 
@@ -78,7 +72,6 @@ from dashboard import (
 )
 from dashboard.layouts import router as layouts_router
 from dashboard.quant_console_agent import router as quant_console_agent_router
-from dashboard.auth import get_client_ip
 from dashboard.output_runs import (
     SUITE_LABELS,
     build_file_view,
@@ -90,8 +83,6 @@ from dashboard.quant_modules import MODULE_REGISTRY
 from dashboard.widget_cache import WidgetCache
 from dashboard.worker_env import build_worker_env
 from shared.logging import setup_logging
-from shared.schemas import validate_quant_summary
-from shared.summary import build_run_summary
 from Tools.context_loader import list_available_contexts, load_context
 from Tools.registry import TOOLS, get_tool
 
@@ -682,7 +673,6 @@ def _orchestrator_runs(limit: int = 20) -> tuple[list[dict[str, Any]], str | Non
             if focus.get("strike") is not None:
                 bits.append(f"K={focus['strike']}")
             row["focus_summary"] = " ".join(bits) or "--"
-            row["live"] = row["id"] in _RUNS
         return raw, None
     except Exception as e:
         return [], f"{type(e).__name__}: {e}"
@@ -691,14 +681,15 @@ def _orchestrator_runs(limit: int = 20) -> tuple[list[dict[str, Any]], str | Non
 
 
 # --------------------------------------------------------------------------
-# run tracking
+# orchestrator_runs audit rows
+#
+# The dashboard no longer launches or fast-polls orchestrator runs (Phase 7):
+# orchestration is synchronous and lives in the widget layer. This file only
+# *reads* recent rows for the history list and *opens* the one row dispatch
+# (_log_dispatch_job_row) records per worker job. _insert_run_row is the
+# durable-row opener dispatch reuses; the old in-memory fast-poll registry and
+# the background run executor were removed along with run-triggering.
 # --------------------------------------------------------------------------
-
-_RUNS: dict[Any, dict[str, Any]] = {}
-_RUNS_LOCK = threading.Lock()
-_FALLBACK_SEQ = [0]
-
-RUN_KINDS = sorted(SUITE_ROOTS) + ["unified"]
 
 
 def _insert_run_row(
@@ -736,209 +727,6 @@ def _insert_run_row(
         return None
 
 
-def _finish_run_row(run_id: Any, status: str, results: Any, completed_at: str) -> None:
-    if not isinstance(run_id, int):
-        return
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        try:
-            conn.execute(
-                "UPDATE orchestrator_runs SET status = ?, results_json = ?, "
-                "completed_at = ? WHERE id = ?;",
-                (status, json.dumps(results, default=str), completed_at, run_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        print(
-            f"  [dashboard] WARNING: could not close run row {run_id}: {e}",
-            file=sys.stderr,
-        )
-
-
-def _set_run(key: Any, **fields: Any) -> None:
-    """Merge fields into the in-memory record for a run (fast-poll layer)."""
-    with _RUNS_LOCK:
-        entry = _RUNS.setdefault(key, {})
-        entry.update(fields)
-
-
-def _write_quant_summary(output_dir: str | None, run_id: Any, ticker: Any) -> None:
-    """Build and atomically write `quant_summary.json` into *output_dir*.
-
-    Called at the very end of `_execute_run()`, after the run's own
-    status/result have already been recorded (`_set_run` + `_finish_run_row`
-    above) -- a failure in here must never mask or overwrite those, so every
-    failure mode below is caught and logged, never raised or re-raised. This
-    establishes the temp-file + `os.replace` atomic-write pattern Phase 2's
-    worker reports (plan Task 12) are meant to reuse.
-
-    A falsy/missing *output_dir* (e.g. `orchestrator.build_context()` itself
-    raised before any directory existed) is a silent no-op: there is nothing
-    on disk to summarize, which is different from "the suite ran and failed"
-    (that case still has an output_dir with zero-or-more marker files in it,
-    and still gets a schema-valid, empty-`modules`-if-nothing-else summary).
-    """
-    if not output_dir or not os.path.isdir(output_dir):
-        return
-
-    try:
-        summary = build_run_summary(
-            output_dir, run_id=str(run_id), ticker=str(ticker or "")
-        )
-        validate_quant_summary(summary)
-    except Exception as e:
-        print(
-            f"  [dashboard] WARNING: could not build quant_summary for run "
-            f"{run_id!r}: {type(e).__name__}: {e}",
-            file=sys.stderr,
-        )
-        return
-
-    summary_path = os.path.join(output_dir, "quant_summary.json")
-    tmp_path = f"{summary_path}.tmp-{os.getpid()}-{threading.get_ident()}"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2, default=str)
-            f.write("\n")
-        os.replace(tmp_path, summary_path)
-    except Exception as e:
-        print(
-            f"  [dashboard] WARNING: could not write quant_summary.json for "
-            f"run {run_id!r}: {type(e).__name__}: {e}",
-            file=sys.stderr,
-        )
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except OSError:
-            pass
-
-
-def _execute_run(
-    run_id: Any,
-    kind: str,
-    focus: dict[str, Any],
-    modules: list[str] | None = None,
-) -> None:
-    """Background worker. Sync on purpose: BackgroundTasks hands a `def` to the
-    threadpool, and run_suite/run_unified are blocking subprocess drivers that
-    would stall the event loop for up to the 1800s child timeout.
-
-    `modules`, when non-None (even if empty -- see `trigger_run`), routes to
-    `orchestrator.run_selected_modules` instead of the existing run_suite/
-    run_unified dispatch below -- a new, additive path (Task 2 of the
-    modularization overhaul). `modules is None` (the default, and what every
-    existing caller passes) leaves this function's behavior byte-identical to
-    before that path existed.
-    """
-    _set_run(run_id, status="running", started_at=_iso_utc_now())
-    output_dir: str | None = None
-    try:
-        if modules is not None:
-            context = orchestrator.build_context(focus)
-            output_dir = context.get("output_dir")
-            _set_run(
-                run_id, output_dir=output_dir, orchestrator_run_id=context.get("run_id")
-            )
-            result = orchestrator.run_selected_modules(modules, context)
-            status = result.get("status", "ok")
-        elif kind == "unified":
-            # run_unified builds (and re-validates) the context itself.
-            result = orchestrator.run_unified(focus)
-            status = result.get("status", "ok")
-            output_dir = result.get("output_dir")
-        else:
-            context = orchestrator.build_context(focus)
-            output_dir = context.get("output_dir")
-            _set_run(
-                run_id, output_dir=output_dir, orchestrator_run_id=context.get("run_id")
-            )
-            timeout = int(focus.get("timeout") or orchestrator.DEFAULT_TIMEOUT_SEC)
-            result = orchestrator.run_suite(kind, context, timeout=timeout)
-            status = "error" if "error" in result else "ok"
-    except Exception as e:
-        result = {
-            "error": f"{type(e).__name__}: {e}",
-            "traceback": traceback.format_exc()[-4000:],
-        }
-        status = "error"
-
-    completed_at = _iso_utc_now()
-    _set_run(run_id, status=status, result=result, completed_at=completed_at)
-    _finish_run_row(run_id, status, result, completed_at)
-
-    # quant_summary.json is best-effort scaffolding on top of a run that has
-    # already fully recorded its own status/result above -- a summary-build
-    # failure must never retroactively change what the run itself reported.
-    _write_quant_summary(output_dir, run_id, focus.get("ticker"))
-
-
-def _focus_from_body(body: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    """Build orchestrator's `focus` dict from a JSON/form body.
-
-    Mirrors orchestrator._focus_from_args: expiry wins, otherwise target_years,
-    because build_context requires expiration_date and/or target_years.
-    """
-    ticker = str(body.get("ticker") or "").strip().upper()
-    if not ticker:
-        return {}, "ticker is required"
-
-    focus: dict[str, Any] = {
-        "ticker": ticker,
-        "option_type": str(body.get("option_type") or "call").lower(),
-    }
-    if focus["option_type"] not in ("call", "put"):
-        return {}, "option_type must be 'call' or 'put'"
-
-    strike = body.get("strike")
-    if strike not in (None, ""):
-        try:
-            focus["strike"] = float(strike)
-        except (TypeError, ValueError):
-            return {}, f"strike must be numeric, got {strike!r}"
-    else:
-        focus["strike"] = None
-
-    expiry = str(body.get("expiry") or body.get("expiration_date") or "").strip()
-    if expiry:
-        focus["expiration_date"] = expiry
-    else:
-        try:
-            focus["target_years"] = float(body.get("target_years") or 0.25)
-        except (TypeError, ValueError):
-            return {}, "target_years must be numeric"
-
-    index = str(body.get("index") or body.get("index_ticker") or "").strip()
-    if index:
-        focus["index_ticker"] = index.upper()
-
-    # Optional VaR horizon override; orchestrator falls back to 252 days when
-    # absent. Accepts 'horizon_days' as a fallback alias for 'var_horizon_days'
-    # so a form field named either way still reaches build_context.
-    horizon = body.get("var_horizon_days")
-    if horizon in (None, ""):
-        horizon = body.get("horizon_days")
-    if horizon not in (None, ""):
-        try:
-            horizon = int(horizon)
-        except (TypeError, ValueError):
-            return {}, "var_horizon_days must be an integer"
-        if horizon <= 0:
-            return {}, "var_horizon_days must be a positive integer"
-        focus["var_horizon_days"] = horizon
-
-    try:
-        focus["timeout"] = int(body.get("timeout") or orchestrator.DEFAULT_TIMEOUT_SEC)
-    except (TypeError, ValueError):
-        return {}, "timeout must be an integer"
-
-    compile_pdf = body.get("compile_pdf")
-    focus["compile_pdf"] = str(compile_pdf).lower() in ("1", "true", "on", "yes")
-    return focus, None
-
-
 async def _parse_body(request: Request) -> dict[str, Any]:
     """JSON or urlencoded, without pulling in python-multipart."""
     content_type = (request.headers.get("content-type") or "").lower()
@@ -960,61 +748,6 @@ async def _parse_body(request: Request) -> dict[str, Any]:
     return {k: v for k, v in request.query_params.items()}
 
 
-# --------------------------------------------------------------------------
-# suite output discovery
-# --------------------------------------------------------------------------
-
-ORCH_OUTPUT = os.path.join(ROOT, "orchestrator_output")
-
-# --------------------------------------------------------------------------
-# WS /suites/{suite}/live -- log-tail for continuous (loop-mode) processes
-# (Task 13 of the quant-console plan). Concretely: sentiment-scanner run
-# without --no-loop, per CLAUDE.md/the design spec's Phase 3 section.
-#
-# The brief for this task says to reuse "the same way job logs already are
-# redirected to a file elsewhere in this codebase" -- verified before writing
-# this route that no such file-based convention actually exists today:
-# orchestrator.run_suite/run_unified (orchestrator.py) and dispatch workers
-# (job_object.run_with_job_object, Task 10) both capture subprocess stdout
-# in-memory via subprocess.PIPE + .communicate(), never to a file. This is
-# therefore the smallest new convention, not a reused one: one rolling log
-# file per suite name under LIVE_LOG_DIR, written by whatever eventually
-# launches that suite's continuous process with
-# `stdout=open(_live_log_path(suite), 'a')` (that launch wiring is out of
-# this task's scope -- Task 13 only tails).
-LIVE_LOG_DIR = os.path.join(ORCH_OUTPUT, "live")
-
-# suite -> Popen-shaped object (anything exposing .poll(), matching
-# subprocess.Popen/job_object.JobObjectProcess) believed to currently be
-# writing that suite's live log file. Nothing in this repo populates this
-# yet (no continuous-process launcher is wired up -- out of this task's
-# scope); it exists so this route has a way to tell "writer exited, stop
-# tailing" apart from "still running" once that launcher is added, and so
-# tests can exercise that disconnect path without a real subprocess. A
-# missing entry means "no tracked writer" -- the route keeps tailing rather
-# than assuming the process is dead.
-_LIVE_WRITERS: dict[str, Any] = {}
-
-_LIVE_POLL_INTERVAL_SEC = 0.1
-
-
-def _live_log_path(suite: str) -> str:
-    return os.path.join(LIVE_LOG_DIR, f"{suite}.log")
-
-
-def _live_writer_exited(suite: str) -> bool:
-    """True only if a writer is actually tracked for *suite* and it has
-    exited. No tracked writer -> False (keep tailing; see _LIVE_WRITERS)."""
-    proc = _LIVE_WRITERS.get(suite)
-    if proc is None:
-        return False
-    try:
-        return proc.poll() is not None
-    except Exception:
-        return False
-
-
-# --------------------------------------------------------------------------
 # routes
 # --------------------------------------------------------------------------
 
@@ -1250,116 +983,16 @@ def widget_archived(module_slug: str):
         return {"error": str(exc)}
 
 
-@app.post("/run/{suite_or_unified}")
-@limiter.limit("1/60s")  # Max 1 run per 60 seconds per IP
-async def trigger_run(
-    suite_or_unified: str, request: Request, background_tasks: BackgroundTasks
-):
-    """Kick off run_suite(<name>, ...) or run_unified(...) in the background.
+def _lookup_run(run_id: str) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve one orchestrator_runs row by id (the runs history table).
 
-    No auth -- this dashboard is localhost-only, single-user (see
-    dashboard/auth.py). Returns immediately with a run_id -- these take up to
-    orchestrator.DEFAULT_TIMEOUT_SEC (1800s) per child, so the response cannot
-    wait on the result. Poll GET /runs/{run_id}.
-    """
-    kind = suite_or_unified.strip().lower()
-    if kind not in RUN_KINDS:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": f"unknown target {suite_or_unified!r}",
-                "expected": RUN_KINDS,
-            },
-        )
-
-    body = await _parse_body(request)
-    focus, error = _focus_from_body(body)
-    if error:
-        return JSONResponse(status_code=400, content={"error": error})
-
-    # Task 2 of the modularization overhaul: an optional `modules` list in the
-    # POST body routes to orchestrator.run_selected_modules instead of the
-    # existing run_suite/run_unified dispatch. Absent or empty -> None, which
-    # leaves _execute_run's existing dispatch completely unchanged.
-    raw_modules = body.get("modules")
-    modules: list[str] | None = None
-    if isinstance(raw_modules, list) and raw_modules:
-        modules = [str(slug).strip() for slug in raw_modules if str(slug).strip()]
-        if not modules:
-            modules = None
-
-    if not os.path.exists(orchestrator.SHARED_PYTHON):
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": f"shared interpreter not found: {orchestrator.SHARED_PYTHON}"
-            },
-        )
-
-    started_at = _iso_utc_now()
-    client_ip = get_client_ip(request)
-    run_type = "dashboard:unified" if kind == "unified" else f"dashboard:suite:{kind}"
-
-    # Include client_ip in focus for audit trail
-    focus["_client_ip"] = client_ip
-
-    run_id: Any = _insert_run_row(run_type, focus, started_at)
-    if run_id is None:
-        # DB unavailable -- still runnable, just not durably recorded.
-        with _RUNS_LOCK:
-            _FALLBACK_SEQ[0] += 1
-            run_id = f"mem-{_FALLBACK_SEQ[0]}"
-
-    _set_run(
-        run_id,
-        run_id=run_id,
-        kind=kind,
-        run_type=run_type,
-        focus=focus,
-        status="queued",
-        queued_at=started_at,
-        started_at=None,
-        completed_at=None,
-        result=None,
-        persisted=isinstance(run_id, int),
-    )
-
-    background_tasks.add_task(_execute_run, run_id, kind, focus, modules)
-
-    return JSONResponse(
-        status_code=202,
-        content={
-            "run_id": run_id,
-            "kind": kind,
-            "run_type": run_type,
-            "status": "queued",
-            "focus": focus,
-            "poll": f"/runs/{run_id}",
-            "persisted": isinstance(run_id, int),
-        },
-    )
-
-
-def _lookup_run(
-    run_id: str,
-) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
-    """Shared in-memory-then-DB run lookup.
-
-    Used by `GET /runs/{run_id}`, `GET /runs/{run_id}/summary`, and
-    `POST /runs/{run_id}/dispatch/{action}` (Task 9 of the quant-console
-    plan) -- extracted here per that task's own instruction not to
-    duplicate this lookup a third time.
-
-    Returns `(key, live, row)`: `key` is `run_id` coerced to `int` when it
-    looks like one (matching the fallback in-memory id scheme used when the
-    DB is unavailable), `live` is the in-memory `_RUNS` entry (or `None`),
-    `row` is the full `orchestrator_runs` row (or `None`) -- individually
-    `None` if not found there; both `None` together means "no such run".
-    """
+    Phase 7: the former in-memory fast-poll run registry is gone, so there is no
+    "live" layer anymore -- dispatch (POST /runs/{run_id}/dispatch/{action})
+    operates on completed historical rows. Returns `(key, live, row)` with
+    `live` always None and `row` the full orchestrator_runs row (or None);
+    keeping the 3-tuple so the retained dispatch caller needs no churn.
+    A non-integer run_id (not a DB row) resolves to `(key, None, None)`."""
     key: Any = int(run_id) if run_id.lstrip("-").isdigit() else run_id
-    with _RUNS_LOCK:
-        live = dict(_RUNS.get(key, {})) if key in _RUNS else None
-
     row: dict[str, Any] | None = None
     if isinstance(key, int):
         conn = _db()
@@ -1375,59 +1008,19 @@ def _lookup_run(
                 row = None
             finally:
                 conn.close()
-    return key, live, row
-
-
-@app.get("/runs/{run_id}")
-def run_status(run_id: str):
-    """In-memory state first (in-flight runs), orchestrator_runs second."""
-    key, live, row = _lookup_run(run_id)
-
-    if live is None and row is None:
-        return JSONResponse(status_code=404, content={"error": f"no run {run_id!r}"})
-
-    payload: dict[str, Any] = {"run_id": key, "source": "memory" if live else "db"}
-
-    if row:
-        for field in ("run_type", "started_at", "completed_at", "status"):
-            payload[field] = row.get(field)
-        for src, dst in (("focus_json", "focus"), ("results_json", "result")):
-            try:
-                payload[dst] = json.loads(row.get(src) or "null")
-            except Exception:
-                payload[dst] = row.get(src)
-
-    if live:
-        payload["status"] = live.get("status", payload.get("status"))
-        payload["kind"] = live.get("kind")
-        payload["focus"] = live.get("focus", payload.get("focus"))
-        payload["queued_at"] = live.get("queued_at")
-        payload["started_at"] = live.get("started_at") or payload.get("started_at")
-        payload["completed_at"] = live.get("completed_at") or payload.get(
-            "completed_at"
-        )
-        if live.get("output_dir"):
-            payload["output_dir"] = live["output_dir"]
-        if live.get("result") is not None:
-            payload["result"] = live["result"]
-
-    payload["done"] = payload.get("status") not in ("queued", "running")
-    return JSONResponse(content=json.loads(json.dumps(payload, default=str)))
+    return key, None, row
 
 
 def _summary_output_dir(
     live: dict[str, Any] | None, row: dict[str, Any] | None
 ) -> str | None:
-    """Best-effort output_dir for a run, same live-then-db precedence as
-    run_status() above.
+    """Best-effort output_dir for a run.
 
-    `live['output_dir']` is set directly for suite-kind runs (`_execute_run`);
-    a unified run's own result dict carries `output_dir` instead, so that's
-    checked next. Falls back to `results_json.output_dir` from the durable
-    orchestrator_runs row for a unified run the in-memory registry no longer
-    knows about (e.g. after a dashboard restart) -- there is currently no
-    equivalent fallback for a restarted suite-kind run, since its DB row's
-    results_json is the raw suite result, which does not carry output_dir.
+    With the run fast-poll registry removed (Phase 7) `live` is always None
+    here, so this reads `output_dir` from the durable orchestrator_runs row's
+    `results_json`. Dispatch (the sole remaining caller) resolves completed
+    historical rows via `_lookup_run`, so `row.results_json.output_dir` is
+    what points a worker at the run's on-disk evidence files.
     """
     if live and live.get("output_dir"):
         return live["output_dir"]
@@ -1445,64 +1038,6 @@ def _summary_output_dir(
         if isinstance(results, dict) and results.get("output_dir"):
             return results["output_dir"]
     return None
-
-
-@app.get("/runs/{run_id}/summary")
-def run_summary(run_id: str):
-    """`quant_summary.json` for a completed run (Task 4 of the quant-console
-    plan) -- reads and schema-validates the file `_execute_run()` wrote via
-    `_write_quant_summary()`.
-
-    404 covers three distinct "not ready" cases, distinguished only by
-    message (the status code stays 404 for all three, matching run_status()'s
-    own not-done semantics rather than inventing a new code): unknown run_id,
-    a run that exists but is still queued/running, and a done run with no
-    output_dir/summary file on disk yet (or ever, e.g. a run that crashed
-    before build_context() produced one). A summary file that exists but
-    fails validate_quant_summary is a 500, not a 404 -- that is a writer bug,
-    not a "come back later" state, and must not be served to the module-card
-    UI as if it were trustworthy.
-    """
-    key, live, row = _lookup_run(run_id)
-
-    if live is None and row is None:
-        return JSONResponse(status_code=404, content={"error": f"no run {run_id!r}"})
-
-    run_status_value = (live or {}).get("status") or (row or {}).get("status")
-    if run_status_value in ("queued", "running"):
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": f"run {run_id!r} is not done yet (status={run_status_value!r})",
-            },
-        )
-
-    output_dir = _summary_output_dir(live, row)
-    summary_path = (
-        os.path.join(output_dir, "quant_summary.json") if output_dir else None
-    )
-    if not summary_path or not os.path.isfile(summary_path):
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": f"no quant_summary.json for run {run_id!r}",
-            },
-        )
-
-    try:
-        with open(summary_path, "r", encoding="utf-8-sig") as f:
-            summary = json.load(f)
-        validate_quant_summary(summary)
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": f"quant_summary.json for run {run_id!r} failed validation: "
-                f"{type(e).__name__}: {e}",
-            },
-        )
-
-    return JSONResponse(content=summary)
 
 
 # --------------------------------------------------------------------------
@@ -1554,14 +1089,13 @@ DISPATCH_DISALLOWED_TOOLS: dict[str, str] = {
 # before spawning; over-cap is a 429, not a silent queue.
 MAX_CONCURRENT_DISPATCH_JOBS = 2
 
-# In-memory dispatch-job registry -- same "_RUNS-style" fast-poll pattern
-# as orchestrator jobs (see module docstring at the top of this file),
-# deliberately not persisted: a server restart mid-dispatch loses live
-# polling state, same tradeoff _RUNS already makes for suite/orchestrator
-# runs. Keyed by job_id (a uuid4 hex string), distinct from run_id's
-# namespace so Task 12's GET /runs/{run_id}/dispatch/{job_id} can address
-# a dispatch job independently of the analysis run it was dispatched
-# against.
+# In-memory dispatch-job registry -- the dashboard's only remaining live
+# process-tracking store (kept: dispatched analysis workers are still
+# asynchronous). Deliberately not persisted: a server restart mid-dispatch
+# loses live polling state. Keyed by job_id (a uuid4 hex string), distinct
+# from run_id's namespace so Task 12's GET /runs/{run_id}/dispatch/{job_id}
+# can address a dispatch job independently of the analysis run it was
+# dispatched against.
 _DISPATCH_JOBS: dict[str, dict[str, Any]] = {}
 _DISPATCH_LOCK = threading.Lock()
 
@@ -1635,8 +1169,8 @@ def _count_active_dispatch_jobs() -> int:
 
 
 def _watch_dispatch_job(job_id: str) -> None:
-    """Background worker (BackgroundTasks, same fire-and-forget pattern as
-    `_execute_run`): blocks on the dispatched worker's `proc.communicate()`
+    """Background worker (BackgroundTasks, same fire-and-forget pattern as the
+    former run executor): blocks on the dispatched worker's `proc.communicate()`
     until it exits -- either normally, or because
     `job_object.JobObjectProcess`'s own internal watchdog killed the whole
     job for exceeding its per-action timeout (Task 10) -- then records the
@@ -1694,15 +1228,14 @@ def _watch_dispatch_job(job_id: str) -> None:
 
     # Best-effort worker-report write (Task 12) -- happens after the
     # in-memory job record above is already fully updated, same ordering
-    # posture `_write_quant_summary` uses relative to a run's own status/
-    # result (a report-write failure must never mask or overwrite job status).
+    # posture the run's summary write used relative to its own status/result
+    # (a report-write failure must never mask or overwrite job status).
     if job_snapshot is not None:
         _write_worker_report(job_snapshot)
 
 
-#: Max chars of stdout returned by the poll route below -- mirrors the
-#: `traceback.format_exc()[-4000:]` truncation `_execute_run` already uses,
-#: same rationale: a "tail" for a status display, not the full transcript.
+#: Max chars of stdout returned by the poll route below -- a tail for a status
+#: display, not the full transcript.
 DISPATCH_STDOUT_TAIL_CHARS = 4000
 
 
@@ -1731,8 +1264,7 @@ def _write_worker_report(job: dict[str, Any]) -> None:
     """Atomically write a finished dispatch job's structured report,
     `orchestrator_output/<run_id>/quant_worker_<action>_<job_id>.json`
     (design spec Phase 2 point 5), reusing the exact temp-file + `os.replace`
-    pattern `_write_quant_summary` established (Task 4) -- avoids a
-    half-written file being read mid-poll.
+    atomic-write pattern -- avoids a half-written file being read mid-poll.
 
     Called from `_watch_dispatch_job` immediately after it records the job's
     final status, with a snapshot of that job dict. Best-effort and never
@@ -1791,8 +1323,7 @@ def _log_dispatch_job_row(
     `dashboard:worker:{action}` (spec Phase 2 point 3) -- reuses the
     existing free-form `run_type` column, no migration needed. Never
     raises: a logging failure here must not block dispatch, the same
-    posture `_write_quant_summary` already established for its own
-    best-effort write.
+    best-effort posture other audit writes in this file use.
     """
     try:
         _insert_run_row(
@@ -2321,11 +1852,10 @@ def quant_console(request: Request):
     """Quant Console module-card view (Task 6 of the quant-console plan).
 
     One card per `dashboard.quant_modules.MODULE_REGISTRY` entry -- this
-    route only serves that static list plus the shell markup; everything
-    dynamic (triggering a run, polling it, fetching its summary) happens
-    client-side against the *existing* `POST /run/{suite_or_unified}`,
-    `GET /runs/{run_id}`, and `GET /runs/{run_id}/summary` (Task 4) endpoints.
-    No new job-tracking backend, per the design spec's Phase 1 section.
+    route serves that list plus the shell markup. Run triggering/polling now
+    happens through the synchronous generic widget API (POST
+    /api/widgets/{slug}/run, /api/widgets/{slug}/state); the old dashboard
+    run-launch and run-tracking routes were removed in Phase 7.
 
     Also carries `alerts` (Task 15's pending `quant_alerts` rows) and
     `alert_status` (the last-checked heartbeat) into the template.
@@ -2341,27 +1871,6 @@ def quant_console(request: Request):
             "alert_status": _read_alert_status(),
         },
     )
-
-
-def _active_run_banner(suite_key: str) -> dict[str, Any] | None:
-    """The most recently started queued/running run tracked in _RUNS that's
-    relevant to `suite_key` -- either a suite-kind run for this exact suite,
-    or a unified run (which touches every suite). Reuses the existing
-    _RUNS/GET-/runs/{run_id} polling infrastructure Quant Console already
-    established (3s client-side poll) -- deliberately NOT the
-    /suites/{suite}/live WebSocket, since nothing in this repo currently
-    writes to the log file it tails (see that route's own comments)."""
-    with _RUNS_LOCK:
-        candidates = [
-            dict(entry)
-            for entry in _RUNS.values()
-            if entry.get("status") in ("queued", "running")
-            and entry.get("kind") in (suite_key, "unified")
-        ]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda e: e.get("started_at") or "", reverse=True)
-    return candidates[0]
 
 
 @app.get("/suites/{suite}", response_class=HTMLResponse)
@@ -2439,7 +1948,7 @@ def suite_output(request: Request, suite: str, run_id: str | None = None):
             "run": run,
             "file_views": file_views,
             "grouped_file_views": grouped_file_views,
-            "active_run_banner": _active_run_banner(key),
+            "active_run_banner": None,
             "error": error,
             "suites": SUITE_LABELS,
         },
@@ -2466,91 +1975,6 @@ def suite_asset(suite: str, run_id: str, rel_path: str):
         raise HTTPException(status_code=404, detail="file not part of this run")
 
     return FileResponse(match.abs_path)
-
-
-@app.websocket("/suites/{suite}/live")
-async def suite_live_log(websocket: WebSocket, suite: str) -> None:
-    """Tails `_live_log_path(suite)` (see LIVE_LOG_DIR above) and streams
-    new lines to the client as they're written. No auth -- this dashboard
-    is localhost-only, single-user (see dashboard/auth.py); nothing on it
-    requires an API key.
-
-    Two ways this closes cleanly, both exercised by
-    dashboard/tests/test_live_ws.py:
-      - the client disconnects (detected via a background `receive_text()`
-        task -- Starlette raises WebSocketDisconnect on that call once the
-        client's close frame is delivered; the tail loop itself only ever
-        *sends*, so it wouldn't otherwise notice a disconnect promptly);
-      - the tracked writer process (`_LIVE_WRITERS`) has exited -- the
-        route drains whatever's left in the file, then returns.
-
-    Polling-based, not inotify/watchdog -- matches this codebase's existing
-    preference for simple stdlib mechanisms over new dependencies, and the
-    per-suite log volume here (occasional scanner output lines) doesn't
-    warrant more.
-    """
-    await websocket.accept()
-
-    key = suite.strip().lower()
-    if key not in SUITE_LABELS:
-        await websocket.close(code=1008, reason=f"unknown suite {suite!r}")
-        return
-
-    path = _live_log_path(key)
-    disconnected = asyncio.Event()
-
-    async def _watch_for_disconnect() -> None:
-        try:
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            disconnected.set()
-        except Exception:
-            disconnected.set()
-
-    watcher = asyncio.create_task(_watch_for_disconnect())
-    pre_existing = os.path.exists(path)
-    try:
-        while not disconnected.is_set() and not os.path.exists(path):
-            if _live_writer_exited(key):
-                return
-            await asyncio.sleep(_LIVE_POLL_INTERVAL_SEC)
-
-        if disconnected.is_set():
-            return
-
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            # Only skip existing content when the file predates this
-            # connection (resuming an already-running writer's log). If the
-            # file appeared while we were waiting for it, nothing has been
-            # shown to this client yet -- read from the start, or the first
-            # line written before our next poll tick would be silently lost.
-            if pre_existing:
-                f.seek(0, os.SEEK_END)
-            while not disconnected.is_set():
-                line = f.readline()
-                if line:
-                    try:
-                        await websocket.send_text(line.rstrip("\n"))
-                    except Exception:
-                        return
-                    continue
-                if _live_writer_exited(key):
-                    remainder = f.read()
-                    for rem_line in remainder.splitlines():
-                        try:
-                            await websocket.send_text(rem_line)
-                        except Exception:
-                            return
-                    return
-                await asyncio.sleep(_LIVE_POLL_INTERVAL_SEC)
-    finally:
-        watcher.cancel()
-        with contextlib.suppress(Exception):
-            await watcher
-        with contextlib.suppress(Exception):
-            if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.close(code=1000)
 
 
 # --------------------------------------------------------------------------
@@ -3362,15 +2786,26 @@ async def tools_generic_run(slug: str, request: Request):
 
 @app.get("/health")
 def health():
+    in_flight: list[Any] = []
+    conn = _db()
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                "SELECT id FROM orchestrator_runs "
+                "WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 50;"
+            ).fetchall()
+            in_flight = [r["id"] for r in rows]
+        except Exception:
+            in_flight = []
+        finally:
+            conn.close()
     return {
         "ok": True,
         "db_path": DB_PATH,
         "db_exists": os.path.exists(DB_PATH),
         "shared_python": orchestrator.SHARED_PYTHON,
         "shared_python_exists": os.path.exists(orchestrator.SHARED_PYTHON),
-        "in_flight": [
-            k for k, v in _RUNS.items() if v.get("status") in ("queued", "running")
-        ],
+        "in_flight": in_flight,
         "available_data_sources": orchestrator.discover_adapters(),
     }
 

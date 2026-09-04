@@ -24,7 +24,7 @@
         {% for k, v in view.pairs %}
           {% if k == 'run_id' %}
             <p class="small" style="margin-top:10px;">
-              <a href="/runs/{{ v }}/summary">Raw Quant Summary (JSON) &rarr;</a>
+              <a href="/suites/{{ suite }}/asset?run_id={{ run.run_id }}&rel_path={{ f.rel_path | urlencode }}" target="_blank">Raw Quant Summary (JSON) &rarr;</a>
             </p>
           {% endif %}
         {% endfor %}
@@ -95,17 +95,6 @@
   </div>
 </div>
 
-{% if active_run_banner %}
-<div class="panel banner-live" id="live-banner" data-run-id="{{ active_run_banner.run_id }}">
-  <div class="body">
-    <span class="pill running">{{ active_run_banner.status }}</span>
-    a <strong>{{ active_run_banner.kind }}</strong> run is in progress
-    {% if active_run_banner.started_at %}(started {{ active_run_banner.started_at | ts }} UTC){% endif %}
-    -- this page will refresh automatically when it finishes.
-  </div>
-</div>
-{% endif %}
-
 {% if error %}<div class="errbox">{{ error }}</div>{% endif %}
 
 {% if not runs %}
@@ -113,7 +102,7 @@
     <div class="empty">
       <strong>Nothing produced yet.</strong><br>
       No run found on disk for {{ suites.get(suite, suite) }}.<br>
-      <span class="small">Trigger a run from the <a href="/">overview page</a>; output shows up here once it writes something.</span>
+      <span class="small">Output from runs launched via the Quant Console widgets appears here once it writes files.</span>
     </div>
   </div></div>
 {% elif run %}
@@ -157,32 +146,5 @@
       {{ filecard(f, view, suite, run) }}
     {% endfor %}
   {% endif %}
-{% endif %}
-{% endblock %}
-
-{% block scripts %}
-{% if active_run_banner %}
-<script>
-// No framework, no CDN -- matches quant.html's own polling script (same
-// 3s interval, same GET /runs/{run_id} endpoint this dashboard already
-// established for watching an in-flight run to completion).
-(function () {
-  var banner = document.getElementById('live-banner');
-  if (!banner) return;
-  var runId = banner.getAttribute('data-run-id');
-
-  function tick() {
-    fetch('/runs/' + encodeURIComponent(runId))
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.status && data.status !== 'queued' && data.status !== 'running') {
-          window.location.reload();
-        }
-      })
-      .catch(function () { /* transient fetch error -- just try again next tick */ });
-  }
-  setInterval(tick, 3000);
-})();
-</script>
 {% endif %}
 {% endblock %}

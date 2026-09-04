@@ -94,14 +94,18 @@ Follow the deployment guide in `DEPLOY.md` under "Multi-source analytics".
 
 ### Command Line
 
-Run a unified analysis over multiple sources:
+Run the module-execution path with multi-source data enabled (the old
+`orchestrator.py --unified`/`--suite` subprocess launcher, removed 2026-09-04;
+analysis modules now run in-process via
+`shared.module_execution`):
 
 ```bash
-# Orchestrator discovers sources from DATA_SOURCES env var
-DATA_SOURCES=DTCC,CME python orchestrator.py \
-    --unified --ticker MSFT --target-years 0.25
+# DATA_SOURCES drives which adapters ingest; then run modules in-process
+DATA_SOURCES=DTCC,CME .venv\Scripts\python.exe -c \
+  "import shared.module_execution as me; me.run_selected_modules(['chain_scanner'], {'ticker':'MSFT','target_years':0.25})"
 
-# Or use run_unified_sources() from Python:
+# Or, for the multi-source ingest + unified cross-source aggregation flow, use
+# run_unified_sources() from Python (cross-source ingestion, not a subprocess):
 from orchestrator import run_unified_sources
 
 result = run_unified_sources(
@@ -203,10 +207,12 @@ export DATA_SOURCES=DTCC,MYSOURCE
 
 ### Step 3: Test
 
-The orchestrator will automatically discover and use the adapter:
+`DATA_SOURCES` drives which adapters are enabled and discovered. Then run a
+module to exercise the data (the `--unified`/`--suite` CLI, removed 2026-09-04):
 
 ```bash
-python orchestrator.py --unified --ticker MSFT --target-years 0.25
+DATA_SOURCES=DTCC,MYSOURCE .venv\Scripts\python.exe -c \
+  "import shared.module_execution as me; me.run_selected_modules(['chain_scanner'], {'ticker':'MSFT'})"
 ```
 
 ## Monitoring

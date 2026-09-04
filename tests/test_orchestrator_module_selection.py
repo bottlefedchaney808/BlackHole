@@ -1,18 +1,24 @@
 """test_orchestrator_module_selection.py
 
-Covers Task 2 of the modularization overhaul (`.superpowers/sdd/task-2-brief.md`):
-`orchestrator.py::run_selected_modules`, a new, additive execution path over
-`shared/module_registry.py`'s registry contract (Task 1), parallel to (never
-calling, never called by) the existing `run_suite`/`run_unified` functions.
+Covers the module-execution path that survives Phase 7 (retire orchestrator
+launching machinery): `run_selected_modules` over `shared/module_registry.py`'s
+registry contract. Phase 7 relocated `run_selected_modules` /
+`_expand_module_requires` / `_topo_sort_modules` verbatim into
+`shared/module_execution.py`; orchestrator.py re-exports them, so every test
+here monkeypatches `all_modules`/`resolve_modules`/`_archive_module_result` on
+the orchestrator namespace exactly as before -- the relocation shim keeps those
+patches effective.
 
-Task 1's own registries are still empty (all four suites' `MODULES` lists are
-`[]`), so every test here injects stub `ModuleSpec` objects directly --
-matching the pattern `tests/test_module_registry.py`'s own cycle-detection
-placeholder test used -- rather than relying on real suite modules.
+The invariant these tests encode -- the module-execution path does NOT call
+`run_suite`/`run_unified` (both removed by Phase 7) -- still applies to the
+surviving in-process run path (`shared.module_execution.run_selected_modules`
+and the dashboard's `POST /api/widgets/{slug}/run` route).
 
-`orchestrator.py` imports `all_modules`/`resolve_modules` by name
-(`from shared.module_registry import (...)`), so tests monkeypatch those
-names on the `orchestrator` module itself, not on `shared.module_registry`.
+The former `TestDashboardModulesDispatch` class, which exercised
+`dashboard/app.py`'s removed `_execute_run`/`_RUNS`/`POST /run/{suite_or_unified}`
+trigger machinery, was deleted with that machinery in Phase 7 step 3; the
+widget-run dispatch it guarded is now covered by `dashboard/tests/` against the
+generic widget routes.
 """
 
 from __future__ import annotations
@@ -21,7 +27,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -219,149 +224,34 @@ class TestRunSelectedModulesContextPatchAndArchiveHook:
 
 
 # --------------------------------------------------------------------------
-# Dashboard POST /run/{kind}: modules field routes to run_selected_modules;
-# absence routes to the existing run_suite/run_unified path unchanged.
+# Surviving run-path invariant (widget-run reality): the in-process module
+# execution the dashboard's POST /api/widgets/{slug}/run and shared.module_execution
+# depend on never dispatches through run_suite/run_unified -- both removed in
+# Phase 7. Run through the orchestrator re-export (the shim) to prove the
+# dispatch stays on the module-execution path.
 # --------------------------------------------------------------------------
 
 
-class TestDashboardModulesDispatch:
-    @pytest.fixture(autouse=True)
-    def _isolate_runs_registry(self):
-        import dashboard.app as dashboard_app
+class TestModuleExecutionDispatchInvariant:
+    def test_run_selected_modules_does_not_call_suite_launchers(self, monkeypatch):
+        # If run_selected_modules ever routes back through the removed
+        # run_suite/run_unified launchers this boom fires. (setattr works even
+        # though the names are gone -- the module namespace still accepts them,
+        # which is exactly the failure we want to catch.)
+        registry = [_make_module("stub_a")]
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
 
-        saved = dict(dashboard_app._RUNS)
-        dashboard_app._RUNS.clear()
-        yield
-        dashboard_app._RUNS.clear()
-        dashboard_app._RUNS.update(saved)
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
 
-    def test_execute_run_with_modules_calls_run_selected_modules(
-        self, monkeypatch, tmp_path
-    ):
-        import dashboard.app as dashboard_app
+        for removed in ("run_suite", "run_unified"):
 
-        fake_context = {"output_dir": str(tmp_path), "run_id": "ctx-1"}
-        monkeypatch.setattr(orchestrator, "build_context", lambda focus: fake_context)
+            def _boom(*args, **kwargs):
+                raise AssertionError(f"{removed} must not be called on the modules path")
 
-        calls = {}
+            monkeypatch.setattr(orchestrator, removed, _boom)
 
-        def fake_run_selected_modules(slugs, context):
-            calls["slugs"] = slugs
-            calls["context"] = context
-            return {"status": "ok", "order": list(slugs), "results": {}}
+        combined = orchestrator.run_selected_modules(["stub_a"], {})
+        assert combined["status"] == "ok"
+        assert combined["order"] == ["stub_a"]
 
-        monkeypatch.setattr(
-            orchestrator, "run_selected_modules", fake_run_selected_modules
-        )
-
-        # A regression guard: run_suite/run_unified must NOT be invoked on
-        # this path.
-        def _boom(*args, **kwargs):
-            raise AssertionError("run_suite must not be called on the modules path")
-
-        monkeypatch.setattr(orchestrator, "run_suite", _boom)
-
-        dashboard_app._execute_run(
-            "test-modules-1", "vol", {"ticker": "NVDA"}, ["stub_a", "stub_b"]
-        )
-
-        assert calls["slugs"] == ["stub_a", "stub_b"]
-        live = dashboard_app._RUNS["test-modules-1"]
-        assert live["status"] == "ok"
-
-    def test_execute_run_without_modules_still_uses_existing_path(
-        self, monkeypatch, tmp_path
-    ):
-        """Explicit regression assertion, not an assumption: `modules=None`
-        (the default) must dispatch through the pre-existing run_suite path,
-        never run_selected_modules."""
-        import dashboard.app as dashboard_app
-
-        fake_context = {"output_dir": str(tmp_path), "run_id": "ctx-2"}
-        monkeypatch.setattr(orchestrator, "build_context", lambda focus: fake_context)
-        monkeypatch.setattr(
-            orchestrator,
-            "run_suite",
-            lambda name, ctx, timeout=1800: {"status": "ok"},
-        )
-
-        def _boom(*args, **kwargs):
-            raise AssertionError(
-                "run_selected_modules must not be called without a modules field"
-            )
-
-        monkeypatch.setattr(orchestrator, "run_selected_modules", _boom)
-
-        dashboard_app._execute_run("test-no-modules-1", "vol", {"ticker": "NVDA"})
-
-        live = dashboard_app._RUNS["test-no-modules-1"]
-        assert live["status"] == "ok"
-
-    def test_post_run_with_modules_field_routes_to_run_selected_modules(
-        self, monkeypatch, tmp_path
-    ):
-        import dashboard.app as dashboard_app
-
-        client = TestClient(dashboard_app.app)
-
-        fake_context = {"output_dir": str(tmp_path), "run_id": "ctx-3"}
-        monkeypatch.setattr(orchestrator, "build_context", lambda focus: fake_context)
-
-        called_with = {}
-
-        def fake_run_selected_modules(slugs, context):
-            called_with["slugs"] = slugs
-            return {"status": "ok", "order": list(slugs), "results": {}}
-
-        monkeypatch.setattr(
-            orchestrator, "run_selected_modules", fake_run_selected_modules
-        )
-
-        def _boom(*args, **kwargs):
-            raise AssertionError("run_suite must not be called on the modules path")
-
-        monkeypatch.setattr(orchestrator, "run_suite", _boom)
-        monkeypatch.setattr(orchestrator, "run_unified", _boom)
-
-        resp = client.post(
-            "/run/vol",
-            json={"ticker": "NVDA", "modules": ["stub_a"]},
-        )
-        assert resp.status_code == 202
-
-        # _execute_run runs as a BackgroundTask -- TestClient executes it
-        # synchronously before returning the response in FastAPI's default
-        # (non-anyio-worker) test setup.
-        assert called_with.get("slugs") == ["stub_a"]
-
-    def test_post_run_without_modules_field_routes_to_existing_path(
-        self, monkeypatch, tmp_path
-    ):
-        """Explicit regression assertion for the endpoint layer: a POST body
-        with no `modules` key must still hit run_suite, never
-        run_selected_modules."""
-        import dashboard.app as dashboard_app
-
-        client = TestClient(dashboard_app.app)
-
-        fake_context = {"output_dir": str(tmp_path), "run_id": "ctx-4"}
-        monkeypatch.setattr(orchestrator, "build_context", lambda focus: fake_context)
-
-        called = {"run_suite": False}
-
-        def fake_run_suite(name, ctx, timeout=1800):
-            called["run_suite"] = True
-            return {"status": "ok"}
-
-        monkeypatch.setattr(orchestrator, "run_suite", fake_run_suite)
-
-        def _boom(*args, **kwargs):
-            raise AssertionError(
-                "run_selected_modules must not be called without a modules field"
-            )
-
-        monkeypatch.setattr(orchestrator, "run_selected_modules", _boom)
-
-        resp = client.post("/run/vol", json={"ticker": "NVDA"})
-        assert resp.status_code == 202
-        assert called["run_suite"] is True

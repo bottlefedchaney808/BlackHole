@@ -62,8 +62,8 @@ THETADATA_CF_ACCESS_CLIENT_SECRET=...
 |------|-----------------|-------|
 | Dashboard | `dashboard.bat` | `http://127.0.0.1:8787`; refuses to double-launch |
 | DTCC live poller | `run_scheduler.bat` | 5-minute APScheduler loop; single instance only |
-| Orchestrator (unified) | `orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16` | sentiment stage is currently hard-skipped |
-| Orchestrator (single suite) | `orchestrator.bat --suite options|vol|var|sentiment --ticker AAPL` | launches one suite in context mode |
+| Widget / module run | `dashboard.bat`, then `GET /api/widgets/catalog` + `POST /api/widgets/{slug}/run` (or `shared.module_execution.run_selected_modules` in-process) | runs one or more registered modules; no subprocess |
+| Module run (scripted) | `.venv\Scripts\python.exe -c "import shared.module_execution as me; me.run_selected_modules(['dealer_exposure'], {'ticker':'SPY'})"` | in-process; expands `requires` |
 | Backfill | `python backfill.py` | hours-long, resumable |
 | Query swaps | `python swaps_query.py` | CLI demo / `from swaps_query import SwapsQuery` |
 | Options_Suite | `Options_Suite\options_suite.bat` | interactive or context mode |
@@ -86,11 +86,9 @@ pytest -m unit        # tests needing no network/credentials
 
 ### 3.1 Orchestrator (`orchestrator.py`)
 
-- `run_unified(...)` — runs suites in dependency order: `vol` → `options`, `var`.  Sentiment is hard-skipped by default (replaced by an in-process market-signals stage after vol).
-- `run_suite(...)` — launches a single suite with `--context`/`--context-out`.
-- Uses `SHARED_PYTHON` from root `.venv` for every child, never `sys.executable`.
-- Validates marker files (`*_result.json`) via `shared/suite_validation.py`.
-- Writes every run into `orchestrator_runs` in `swaps.db`.
+- `shared/module_execution.run_selected_modules(slugs, context)` — runs registered modules in-process (resolves `requires`, topo-sorts, merges `context_patch`); the surviving run path. Re-exported by `orchestrator.run_selected_modules`.
+- `run_market_signals_stage(ticker, context)` — the in-process market-signals/Options/VaR context stage that replaced the sentiment subprocess.
+- Module result validation happens inside each module (`shared/schemas.py` / `shared/suite_validation.py`); the Context Store (`shared/context_store.py`) persists `context_patch` values keyed by scope.
 
 ### 3.2 Shared library (`shared/`)
 
@@ -193,7 +191,7 @@ Key route groups:
 - **Sentiment scanner venv**: the root `.venv` does not include `yt-dlp`/`curl_cffi`/bgutil deps; sentiment must run from its own local `.venv` (auto-installed by `sentiment.bat`).
 - **YouTube PO token server**: sentiment's YouTube caption path requires a local `bgutil-ytdlp-pot-provider` on port 4416 or captions are silently skipped.
 - **ThetaData credentials**: every suite that touches market data needs `THETADATA_CF_ACCESS_CLIENT_ID`/`_SECRET` in root `.env`. Without them, Options_Suite fails fast with a clear error.
-- **`--unified` skips sentiment**: even though the docstring describes sentiment → vol → options/var, `run_unified` hard-skips the sentiment subprocess by default.
+- **Sentiment is not run as a registered module by default**: the market-signals stage (`run_market_signals_stage`) replaced the old sentiment subprocess; `sentiment-scanner` scanner slugs exist in the registry but aren't part of a default module run.
 - **VaR context mode only runs module 1**: `main.py --context ... --module 2` (or any module other than 1) returns a clean `status: "error"` JSON by design.
 - **Root loose `test_*.py` files are not collected**: `test_data_source.py`, `test_decode_upis.py`, `test_logging.py`, `test_query_monitor.py`, etc. are not in `pyproject.toml`'s `testpaths` and never run with `pytest`.
 
@@ -232,11 +230,9 @@ dashboard.bat
 :: Start the DTCC poller in a second terminal
 run_scheduler.bat
 
-:: Run a unified analysis
-orchestrator.bat --unified --ticker SPY --expiry 2026-10-16
-
-:: Run a single suite
-orchestrator.bat --suite options --ticker AAPL --target-years 0.25
+:: Run registered modules as widgets (dashboard) or in-process
+dashboard.bat
+.venv\Scripts\python.exe -c "import shared.module_execution as me; me.run_selected_modules(['dealer_exposure'], {'ticker':'SPY'})"
 
 :: Run a suite standalone
 Options_Suite\options_suite.bat
