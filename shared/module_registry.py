@@ -59,6 +59,18 @@ class ArchiveHint:
 
 
 @dataclass(frozen=True)
+class InputSpec:
+    """Declares which scope fields a module consumes.
+
+    Each field is one of "required", "optional", or "none".
+    """
+
+    ticker: str = "none"
+    expiry: str = "none"
+    basket: str = "none"
+
+
+@dataclass(frozen=True)
 class ModuleResult:
     """What a module's run() returns.
 
@@ -116,6 +128,11 @@ class ModuleSpec:
                       requires dealer_exposure's fetch)
     archive:          tells the archiver what kind of artifacts/keys to
                       expect for this module
+    description:      one or two sentence UI description
+    inputs:           InputSpec declaring required/optional context fields
+    output_kind:      "metrics" | "chart" | "table" -- how the dashboard
+                      should render this module's metrics
+    sample:           example context dict for testing/documentation
     """
 
     name: str
@@ -129,6 +146,10 @@ class ModuleSpec:
     archive: ArchiveHint = field(
         default_factory=lambda: ArchiveHint(key_shape="global")
     )
+    description: str = ""
+    inputs: InputSpec = field(default_factory=InputSpec)
+    output_kind: str = "metrics"
+    sample: dict[str, Any] = field(default_factory=dict)
 
 
 # Suites whose module_registry.py::MODULES lists get aggregated by
@@ -175,8 +196,7 @@ def from_tool_spec(tool_spec: ToolSpec) -> ModuleSpec:
     ToolSpec.run(context) -> dict is a strict subset of ModuleSpec's contract
     (ModuleSpec.run returns a ModuleResult, not a bare dict), so this wraps
     the tool's run callable rather than reassigning it directly. Tools/
-    entries don't carry per-module archive/requires metadata yet -- these
-    defaults are intentionally coarse until a later phase adds it.
+    entries now carry suite/category metadata via the extended ToolSpec.
     """
 
     def _run(context: dict[str, Any]) -> ModuleResult:
@@ -188,13 +208,17 @@ def from_tool_spec(tool_spec: ToolSpec) -> ModuleSpec:
     return ModuleSpec(
         name=tool_spec.name,
         slug=tool_spec.slug,
-        suite="tools",
-        category="tool",
+        suite=tool_spec.suite,
+        category=tool_spec.category,
         run=_run,
         cli_entry=None,
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="global"),
+        description=tool_spec.description,
+        inputs=InputSpec(),
+        output_kind="metrics",
+        sample={},
     )
 
 

@@ -18,7 +18,7 @@ _REPO_ROOT = _SENTIMENT_DIR.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from shared.module_registry import ArchiveHint, ArtifactRef, ModuleResult, ModuleSpec
+from shared.module_registry import ArchiveHint, ArtifactRef, InputSpec, ModuleResult, ModuleSpec
 
 def _failed(exc: Exception) -> ModuleResult:
     return ModuleResult(
@@ -127,6 +127,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Gamma exposure scanner: net dollar gamma by strike/expiry.",
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
     ),
     ModuleSpec(
         name="Unusual OI",
@@ -138,6 +142,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Flags strikes/expirations with unusual open-interest patterns.",
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
     ),
     ModuleSpec(
         name="IV Rank",
@@ -149,6 +157,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Implied-vol rank vs historical realized vol.",
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
     ),
     ModuleSpec(
         name="Skew",
@@ -160,6 +172,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Option-implied skew metrics by expiry.",
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
     ),
     ModuleSpec(
         name="Max Pain",
@@ -171,6 +187,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Max pain strike concentration per expiry.",
+        inputs=InputSpec(ticker="required", expiry="optional"),
+        output_kind="metrics",
+        sample={"ticker": "SPY", "expiry": "20261016"},
     ),
     ModuleSpec(
         name="Vol Dispersion",
@@ -182,6 +202,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Index-vs-component implied-vol dispersion scanner.",
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
     ),
     ModuleSpec(
         name="Earnings",
@@ -193,6 +217,10 @@ MODULES: list[ModuleSpec] = [
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+        description="Earnings implied-move and vol-premium scanner.",
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
     ),
 ]
 

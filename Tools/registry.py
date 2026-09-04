@@ -20,19 +20,25 @@ HOW TO ADD TOOL #3 (or #4, #5, ...)
            slug="var-stress",
            description="Runs a stressed-scenario VaR sweep off a suite context.",
            run=run,
+           suite="var_tools",
+           category="tool",
        )
 
 4. Back in this file: import the new module and append its TOOL_SPEC to
    TOOLS below. That's the entire integration surface -- nothing else in
    Tools/ needs to change, and nothing in the four suites needs to change
    either, since every tool only ever depends on the shared context schema.
+
+Phase 2 of the Widget-Native Quant Console adds ``suite`` and ``category``
+metadata to every ToolSpec so the unified registry can place tools in the
+same discovery/selection space as native suite modules.
 --------------------------------------------------------------------------
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -48,12 +54,22 @@ class ToolSpec:
                  optionally with extra tool-specific keys mixed in by the
                  caller; the returned dict is the tool's result artifact,
                  always JSON-serializable.
+    suite:       "tools" or the logical suite that owns this tool (used by
+                 the unified module registry for grouping/filtering)
+    category:    "tool" or a more specific category for the dashboard UI
     """
 
     name: str
     slug: str
     description: str
     run: Callable[[dict[str, Any]], dict[str, Any]]
+    suite: str = "tools"
+    category: str = "tool"
+
+
+TOOL_SPEC_FIELDS = {
+    "name", "slug", "description", "run", "suite", "category"
+}
 
 
 def _load_tools() -> list[ToolSpec]:

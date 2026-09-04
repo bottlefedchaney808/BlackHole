@@ -356,13 +356,13 @@ def run_market_signals_stage(ticker: str, context: dict[str, Any]) -> dict[str, 
         spec.loader.exec_module(reg_mod)
         resolve_modules = reg_mod.resolve_modules
         scanner_slugs = ["iv_rank", "max_pain", "skew", "unusual_oi"]
-        for spec in resolve_modules(scanner_slugs):
+        for scanner_spec in resolve_modules(scanner_slugs):
             try:
-                res = spec.run({"ticker": ticker, "focus": context.get("focus") or {}})
-                bundle["scanners"][spec.slug] = res.metrics or {}
+                res = scanner_spec.run({"ticker": ticker, "focus": context.get("focus") or {}})
+                bundle["scanners"][scanner_spec.slug] = res.metrics or {}
             except Exception as e:
-                errors.append(f"{spec.slug}: {e}")
-                bundle["scanners"][spec.slug] = {"error": str(e)}
+                errors.append(f"{scanner_spec.slug}: {e}")
+                bundle["scanners"][scanner_spec.slug] = {"error": str(e)}
     except Exception as e:
         errors.append(f"sentiment registry: {e}")
 
