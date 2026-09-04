@@ -76,6 +76,8 @@ from dashboard import (
     job_object,
     worker_worktree,
 )
+from dashboard.layouts import router as layouts_router
+from dashboard.quant_console_agent import router as quant_console_agent_router
 from dashboard.auth import get_client_ip
 from dashboard.output_runs import (
     SUITE_LABELS,
@@ -277,6 +279,11 @@ app.mount(
     StaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")),
     name="static",
 )
+
+# Phase 5/6 routers: layout persistence + console agent (skeleton; the agent
+# endpoint stays proposal-only unless confirm=true and 503s without a key).
+app.include_router(layouts_router)
+app.include_router(quant_console_agent_router)
 
 # Rate limiter: max 1 run per 60s per IP, max 10 concurrent
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
