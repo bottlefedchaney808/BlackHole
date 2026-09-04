@@ -91,6 +91,32 @@ def test_run_leisen_reimer_returns_ok_price(monkeypatch, tmp_path):
     assert data["metrics"]["model"] == "leisen_reimer"
 
 
+def test_run_accepts_design_spec_scope_params_shape(monkeypatch, tmp_path):
+    """The wire shape quant-widget.js posts: {scope: {...}, params: {...}}.
+
+    The route must lift scope + params to top level so the module sees a
+    normal context (this is the JS<->backend contract from the design spec).
+    """
+    _db_paths(monkeypatch, tmp_path)
+    nested = {
+        "scope": {"ticker": "SPY"},
+        "params": {
+            "spot": 550.0,
+            "strike": 550.0,
+            "target_years": 0.25,
+            "risk_free_rate": 0.05,
+            "dividend_yield": 0.0,
+            "option_type": "call",
+            "sigma": 0.2,
+        },
+    }
+    r = client.post("/api/widgets/leisen_reimer/run", json=nested)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "ok"
+    assert data["metrics"]["price"] > 0
+
+
 def test_run_unknown_slug_404(monkeypatch, tmp_path):
     _db_paths(monkeypatch, tmp_path)
     r = client.post("/api/widgets/does-not-exist/run", json={"ticker": "SPY"})

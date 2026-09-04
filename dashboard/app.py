@@ -2200,7 +2200,19 @@ async def run_widget(slug: str, request: Request):
     except IndexError:
         raise HTTPException(status_code=404, detail=f"unknown widget slug {slug!r}")
 
-    context = body
+    # Wire-shape adapter: accept BOTH the design-spec shape
+    # {scope: {ticker, ...}, params?: {...}} — what dashboard/static/js/
+    # quant-widget.js posts — and a flat context dict (tests, curl). Scope
+    # fields and params are lifted to top level so modules see the context
+    # they expect; any other top-level body keys pass through.
+    scope_part = body.get("scope") if isinstance(body.get("scope"), dict) else {}
+    params_part = body.get("params") if isinstance(body.get("params"), dict) else {}
+    if scope_part or params_part:
+        context = {k: v for k, v in body.items() if k not in ("scope", "params")}
+        context.update(scope_part)
+        context.update(params_part)
+    else:
+        context = body
     try:
         result = spec.run(context)
     except Exception as exc:  # defensive: a raw raise from a module run
