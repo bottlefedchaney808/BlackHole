@@ -28,18 +28,17 @@ spec:
       # 30000-32767 service-node-port-range.
       nodePort: 30080
 
-  # POST /run/{suite} returns a run_id that the browser then polls via
-  # GET /runs/{run_id}. dashboard/app.py answers that poll from a
-  # process-local dict (_RUNS) first and only falls back to the
-  # orchestrator_runs table in SQLite. With replicas: 2 and no affinity, a poll
-  # landing on the other pod still resolves -- but via the slower DB path and
-  # without the in-flight progress detail. Pinning the client to one replica
-  # keeps the fast path intact for the whole life of a run.
+  # The generic widget API (POST /api/widgets/{slug}/run) runs modules
+  # synchronously in-process, so a client that needs results just waits on the
+  # POST itself -- no long-lived run-id polling across pods. The Context Store
+  # (shared/context_store.py, artifacts/widget_cache.db) is the durable result
+  # surface. Pinning the client to one replica keeps module/context state and
+  # any in-process cache consistent for the life of a session.
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:
-      # Comfortably longer than a suite run (SUITE_CHILD_TIMEOUT_SEC defaults
-      # to 1800s in orchestrator.py).
+      # Comfortably longer than the longest widget run (module timeouts can
+      # reach tens of minutes for live-data fetches).
       timeoutSeconds: 3600
 
   # Preserve the real client source IP. dashboard/auth.get_client_ip and the
@@ -51,7 +50,7 @@ spec:
   externalTrafficPolicy: Local
 
   # Uncomment and set to the CIDRs allowed to reach the dashboard. The
-  # orchestrator endpoints are API-key protected, but the read-only swap views
+  # widget-run API is API-key protected, but the read-only swap views
   # are not -- do not leave this open to 0.0.0.0/0 on a public LB.
   # loadBalancerSourceRanges:
   #   - 10.0.0.0/8

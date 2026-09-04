@@ -113,11 +113,11 @@ spec:
         - name: dashboard
           image: ghcr.io/zinko83/financialdevelopment-dashboard:1.0.0
           imagePullPolicy: IfNotPresent
-          # --workers 1 is deliberate. dashboard/app.py holds in-flight run
-          # state in a process-local dict (_RUNS) that GET /runs/{run_id} reads
-          # before falling back to the orchestrator_runs table; extra workers
-          # would answer polls from processes that never saw the run. Scale with
-          # replicas plus the Service's sessionAffinity, not uvicorn workers.
+          # --workers 1 is deliberate. dashboard/app.py serves the generic
+          # widget-run API (POST /api/widgets/{slug}/run), which runs modules
+          # synchronously in-process; extra workers would duplicate module state
+          # and each would rebuild the same context store. Scale with replicas
+          # plus the Service's sessionAffinity, not uvicorn workers.
           command: ["/bin/sh", "-euc"]
           args:
             - |
@@ -147,7 +147,7 @@ spec:
               value: /app/data/swaps.db
             # dashboard/auth.py falls back to the literal
             # "dev-key-change-in-production" when this is unset, which would
-            # leave POST /run/{suite} effectively unauthenticated. optional:
+            # leave the widget-run API effectively unauthenticated. optional:
             # false turns a missing key into a pod-start failure instead.
             - name: DASHBOARD_API_KEY
               valueFrom:

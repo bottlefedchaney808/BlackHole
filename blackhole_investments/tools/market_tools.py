@@ -1,14 +1,21 @@
 """In-process MCP tools bridging BlackHole Investments into the FinancialDevelopment
-quant-finance monorepo: read-only swap data lookups, and triggering suite runs
-(Vol_Suite / Options_Suite / VaR_Tools_Simulations / sentiment-scanner) via orchestrator.py.
+quant-finance monorepo: read-only swap data lookups, and triggering analysis
+runs through the generic widget-run API (POST /api/widgets/{slug}/run).
+
+The analysis launcher no longer subprocesses orchestrator.py -- Phase 7 migrated
+suite launching to the dashboard's generic widget-run route. This project treats
+FinancialDevelopment as an external service over HTTP (dashboard), exactly the
+posture orchestrator.py itself used.
 
 Deliberately talks to swaps.db with raw sqlite3 rather than importing swaps_query.SwapsQuery,
 since SwapsQuery pulls in shared/ (pandas, etc.) from the root .venv, which this project's
 own project-local .venv does not have installed.
 """
+import json
 import os
 import sqlite3
-import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +24,66 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_PATH = os.environ.get("SWAPS_DB_PATH") or str(REPO_ROOT / "swaps.db")
 
-# Same shared-interpreter convention orchestrator.py uses: subprocess calls into the
-# suites always go through the root repo's .venv, never this project's own interpreter.
-SHARED_PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
-if not SHARED_PYTHON.exists():
-    SHARED_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+# Phase 7: the analysis suites are no longer launched by subprocessing
+# orchestrator.py. They run through the dashboard's generic widget API:
+#   POST {DASHBOARD_URL}/api/widgets/{slug}/run
+# with a flat context dict (or {"scope": ..., "params": ...}) as the body.
+# Synchronous; response is {status, slug, scope, artifacts, metrics, context_patch}.
+# Module failures come back as status=error with metrics.error, not a 500.
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL") or "http://127.0.0.1:8787"
 
-VALID_SUITES = {"options", "vol", "var", "sentiment"}
+# Legacy suite-level semantics, preserved for callers that still pass a suite
+# name rather than a module slug. The old CLI `--suite options|vol|var|sentiment`
+# each mapped to a family of modules; the widget API is slug-level, so a legacy
+# suite name expands to the concrete module slugs that make up that suite.
+# Slugs below are the live ones from GET /api/widgets/catalog (each module's
+# `suite` field equals the mapping key's suite here).
+LEGACY_SUITE_SLUGS: dict[str, list[str]] = {
+    "options": [
+        "crr", "leisen_reimer", "newton_raphson_iv", "sabr", "vanna_volga",
+        "mc", "mc_heston_lsm", "baw", "model_comparison",
+    ],
+    "vol": [
+        "dealer_exposure", "dealer_flow", "position_book", "dual_book",
+        "chain_scanner", "svi_smile", "surface_greek", "surface_market_iv",
+        "surface_flow_strike_time", "surface_flow_strike_expiry",
+        "group_screener", "vol_surface_2d", "vrp_term_structure",
+        "sentiment_backtest",
+    ],
+    "var": [
+        "hist_sim", "mc_sim", "corr_sim", "copulas", "forex_var",
+        "cashflow_map", "stress_test", "var_agg", "hedge_optimizer",
+        "price_dist",
+    ],
+    "sentiment": [
+        "gex", "unusual_oi", "iv_rank", "skew", "max_pain",
+        "vol_dispersion", "earnings",
+    ],
+}
+
+# 'unified' had no single suite mapping; run every known module slug.
+ALL_SUITE_SLUGS: list[str] = sorted(
+    {slug for slugs in LEGACY_SUITE_SLUGS.values() for slug in slugs}
+)
+
+
+def _widget_run(slug: str, context: dict[str, Any]) -> dict[str, Any]:
+    """POST {slug}/run synchronously and return the parsed JSON response.
+
+    Raises the underlying urllib error on transport/HTTP failure so the caller
+    can render it; unknown slugs surface as a 404 which we turn into a clear
+    message.
+    """
+    url = f"{DASHBOARD_URL}/api/widgets/{slug}/run"
+    body = json.dumps(context).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=900) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 @tool(
@@ -81,59 +141,94 @@ async def query_swap_data(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "run_suite",
-    "Trigger a FinancialDevelopment analysis suite run via orchestrator.py "
-    "(options, vol, var, sentiment, or 'unified' for the full cross-suite pipeline). "
-    "Runs synchronously and can take minutes for live-data suites.",
-    {"suite": str, "ticker": str},
+    "Trigger a FinancialDevelopment analysis run via the dashboard widget API "
+    "instead of orchestrator.py. Takes a module slug (or a legacy suite name: "
+    "options, vol, var, sentiment, unified -- expanded to that suite's module "
+    "slugs) plus a context dict (at minimum {'ticker': TICKER}). Runs "
+    "synchronously and can take minutes for live-data modules.",
+    {"slug": str, "suite": str, "ticker": str, "context": dict},
 )
 async def run_suite(args: dict[str, Any]) -> dict[str, Any]:
+    slug = (args.get("slug") or "").strip()
     suite = (args.get("suite") or "").strip().lower()
     ticker = (args.get("ticker") or "").strip().upper()
-
-    if not SHARED_PYTHON.exists():
+    context = args.get("context") or {}
+    if not isinstance(context, dict):
         return {
-            "content": [{"type": "text", "text": f"Shared interpreter not found: {SHARED_PYTHON}"}],
+            "content": [{"type": "text", "text": "context must be a dict"}],
             "isError": True,
         }
-    if not ticker:
-        return {"content": [{"type": "text", "text": "ticker is required"}], "isError": True}
+    if ticker:
+        context = {**context, "ticker": ticker}
 
-    if suite == "unified":
-        cmd = [str(SHARED_PYTHON), "orchestrator.py", "--unified", "--ticker", ticker, "--json"]
-    elif suite in VALID_SUITES:
-        cmd = [str(SHARED_PYTHON), "orchestrator.py", "--suite", suite, "--ticker", ticker, "--json"]
+    if suite:
+        if suite == "unified":
+            slugs = ALL_SUITE_SLUGS
+        elif suite in LEGACY_SUITE_SLUGS:
+            slugs = LEGACY_SUITE_SLUGS[suite]
+        else:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"suite must be 'unified' or one of "
+                        f"{sorted(LEGACY_SUITE_SLUGS)}, got {suite!r}"
+                    ),
+                }],
+                "isError": True,
+            }
+    elif slug:
+        slugs = [slug]
     else:
         return {
             "content": [{
                 "type": "text",
-                "text": f"suite must be 'unified' or one of {sorted(VALID_SUITES)}, got {suite!r}",
+                "text": "provide a module slug (or a legacy suite name)",
             }],
             "isError": True,
         }
 
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            timeout=900,
-        )
-    except subprocess.TimeoutExpired:
+    if not context:
         return {
-            "content": [{"type": "text", "text": f"{' '.join(cmd)} timed out after 900s"}],
-            "isError": True,
-        }
-    except OSError as exc:
-        return {
-            "content": [{"type": "text", "text": f"Failed to launch orchestrator.py: {exc}"}],
+            "content": [{
+                "type": "text",
+                "text": "context is required (at least {\"ticker\": TICKER})",
+            }],
             "isError": True,
         }
 
-    output = result.stdout or result.stderr or "(no output)"
+    summaries = []
+    errors = []
+    for s in slugs:
+        try:
+            resp = _widget_run(s, context)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            errors.append(f"{s}: HTTP {exc.code}: {detail}")
+            continue
+        except urllib.error.URLError as exc:
+            errors.append(f"{s}: could not reach dashboard at {DASHBOARD_URL}: {exc.reason}")
+            continue
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"{s}: request failed: {exc}")
+            continue
+
+        status = resp.get("status", "unknown")
+        metrics = resp.get("metrics") or {}
+        meta = " ".join(f"{k}={v}" for k, v in (metrics or {}).items()
+                        if k != "error" and not isinstance(v, (dict, list)))
+        if status in ("ok", "skipped"):
+            summaries.append(f"[{s}] {status}: {meta}".rstrip())
+        else:
+            err = metrics.get("error") if isinstance(metrics, dict) else None
+            errors.append(f"{s}: {status}: {err or meta}".rstrip())
+
+    text = "\n".join(summaries) if summaries else "(no successful runs)"
+    if errors:
+        text = "\n".join([text, "ERRORS:", *errors])
     return {
-        "content": [{"type": "text", "text": output[-8000:]}],
-        "isError": result.returncode != 0,
+        "content": [{"type": "text", "text": text[-8000:]}],
+        "isError": bool(errors),
     }
 
 

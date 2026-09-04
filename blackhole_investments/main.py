@@ -8,7 +8,7 @@ Requires ANTHROPIC_API_KEY in the environment (see .env.example). Two custom
 tools bridge it into the FinancialDevelopment monorepo — see tools/market_tools.py:
   - mcp__market_tools__query_swap_data: read-only swaps.db lookups
   - mcp__market_tools__run_suite: trigger Vol_Suite/Options_Suite/VaR/sentiment
-    runs via orchestrator.py
+    runs via the dashboard widget API (POST /api/widgets/{slug}/run)
 """
 import asyncio
 import os
@@ -35,7 +35,7 @@ SYSTEM_PROMPT = """You are BlackHole Investments, a specialist agent covering th
 2. Research: investigate market structure, instruments, and strategy questions,
    using web search and the swap-data lookup tool.
 3. Trading: reason about positioning, risk, and strategy using the analysis
-   suites — trigger a suite run via the run_suite tool when you need fresh
+   suites — trigger a run via the run_suite tool when you need fresh
    numbers rather than guessing.
 
 Always state which role a given answer draws on when it isn't obvious. Prefer
