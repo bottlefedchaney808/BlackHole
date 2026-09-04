@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<!--
+  sync-bus.test.html — node-free browser tests for the Phase 4 frontend
+  modules (sync-bus, quant-widget, widget-renderers).
+
+  The repo has no JS test tooling (no package.json under the repo root or
+  dashboard/), so per the plan these are plain assertions run in a browser —
+  no Jest/vitest, no npm. ES modules must be served over http (file://
+  blocks module loading in Chromium):
+
+      python -m http.server 8765 --directory dashboard/static
+      # then open:  http://localhost:8765/js/sync-bus.test.html
+
+  The quant-widget run-flow test deliberately targets /api/widgets/* routes
+  that only exist once Phase 3 lands. Served statically those requests fail
+  and the test asserts the element's *error* path (qw:run-error event, button
+  re-enabled) — run the same page behind the live dashboard to exercise the
+  success path. Either terminal event is a pass; a hang is a fail.
+
+  Open the browser console for per-assertion detail; the page shows a PASS/FAIL
+  tally and exits with document.title = "PASS n" or "FAIL n".
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>quant-widget frontend tests</title>
+<style>
+  body { background: #070a14; color: #f8fafc; font: 14px/1.5 system-ui, sans-serif;
+         margin: 0; padding: 20px; }
+  h1 { font-size: 18px; }
+  #tally { font-weight: 700; margin: 8px 0 14px; }
+  #tally.pass { color: #34d399; } #tally.fail { color: #f87171; }
+  ol#results { padding-left: 22px; }
+  li { margin: 3px 0; }
+  li.pass { color: #34d399; } li.fail { color: #f87171; }
+  li .why { color: #94a3b8; font-size: 12px; }
+  .skip { color: #fbbf24; }
+</style>
+</head>
+<body>
+<h1>quant-widget frontend tests (sync-bus / quant-widget / widget-renderers)</h1>
+<div id="tally">running…</div>
+<ol id="results"></ol>
+
+<script type="module">
+  import { ScopeBus, syncBus } from './sync-bus.js';
+  import * as renderers from './widget-renderers.js';
+  import { QuantWidget, defineQuantWidget, catalogEntryFor } from './quant-widget.js';
+  // (importing quant-widget.js registers <quant-widget> as a side effect)
+
+  const list = document.getElementById('results');
+  const tally = document.getElementById('tally');
+  const results = [];
+  const seen = {};
+
+  function note(msg, extra) {
+    const why = extra === undefined ? '' : ' — ' + JSON.stringify(extra);
+    console.log((seen[msg] ? 're-ran: ' : '') + msg + why);
+    seen[msg] = true;
+  }
+
+  function check(name, cond, extra) {
+    results.push({ name: name, ok: !!cond, extra: extra });
+    const li = document.createElement('li');
+    li.className = cond ? 'pass' : 'fail';
+    li.textContent = (cond ? 'PASS  ' : 'FAIL  ') + name;
+    if (extra !== undefined) {
+      const why = document.createElement('div');
+      why.className = 'why';
+      why.textContent = JSON.stringify(extra);
+      li.appendChild(why);
+    }
+    list.appendChild(li);
+  }
+
+  function section(title) {
+    const li = document.createElement('li');
+    li.className = 'skip';
+    li.textContent = '— ' + title + ' —';
+    list.appendChild(li);
+  }
+
+  const bus = new ScopeBus(); // isolated instance for assertions
+  // setTimeout tick: rAF does not fire under headless --virtual-time-budget,
+  // so tests must not depend on animation frames to advance.
+  const tick = () => new Promise(r => setTimeout(r, 0));
+
+  // ------------------------------------------------------------------ sync-bus
+  section('sync-bus');
+
+  bus.reset({});
+  let s0 = bus.getScope();
+  check('getScope() starts empty', s0.ticker === '' && s0.expiry === '' && s0.basket === null, s0);
+
+  const c1 = bus.setScope({ ticker: '  SPY  ' });
+  s0 = bus.getScope();
+  check('setScope trims + merges ticker', c1 === true && s0.ticker === 'SPY', s0);
+  check('setScope leaves untouched keys alone', s0.expiry === '' && s0.basket === null, s0);
+  check('setScope no-op returns false', bus.setScope({ ticker: 'SPY' }) === false);
+
+  bus.setScope({ basket: ' SPY, QQQ, ' });
+  check('basket CSV string -> trimmed array',
+    JSON.stringify(bus.getScope().basket) === JSON.stringify(['SPY', 'QQQ']),
+    bus.getScope().basket);
+  bus.setScope({ basket: [' A ', '', 'B', '  '] });
+  check('basket array normalized', JSON.stringify(bus.getScope().basket) === JSON.stringify(['A', 'B']), bus.getScope().basket);
+  bus.setScope({ basket: '' });
+  check('empty basket -> null', bus.getScope().basket === null);
+  bus.setScope({ basket: ['X'] });
+
+  let fired = 0, lastChanged = null;
+  const unsub = bus.subscribe((scope, changed) => { fired++; lastChanged = changed; });
+  bus.setScope({ expiry: '2026-12-18' });
+  check('subscribe fires on change', fired === 1, fired);
+  check('changed keys reported', JSON.stringify(lastChanged) === JSON.stringify(['expiry']), lastChanged);
+  unsub();
+  bus.setScope({ ticker: 'QQQ' });
+  check('unsubscribe stops delivery', fired === 1, fired);
+
+  let evtDetail = null;
+  const onEvt = (e) => { evtDetail = e.detail; };
+  bus.addEventListener('scopechange', onEvt);
+  bus.setScope({ basket: ['SPY', 'QQQ'] });
+  bus.removeEventListener('scopechange', onEvt);
+  check('scopechange CustomEvent carries scope+changed',
+    evtDetail && evtDetail.scope.ticker === 'QQQ' && evtDetail.changed.indexOf('basket') !== -1,
+    evtDetail && evtDetail.changed);
+
+  const before = bus.getScope();
+  before.ticker = 'MUTATED';
+  before.basket.push('HACK');
+  check('getScope returns an independent copy',
+    bus.getScope().ticker === 'QQQ' && bus.getScope().basket.length === 2,
+    bus.getScope());
+
+  bus.reset({ ticker: 'SPY', basket: 'NVDA, AMD' });
+  check('reset() replaces whole scope', bus.getScope().ticker === 'SPY' &&
+    JSON.stringify(bus.getScope().basket) === JSON.stringify(['NVDA', 'AMD']), bus.getScope());
+  check('syncBus singleton exported', syncBus instanceof EventTarget && typeof syncBus.setScope === 'function');
+
+  // ------------------------------------------------------------- custom element
+  section('quant-widget element');
+
+  check('defineQuantWidget registered <quant-widget>', !!customElements.get('quant-widget'));
+  const Slug = customElements.get('quant-widget');
+  check('class is QuantWidget', Slug === QuantWidget);
+
+  const w = document.createElement('quant-widget');
+  w.setAttribute('slug', 'leisen_reimer');
+  w.setAttribute('data-output-kind', 'metrics');
+  w.setAttribute('data-context', '{"strike": 550, "option_type": "call"}');
+  document.body.appendChild(w);
+  await customElements.whenDefined('quant-widget');
+  await tick();
+
+  const sr = w.shadowRoot;
+  check('shadow DOM built', !!sr && !!sr.querySelector('.qw-panel'));
+  check('slug in header title', (sr.querySelector('.qw-title').textContent || '').indexOf('leisen_reimer') !== -1,
+    sr.querySelector('.qw-title').textContent);
+  check('run button present', !!sr.querySelector('button.qw-run'));
+  check('synced default ON (checkbox checked)', sr.querySelector('input[type=checkbox]').checked === true);
+  check('placeholder shown before run', (sr.querySelector('.qw-empty') || {}).textContent &&
+    sr.querySelector('.qw-empty').textContent.indexOf('Not run yet') !== -1,
+    sr.querySelector('.qw-empty') && sr.querySelector('.qw-empty').textContent);
+  check('three scope inputs', ['ticker', 'expiry', 'basket'].every(f => !!sr.querySelector('input.qw-' + f + '-input')));
+
+  syncBus.reset({});
+  syncBus.setScope({ ticker: 'SPY', expiry: '2026-12-18', basket: ['SPY', 'QQQ'] });
+  await tick();
+  check('synced widget follows bus scope',
+    sr.querySelector('input.qw-ticker-input').value === 'SPY' &&
+    sr.querySelector('input.qw-expiry-input').value === '2026-12-18' &&
+    sr.querySelector('input.qw-basket-input').value === 'SPY, QQQ',
+    { t: sr.querySelector('input.qw-ticker-input').value, e: sr.querySelector('input.qw-expiry-input').value, b: sr.querySelector('input.qw-basket-input').value });
+
+  // Edit while synced publishes back to the bus.
+  const tickerInput = sr.querySelector('input.qw-ticker-input');
+  tickerInput.value = 'NVDA';
+  tickerInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
+  check('typing in a synced widget publishes to bus', syncBus.getScope().ticker === 'NVDA', syncBus.getScope());
+
+  // Detach: attribute synced="false".
+  w.setAttribute('synced', 'false');
+  check('checkbox reflects detach', sr.querySelector('input[type=checkbox]').checked === false);
+  syncBus.setScope({ ticker: 'QQQ' });
+  check('detached widget ignores bus', sr.querySelector('input.qw-ticker-input').value === 'NVDA',
+    sr.querySelector('input.qw-ticker-input').value);
+  tickerInput.value = 'AAPL';
+  tickerInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
+  check('editing a detached widget stays local', syncBus.getScope().ticker === 'QQQ' &&
+    sr.querySelector('input.qw-ticker-input').value === 'AAPL', syncBus.getScope());
+
+  // Re-attach: synced="true" adopts the bus (local edits are discarded — that
+  // is the documented "follow the page scope" semantic).
+  w.setAttribute('synced', 'true');
+  check('re-synced widget adopts bus scope', sr.querySelector('input.qw-ticker-input').value === 'QQQ',
+    sr.querySelector('input.qw-ticker-input').value);
+  tickerInput.value = 'MSFT';
+  tickerInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
+  check('re-synced edits publish again', syncBus.getScope().ticker === 'MSFT', syncBus.getScope());
+
+  check('qw:sync-change event fires on toggle', await new Promise((resolve) => {
+    const onToggle = (e) => { w.removeEventListener('qw:sync-change', onToggle); resolve(e.detail.synced === false); };
+    w.addEventListener('qw:sync-change', onToggle);
+    w.setSynced(false);
+    setTimeout(() => { w.removeEventListener('qw:sync-change', onToggle); resolve(false); }, 500);
+  }));
+
+  // --------------------------------------------------------------- renderers
+  section('widget-renderers');
+
+  check('renderDistribution(null) -> null', renderers.renderDistribution(null) === null);
+  const bins = [
+    { low: 100, high: 110, count: 12 }, { low: 110, high: 120, count: 30 }, { low: 120, high: 130, count: 9 }
+  ];
+  const distNode = renderers.renderDistribution({ label: 'mc_sim', unit: 'price', bins, percentiles: { p5: 101.2, p50: 112.7, p95: 128.4 } });
+  check('renderDistribution(bins) builds svg bars',
+    !!distNode && distNode.querySelectorAll('rect.dist-bar').length === 3, distNode && distNode.querySelectorAll('rect').length);
+  check('renderDistribution percentiles line', (distNode.textContent.indexOf('p50') !== -1), distNode.textContent);
+  const valNode = renderers.renderDistribution({ label: 'hist', values: Array.from({ length: 120 }, (_, i) => 100 + Math.sin(i) * 20 + i / 3) });
+  check('renderDistribution(values) auto-bins', !!valNode && valNode.querySelectorAll('rect.dist-bar').length >= 8,
+    valNode && valNode.querySelectorAll('rect.dist-bar').length);
+
+  const metricsNode = renderers.renderMetricsTable({
+    headline: 'price 12.34',
+    price: 12.34, delta: 0.55, model: 'leisen_reimer',
+    greeks: { gamma: 0.02, vega: 0.11, theta: -0.03, rho: 0.4, vanna: 0.01 },
+    rows: [{ t: 'A', v: 1.5 }, { t: 'B', v: 2.5 }],
+    warnings: ['synthetic data']
+  });
+  check('renderMetricsTable: scalar cards', (() => {
+    const outer = metricsNode.querySelector('.qw-metrics > .metric-grid');
+    return !!outer && outer.querySelectorAll('.metric-card').length === 3;
+  })(), metricsNode.querySelectorAll('.metric-card').length);
+  check('renderMetricsTable: nested details disclosure', !!metricsNode.querySelector('details.qw-sub'));
+  check('renderMetricsTable: row array -> <table>', metricsNode.querySelectorAll('table tbody tr').length === 2);
+  check('renderMetricsTable: headline + warnings', metricsNode.textContent.indexOf('price 12.34') !== -1 && metricsNode.textContent.indexOf('synthetic data') !== -1);
+
+  check('renderJSON escapes (textContent, not innerHTML)', (() => {
+    const n = renderers.renderJSON({ a: '<script>' });
+    return n.textContent.indexOf('<script>') !== -1 && n.innerHTML.indexOf('<script>') === -1;
+  })());
+  check('resolveArtifactURL: data:/http(s) passthrough',
+    renderers.resolveArtifactURL('data:image/png;base64,AAA') === 'data:image/png;base64,AAA' &&
+    renderers.resolveArtifactURL('http://x/y.png') === 'http://x/y.png');
+  check('resolveArtifactURL: filesystem path -> /files?path=',
+    renderers.resolveArtifactURL('artifacts/chart.png').indexOf('/files?path=artifacts%2Fchart.png') === 0,
+    renderers.resolveArtifactURL('artifacts/chart.png'));
+
+  const okResult = {
+    status: 'ok',
+    metrics: { headline: 'LR price', price: 12.34, greeks: { delta: 0.55 } },
+    artifacts: [{ path: 'artifacts/lr_curve.png', kind: 'png' }],
+    context_patch: { vol_stats: { iv: 0.2 } }
+  };
+  const met = renderers.renderResult(okResult, 'metrics', { title: 'Leisen-Reimer' });
+  check('renderResult(metrics): pill + headline + cards + png artifact',
+    met.querySelector('.pill.ok') && met.textContent.indexOf('LR price') !== -1 &&
+    met.querySelectorAll('.metric-card').length >= 1 && met.querySelector('img.qw-artifact-img') !== null);
+  check('renderResult(metrics): png src resolved', (met.querySelector('img.qw-artifact-img').getAttribute('src') || '').indexOf('/files?path=') === 0);
+
+  const failed = renderers.renderResult({ status: 'failed', metrics: { error: 'no quotes for this expiry' } }, 'metrics', {});
+  check('renderResult(failed): errbox + JSON fallback', !!failed.querySelector('.errbox') && !!failed.querySelector('pre.json'),
+    failed.textContent.slice(0, 80));
+
+  const distRes = renderers.renderResult({ status: 'ok', metrics: { price_dist: { label: 'sim', unit: 'price', values: [1, 2, 2, 3, 3, 3] } } }, 'distribution', {});
+  check('renderResult(distribution): discovers nested dist in metrics', distRes.querySelectorAll('rect.dist-bar').length > 0,
+    distRes.querySelectorAll('rect').length);
+
+  const jsonOnly = renderers.renderResult({ status: 'ok', metrics: { anything: true } }, 'nonsense_kind', {});
+  check('renderResult(unknown kind): JSON fallback', !!jsonOnly.querySelector('pre.json'));
+
+  // ----------------------------------------------------------------- run flow
+  section('quant-widget run flow (network)');
+
+  const runOutcome = await new Promise((resolve) => {
+    let done = false;
+    const finish = (detail, name) => {
+      if (done) return; done = true;
+      w.removeEventListener('qw:run-success', onOk);
+      w.removeEventListener('qw:run-error', onErr);
+      resolve({ event: name, detail });
+    };
+    const onOk = (e) => finish(e.detail, 'qw:run-success');
+    const onErr = (e) => finish(e.detail, 'qw:run-error');
+    w.addEventListener('qw:run-success', onOk);
+    w.addEventListener('qw:run-error', onErr);
+    w.run();
+    setTimeout(() => finish({ timeout: true }, 'timeout'), 6000);
+  });
+  check('run() reaches a terminal event (success or error)',
+    runOutcome.event === 'qw:run-success' || runOutcome.event === 'qw:run-error', runOutcome);
+  check('run() leaves the button re-enabled and state settled', w.state !== 'running' &&
+    sr.querySelector('button.qw-run').disabled === false, { state: w.state });
+  check('run-error carries a message when it failed', runOutcome.event !== 'qw:run-error' || typeof runOutcome.detail.error === 'string');
+
+  // ------------------------------------------------------------------ summary
+  const pass = results.filter(r => r.ok).length;
+  const fail = results.filter(r => !r.ok).length;
+  tally.textContent = pass + ' passed, ' + fail + ' failed';
+  tally.className = fail ? 'fail' : 'pass';
+  document.title = (fail ? 'FAIL ' : 'PASS ') + pass + ' / ' + (pass + fail);
+</script>
+</body>
+</html>

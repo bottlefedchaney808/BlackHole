@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<!--
+  widget_sandbox.html — Phase 4 exit-criteria page for the
+  widget-native-quant-console plan (see
+  docs/superpowers/plans/2026-09-03-widget-native-quant-console-plan.md).
+
+  Throwaway test harness ONLY: proves a <quant-widget> can be dropped onto a
+  page, toggled synced/unsynced, run, and rendered — fully generic, zero
+  bespoke JS for a standard output_kind. NOT wired into dashboard/app.py
+  (no route serves this file); Phase 5 owns real page rollout.
+
+  Serving options:
+    - live dashboard (backend running): copy under templates/ + Phase-5 route
+    - static only:  python -m http.server 8765 --directory dashboard
+      then open http://localhost:8765/templates/widget_sandbox.html
+
+  Page-global scope form (bottom bar) publishes to the sync-bus; the widget's
+  synced checkbox (header) controls whether it follows the bus. The Run button
+  POSTs /api/widgets/{slug}/run with the Phase-3 body {scope:{...}, params?}.
+  With no backend, Run shows the widget's built-in HTTP error state — that is
+  the intended offline behaviour, not a bug.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>quant-widget sandbox — Phase 4 exit check</title>
+<style>
+  :root {
+    --bg: #070a14; --panel: #0c1122; --panel-2: #121a30; --border: #24304f;
+    --text: #f8fafc; --muted: #94a3b8; --accent: #3b82f6; --accent-2: #38bdf8;
+    --accent-soft: #3b82f622; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header.topbar {
+    padding: 12px 20px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  .brand { font-weight: 650; }
+  .brand span { color: var(--muted); font-weight: 400; font-size: 12px; }
+  main { max-width: 860px; margin: 0 auto; padding: 22px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .grid2 { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px; overflow: hidden;
+  }
+  .panel > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 10px; }
+  form.scope-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  input, button {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
+  }
+  input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  button {
+    background: linear-gradient(135deg, var(--accent-2), var(--accent));
+    border-color: transparent; color: #fff; font-weight: 700; cursor: pointer;
+  }
+  button.ghost { background: var(--panel-2); color: var(--text); border-color: var(--border); }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">quant-widget sandbox <span>Phase 4 exit check — throwaway page, not routed</span></div>
+</header>
+<main>
+  <h1>&lt;quant-widget slug="leisen_reimer"&gt;</h1>
+  <p class="sub">
+    Generic custom element: synced to the page-global scope bus by default; toggle
+    the header checkbox to detach. Run POSTs
+    <code>/api/widgets/leisen_reimer/run</code> (Phase-3 route — 404/offline shows the
+    element's error state). Catalog is fetched from <code>/api/widgets/catalog</code> when
+    the backend is up; <code>data-output-kind="metrics"</code> is present as the offline fallback.
+  </p>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>Widget under test</h2>
+      <quant-widget id="w1" slug="leisen_reimer" data-output-kind="metrics"
+                    data-context='{"strike": 550, "option_type": "call", "sigma": 0.2}'></quant-widget>
+    </section>
+
+    <section class="panel">
+      <h2>Page-global scope (sync-bus)</h2>
+      <form class="scope-form" id="scopeForm">
+        <div class="field">
+          <label for="busTicker">ticker</label>
+          <input id="busTicker" placeholder="SPY">
+        </div>
+        <div class="field">
+          <label for="busExpiry">expiry</label>
+          <input id="busExpiry" placeholder="2026-12-18">
+        </div>
+        <div class="field">
+          <label for="busBasket">basket</label>
+          <input id="busBasket" placeholder="SPY, QQQ">
+        </div>
+        <button type="submit">Publish scope</button>
+        <button type="button" id="busReset" class="ghost">Reset scope</button>
+      </form>
+      <p class="small muted" style="margin:10px 0 0">
+        Publishing here while the widget is <strong>synced</strong> updates its inputs; typing
+        inside a synced widget publishes back here. Toggle the widget's checkbox and repeat to
+        see detach/attach behaviour.
+      </p>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+  import { syncBus } from '/static/js/sync-bus.js';
+  // quant-widget.js registers the custom element as a side effect; importing
+  // it here (or relying on the sandbox <script> below) is all a page needs.
+  import '/static/js/quant-widget.js';
+
+  const $ = function (id) { return document.getElementById(id); };
+  const scopeForm = $('scopeForm');
+  const tickerEl = $('busTicker'), expiryEl = $('busExpiry'), basketEl = $('busBasket');
+
+  // Form edits publish straight to the bus (widgets follow live).
+  [tickerEl, expiryEl].forEach(function (input) {
+    input.addEventListener('input', function () {
+      const patch = {};
+      patch[input.id === 'busTicker' ? 'ticker' : 'expiry'] = input.value;
+      syncBus.setScope(patch);
+    });
+  });
+  basketEl.addEventListener('input', function () {
+    syncBus.setScope({ basket: basketEl.value });
+  });
+
+  scopeForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    syncBus.setScope({
+      ticker: tickerEl.value,
+      expiry: expiryEl.value,
+      basket: basketEl.value
+    });
+  });
+  $('busReset').addEventListener('click', function () {
+    syncBus.reset({});
+    syncBus.setScope({ ticker: '', expiry: '' }); // force notify of the clear
+  });
+
+  // Mirror bus state back into the form (also covers edits made by the widget
+  // itself while synced).
+  syncBus.subscribe(function (scope) {
+    if (tickerEl.value !== scope.ticker) tickerEl.value = scope.ticker;
+    if (expiryEl.value !== scope.expiry) expiryEl.value = scope.expiry;
+    const joined = (scope.basket || []).join(', ');
+    if (basketEl.value !== joined) basketEl.value = joined;
+  });
+</script>
+</body>
+</html>
