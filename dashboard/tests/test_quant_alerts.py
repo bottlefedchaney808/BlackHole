@@ -256,8 +256,8 @@ class TestRobustness:
         def _boom(*a, **k):
             raise AssertionError("check_for_alerts must never trigger a run")
 
-        monkeypatch.setattr(orchestrator, "run_suite", _boom)
-        monkeypatch.setattr(orchestrator, "run_unified", _boom)
+        monkeypatch.setattr(orchestrator, "run_suite", _boom, raising=False)
+        monkeypatch.setattr(orchestrator, "run_unified", _boom, raising=False)
         monkeypatch.setattr(orchestrator, "build_context", _boom)
 
         db_path = _db(tmp_path)

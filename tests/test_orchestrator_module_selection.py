@@ -249,7 +249,7 @@ class TestModuleExecutionDispatchInvariant:
             def _boom(*args, **kwargs):
                 raise AssertionError(f"{removed} must not be called on the modules path")
 
-            monkeypatch.setattr(orchestrator, removed, _boom)
+            monkeypatch.setattr(orchestrator, removed, _boom, raising=False)
 
         combined = orchestrator.run_selected_modules(["stub_a"], {})
         assert combined["status"] == "ok"

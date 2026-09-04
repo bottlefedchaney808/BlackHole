@@ -325,7 +325,39 @@ def run_market_signals_stage(ticker: str, context: dict[str, Any]) -> dict[str, 
         for scanner_spec in resolve_modules(scanner_slugs):
             try:
                 res = scanner_spec.run({"ticker": ticker, "focus": context.get("focus") or {}})
-                bundle["scanners"][scanner_spec.slug] = res.metrics or {}
+                metrics = res.metrics or {}
+                # Scanner results carry their real payload in context_patch as
+                # a dataclass (metrics only carry the ticker). If the dataclass
+                # holds an error, surface it — normalized to the stable
+                # no_oi_for_pinned_expiry sentinel for ThetaData no-OI
+                # failures (both endpoints 404/empty for the pinned expiry).
+                # A successful scan gets its full dataclass serialized into
+                # the bundle so consumers see max_pain_strike etc.
+                patch = res.context_patch or {}
+                for _pv in patch.values():
+                    if dataclasses.is_dataclass(_pv):
+                        _err = getattr(_pv, "error", None)
+                        if not _err:
+                            metrics.update(_to_jsonable(_pv))
+                        if _err:
+                            # Normalize raw ThetaData failures into the stable
+                            # degraded sentinel the old in-orchestrator scanner
+                            # block used (no snapshot OI and no historical OI
+                            # for a pinned expiry == same degraded outcome).
+                            if any(
+                                _s in str(_err)
+                                for _s in (
+                                    "404",
+                                    "Not Found",
+                                    "no_oi",
+                                    "empty",
+                                    "v2 payload is None",
+                                )
+                            ):
+                                _err = "no_oi_for_pinned_expiry"
+                            metrics = {"error": _err}
+                            break
+                bundle["scanners"][scanner_spec.slug] = metrics
             except Exception as e:
                 errors.append(f"{scanner_spec.slug}: {e}")
                 bundle["scanners"][scanner_spec.slug] = {"error": str(e)}

@@ -10,12 +10,22 @@ from decode_upis import run, run_batch
 
 
 @pytest.fixture
-def db_path():
-    path = tempfile.mktemp(suffix=".db")
+def db_path(tmp_path):
+    # tmp_path (pytest-managed) + retry: a pooled sqlite connection elsewhere
+    # can hold the file momentarily open on Windows (WinError 32), so removal
+    # is best-effort with short retries instead of a hard os.remove.
+    import time
+
+    path = str(tmp_path / "upi_test.db")
     setup_db.init_database(path)
     yield path
-    if os.path.exists(path):
-        os.remove(path)
+    for _ in range(5):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        except PermissionError:
+            time.sleep(0.2)
 
 
 def _insert_trade(conn, dissemination_id, upi, underlier_id, underlier_source, underlier_name):
