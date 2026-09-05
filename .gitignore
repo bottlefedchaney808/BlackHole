@@ -98,9 +98,9 @@ sentiment-scanner/data/oi_baseline.json
 potatohedge-*.whl
 .whl-inspect/
 
-# Triage 2026-08-21: generated cron artifacts stay out of git
-trading_journal/alerts/
-trading_journal/x_buzz/raw/
+# Trading journal migrated to Obsidian vault (obsidian-brain, Trading/FinancialDevelopment Journal/) 2026-09-04.
+# Keep the whole directory out of git — personal account data + live cron artifacts.
+trading_journal/
 
 # Ruff cache
 .ruff_cache/
