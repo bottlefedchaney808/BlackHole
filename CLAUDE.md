@@ -140,8 +140,9 @@ surviving module-CLI shell (`orchestrator.py --modules slug,slug` /
 runs the same function per-widget via `POST /api/widgets/{slug}/run`.
 `ModuleSpec.context_patch` values are written to the Context Store
 (`shared/context_store.py`, table `context_store_audit`) as the run path's
-successor to the removed `_thread_vol_stats_into_context`. Archiver hook is
-still a no-op stub.
+The archiver hook is live: every `ModuleResult` from `run_selected_modules` records to
+`module_archive.db` (`shared/module_archive.py`, dedicated DB, never-raises;
+`triggered_by="orchestrator"` covers CLI and dashboard callers).
 
 ### `shared/` — the library every suite and the orchestrator import from
 
