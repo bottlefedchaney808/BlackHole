@@ -112,24 +112,27 @@ def resolve_stored(path: str) -> Path | None:
     if not path:
         return None
 
+    # First check for Windows-style paths (drive letter) which os.path.isabs() may not
+    # recognize on non-Windows platforms. This handles paths like C:\Users\...
+    if len(path) > 1 and path[1] == ':':
+        rest = path[2:].replace('\\', '/').lstrip('/')
+        # Try to find FinancialDevelopment and strip everything up to and including it
+        parts = rest.split('/')
+        for i, part in enumerate(parts):
+            if part.lower() == 'financialdevelopment':
+                # Strip up to and including FinancialDevelopment, keep the rest
+                rest = '/'.join(parts[i+1:])
+                break
+        resolved = repo_root() / rest
+        if resolved.exists():
+            return resolved
+        return None
+
     # Already absolute?
     if os.path.isabs(path):
         resolved = Path(path)
         if resolved.exists():
             return resolved
-        # Maybe it's a Windows path on Linux; try to normalize
-        if len(path) > 2 and path[1] == ':':
-            # Strip drive + common parent prefixes
-            rest = path[2:].replace('\\', '/').lstrip('/')
-            # Try to find FinancialDevelopment and strip up to it
-            parts = rest.split('/')
-            for i, part in enumerate(parts):
-                if part.lower() == 'financialdevelopment':
-                    rest = '/'.join(parts[i:])
-                    break
-            resolved = repo_root() / rest
-            if resolved.exists():
-                return resolved
         return None
 
     # Repo-relative

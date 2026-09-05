@@ -6,6 +6,7 @@ hitting the network.  ThetaData (api.potatohedge.com) is the ONLY source.
 No yfinance.  No fallbacks that cost money.
 """
 import os
+from shared.artifact_paths import resolve_stored
 import json
 import logging
 from datetime import datetime, timedelta
@@ -55,7 +56,10 @@ def load_highlighted_ticker_pack(
     pack_json = selected.get("json_path")
     if not pack_json:
         return []
-    pack_file = Path(pack_json)
+    resolved = resolve_stored(pack_json)
+    if resolved is None:
+        return []
+    pack_file = resolved
     if not pack_file.exists():
         return []
     try:
