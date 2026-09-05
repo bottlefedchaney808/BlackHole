@@ -75,12 +75,7 @@ jinja2==3.1.6
 slowapi==0.1.9  # Rate limiting for FastAPI
 
 # pywin32 -- Windows Job Object bindings (win32job/win32process/win32api) for
-# Quant Console Phase 2's dispatch-worker timeout-kill (dashboard/job_object.py,
-# not yet built as of this pin -- see docs/superpowers/plans/2026-08-01-quant-console.md
-# Task 10). Declared here as a real, pinned, direct dependency: previously
-# present in .venv only as an undeclared transitive dependency of `mcp`, which
-# this repo's own dependency graph should not be relied on to keep pulling in.
-# Windows-only; if this shared venv is ever built on Linux/Mac, this pin will
-# fail to install and needs an OS-conditional marker at that point -- not
-# addressed here since this repo is Windows-only today (see CLAUDE.md).
-pywin32==312
+# Quant Console Phase 2's dispatch-worker timeout-kill (dashboard/job_object.py).
+# Windows-only; Linux/Mac skip this pin. dashboard/job_object.py imports it
+# behind ImportError so the rest of the dashboard still loads.
+pywin32==312; sys_platform == "win32"

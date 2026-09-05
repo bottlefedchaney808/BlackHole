@@ -33,9 +33,14 @@ import sys
 import threading
 from typing import Dict, List, Optional
 
-import win32api
-import win32con
-import win32job
+try:
+    import win32api
+    import win32con
+    import win32job
+except ImportError:  # Linux/Mac — tests inject mocks onto these names
+    win32api = None  # type: ignore[assignment]
+    win32con = None  # type: ignore[assignment]
+    win32job = None  # type: ignore[assignment]
 
 # Per-action timeout in seconds (plan Task 10 / spec Phase 2): interpret and
 # explain are short, single-pass reads; investigate is a longer, code-

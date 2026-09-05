@@ -3,7 +3,17 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 2
 
-PY=".venv/Scripts/python.exe"
+PY=""
+for candidate in .venv/bin/python3 .venv/bin/python .venv/Scripts/python.exe; do
+    if [ -x "$candidate" ]; then
+        PY="$candidate"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "Shared .venv not found -- run: python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt" >&2
+    exit 2
+fi
 SUITE="${1:-all}"
 FAILED=0
 
