@@ -420,3 +420,37 @@ class TestRunStoreApi:
         finally:
             set_default_index(None)
             index.close()
+
+
+def test_write_run_manifest_stores_relative_artifact_paths(tmp_path):
+    """Regression (PM, 2026-09-05): _write_run_manifest stored ABSOLUTE artifact
+    paths because it assumed modules emit relative ones; dealer_exposure emits
+    absolutes. Manifest paths must go through to_rel() like the archive does."""
+    import types
+
+    from shared import module_execution as me
+    from shared.artifact_paths import repo_root
+    from shared.module_registry import ArtifactRef, ModuleResult
+
+    img = repo_root() / "outputs" / "test_rel" / "chart.png"
+    img.parent.mkdir(parents=True, exist_ok=True)
+    img.write_bytes(b"png")
+    try:
+        result = ModuleResult(
+            status="ok",
+            artifacts=[ArtifactRef(path=str(img), kind="png")],
+            metrics={},
+            context_patch=None,
+        )
+        ordered = [types.SimpleNamespace(slug="stub_rel")]
+        context = {
+            "run_id": "TEST-REL-1",
+            "output_dir": str(tmp_path),
+            "ticker": "SPY",
+            "expiry": "auto",
+        }
+        me._write_run_manifest({"stub_rel": result}, ordered, context)
+        manifest = json.loads((tmp_path / "run_manifest.json").read_text())
+        assert manifest["artifacts"]["stub_rel"] == ["outputs/test_rel/chart.png"]
+    finally:
+        img.unlink(missing_ok=True)
