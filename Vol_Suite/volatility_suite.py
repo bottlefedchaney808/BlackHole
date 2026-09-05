@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 import index_membership as idxmem
+from shared.artifact_paths import resolve_stored
 from suite_context import (
     DEFAULT_OPTIONS_SUITE_ROOT,
     DEFAULT_SENTIMENT_SUITE_ROOT,
@@ -216,8 +217,16 @@ def _default_pack_manifest_path() -> str:
 
 
 def _load_json_file(path: str) -> dict | None:
+    """Load a JSON file, resolving the path through resolve_stored().
+    
+    This handles legacy Windows-style paths by converting them to the
+    local host's absolute path if they point to an existing file.
+    """
+    resolved = resolve_stored(path)
+    if resolved is None:
+        return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(resolved, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data

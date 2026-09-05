@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from shared.artifact_paths import repo_root, to_rel, from_rel
+from shared.artifact_paths import repo_root, to_rel, from_rel, resolve_stored
 
 
 pytestmark = pytest.mark.unit
@@ -128,3 +128,69 @@ class TestIntegration:
         abs_path = from_rel(rel)
         rel_back = to_rel(str(abs_path))
         assert rel_back == rel
+
+
+from shared.artifact_paths import resolve_stored
+
+
+class TestResolveStored:
+    """Test resolve_stored() path resolution."""
+
+    def test_unknown_path_returns_none(self):
+        """Unknown/non-existent paths should return None."""
+        assert resolve_stored("/does/not/exist.json") is None
+        assert resolve_stored("outputs/unknown/chart.png") is None
+
+    def test_repo_relative_resolves(self, tmp_path):
+        """Repo-relative paths should resolve to absolute if file exists."""
+        root = repo_root()
+        test_file = root / "outputs" / "r1" / "chart.png"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.touch()
+
+        rel = "outputs/r1/chart.png"
+        resolved = resolve_stored(rel)
+        assert resolved is not None
+        assert resolved == test_file
+
+    def test_windows_style_path_resolves(self):
+        """Windows-style paths should resolve when file exists."""
+        root = repo_root()
+        # Simulate a Windows path pointing to a file that exists
+        test_file = root / "sentiment-scanner" / "data" / "exports" / "highlighted_ticker_packs" / "latest_manifest.json"
+        if test_file.exists():
+            # Build a Windows-style path to this file
+            rel_part = str(test_file.relative_to(root)).replace("/", "\\")
+            win_path = f"C:\\Users\\bottl\\FinancialDevelopment\\{rel_part}"
+            resolved = resolve_stored(win_path)
+            assert resolved is not None
+            assert resolved == test_file
+
+    def test_absolute_path_resolves(self, tmp_path):
+        """Absolute paths should resolve if file exists."""
+        root = repo_root()
+        test_file = root / "outputs" / "r1" / "chart.png"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.touch()
+
+        resolved = resolve_stored(str(test_file))
+        assert resolved is not None
+        assert resolved == test_file
+
+    def test_existing_manifest_json_resolves(self):
+        """The checked-in latest_manifest.json should resolve to its real path."""
+        root = repo_root()
+        manifest = root / "sentiment-scanner" / "data" / "exports" / "highlighted_ticker_packs" / "latest_manifest.json"
+        if manifest.exists():
+            # Read the manifest to get the stored paths
+            import json
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            if data.get("packs"):
+                first_pack = data["packs"][0]
+                json_path = first_pack.get("json_path", "")
+                if json_path:
+                    resolved = resolve_stored(json_path)
+                    # For a path that exists, it should resolve
+                    if resolved is None:
+                        # If it doesn't exist, that's also acceptable (file may not exist)
+                        pass

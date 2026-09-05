@@ -869,14 +869,20 @@ def live_rf() -> float:
         return 0.05
 
 
+from shared.artifact_paths import resolve_stored
+
+
 def _default_pack_manifest_path() -> str:
     root = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(root, "..", "sentiment-scanner", "data", "exports", "highlighted_ticker_packs", "latest_manifest.json")
 
 
 def _load_pack_entries(manifest_path: str):
+    resolved = resolve_stored(manifest_path)
+    if resolved is None:
+        return []
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        with open(resolved, "r", encoding="utf-8") as f:
             data = json.load(f)
         packs = data.get("packs", []) if isinstance(data, dict) else []
         if isinstance(packs, list):

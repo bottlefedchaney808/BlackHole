@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import config
+from shared.artifact_paths import to_rel
 
 
 def _utc_now() -> datetime:
@@ -148,6 +149,10 @@ def export_alert_group(
         for row in pack_tickers:
             writer.writerow({k: row.get(k) for k in writer.fieldnames})
 
+    # Route json_path and csv_path through to_rel() for portability
+    rel_json_path = to_rel(json_path)
+    rel_csv_path = to_rel(csv_path)
+
     manifest = _load_manifest(config.HIGHLIGHT_PACK_MANIFEST)
     fresh_existing = []
     for item in manifest.get("packs", []):
@@ -164,8 +169,8 @@ def export_alert_group(
         "source_run_id": source_run_id,
         "thesis_summary": thesis_summary,
         "tickers": [row["symbol"] for row in pack_tickers],
-        "json_path": json_path,
-        "csv_path": csv_path,
+        "json_path": rel_json_path,
+        "csv_path": rel_csv_path,
     }
     deduped = [manifest_entry]
     for item in fresh_existing:
@@ -175,9 +180,9 @@ def export_alert_group(
     _save_manifest(config.HIGHLIGHT_PACK_MANIFEST, manifest)
     return {
         "group_id": group_id,
-        "json_path": json_path,
-        "pack_json_path": json_path,
-        "csv_path": csv_path,
+        "json_path": rel_json_path,
+        "pack_json_path": rel_json_path,
+        "csv_path": rel_csv_path,
         "manifest_path": config.HIGHLIGHT_PACK_MANIFEST,
         "ticker_count": len(pack_tickers),
         "ranked_tickers": [row["symbol"] for row in pack_tickers],

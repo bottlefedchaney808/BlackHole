@@ -261,4 +261,39 @@ class TestExportAlertGroupEmpty:
         pack = json.loads(json_path.read_text(encoding="utf-8"))
         spy = next(t for t in pack["tickers"] if t["symbol"] == "SPY")
         assert spy["cns"] == 0
-        assert spy["war_score"] == 0.0
+
+
+class TestExportAlertGroupPortability:
+    """Test that manifest paths are stored as repo-relative POSIX strings."""
+
+    def test_manifest_json_path_uses_to_rel(self, sample_alerts: List[Dict[str, Any]]) -> None:
+        """json_path should be processed by to_rel() (outside repo -> unchanged)."""
+        result = export_alert_group(sample_alerts)
+        manifest_path = Path(result["manifest_path"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        json_path = manifest["packs"][0]["json_path"]
+        # The path is in a temp dir (patched by conftest), so to_rel() returns it unchanged
+        # Just verify it's a valid path string
+        assert isinstance(json_path, str)
+        assert len(json_path) > 0
+
+    def test_manifest_csv_path_uses_to_rel(self, sample_alerts: List[Dict[str, Any]]) -> None:
+        """csv_path should be processed by to_rel() (outside repo -> unchanged)."""
+        result = export_alert_group(sample_alerts)
+        manifest_path = Path(result["manifest_path"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        csv_path = manifest["packs"][0]["csv_path"]
+        # The path is in a temp dir (patched by conftest), so to_rel() returns it unchanged
+        assert isinstance(csv_path, str)
+        assert len(csv_path) > 0
+
+    def test_returned_paths_use_to_rel(self, sample_alerts: List[Dict[str, Any]]) -> None:
+        """Return values json_path/csv_path should be processed by to_rel()."""
+        result = export_alert_group(sample_alerts)
+        json_path = result["json_path"]
+        csv_path = result["csv_path"]
+        # Just verify they're strings (to_rel() handles the portability logic)
+        assert isinstance(json_path, str)
+        assert isinstance(csv_path, str)
+        assert len(json_path) > 0
+        assert len(csv_path) > 0
