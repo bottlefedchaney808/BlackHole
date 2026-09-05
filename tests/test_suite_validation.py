@@ -493,3 +493,127 @@ def test_report_lists_every_check(tmp_path):
 
     assert report.splitlines()[0].endswith('PASS')
     assert len(report.splitlines()) == 1 + len(result.checks)
+
+
+# ── validate_run_manifest tests ────────────────────────────────────────────
+from shared.suite_validation import ValidationResult, validate_run_manifest
+
+
+def run_manifest_payload(run_id='run-1', order=None, results=None, **over):
+    """A minimal valid run_manifest.json payload."""
+    if order is None:
+        order = ['dealer_exposure', 'dealer_flow']
+    if results is None:
+        results = {
+            'dealer_exposure': {'status': 'ok'},
+            'dealer_flow': {'status': 'skipped', 'reason': 'missing data'},
+        }
+    payload = {
+        'run_id': run_id,
+        'order': order,
+        'results': results,
+        'started_at': '2026-09-05T20:00:00Z',
+        'ended_at': '2026-09-05T20:01:30Z',
+    }
+    payload.update(over)
+    return payload
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_passes_with_valid_payload(tmp_path):
+    payload = run_manifest_payload()
+    path = tmp_path / 'run_manifest.json'
+    path.write_text(json.dumps(payload))
+
+    result = validate_run_manifest(str(path))
+    assert result.passed
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_fails_when_run_id_missing(tmp_path):
+    payload = run_manifest_payload()
+    del payload['run_id']
+    path = tmp_path / 'run_manifest.json'
+    path.write_text(json.dumps(payload))
+
+    result = validate_run_manifest(str(path))
+    assert not result.passed
+    assert any('run_id' in e for e in result.errors)
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_fails_when_order_missing(tmp_path):
+    payload = run_manifest_payload()
+    del payload['order']
+    path = tmp_path / 'run_manifest.json'
+    path.write_text(json.dumps(payload))
+
+    result = validate_run_manifest(str(path))
+    assert not result.passed
+    assert any('order' in e for e in result.errors)
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_fails_when_order_not_list_of_strings(tmp_path):
+    payload = run_manifest_payload(order=['dealer_exposure', 123])
+    path = tmp_path / 'run_manifest.json'
+    path.write_text(json.dumps(payload))
+
+    result = validate_run_manifest(str(path))
+    assert not result.passed
+    assert any('order' in e for e in result.errors)
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_fails_when_bad_status_value(tmp_path):
+    payload = run_manifest_payload(results={'dealer_exposure': {'status': 'ok'}})
+    # Add a result with invalid status
+    payload['results']['dealer_flow'] = {'status': 'pending'}  # invalid
+    path = tmp_path / 'run_manifest.json'
+    path.write_text(json.dumps(payload))
+
+    result = validate_run_manifest(str(path))
+    assert not result.passed
+    assert any('status' in e for e in result.errors)
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_accepts_valid_status_values(tmp_path):
+    for status in ('ok', 'error', 'failed', 'skipped'):
+        payload = run_manifest_payload(
+            order=['m1'],
+            results={'m1': {'status': status}}
+        )
+        path = tmp_path / 'run_manifest.json'
+        path.write_text(json.dumps(payload))
+        result = validate_run_manifest(str(path))
+        assert result.passed, f"status={status} should pass"
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_rejects_invalid_iso_timestamp(tmp_path):
+    payload = run_manifest_payload(started_at='not-an-iso-time')
+    path = tmp_path / 'run_manifest.json'
+    path.write_text(json.dumps(payload))
+
+    result = validate_run_manifest(str(path))
+    assert not result.passed
+    assert any('started_at' in e for e in result.errors)
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_accepts_valid_iso_timestamps(tmp_path):
+    for ts in ('2026-09-05T20:00:00Z', '2026-09-05T20:00:00+00:00', '2026-09-05T20:00:00'):
+        payload = run_manifest_payload(started_at=ts, ended_at=ts)
+        path = tmp_path / 'run_manifest.json'
+        path.write_text(json.dumps(payload))
+        result = validate_run_manifest(str(path))
+        assert result.passed, f"timestamp={ts} should pass"
+
+
+@pytest.mark.unit
+def test_validate_run_manifest_accepts_dict_input(tmp_path):
+    payload = run_manifest_payload()
+    # Pass dict directly instead of path
+    result = validate_run_manifest(payload)
+    assert result.passed
