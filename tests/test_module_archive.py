@@ -631,3 +631,231 @@ class TestRepoRelativeArtifactPaths:
         assert artifacts[0]["path"] == legacy_path
 
         index.close()
+
+
+# ---------------------------------------------------------------------------#
+# Task B5: backfill legacy absolute paths
+# ---------------------------------------------------------------------------#
+
+
+def _run_backfill_script(tmp_path):
+    """Run the backfill script against a temp DB and return results."""
+    import subprocess
+    script_path = REPO_ROOT / "scripts" / "backfill_archive_paths.py"
+    env = os.environ.copy()
+    env["MODULE_ARCHIVE_DB_PATH"] = str(tmp_path / "archive.db")
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return result
+
+
+class TestBackfillArchivePaths:
+    """Test the backfill_archive_paths.py script (Task B5)."""
+
+    def test_backfill_converts_absolute_to_relative_paths(self, tmp_path):
+        """Absolute paths under repo root become relative."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+
+        # Seed a legacy absolute row (simulating old data)
+        legacy_path = str(REPO_ROOT / "outputs" / "r1" / "chart.png")
+        with index._pool.get_connection_context() as conn:
+            conn.execute(
+                """
+                INSERT INTO module_archive (
+                    module_slug, suite, ticker, expiry, run_id,
+                    triggered_by, timestamp, artifact_paths_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module_spec.slug,
+                    module_spec.suite,
+                    "SPY",
+                    "20261016",
+                    None,
+                    "cli",
+                    "2026-08-01T00:00:00+00:00",
+                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    "{}",
+                ),
+            )
+            conn.commit()
+
+        index.close()
+
+        # Run backfill
+        result = _run_backfill_script(tmp_path)
+        assert result.returncode == 0, f"script failed: {result.stderr}"
+
+        # Verify path is now relative
+        index2 = ArchiveIndex(str(tmp_path / "archive.db"))
+        rows = index2.query(module_slug="dealer_exposure")
+        assert len(rows) == 1
+        artifacts = rows[0]["artifacts"]
+        assert len(artifacts) == 1
+        assert artifacts[0]["path"] == "outputs/r1/chart.png"
+        index2.close()
+
+    def test_backfill_is_idempotent(self, tmp_path):
+        """Running backfill twice changes 0 rows on second run."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+
+        # Seed a legacy absolute row
+        legacy_path = str(REPO_ROOT / "outputs" / "r1" / "chart.png")
+        with index._pool.get_connection_context() as conn:
+            conn.execute(
+                """
+                INSERT INTO module_archive (
+                    module_slug, suite, ticker, expiry, run_id,
+                    triggered_by, timestamp, artifact_paths_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module_spec.slug,
+                    module_spec.suite,
+                    "SPY",
+                    "20261016",
+                    None,
+                    "cli",
+                    "2026-08-01T00:00:00+00:00",
+                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    "{}",
+                ),
+            )
+            conn.commit()
+
+        index.close()
+
+        # Run backfill first time
+        result1 = _run_backfill_script(tmp_path)
+        assert result1.returncode == 0
+
+        # Run backfill second time
+        result2 = _run_backfill_script(tmp_path)
+        assert result2.returncode == 0
+
+        # Second run should report 0 changes
+        assert "Rows changed: 0" in result2.stdout
+
+    def test_backfill_leaves_outside_root_paths_unchanged(self, tmp_path):
+        """Paths outside repo root are left unchanged."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+
+        # Seed a row with a path outside repo root
+        outside_path = "/elsewhere/outputs/chart.png"
+        with index._pool.get_connection_context() as conn:
+            conn.execute(
+                """
+                INSERT INTO module_archive (
+                    module_slug, suite, ticker, expiry, run_id,
+                    triggered_by, timestamp, artifact_paths_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module_spec.slug,
+                    module_spec.suite,
+                    "SPY",
+                    "20261016",
+                    None,
+                    "cli",
+                    "2026-08-01T00:00:00+00:00",
+                    f'[{{"path": "{outside_path}", "kind": "png"}}]',
+                    "{}",
+                ),
+            )
+            conn.commit()
+
+        index.close()
+
+        result = _run_backfill_script(tmp_path)
+        assert result.returncode == 0
+
+        # Verify path is unchanged
+        index2 = ArchiveIndex(str(tmp_path / "archive.db"))
+        rows = index2.query(module_slug="dealer_exposure")
+        artifacts = rows[0]["artifacts"]
+        assert artifacts[0]["path"] == outside_path
+        index2.close()
+
+    def test_backfill_handles_windows_style_paths(self, tmp_path):
+        """Windows-style absolute paths are converted to relative."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+
+        # Seed a Windows-style absolute path
+        windows_path = "C:\\\\Users\\\\bottl\\\\FinancialDevelopment\\\\outputs\\\\r1\\\\chart.png"
+        with index._pool.get_connection_context() as conn:
+            conn.execute(
+                """
+                INSERT INTO module_archive (
+                    module_slug, suite, ticker, expiry, run_id,
+                    triggered_by, timestamp, artifact_paths_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module_spec.slug,
+                    module_spec.suite,
+                    "SPY",
+                    "20261016",
+                    None,
+                    "cli",
+                    "2026-08-01T00:00:00+00:00",
+                    f'[{{"path": "{windows_path}", "kind": "png"}}]',
+                    "{}",
+                ),
+            )
+            conn.commit()
+
+        index.close()
+
+        result = _run_backfill_script(tmp_path)
+        assert result.returncode == 0
+
+        index2 = ArchiveIndex(str(tmp_path / "archive.db"))
+        rows = index2.query(module_slug="dealer_exposure")
+        artifacts = rows[0]["artifacts"]
+        assert artifacts[0]["path"] == "outputs/r1/chart.png"
+        index2.close()
+
+    def test_backfill_report_format(self, tmp_path):
+        """Backfill produces expected report format."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+
+        legacy_path = str(REPO_ROOT / "outputs" / "r1" / "chart.png")
+        with index._pool.get_connection_context() as conn:
+            conn.execute(
+                """
+                INSERT INTO module_archive (
+                    module_slug, suite, ticker, expiry, run_id,
+                    triggered_by, timestamp, artifact_paths_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module_spec.slug,
+                    module_spec.suite,
+                    "SPY",
+                    "20261016",
+                    None,
+                    "cli",
+                    "2026-08-01T00:00:00+00:00",
+                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    "{}",
+                ),
+            )
+            conn.commit()
+
+        index.close()
+
+        result = _run_backfill_script(tmp_path)
+        assert result.returncode == 0
+
+        # Should show summary with counts
+        assert "rows processed" in result.stdout.lower()
+        assert "rows changed" in result.stdout.lower()
