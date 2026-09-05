@@ -26,7 +26,6 @@ are migrated off the orchestrator namespace.
 
 from typing import Any
 
-
 def _all_modules() -> list[Any]:
     """Current registry modules, read through orchestrator's namespace.
 
@@ -137,6 +136,11 @@ def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str,
     - `_archive_module_result` (currently a no-op stub) is called once per
       executed module, after that module's `run(context)` returns.
 
+    Entry-time mutation: if `context` lacks `run_id`, mint one
+    'YYYYMMDDTHHMMSSZ-<4 hex>'. If `context` lacks `output_dir`, set it to
+    `<repo>/outputs/<run_id>/` and create the directory. Explicit caller
+    `output_dir` is respected; `run_id` is always assigned.
+
     Returns:
         {
             "status": "ok",
@@ -144,6 +148,21 @@ def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str,
             "results": {slug: ModuleResult, ...},
         }
     """
+    # Entry-time mutation: mint run_id and set default output_dir if missing.
+    # Explicit caller output_dir is respected; run_id is always assigned.
+    if "run_id" not in context:
+        import datetime as dt
+        import secrets
+        now = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+        ran = secrets.token_hex(2)
+        context["run_id"] = f"{now}-{ran}"
+
+    if "output_dir" not in context:
+        from shared.artifact_paths import repo_root
+        out_dir = repo_root() / "outputs" / context["run_id"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        context["output_dir"] = str(out_dir)
+
     if slugs:
         selected = _resolve_modules(slugs)
     else:

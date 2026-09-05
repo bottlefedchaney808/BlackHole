@@ -255,3 +255,104 @@ class TestModuleExecutionDispatchInvariant:
         assert combined["status"] == "ok"
         assert combined["order"] == ["stub_a"]
 
+
+# --------------------------------------------------------------------------#
+# C1: run_id + default output_dir in run_selected_modules
+# --------------------------------------------------------------------------#
+
+import datetime
+import re
+
+
+class TestRunSelectedModulesRunIdAndOutputDir:
+    def test_no_output_dir_mints_run_id_and_creates_output_dir(self, monkeypatch, tmp_path):
+        module_a = _make_module("stub_a")
+        registry = [module_a]
+
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        context = {"ticker": "SPY"}
+        # Override repo_root to use tmp_path for test isolation
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        result = orchestrator.run_selected_modules(["stub_a"], context)
+
+        # run_id should be minted with format YYYYMMDDTHHMMSSZ-<4 hex>
+        run_id = context.get("run_id")
+        assert run_id is not None
+        assert re.match(r"\d{8}T\d{6}Z-[0-9a-f]{4}", run_id)
+
+        # output_dir should be created as outputs/<run_id>/
+        output_dir = context.get("output_dir")
+        assert output_dir is not None
+        expected_dir = tmp_path / "outputs" / run_id
+        assert Path(output_dir) == expected_dir
+        assert expected_dir.is_dir()
+
+        # run result shape unchanged
+        assert result["status"] == "ok"
+        assert "order" in result
+        assert "results" in result
+
+    def test_explicit_output_dir_respected_run_id_still_set(self, monkeypatch, tmp_path):
+        module_a = _make_module("stub_a")
+        registry = [module_a]
+
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        explicit_dir = tmp_path / "custom" / "output" / "dir"
+        explicit_dir.mkdir(parents=True, exist_ok=True)  # Caller creates the dir
+        context = {"ticker": "SPY", "output_dir": str(explicit_dir)}
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        result = orchestrator.run_selected_modules(["stub_a"], context)
+
+        # run_id should still be set
+        run_id = context.get("run_id")
+        assert run_id is not None
+        assert re.match(r"\d{8}T\d{6}Z-[0-9a-f]{4}", run_id)
+
+        # explicit output_dir should be respected
+        output_dir = context.get("output_dir")
+        assert output_dir == str(explicit_dir)
+        assert explicit_dir.is_dir()
+
+        # run result shape unchanged
+        assert result["status"] == "ok"
+        assert "order" in result
+        assert "results" in result
+
+    def test_run_returns_same_shape_with_or_without_mutation(self, monkeypatch, tmp_path):
+        module_a = _make_module("stub_a")
+        module_b = _make_module("stub_b", requires=["stub_a"])
+        registry = [module_a, module_b]
+
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        # Test without explicit output_dir
+        context1 = {"ticker": "NVDA"}
+        result1 = orchestrator.run_selected_modules(["stub_b"], context1)
+        assert result1["status"] == "ok"
+        assert result1["order"] == ["stub_a", "stub_b"]
+        assert "results" in result1
+
+        # Test with explicit output_dir
+        explicit_dir = tmp_path / "explicit_run"
+        context2 = {"ticker": "AAPL", "output_dir": str(explicit_dir)}
+        result2 = orchestrator.run_selected_modules(["stub_b"], context2)
+        assert result2["status"] == "ok"
+        assert result2["order"] == ["stub_a", "stub_b"]
+        assert "results" in result2
+
