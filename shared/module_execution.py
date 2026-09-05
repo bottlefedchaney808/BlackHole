@@ -113,6 +113,155 @@ def _topo_sort_modules(modules: list[Any]) -> list[Any]:
     return [by_slug[slug] for slug in ordered_slugs]
 
 
+def _write_run_manifest(
+    results: dict[str, Any],
+    ordered: list[Any],
+    context: dict[str, Any],
+) -> None:
+    """Best-effort write run_manifest.json to run output directory.
+
+    Writes a manifest file next to artifacts that says what happened -
+    the validation target for widget runs. A failure to write the manifest
+    is logged but does NOT fail the run (mirrors module_archive discipline).
+
+    Args:
+        results: Dict of slug -> ModuleResult from module runs
+        ordered: List of ModuleSpecs in execution order
+        context: Execution context (contains run_id, output_dir)
+    """
+    import datetime as dt
+    import json
+    import logging
+    from pathlib import Path
+
+    from shared.artifact_paths import repo_root
+
+    logger = logging.getLogger(__name__)
+
+    run_id = context.get("run_id")
+    output_dir = context.get("output_dir")
+
+    if not run_id or not output_dir:
+        logger.warning(
+            "run_manifest write skipped: missing run_id (%r) or output_dir (%r)",
+            run_id,
+            output_dir,
+        )
+        return
+
+    try:
+        # Build results dict: slug -> {status, error, ticker, expiry}
+        # and build artifacts dict: slug -> [relative paths]
+        results_out: dict[str, dict[str, Any]] = {}
+        artifacts_out: dict[str, list[str]] = {}
+        for slug, result in results.items():
+            # Extract ticker/expiry from context or module archive convention
+            focus = context.get("focus") or {}
+            ticker = (
+                str(context.get("ticker") or focus.get("ticker") or "")
+                .strip()
+                .upper()
+            )
+            ticker = ticker or None
+            expiry = str(context.get("expiry") or focus.get("expiry") or "").strip()
+            expiry = expiry or None
+
+            # Build artifacts list: [repo-relative paths]
+            artifact_paths: list[str] = []
+            for artifact in result.artifacts or []:
+                try:
+                    # artifact.path is already relative from module's perspective
+                    # Convert to absolute path string for storage
+                    artifact_paths.append(str(artifact.path))
+                except Exception:
+                    # If path access fails, skip this artifact
+                    pass
+
+            results_out[slug] = {
+                "status": result.status,
+                "error": None,  # No error field in ModuleResult; could add if needed
+                "ticker": ticker,
+                "expiry": expiry,
+            }
+            artifacts_out[slug] = artifact_paths
+
+        manifest = {
+            "run_id": run_id,
+            "order": [module.slug for module in ordered],
+            "results": results_out,
+            "artifacts": artifacts_out,
+            "started_at": context.get("run_started_at", dt.datetime.now(dt.UTC).isoformat()),
+            "ended_at": dt.datetime.now(dt.UTC).isoformat(),
+        }
+
+        # Write to <output_dir>/run_manifest.json
+        output_path = Path(output_dir)
+        manifest_path = output_path / "run_manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+    except Exception:
+        logger.warning(
+            "run_manifest write failed for run_id=%r (manifest is best-effort; "
+            "the module run itself is unaffected)",
+            run_id,
+            exc_info=True,
+        )
+
+
+def _persist_context_patch_to_store(
+    context_patch: dict[str, Any],
+    context: dict[str, Any],
+    source_slug: str,
+) -> None:
+    """Persist a context_patch to the Context Store (best-effort, never fail the run).
+
+    Keys the entry by the context scope (ticker/ticker+expiry or basket) plus run_id.
+    If Context Store operations fail, logs a warning but does NOT fail the module run.
+
+    Args:
+        context_patch: The patch dict from ModuleResult.context_patch
+        context: The execution context (should contain ticker/scope + run_id)
+        source_slug: The module slug that produced this patch
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Lazy import ContextStore and Scope
+        from shared.context_store import ContextStore, Scope
+
+        # Build scope from context: prefer ticker+expiry if available, fall back to basket
+        scope_dict: dict[str, Any] = {}
+        if "basket" in context:
+            scope_dict["basket"] = context["basket"]
+        elif "ticker" in context:
+            scope_dict["ticker"] = context["ticker"]
+            if "expiry" in context and context["expiry"]:
+                scope_dict["expiry"] = context["expiry"]
+
+        # If we have a valid scope, persist each key in context_patch
+        if scope_dict:
+            store = ContextStore()
+            try:
+                for key, value in context_patch.items():
+                    store.put(scope_dict, key, value, source_slug=source_slug)
+            finally:
+                store.close()
+        else:
+            # No usable scope in context - log at debug level
+            logger.debug(
+                "context_patch write skipped: no ticker/scope in context for module %s",
+                source_slug,
+            )
+    except Exception:
+        logger.warning(
+            "context_patch store failed for module %s (best-effort; "
+            "the module run itself is unaffected)",
+            source_slug,
+            exc_info=True,
+        )
+
+
 def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str, Any]:
     """Resolve, expand, order and execute a set of registry modules.
 
@@ -185,7 +334,12 @@ def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str,
         results[module.slug] = result
         if result.context_patch is not None:
             context.update(result.context_patch)
+            # Persist context_patch to Context Store (best-effort, never fail the run)
+            _persist_context_patch_to_store(result.context_patch, context, module.slug)
         _archive_module_result(module.slug, result, context)
+
+    # Write run_manifest.json best-effort (never fail the run)
+    _write_run_manifest(results, ordered, context)
 
     return {
         "status": "ok",
