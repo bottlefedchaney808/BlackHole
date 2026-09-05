@@ -170,12 +170,15 @@ def _write_run_manifest(
             artifact_paths: list[str] = []
             for artifact in result.artifacts or []:
                 try:
-                    # artifact.path is already relative from module's perspective
-                    # Convert to absolute path string for storage
-                    artifact_paths.append(str(artifact.path))
+                    from shared.artifact_paths import to_rel
+
+                    artifact_paths.append(to_rel(str(artifact.path)))
                 except Exception:
-                    # If path access fails, skip this artifact
-                    pass
+                    # If path access/conversion fails, degrade to the raw path
+                    try:
+                        artifact_paths.append(str(artifact.path))
+                    except Exception:
+                        pass
 
             results_out[slug] = {
                 "status": result.status,
