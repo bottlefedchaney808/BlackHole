@@ -170,7 +170,6 @@ class TestRunSelectedModulesRequiresExpansion:
         import shared.module_registry as module_registry_mod
 
         monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
-
         with pytest.raises(ValueError, match="not_registered"):
             orchestrator.run_selected_modules(["stub_broken"], {})
 
@@ -247,18 +246,19 @@ class TestModuleExecutionDispatchInvariant:
         for removed in ("run_suite", "run_unified"):
 
             def _boom(*args, **kwargs):
-                raise AssertionError(f"{removed} must not be called on the modules path")
+                raise AssertionError(
+                    f"{removed} must not be called on the modules path"
+                )
 
             monkeypatch.setattr(orchestrator, removed, _boom, raising=False)
-
         combined = orchestrator.run_selected_modules(["stub_a"], {})
         assert combined["status"] == "ok"
         assert combined["order"] == ["stub_a"]
 
 
-# --------------------------------------------------------------------------#
+# --------------------------------------------------------------------------
 # C1: run_id + default output_dir in run_selected_modules
-# --------------------------------------------------------------------------#
+# --------------------------------------------------------------------------
 
 import datetime
 import re
@@ -356,3 +356,225 @@ class TestRunSelectedModulesRunIdAndOutputDir:
         assert result2["order"] == ["stub_a", "stub_b"]
         assert "results" in result2
 
+
+# C2: run_manifest.json at end of run_selected_modules
+# --------------------------------------------------------------------------
+
+import json
+from pathlib import Path
+
+
+class TestRunManifestJson:
+    def test_run_manifest_written_for_two_module_run(self, monkeypatch, tmp_path):
+        """Stubbed 2-module run (one ok, one status=error) -> run_manifest.json exists."""
+        module_a = _make_module("stub_a")
+        module_b = _make_module("stub_b")
+
+        # Override run to return status="error" for module_b
+        def run_error(context: dict) -> ModuleResult:
+            return ModuleResult(
+                status="error",
+                artifacts=[],
+                metrics={"error_reason": "test failure"},
+                context_patch=None,
+            )
+
+        module_b_error = _make_module("stub_b", run=run_error)
+
+        registry = [module_a, module_b_error]
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        context = {"ticker": "SPY"}
+        result = orchestrator.run_selected_modules(["stub_a", "stub_b"], context)
+
+        # Verify run result shape
+        assert result["status"] == "ok"
+        assert result["order"] == ["stub_a", "stub_b"]
+        assert "results" in result
+        assert result["results"]["stub_a"].status == "ok"
+        assert result["results"]["stub_b"].status == "error"
+
+        # Verify run_manifest.json was written
+        run_id = context.get("run_id")
+        assert run_id is not None
+
+        manifest_path = tmp_path / "outputs" / run_id / "run_manifest.json"
+        assert manifest_path.exists(), f"run_manifest.json not found at {manifest_path}"
+
+        manifest = json.loads(manifest_path.read_text())
+
+        # Verify manifest structure
+        assert manifest["run_id"] == run_id
+        assert manifest["order"] == ["stub_a", "stub_b"]
+        assert "results" in manifest
+        assert "artifacts" in manifest
+        assert "started_at" in manifest
+        assert "ended_at" in manifest
+
+        # Verify per-module results
+        assert manifest["results"]["stub_a"]["status"] == "ok"
+        assert manifest["results"]["stub_b"]["status"] == "error"
+        assert manifest["results"]["stub_b"]["error"] is None
+        assert manifest["results"]["stub_a"]["ticker"] == "SPY"
+        assert manifest["results"]["stub_b"]["ticker"] == "SPY"
+
+        # Verify artifacts dict structure
+        assert "stub_a" in manifest["artifacts"]
+        assert "stub_b" in manifest["artifacts"]
+
+    def test_run_manifest_has_correct_timestamps(self, monkeypatch, tmp_path):
+        """run_manifest timestamps are ISO UTC format."""
+        module_a = _make_module("stub_a")
+        registry = [module_a]
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        context = {"ticker": "AAPL"}
+        result = orchestrator.run_selected_modules(["stub_a"], context)
+
+        run_id = context.get("run_id")
+        manifest_path = tmp_path / "outputs" / run_id / "run_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+
+        # Verify timestamps are ISO format (can be parsed)
+        from datetime import datetime
+
+        started_at = datetime.fromisoformat(manifest["started_at"])
+        ended_at = datetime.fromisoformat(manifest["ended_at"])
+
+        assert started_at is not None
+        assert ended_at is not None
+        assert ended_at >= started_at
+
+
+# C4: agent runs persist context_patch into Context Store
+# --------------------------------------------------------------------------
+
+import logging
+from unittest.mock import patch, MagicMock
+
+
+class TestContextPatchPersistence:
+    def test_context_patch_stored_for_module_run(self, monkeypatch, tmp_path):
+        """Stub module with context_patch -> store contains entry for scope."""
+        from shared.context_store import ContextStore
+
+        def run_with_patch(context: dict) -> ModuleResult:
+            return ModuleResult(
+                status="ok",
+                artifacts=[],
+                metrics={},
+                context_patch={"garch_vol": 0.42, "iv_rank": 0.65},
+            )
+
+        module_a = _make_module("stub_a", run=run_with_patch)
+        registry = [module_a]
+
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        context = {"ticker": "SPY", "output_dir": str(tmp_path / "outputs")}
+
+        # Patch ContextStore to track calls
+        mock_store = MagicMock()
+        monkeypatch.setattr("shared.context_store.ContextStore", lambda *a, **kw: mock_store)
+
+        orchestrator.run_selected_modules(["stub_a"], context)
+
+        # Verify put was called for each key in context_patch
+        assert mock_store.put.call_count >= 2  # At least 2 keys: garch_vol, iv_rank
+
+        # Verify scope is correct (ticker:SPY) for at least one call
+        found_spy_scope = False
+        for call in mock_store.put.call_args_list:
+            scope_arg = call[0][0]
+            if isinstance(scope_arg, dict):
+                if scope_arg.get("ticker") == "SPY":
+                    found_spy_scope = True
+                    break
+        assert found_spy_scope, "No call found with ticker:SPY scope"
+
+    def test_context_store_failure_does_not_fail_run(self, monkeypatch, tmp_path, caplog):
+        """ContextStore patched to raise -> run succeeds, warning logged."""
+        from shared.context_store import ContextStore
+
+        def run_with_patch(context: dict) -> ModuleResult:
+            return ModuleResult(
+                status="ok",
+                artifacts=[],
+                metrics={},
+                context_patch={"garch_vol": 0.42},
+            )
+
+        module_a = _make_module("stub_a", run=run_with_patch)
+        registry = [module_a]
+
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        context = {"ticker": "SPY", "output_dir": str(tmp_path / "outputs")}
+
+        # Patch ContextStore.put to raise
+        with patch.object(ContextStore, "put", side_effect=Exception("DB error")):
+            # The run should still succeed despite ContextStore failure
+            result = orchestrator.run_selected_modules(["stub_a"], context)
+
+            assert result["status"] == "ok"
+            assert "stub_a" in result["results"]
+            assert result["results"]["stub_a"].status == "ok"
+
+        # Verify warning was logged
+        log_messages = [r.getMessage() for r in caplog.records]
+        assert any("context_patch" in msg.lower() or "context store" in msg.lower() for msg in log_messages)
+
+    def test_context_patch_persists_to_store_in_integration(self, monkeypatch, tmp_path):
+        """Full integration: context_patch actually gets stored via real ContextStore."""
+        from shared.context_store import ContextStore
+
+        def run_with_patch(context: dict) -> ModuleResult:
+            return ModuleResult(
+                status="ok",
+                artifacts=[],
+                metrics={},
+                context_patch={"garch_vol": 0.42},
+            )
+
+        module_a = _make_module("stub_a", run=run_with_patch)
+        registry = [module_a]
+
+        monkeypatch.setattr(orchestrator, "all_modules", lambda: registry)
+        import shared.module_registry as module_registry_mod
+        monkeypatch.setattr(module_registry_mod, "all_modules", lambda: registry)
+
+        import shared.artifact_paths as artifact_paths_mod
+        monkeypatch.setattr(artifact_paths_mod, "repo_root", lambda: tmp_path)
+
+        db_path = tmp_path / "test_context.db"
+        context = {"ticker": "SPY", "output_dir": str(tmp_path / "outputs")}
+
+        with ContextStore(db_path) as store:
+            # Patch ContextStore constructor to use our test db
+            monkeypatch.setattr("shared.context_store.ContextStore", lambda *a, **kw: store)
+
+            orchestrator.run_selected_modules(["stub_a"], context)
+
+            # Verify the value was stored
+            result = store.get({"ticker": "SPY"}, "garch_vol")
+            assert result == 0.42
