@@ -27,7 +27,7 @@ python setup_db.py
 | Dashboard (`http://127.0.0.1:8787`) | `dashboard.bat` | Refuses to double-launch on port 8787 |
 | Tools module (`/tools`, same process) | `tools.bat` | |
 | DTCC live poller (leave running) | `run_scheduler.bat` | Polls every 5 min; refuses to double-launch |
-| Orchestrator, unified | `orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16` | Sentiment stage is **hardcoded skipped** in `run_unified` regardless of flags — see Part 5 |
+| Orchestrator, unified | ~~`orchestrator.bat --unified --ticker NVDA --expiry 2026-10-16`~~ | **Removed 2026-09-04 (commit 1847bf3).** CLI flags `--unified`/`--suite` and `run_suite`/`run_unified` no longer exist — see `CLAUDE.md` line 101. |
 | Orchestrator, single suite | `orchestrator.bat --suite vol\|options\|var\|sentiment --ticker AAPL` | `--suite options` currently **fails validation** (Options_Suite context-mode stub is incomplete — see Part 5); `--suite var` always runs VaR module 1 only, no flag exists to change that |
 | Full swap backfill (hours, resumable) | `python backfill.py` | Ctrl+C-safe; resumes from `ingestion_state` |
 | Query swap DB | `python swaps_query.py` or `from swaps_query import SwapsQuery` | `swaps.db` is **~320GB** — see Part 6 finding #1 before writing ad hoc full-table-scan queries |
