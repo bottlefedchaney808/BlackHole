@@ -66,6 +66,7 @@ __all__ = [
     'validate_vol_result',
     'validate_suite_output',
     'require_suite_output',
+    'validate_run_manifest',
 ]
 
 PASS = 'PASS'
@@ -406,12 +407,10 @@ def validate_suite_output(suite_name: str,
         result.errors.append(f"{name}: {detail}")
         result.status = FAIL
         return False
-
     # ---- 1. output directory ----
     if not record('output_dir_exists', os.path.isdir(output_dir),
                   f"not a directory: {output_dir}"):
         return result
-
     # ---- 2. marker file present and non-empty ----
     if not os.path.isfile(marker_path):
         record('marker_present', False,
@@ -505,4 +504,115 @@ def require_suite_output(suite_name: str,
         raise SuiteValidationError(
             f"{result.suite} output validation FAILED: " + '; '.join(result.errors),
             result)
+    return result
+
+
+# --------------------------------------------------------------------------
+# validate_run_manifest for widget-regime runs
+# --------------------------------------------------------------------------
+
+
+def validate_run_manifest(path_or_dict: str | Dict[str, Any]) -> ValidationResult:
+    """Validate the run_manifest.json produced by widget/module runs.
+
+    Checks:
+      - run_id is present and non-empty
+      - order is a list[str]
+      - results is a dict with per-slug status in {ok, error, failed, skipped}
+      - started_at / ended_at (if present) parse as ISO 8601 timestamps
+
+    Accepts either a file path (str) or an already-parsed dict. Returns a
+    ValidationResult (status PASS/FAIL, .errors list details).
+
+    Does NOT modify existing validators or the validate_vol_result signature.
+    """
+    # Load from file if path given
+    if isinstance(path_or_dict, str):
+        try:
+            with open(path_or_dict, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            return ValidationResult(
+                suite='run_manifest',
+                status=FAIL,
+                output_dir=os.path.dirname(path_or_dict) or '.',
+                marker_path=path_or_dict,
+                validated_at=_iso_utc_now(),
+                strict=True,
+                checks=[CheckResult('marker_parses', FAIL, f"{type(e).__name__}: {e}")],
+                errors=[f"marker_parses: {type(e).__name__}: {e}"],
+            )
+    else:
+        data = path_or_dict
+        path_or_dict = '<dict>'
+
+    result = ValidationResult(
+        suite='run_manifest',
+        status=PASS,
+        output_dir='.',
+        marker_path=path_or_dict,
+        validated_at=_iso_utc_now(),
+        strict=True,
+    )
+
+    def record(name: str, ok: bool, detail: str = '') -> bool:
+        if ok:
+            result.checks.append(CheckResult(name, PASS, detail))
+            return True
+        result.checks.append(CheckResult(name, FAIL, detail))
+        result.errors.append(f"{name}: {detail}")
+        result.status = FAIL
+        return False
+
+    # ---- run_id present and non-empty ----
+    if not record('run_id_present',
+                  isinstance(data.get('run_id'), str) and data['run_id'].strip(),
+                  "run_id must be a non-empty string"):
+        return result
+
+    # ---- order is list[str] ----
+    order = data.get('order')
+    if not record('order_is_list', isinstance(order, list),
+                  "order must be a list"):
+        return result
+    if order and not all(isinstance(item, str) for item in order):
+        record('order_is_list_of_strings', False,
+               "order must be a list of strings")
+        return result
+    record('order_is_list_of_strings', True, f"{len(order)} item(s)")
+
+    # ---- results is dict with valid status values ----
+    results = data.get('results')
+    if not record('results_is_dict', isinstance(results, dict),
+                  "results must be a dict"):
+        return result
+    valid_statuses = {'ok', 'error', 'failed', 'skipped'}
+    for slug, entry in results.items():
+        if not isinstance(entry, dict):
+            record(f'results[{slug}].is_dict', False, "entry must be a dict")
+            continue
+        status = entry.get('status')
+        if status is None:
+            record(f'results[{slug}].status_present', False, "status missing")
+        elif status not in valid_statuses:
+            record(f'results[{slug}].status_valid', False,
+                   f"status={status!r} not in {sorted(valid_statuses)}")
+        else:
+            record(f'results[{slug}].status_valid', True, status)
+
+    # ---- ISO timestamps (started_at, ended_at) parseable ----
+    for field in ('started_at', 'ended_at'):
+        val = data.get(field)
+        if val is None:
+            continue  # optional fields
+        if isinstance(val, str):
+            try:
+                # Try parsing ISO 8601
+                dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
+                record(f'{field}_parseable', True, val)
+            except ValueError as e:
+                record(f'{field}_parseable', False, f"{val}: {e}")
+        else:
+            record(f'{field}_parseable', False, f"must be string, got {type(val).__name__}")
+
     return result
