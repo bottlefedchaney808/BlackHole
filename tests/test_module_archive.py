@@ -16,6 +16,7 @@ parallelism.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -292,6 +293,7 @@ class TestRecordNeverRaises:
 # "database is locked" failure mode).
 # ---------------------------------------------------------------------------
 
+
 _CHILD_SCRIPT = """
 import sys
 sys.path.insert(0, {repo_root!r})
@@ -514,3 +516,118 @@ class TestDefaultIndexSingleton:
         finally:
             module_archive_mod.set_default_index(None)
             index.close()
+
+
+# ---------------------------------------------------------------------------
+# Task B2: repo-relative artifact paths
+# ---------------------------------------------------------------------------
+
+
+class TestRepoRelativeArtifactPaths:
+    """Test that artifact paths are stored repo-relative (Task B2)."""
+
+    def test_record_stores_repo_path_relative(self, tmp_path):
+        """Repo under-root path should be stored as relative."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+        # Path under repo root
+        repo_path = REPO_ROOT / "outputs" / "r1" / "chart.png"
+        result = _make_result(artifacts=[ArtifactRef(path=str(repo_path), kind="png")])
+        context = {"ticker": "SPY", "expiry": "20261016"}
+
+        index.record(result, module_spec, context, triggered_by="orchestrator")
+
+        rows = index.query(module_slug="dealer_exposure")
+        assert len(rows) == 1
+        artifacts = rows[0]["artifacts"]
+        assert len(artifacts) == 1
+        # Should be stored relative, not absolute
+        assert artifacts[0]["path"] == "outputs/r1/chart.png"
+        assert not os.path.isabs(artifacts[0]["path"])
+
+        index.close()
+
+    def test_record_stores_windows_style_path_relative(self, tmp_path):
+        """Fake Windows-style path should be stored as relative."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+        # Fake Windows path (doesn't exist, but should be normalized)
+        windows_path = "C:\\Users\\bottl\\FinancialDevelopment\\outputs\\r1\\chart.png"
+        result = _make_result(artifacts=[ArtifactRef(path=windows_path, kind="png")])
+        context = {"ticker": "SPY", "expiry": "20261016"}
+
+        index.record(result, module_spec, context, triggered_by="orchestrator")
+
+        rows = index.query(module_slug="dealer_exposure")
+        assert len(rows) == 1
+        artifacts = rows[0]["artifacts"]
+        assert len(artifacts) == 1
+        # Should be stored relative, not as Windows absolute
+        assert artifacts[0]["path"] == "outputs/r1/chart.png"
+        assert not os.path.isabs(artifacts[0]["path"])
+
+        index.close()
+
+    def test_record_mixed_repo_and_windows_paths(self, tmp_path):
+        """One repo-path + one fake Windows-style path both stored relative."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+        repo_path = REPO_ROOT / "outputs" / "r1" / "chart.png"
+        windows_path = "C:\\Users\\bottl\\FinancialDevelopment\\outputs\\r1\\vol.json"
+        result = _make_result(
+            artifacts=[
+                ArtifactRef(path=str(repo_path), kind="png"),
+                ArtifactRef(path=windows_path, kind="json"),
+            ]
+        )
+        context = {"ticker": "SPY", "expiry": "20261016"}
+
+        index.record(result, module_spec, context, triggered_by="orchestrator")
+
+        rows = index.query(module_slug="dealer_exposure")
+        assert len(rows) == 1
+        artifacts = rows[0]["artifacts"]
+        assert len(artifacts) == 2
+        assert artifacts[0]["path"] == "outputs/r1/chart.png"
+        assert artifacts[1]["path"] == "outputs/r1/vol.json"
+
+        index.close()
+
+    def test_legacy_absolute_row_returned_unmuted_by_query(self, tmp_path):
+        """Pre-seeded legacy ABSOLUTE row still returned unmuted by query."""
+        index = ArchiveIndex(str(tmp_path / "archive.db"))
+        module_spec = _make_module_spec("dealer_exposure")
+
+        # Pre-seed a legacy absolute row (simulating old data)
+        legacy_path = "/opt/data/FinancialDevelopment/outputs/legacy/chart.png"
+        with index._pool.get_connection_context() as conn:
+            conn.execute(
+                """
+                INSERT INTO module_archive (
+                    module_slug, suite, ticker, expiry, run_id,
+                    triggered_by, timestamp, artifact_paths_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module_spec.slug,
+                    module_spec.suite,
+                    "SPY",
+                    "20261016",
+                    None,
+                    "cli",
+                    "2026-08-01T00:00:00+00:00",
+                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    "{}",
+                ),
+            )
+            conn.commit()
+
+        # Query should return the absolute path unchanged (query does NOT mutate)
+        rows = index.query(ticker="SPY")
+        assert len(rows) == 1
+        artifacts = rows[0]["artifacts"]
+        assert len(artifacts) == 1
+        # Should be returned as-is (absolute), not converted
+        assert artifacts[0]["path"] == legacy_path
+
+        index.close()

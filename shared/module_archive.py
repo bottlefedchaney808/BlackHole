@@ -76,6 +76,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from shared.artifact_paths import to_rel
 from shared.connection_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -234,10 +235,14 @@ class ArchiveIndex:
         run_id = context.get("run_id")
         run_id = str(run_id) if run_id not in (None, "") else None
 
-        artifacts = [
-            {"path": str(a.path), "kind": str(a.kind)}
-            for a in (module_result.artifacts or [])
-        ]
+        artifacts = []
+        for a in (module_result.artifacts or []):
+            try:
+                path_rel = to_rel(str(a.path))
+            except Exception:
+                # If to_rel fails, store original path (graceful degradation)
+                path_rel = str(a.path)
+            artifacts.append({"path": path_rel, "kind": str(a.kind)})
         metrics = dict(module_result.metrics or {})
 
         # No `default=str` fallback here on purpose: a metrics dict that
