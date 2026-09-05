@@ -11,9 +11,13 @@ compiles fine even with a typo'd kwarg or a stale local-variable reference
 end-to-end with every network-facing module and stdin stubbed out, and
 asserts each pipeline step actually got invoked with the basket/ticker it
 should have used.
+
+This file also tests task C3: context-mode writes into the shared run directory.
 """
 
 import builtins
+import json
+import os
 
 import pytest
 import volatility_suite as vsuite
@@ -312,7 +316,6 @@ def test_garch_success_with_no_conditional_vol_is_not_an_error(monkeypatch, tmp_
     _install_common_stubs(monkeypatch, calls)
 
     import garch_analysis as ga
-
     monkeypatch.setattr(
         ga,
         "run_garch_module",
@@ -327,3 +330,127 @@ def test_garch_success_with_no_conditional_vol_is_not_an_error(monkeypatch, tmp_
     assert artifacts["garch_ran"] is True
     assert artifacts["garch_conditional_vol"] is None
     assert [e for e in artifacts["errors"] if e["step"] == "garch"] == []
+
+
+# --------------------------------------------------------------------------- #
+# C3: context-mode writes into the shared run directory                       #
+# --------------------------------------------------------------------------- #
+
+
+def _write_context_file(tmp_path, run_id=None, output_dir=None, **overrides) -> str:
+    """Create a suite_context.json with optional run_id/output_dir."""
+    import suite_context
+
+    kwargs = dict(
+        schema_version=1,
+        run_id=run_id or "test-run-123",
+        created_at_utc="2026-09-05T12:00:00Z",
+        output_dir=str(output_dir or (tmp_path / "outputs" / "test-run-123")),
+        focus={
+            "ticker": "TSLA",
+            "option_type": "call",
+            "strike": None,
+            "target_years": 0.4,
+            "expiration_date": "2026-12-18",
+            "garch_conditional_vol": None,
+            "expected_return": None,
+        },
+        basket={
+            "index_ticker": "SPY",
+            "tickers": ["TSLA", "INTC"],
+            "weights": [0.5, 0.5],
+        },
+        sentiment={
+            "manifest_path": str(tmp_path / "manifest.json"),
+            "pack_json_path": None,
+            "group_id": None,
+            "ranked_tickers": ["TSLA", "INTC"],
+        },
+        var={
+            "horizon_days": 1,
+            "confidence": 0.95,
+            "positions": None,
+        },
+        controls={
+            "run_options_suite": False,
+            "run_var_suite": False,
+            "compile_pdf": False,
+        },
+        paths={
+            "options_suite_root": "options_suite",
+            "var_suite_root": "var_suite",
+            "sentiment_suite_root": "sentiment",
+        },
+        data_sources=[],
+        strategies=[],
+        jump_diffusion=None,
+    )
+    kwargs.update(overrides)
+    path = tmp_path / "suite_context.json"
+    path.write_text(json.dumps(kwargs, indent=2), encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.unit
+def test_context_mode_with_run_id_and_output_dir_honors_both(monkeypatch, tmp_path):
+    """When context has run_id and output_dir from orchestrator, vol_result.json
+    should be written to that output directory (task C3)."""
+    calls: dict = {}
+    _install_common_stubs(monkeypatch, calls)
+    monkeypatch.setattr(builtins, "input", lambda p=None: "")
+
+    expected_run_id = "orchestrator-run-456"
+    expected_output_dir = tmp_path / "orchestrator_runs" / "orchestrator-run-456"
+    expected_output_dir.mkdir(parents=True)
+
+    ctx_path = _write_context_file(
+        tmp_path, run_id=expected_run_id, output_dir=str(expected_output_dir)
+    )
+
+    rc = vsuite.run_context_mode(ctx_path)
+    assert rc == 0
+
+    # vol_result.json should be in the output directory
+    vol_result_path = expected_output_dir / "vol_result.json"
+    assert vol_result_path.exists(), (
+        f"vol_result.json should be in {expected_output_dir}"
+    )
+
+    # Verify run_id in vol_result.json matches
+    vol_res = json.loads(vol_result_path.read_text(encoding="utf-8"))
+    assert vol_res["run_id"] == expected_run_id
+    assert vol_res["output_dir"] == str(expected_output_dir)
+
+
+@pytest.mark.unit
+def test_context_mode_standalone_with_explicit_context_out(monkeypatch, tmp_path):
+    """When context has output_dir but --context-out is given, context_out
+    takes precedence for vol_result.json."""
+    calls: dict = {}
+    _install_common_stubs(monkeypatch, calls)
+    monkeypatch.setattr(builtins, "input", lambda p=None: "")
+
+    expected_run_id = "context-run-abc"
+    expected_output_dir = tmp_path / "context_runs" / "context-run-abc"
+    expected_output_dir.mkdir(parents=True)
+
+    ctx_path = _write_context_file(
+        tmp_path, run_id=expected_run_id, output_dir=str(expected_output_dir)
+    )
+
+    # Override with context_out pointing to a different location
+    alt_output_dir = tmp_path / "alt_output"
+    alt_output_dir.mkdir()
+    context_out_path = alt_output_dir / "vol_result_override.json"
+
+    rc = vsuite.run_context_mode(ctx_path, context_out=str(context_out_path))
+    assert rc == 0
+
+    # vol_result.json should be at context_out
+    assert context_out_path.exists(), (
+        "vol_result.json should be at context_out"
+    )
+
+    # Verify run_id matches
+    vol_res = json.loads(context_out_path.read_text(encoding="utf-8"))
+    assert vol_res["run_id"] == expected_run_id
