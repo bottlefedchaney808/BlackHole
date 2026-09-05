@@ -2431,6 +2431,26 @@ def run_context_mode(context_path: str, context_out: str | None = None) -> int:
         print(f"Unusable context {context_path}: {exc}", file=sys.stderr)
         return 2
 
+    # Task C3: When context lacks run_id or output_dir (standalone --context
+    # mode), mint fresh values using the same format as run_selected_modules.
+    # This ensures all files land in one run directory regardless of how the
+    # context was created.
+    import datetime as dt
+    import secrets
+    if "run_id" not in context or "output_dir" not in context:
+        now = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+        ran = secrets.token_hex(2)
+        # Honor an existing run_id when only output_dir is missing, so all
+        # files land in the SAME run directory (card requirement).
+        run_id = context.get("run_id") or f"{now}-{ran}"
+        context["run_id"] = run_id
+
+        # Use the same output directory logic as run_selected_modules
+        from shared.artifact_paths import repo_root
+        out_dir = repo_root() / "outputs" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        context["output_dir"] = str(out_dir)
+
     focus = context["focus"]
     basket = context["basket"]
     ticker = str(focus["ticker"]).upper()
