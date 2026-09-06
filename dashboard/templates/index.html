@@ -19,49 +19,10 @@
 
 <!-- ------------------------------------------------------------------ -->
 <div class="widget-grid">
-  <div class="panel widget" id="positionsWidget">
-    <header>
-      <h2>Positions</h2>
-      <span class="note">Robinhood accounts A &amp; B &middot; pushed by a scheduled agent every 15-30 min</span>
-    </header>
-    <div class="body">
-      <div id="positionsStalePill" style="margin-bottom:10px;"></div>
-      <div id="positionsContent"><div class="empty">No positions synced yet.</div></div>
-    </div>
-  </div>
-
-  <div class="panel widget" id="signalsWidget">
-    <header>
-      <h2>Vol/quant signals</h2>
-      <span class="note">screener read (Vol_Suite) &middot; not full dealer positioning &middot; refreshed periodically</span>
-    </header>
-    <div class="body">
-      <div id="signalsStalePill" style="margin-bottom:10px;"></div>
-      <div id="signalsContent"><div class="empty">No signals computed yet.</div></div>
-    </div>
-  </div>
-
-  <div class="panel widget" id="positionAnalysisWidget">
-    <header>
-      <h2>Per-position analysis</h2>
-      <span class="note">hedge advice + price_dist/mc_sim/corr_sim per held ticker &middot; refreshed periodically</span>
-    </header>
-    <div class="body">
-      <div id="positionAnalysisStalePill" style="margin-bottom:10px;"></div>
-      <div id="positionAnalysisContent"><div class="empty">No analysis computed yet.</div></div>
-    </div>
-  </div>
-
-  <div class="panel widget" id="surfacesWidget">
-    <header>
-      <h2>Surface Explorer -- SPX (SPXW)</h2>
-      <span class="note">IV / Vanna / Charm &middot; refreshed periodically</span>
-    </header>
-    <div class="body">
-      <div id="surfacesStalePill" style="margin-bottom:10px;"></div>
-      <div id="surfacesContent"><div class="empty">No surfaces rendered yet.</div></div>
-    </div>
-  </div>
+  <quant-widget id="positionsWidget" slug="positions" data-output-kind="metrics" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
+  <quant-widget id="signalsWidget" slug="signals" data-output-kind="metrics" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
+  <quant-widget id="positionAnalysisWidget" slug="position_analysis" data-output-kind="distribution" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
+  <quant-widget id="surfacesWidget" slug="surfaces" data-output-kind="chart" data-context='{"ticker": "SPXW", "expiry": "", "basket": ""}'></quant-widget>
 
   <div class="panel widget">
     <header>
@@ -105,326 +66,64 @@
     </div>
   </div>
 </div>
+
+<!-- Layout persistence: load instances on page load and attach quant-widget instances -->
+<script>
+(function() {
+  var PAGE = 'overview';
+
+  // Load persisted layout on page load
+  fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } })
+    .then(function(r) { return r.ok ? r.json() : []; })
+    .then(function(instances) {
+      // If layout has instances, they replace the hardcoded widgets
+      if (instances && instances.length > 0) {
+        var grid = document.querySelector('.widget-grid');
+        grid.innerHTML = '';
+        instances.forEach(function(inst) {
+          var widget = document.createElement('quant-widget');
+          widget.setAttribute('slug', inst.slug);
+          widget.setAttribute('synced', inst.sync_enabled ? 'true' : 'false');
+          if (inst.scope_override) {
+            widget.setAttribute('data-context', JSON.stringify(inst.scope_override));
+          }
+          // Use catalog output_kind if available, else fallback
+          widget.dataset.widgetInstanceId = inst.widget_instance_id;
+          grid.appendChild(widget);
+        });
+      } else {
+        // No persisted layout - use the default 4 widgets
+        // They're already in the DOM above with data-context
+        console.log('No persisted layout for ' + PAGE + ', using default widgets');
+      }
+    })
+    .catch(function(e) {
+      console.error('Failed to load layout for ' + PAGE + ':', e);
+      // Continue with default widgets if load fails
+    });
+})();
+</script>
 {% endblock %}
 
 {% block scripts %}
-<script>
-// Positions widget (widget 1) -- polls the cache-only /api/widgets/positions
-// endpoint; a scheduled agent job is the only thing that ever writes to it
-// (see POST /api/widgets/positions), this page only reads.
-var POSITIONS_STALE_MS = 45 * 60 * 1000;
-
-function escPositions(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
-  });
-}
-
-function fmtPositionsMoney(v) {
-  if (v === null || v === undefined) return '--';
-  var n = Number(v);
-  if (Number.isNaN(n)) return '--';
-  return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
-}
-
-function renderPositions(data) {
-  var content = document.getElementById('positionsContent');
-  var pillHost = document.getElementById('positionsStalePill');
-  var positions = (data.payload && data.payload.positions) || [];
-  var accounts = (data.payload && data.payload.accounts) || [];
-
-  var ageMs = Date.now() - new Date(data.computed_at).getTime();
-  pillHost.innerHTML = ageMs > POSITIONS_STALE_MS
-    ? '<span class="pill error">stale since ' + escPositions(data.computed_at) + '</span>'
-    : '<span class="pill ok">synced ' + escPositions(data.computed_at) + '</span>';
-
-  if (!positions.length) {
-    content.innerHTML = '<div class="empty">No open positions.</div>';
-    return;
-  }
-
-  var byAccount = {};
-  positions.forEach(function (p) {
-    var acct = p.account || '?';
-    (byAccount[acct] = byAccount[acct] || []).push(p);
-  });
-
-  var html = '';
-  Object.keys(byAccount).sort().forEach(function (acct) {
-    var summary = accounts.filter(function (a) { return a.account === acct; })[0];
-    html += '<h3 class="small muted" style="margin:10px 0 4px;">Account ' + escPositions(acct) +
-      (summary && summary.total_value != null
-        ? ' &middot; ' + fmtPositionsMoney(summary.total_value) + ' total'
-        : '') +
-      '</h3>';
-    html += '<div class="tablewrap"><table><thead><tr>' +
-      '<th>ticker</th><th>type</th><th class="num">qty</th><th class="num">avg price</th>' +
-      '<th class="num">current</th><th class="num">value</th><th class="num">unrealized P&amp;L</th>' +
-      '</tr></thead><tbody>';
-    byAccount[acct].forEach(function (p) {
-      var pl = p.unrealized_pl;
-      var plCls = (pl || 0) < 0 ? 'error' : 'ok';
-      html += '<tr><td><strong>' + escPositions(p.ticker) + '</strong></td>' +
-        '<td class="small muted">' + escPositions(p.instrument_type) + '</td>' +
-        '<td class="num">' + escPositions(p.qty) + '</td>' +
-        '<td class="num">' + fmtPositionsMoney(p.avg_price) + '</td>' +
-        '<td class="num">' + fmtPositionsMoney(p.current_price) + '</td>' +
-        '<td class="num">' + fmtPositionsMoney(p.market_value) + '</td>' +
-        '<td class="num"><span class="pill ' + plCls + '">' + fmtPositionsMoney(pl) + '</span></td>' +
-        '</tr>';
-    });
-    html += '</tbody></table></div>';
-  });
-  content.innerHTML = html;
-}
-
-function pollPositions() {
-  fetch('/api/widgets/positions')
-    .then(function (r) { return r.status === 404 ? null : r.json(); })
-    .then(function (data) { if (data) renderPositions(data); })
-    .catch(function (e) { console.error('positions widget poll failed', e); });
-}
-
-pollPositions();
-setInterval(pollPositions, 45000);
-
-// --------------------------------------------------------------------------
-// Widget 2 -- vol/quant signals
-// --------------------------------------------------------------------------
-
-function renderSignals(data) {
-  var content = document.getElementById('signalsContent');
-  var pillHost = document.getElementById('signalsStalePill');
-  var tickers = (data.payload && data.payload.tickers) || [];
-
-  pillHost.innerHTML = '<span class="pill ok">computed ' + escPositions(data.computed_at) + '</span>';
-
-  if (!tickers.length) {
-    content.innerHTML = '<div class="empty">No tickers in the watchlist.</div>';
-    return;
-  }
-
-  var SIGNAL_PILL = {'ERROR': 'error', 'NO DATA': 'plain', 'INSUFFICIENT DATA': 'plain'};
-
-  var html = '<div class="tablewrap"><table><thead><tr>' +
-    '<th>ticker</th><th>signal</th><th class="num">score</th><th class="num">vrp %</th><th>data quality</th>' +
-    '</tr></thead><tbody>';
-  tickers.forEach(function (t) {
-    var cls = SIGNAL_PILL[t.signal] || 'ok';
-    html += '<tr><td><strong>' + escPositions(t.ticker) + '</strong></td>' +
-      '<td><span class="pill ' + cls + '">' + escPositions(t.signal) + '</span></td>' +
-      '<td class="num">' + (t.score == null ? '--' : Number(t.score).toFixed(2)) + '</td>' +
-      '<td class="num">' + (t.vrp_pct == null ? '--' : Number(t.vrp_pct).toFixed(2)) + '</td>' +
-      '<td class="small muted">' + escPositions(t.data_quality) + '</td></tr>';
-  });
-  html += '</tbody></table></div>';
-  content.innerHTML = html;
-}
-
-function pollSignals() {
-  fetch('/api/widgets/signals')
-    .then(function (r) { return r.status === 404 ? null : r.json(); })
-    .then(function (data) { if (data) renderSignals(data); })
-    .catch(function (e) { console.error('signals widget poll failed', e); });
-}
-
-pollSignals();
-setInterval(pollSignals, 60000);
-
-// --------------------------------------------------------------------------
-// Widget 3 -- per-position analysis. Reuses the {label,unit,bins,percentiles}
-// distribution shape quant.html's histogram renderer already draws (see
-// shared/summary.py::_bundle_distribution, which produced these on the
-// backend) -- same small inline-SVG bar chart, no chart library.
-// --------------------------------------------------------------------------
-
-var SVG_NS = 'http://www.w3.org/2000/svg';
-var DIST_UNIT_LABELS = {
-  price: 'terminal price distribution',
-  portfolio_value: 'terminal portfolio-value distribution',
-  unknown: 'terminal distribution (units unreported)'
-};
-
-function renderDistChart(dist) {
-  var bins = (dist && dist.bins) || [];
-  if (!bins.length) return null;
-
-  var wrap = document.createElement('div');
-  wrap.className = 'dist-chart';
-
-  var title = document.createElement('div');
-  title.className = 'small dist-chart-title';
-  title.textContent = (dist.label || 'simulation') + ' — ' +
-    (DIST_UNIT_LABELS[dist.unit] || DIST_UNIT_LABELS.unknown);
-  wrap.appendChild(title);
-
-  var W = 320, H = 80, PAD = 2;
-  var barW = W / bins.length;
-  var maxCount = bins.reduce(function (m, b) {
-    return Math.max(m, typeof b.count === 'number' ? b.count : 0);
-  }, 0) || 1;
-
-  var svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', String(H));
-
-  bins.forEach(function (b, i) {
-    var count = typeof b.count === 'number' ? b.count : 0;
-    var barH = (count / maxCount) * (H - PAD);
-    var rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(i * barW));
-    rect.setAttribute('y', String(H - barH));
-    rect.setAttribute('width', String(Math.max(barW - 1, 0.5)));
-    rect.setAttribute('height', String(barH));
-    rect.setAttribute('class', 'dist-bar');
-    svg.appendChild(rect);
-  });
-  wrap.appendChild(svg);
-
-  var pct = dist.percentiles || {};
-  var parts = ['p5', 'p50', 'p95'].filter(function (k) { return typeof pct[k] === 'number'; })
-    .map(function (k) { return k + ': ' + pct[k].toFixed(2); });
-  var line = document.createElement('div');
-  line.className = 'small dist-percentiles';
-  line.textContent = parts.length ? parts.join('  ·  ') : 'percentiles not reported';
-  wrap.appendChild(line);
-
-  return wrap;
-}
-
-function renderPositionAnalysis(data) {
-  var content = document.getElementById('positionAnalysisContent');
-  var pillHost = document.getElementById('positionAnalysisStalePill');
-  var positions = (data.payload && data.payload.positions) || [];
-
-  if (data.status === 'no_positions') {
-    pillHost.innerHTML = '<span class="pill plain">no open positions</span>';
-    content.innerHTML = '<div class="empty">No open positions to analyze.</div>';
-    return;
-  }
-  pillHost.innerHTML = '<span class="pill ok">computed ' + escPositions(data.computed_at) + '</span>';
-
-  if (!positions.length) {
-    content.innerHTML = '<div class="empty">No analysis computed yet.</div>';
-    return;
-  }
-
-  content.innerHTML = '';
-  positions.forEach(function (entry) {
-    var section = document.createElement('div');
-    section.style.marginBottom = '18px';
-
-    var h3 = document.createElement('h3');
-    h3.className = 'small muted';
-    h3.style.margin = '0 0 6px';
-    h3.textContent = entry.ticker;
-    section.appendChild(h3);
-
-    if (entry.hedge_headline) {
-      var headline = document.createElement('div');
-      headline.className = 'small';
-      headline.textContent = 'hedge: ' + entry.hedge_headline;
-      section.appendChild(headline);
-    } else if (entry.hedge_error) {
-      var herr = document.createElement('div');
-      herr.className = 'small muted';
-      herr.textContent = 'hedge: ' + entry.hedge_error;
-      section.appendChild(herr);
-    }
-
-    ['price_dist', 'mc_sim', 'corr_sim'].forEach(function (mode) {
-      var dist = entry[mode + '_distribution'];
-      var chart = dist ? renderDistChart(dist) : null;
-      if (chart) {
-        section.appendChild(chart);
-      } else if (entry[mode + '_error']) {
-        var err = document.createElement('div');
-        err.className = 'small muted';
-        err.textContent = mode + ': ' + entry[mode + '_error'];
-        section.appendChild(err);
-      }
-    });
-
-    content.appendChild(section);
-  });
-}
-
-function pollPositionAnalysis() {
-  fetch('/api/widgets/position_analysis')
-    .then(function (r) { return r.status === 404 ? null : r.json(); })
-    .then(function (data) { if (data) renderPositionAnalysis(data); })
-    .catch(function (e) { console.error('position analysis widget poll failed', e); });
-}
-
-pollPositionAnalysis();
-setInterval(pollPositionAnalysis, 60000);
-
-// --------------------------------------------------------------------------
-// Widget 4 -- surface showcase (IV/vanna/charm, SPX, dark-themed PNGs)
-// --------------------------------------------------------------------------
-
-function renderSurfaces(data) {
-  var content = document.getElementById('surfacesContent');
-  var pillHost = document.getElementById('surfacesStalePill');
-  var surfaces = (data.payload && data.payload.surfaces) || {};
-  var ticker = (data.payload && data.payload.ticker) || 'SPX';
-
-  pillHost.innerHTML = '<span class="pill ok">rendered ' + escPositions(data.computed_at) + '</span>';
-
-  var labels = {iv: 'IV surface', vanna: 'Vanna surface', charm: 'Charm surface'};
-  var html = '';
-  ['iv', 'vanna', 'charm'].forEach(function (key) {
-    var s = surfaces[key];
-    html += '<div style="margin-bottom:14px;">';
-    html += '<div class="small muted" style="margin-bottom:4px;">' + escPositions(ticker) + ' ' + labels[key] + '</div>';
-    if (s && s.status === 'ok' && s.image_b64) {
-      html += '<img src="data:image/png;base64,' + s.image_b64 + '" style="width:100%; border-radius:8px; border:1px solid var(--border);" alt="' + labels[key] + '">';
-    } else {
-      html += '<div class="empty">' + (s ? escPositions(s.status) : 'not rendered') + '</div>';
-    }
-    html += '</div>';
-  });
-  content.innerHTML = html;
-}
-
-function pollSurfaces() {
-  fetch('/api/widgets/surfaces')
-    .then(function (r) { return r.status === 404 ? null : r.json(); })
-    .then(function (data) { if (data) renderSurfaces(data); })
-    .catch(function (e) { console.error('surfaces widget poll failed', e); });
-}
-
-pollSurfaces();
-setInterval(pollSurfaces, 60000);
+<!-- Quant widget custom element (Phase 4) -->
+<script type="module">
+  import { syncBus } from '/static/js/sync-bus.js';
+  // quant-widget is loaded in quant.html via the same module path
 </script>
+
+<style>
+/* Grid layout for overview widgets - matches quant.html console-grid pattern */
+.widget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+  gap: 16px;
+  padding: 12px;
+}
+/* Make the quant-widget instances fill their grid cells */
+.widget-grid quant-widget {
+  display: block;
+  width: 100%;
+}
+</style>
 {% endblock %}
-
-<!-- Phase 8: generic archived-module widget (new panel, not repurposing existing) -->
-<div class="panel widget" id="archivedModuleWidget">
-  <header><h2>Archived module snapshot</h2><span class="note">from Phase 6 archive</span></header>
-  <div>
-    <select id="arch-sel" onchange="loadArchived()">
-      <option value="dealer_exposure">dealer_exposure</option>
-      <option value="position_book">position_book</option>
-      <option value="iv_rank">iv_rank</option>
-    </select>
-    <button onclick="loadArchived()">Load latest</button>
-  </div>
-  <div id="archivedContent" style="margin-top:8px; font-size:12px;">—</div>
-</div>
-
-<script>
-function loadArchived() {
-  const slug = document.getElementById('arch-sel').value;
-  fetch('/api/widget/archived/' + slug)
-    .then(r => r.json())
-    .then(d => {
-      const el = document.getElementById('archivedContent');
-      el.textContent = JSON.stringify(d).slice(0,200);
-    })
-    .catch(e => console.error(e));
-}
-setTimeout(loadArchived, 2000);
-</script>
