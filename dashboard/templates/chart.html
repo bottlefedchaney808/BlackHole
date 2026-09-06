@@ -4,21 +4,142 @@
 {% block content %}
 <h1>Chart</h1>
 <p class="sub">Live native chart app at <code>{{ chart_app_url }}</code></p>
-<iframe
-  src="{{ chart_app_url }}"
-  id="chartFrame"
-  style="width:100%; height:calc(100vh - 160px); border:1px solid var(--border); border-radius:12px; background:var(--panel);"
-></iframe>
+
+<div class="chart-layout">
+  <!-- Side panel for quant-widget instances (bounded to <4 widgets) -->
+  <aside class="chart-side-panel">
+    <header>
+      <h2>Chart widgets</h2>
+      <span class="note" id="chartWidgetCount">0 widgets</span>
+    </header>
+    <div class="chart-grid" id="chartGrid">
+      <div class="empty-grid">No widgets added to chart side panel.</div>
+    </div>
+  </aside>
+
+  <!-- Main chart iframe -->
+  <main class="chart-main">
+    <iframe
+      src="{{ chart_app_url }}"
+      id="chartFrame"
+      style="width:100%; height:calc(100vh - 160px); border:1px solid var(--border); border-radius:12px; background:var(--panel);"
+    ></iframe>
+  </main>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// chart_app's own uvicorn start (kicked off headlessly by dashboard.bat) is
-// async and can still be binding when this page first paints -- one-shot
-// reload, not a polling loop, covers the common "still starting" case.
-setTimeout(function () {
-  var f = document.getElementById('chartFrame');
-  if (f) f.src = f.src;
-}, 3000);
+(function() {
+  var PAGE = 'chart';
+
+  // Load persisted layout on page load
+  fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } })
+    .then(function(r) { return r.ok ? r.json() : []; })
+    .then(function(instances) {
+      var grid = document.getElementById('chartGrid');
+      var countEl = document.getElementById('chartWidgetCount');
+
+      if (!instances || instances.length === 0) {
+        grid.innerHTML = '<div class="empty-grid">No widgets added to chart side panel.</div>';
+        countEl.textContent = '0 widgets';
+        return;
+      }
+
+      grid.innerHTML = '';
+      instances.forEach(function(inst) {
+        var widget = document.createElement('quant-widget');
+        widget.setAttribute('slug', inst.slug);
+        widget.setAttribute('synced', inst.sync_enabled ? 'true' : 'false');
+        if (inst.scope_override) {
+          widget.setAttribute('data-context', JSON.stringify(inst.scope_override));
+        }
+        widget.dataset.widgetInstanceId = inst.widget_instance_id;
+        grid.appendChild(widget);
+      });
+
+      countEl.textContent = instances.length + ' widget' + (instances.length === 1 ? '' : 's');
+    })
+    .catch(function(e) {
+      console.error('Failed to load chart layout:', e);
+      document.getElementById('chartGrid').innerHTML = '<div class="empty-grid">Could not load chart widgets.</div>';
+    });
+})();
 </script>
+
+<!-- Quant widget custom element (Phase 4) -->
+<script type="module">
+  import { syncBus } from '/static/js/sync-bus.js';
+  // quant-widget is loaded in quant.html via the same module path
+</script>
+
+<style>
+/* Chart layout with bounded side panel */
+.chart-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 12px;
+}
+
+.chart-side-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-side-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.chart-side-panel header h2 {
+  font-size: 13px;
+}
+
+.chart-side-panel header .note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chart-grid {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  overflow: auto;
+  max-height: calc(100vh - 220px);
+}
+
+.empty-grid {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+}
+
+.chart-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Responsive: stack layout on narrow screens */
+@media (max-width: 1100px) {
+  .chart-layout {
+    grid-template-columns: 1fr;
+  }
+  .chart-side-panel {
+    max-height: 40vh;
+  }
+}
+</style>
 {% endblock %}
