@@ -108,8 +108,7 @@
 {% block scripts %}
 <!-- Quant widget custom element (Phase 4) -->
 <script type="module">
-  import { syncBus } from '/static/js/sync-bus.js';
-  // quant-widget is loaded in quant.html via the same module path
+import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-renderers.js
 </script>
 
 <style>

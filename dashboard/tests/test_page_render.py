@@ -32,9 +32,10 @@ def test_overview_loads_quant_widget_js():
     """Overview page includes the quant-widget custom element definition."""
     resp = client.get('/')
     html = resp.text
-    # The module is imported via ES module syntax
-    assert '/static/js/sync-bus.js' in html or 'sync-bus' in html
-    assert '/static/js/quant-widget.js' in html or 'quant-widget' in html
+    # The module is imported via ES module syntax - verify actual import statement
+    assert "import '/static/js/quant-widget.js'" in html
+    # sync-bus is imported transitively via quant-widget.js, not directly
+    assert "import { syncBus } from '/static/js/sync-bus.js'" not in html
 
 
 def test_overview_talks_to_layout_api():
@@ -67,9 +68,10 @@ def test_chart_loads_quant_widget_js():
     """Chart page includes the quant-widget custom element definition."""
     resp = client.get('/chart')
     html = resp.text
-    # The module is imported via ES module syntax
-    assert '/static/js/sync-bus.js' in html or 'sync-bus' in html
-    assert '/static/js/quant-widget.js' in html or 'quant-widget' in html
+    # The module is imported via ES module syntax - verify actual import statement
+    assert "import '/static/js/quant-widget.js'" in html
+    # sync-bus is imported transitively via quant-widget.js, not directly
+    assert "import { syncBus } from '/static/js/sync-bus.js'" not in html
 
 
 def test_chart_talks_to_layout_api():
