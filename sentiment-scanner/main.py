@@ -28,7 +28,7 @@ import scanner.youtube
 from correlation.engine import CorrelationEngine
 from scanner.narrative import score_messages
 from scanner.options_scanner_base import close_td, get_td
-from scanner.reddit import MCP_AVAILABLE
+from scanner.reddit import MCP_AVAILABLE, RedditScraper
 from scanner.stocktwits import StockTwitsScraper
 from scanner.swap_sdr import build_swap_snapshot
 from scanner.theta_integration import build_oi_snapshot
@@ -36,6 +36,7 @@ from scanner.ticker_pack import export_alert_group
 from scanner.youtube import format_scanner_line as yt_format
 from scanner.youtube import scan_ticker as yt_scan_ticker
 
+_reddit_scan = RedditScraper
 _youtube_scan = scanner.youtube.scan_ticker
 import config
 from scanner.earnings_calendar import (
@@ -243,6 +244,11 @@ def _parse_args() -> argparse.Namespace:
         help="Skip YouTube transcript sentiment scan.",
     )
     parser.add_argument(
+        "--skip-reddit",
+        action="store_true",
+        help="Skip Reddit Atom-feed sentiment scan.",
+    )
+    parser.add_argument(
         "--skip-sector-prompt",
         action="store_true",
         help="Don't prompt to launch the Sector Rotation scanner at startup/shutdown.",
@@ -382,7 +388,74 @@ def run_youtube_scanner(ticker, engine):
     return None
 
 
-def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=False):
+def run_reddit_scanner(ticker, engine):
+    """Run Reddit Atom-feed scanner for a ticker, scanning posts mentioning $TICKER.
+
+    Returns formatted line string or None if no data or error.
+    """
+    try:
+        rs = _reddit_scan()
+        posts = rs.get_hot_posts("wallstreetbets", limit=25)
+        rs.close()
+
+        # Filter posts that mention this ticker
+        ticker_posts = [p for p in posts if ticker.lower() in p.get("cashtags", [])]
+
+        if ticker_posts:
+            # Calculate simple sentiment: count bullish/bearish keywords
+            bullish_keywords = ["buy", "long", "call", "moon", "rocket", "hodl", "bull"]
+            bearish_keywords = ["sell", "short", "put", "bear", "drop", "crash", "bearish"]
+
+            bullish_count = sum(
+                1 for p in ticker_posts
+                if any(kw in p.get("title", "").lower() or kw in p.get("body", "").lower() for kw in bullish_keywords)
+            )
+            bearish_count = sum(
+                1 for p in ticker_posts
+                if any(kw in p.get("title", "").lower() or kw in p.get("body", "").lower() for kw in bearish_keywords)
+            )
+
+            total = len(ticker_posts)
+            bullish_pct = bullish_count / total if total > 0 else 0
+            bearish_pct = bearish_count / total if total > 0 else 0
+
+            result = {
+                "post_count": total,
+                "bullish_count": bullish_count,
+                "bearish_count": bearish_count,
+                "bullish_pct": bullish_pct,
+                "bearish_pct": bearish_pct,
+                "ticker": ticker,
+            }
+
+            # Record to engine
+            engine.record_narrative(ticker, {
+                "narrative_score": 0,
+                "bullish_pct": bullish_pct,
+                "bearish_pct": bearish_pct,
+                "volume": total,
+                "contested_narrative_score": 0,
+                "war_score": 0,
+                "thesis_ratio": 0.5,
+            })
+
+            return format_reddit_line(result)
+    except Exception:
+        pass
+    return None
+
+
+def format_reddit_line(result):
+    """Format Reddit scanner result as a line for console output."""
+    if not result:
+        return None
+    return (
+        f"  {result['ticker']:6s} | Reddit: {result['post_count']:<3d} posts | "
+        f"Bull: {result['bullish_pct']:.0%} | Bear: {result['bearish_pct']:.0%}"
+    )
+
+
+def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=False, skip_reddit=False):
     """Scan all trending tickers, running sentiment + options scanners on each.
 
     Returns (alerts, cycle_raw) where alerts are CNS-threshold alert dicts
@@ -421,6 +494,14 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
                 yt_line = yt_format(yt_result)
                 if yt_line:
                     print(yt_line)
+        if not skip_reddit:
+            try:
+                reddit_result = run_reddit_scanner(ticker, engine)
+            except Exception as e:
+                print(f"  {ticker:6s} | Reddit: ERROR — {e}")
+                reddit_result = None
+            if reddit_result:
+                print(reddit_result)
         time.sleep(0.5)  # brief pause between tickers
     return alerts, cycle_raw
 
@@ -669,7 +750,7 @@ def main():
     print("=" * 60)
     print("CONTESTED NARRATIVE SCANNER + OPTIONS SUITE v0.2")
     print("=" * 60)
-    print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps) | YouTube")
+    print("Sources: StockTwits | ThetaData (options) | CME SDR (swaps) | YouTube | Reddit")
     print(
         "Options Scanners: GEX | Unusual OI | IV Rank | Skew | Max Pain | Vol Dispersion | Earnings"
     )
@@ -687,7 +768,7 @@ def main():
     try:
         run_id = _make_run_id()
         alerts, cycle_raw = scan_trending(
-            st, engine, args.benchmark, args.skip_gex, args.skip_youtube
+            st, engine, args.benchmark, args.skip_gex, args.skip_youtube, args.skip_reddit
         )
         pack = {}
 
@@ -737,7 +818,7 @@ def main():
             time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
             run_id = _make_run_id()
             alerts, cycle_raw = scan_trending(
-                st, engine, args.benchmark, args.skip_gex, args.skip_youtube
+                st, engine, args.benchmark, args.skip_gex, args.skip_youtube, args.skip_reddit
             )
             pack = {}
             if alerts:

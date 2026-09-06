@@ -711,3 +711,51 @@ class TestMainUniverseDispatch:
 
         assert calls == []
         assert "no tickers" in capsys.readouterr().out
+
+
+class TestScanTrendingSkipReddit:
+    def test_skip_reddit_flag_skips_reddit_scan(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        st = MagicMock()
+        st.get_trending.return_value = [{"symbol": "AAPL"}]
+        engine = MagicMock()
+
+        monkeypatch.setattr(main_mod, "scan_ticker", lambda st, t, e: None)
+        monkeypatch.setattr(
+            main_mod, "run_options_scanners",
+            lambda ticker, engine, benchmark, skip_gex: (
+                [f"  {ticker}: line"], {"gex": _FakeScan("gex")},
+            ),
+        )
+        monkeypatch.setattr(main_mod, "_youtube_scan", lambda t: None)
+        monkeypatch.setattr(main_mod, "run_reddit_scanner", lambda t, e: "  AAPL | Reddit: line")
+        monkeypatch.setattr(main_mod.time, "sleep", lambda s: None)
+
+        alerts, cycle_raw = main_mod.scan_trending(st, engine, skip_reddit=True)
+
+        assert alerts == []
+        assert cycle_raw == {"AAPL": {"gex": cycle_raw["AAPL"]["gex"]}}
+        # run_reddit_scanner should not have been called
+        assert engine.record_narrative.call_count == 0
+
+
+def test_run_reddit_scanner_format_line():
+    """Test format_reddit_line output."""
+    result = main_mod.format_reddit_line({
+        "ticker": "AAPL",
+        "post_count": 5,
+        "bullish_pct": 0.6,
+        "bearish_pct": 0.4,
+    })
+    assert result is not None
+    assert "AAPL" in result
+    assert "5" in result
+    assert "60%" in result
+    assert "40%" in result
+
+
+def test_run_reddit_scanner_none_on_empty():
+    """Test format_reddit_line returns None on empty/None input."""
+    assert main_mod.format_reddit_line(None) is None
+    assert main_mod.format_reddit_line({}) is None
