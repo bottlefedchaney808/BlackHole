@@ -20,7 +20,7 @@ RESULTS = {
 }
 
 
-def test(name, fn):
+def run_check(name, fn):
     """Run a test and record result"""
     try:
         fn()
@@ -70,10 +70,12 @@ def test_backfill_imports_shutdown():
 # ============================================================================
 
 def test_orchestrator_has_validation():
-    """orchestrator.py has validation functions"""
+    """orchestrator.py has validation functions (post-Phase 7: imported from shared)"""
     orch_code = (ROOT / "orchestrator.py").read_text()
-    assert "_validate_suite_output" in orch_code
-    assert "--fail-on-suite-error" in orch_code or "fail_on_suite_error" in orch_code
+    # Phase 7 relocated validation to shared/suite_validation.py; orchestrator
+    # imports validate_suite_output from there instead of defining it inline.
+    assert "from shared.suite_validation import" in orch_code
+    assert "validate_suite_output" in orch_code
 
 
 def test_suite_validation_module():
@@ -219,44 +221,44 @@ def main():
 
     # Test 2.1: Graceful Shutdown
     print("[2.1] Graceful Shutdown")
-    test("shutdown_signal module imports", test_shutdown_signal_import)
-    test("shutdown_signal has required methods", test_shutdown_signal_methods)
-    test("backfill.py imports shutdown signal", test_backfill_imports_shutdown)
+    run_check("shutdown_signal module imports", test_shutdown_signal_import)
+    run_check("shutdown_signal has required methods", test_shutdown_signal_methods)
+    run_check("backfill.py imports shutdown signal", test_backfill_imports_shutdown)
     print()
 
     # Test 2.2: Dependency Validation
     print("[2.2] Dependency Validation")
-    test("orchestrator.py has validation functions", test_orchestrator_has_validation)
-    test("suite_validation.py module exists", test_suite_validation_module)
+    run_check("orchestrator.py has validation functions", test_orchestrator_has_validation)
+    run_check("suite_validation.py module exists", test_suite_validation_module)
     print()
 
     # Test 2.3: Vol_Suite Contract
     print("[2.3] Vol_Suite Output Contract")
-    test("Vol_Suite has argparse CLI", test_vol_suite_argparse)
-    test("orchestrator uses Vol_Suite flags", test_orchestrator_uses_vol_flags)
-    test("vol_result schema defined", test_vol_result_schema)
+    run_check("Vol_Suite has argparse CLI", test_vol_suite_argparse)
+    run_check("orchestrator uses Vol_Suite flags", test_orchestrator_uses_vol_flags)
+    run_check("vol_result schema defined", test_vol_result_schema)
     print()
 
     # Test 2.4: Context Audit Trail
     print("[2.4] Context Audit Trail")
-    test("orchestrator has context audit", test_orchestrator_context_audit)
-    test("context validation schema exists", test_context_validation_schema)
+    run_check("orchestrator has context audit", test_orchestrator_context_audit)
+    run_check("context validation schema exists", test_context_validation_schema)
     print()
 
     # Test 2.5: Schema Migrations
     print("[2.5] Schema Migration Framework")
-    test("setup_db has migration framework", test_setup_db_migration_framework)
-    test("migrations/ directory exists", test_migrations_directory_exists)
-    test("001_initial.sql migration exists", test_initial_migration_exists)
-    test("setup_db has CLI flags", test_setup_db_cli_flags)
-    test("migrations are idempotent", test_migration_idempotency)
+    run_check("setup_db has migration framework", test_setup_db_migration_framework)
+    run_check("migrations/ directory exists", test_migrations_directory_exists)
+    run_check("001_initial.sql migration exists", test_initial_migration_exists)
+    run_check("setup_db has CLI flags", test_setup_db_cli_flags)
+    run_check("migrations are idempotent", test_migration_idempotency)
     print()
 
     # Integration tests
     print("[INT] Integration Tests")
-    test("orchestrator imports without errors", test_orchestrator_imports_no_errors)
-    test("db_loader uses atomic upsert", test_db_loader_atomic_upsert)
-    test("backfill has atomic state updates", test_backfill_state_atomicity)
+    run_check("orchestrator imports without errors", test_orchestrator_imports_no_errors)
+    run_check("db_loader uses atomic upsert", test_db_loader_atomic_upsert)
+    run_check("backfill has atomic state updates", test_backfill_state_atomicity)
     print()
 
     # Summary
