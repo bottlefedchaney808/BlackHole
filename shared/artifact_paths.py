@@ -56,29 +56,42 @@ def to_rel(path: str | Path) -> str:
 
     This is the writer-side helper: store repo-relative paths in the archive.
     """
-    # Normalize backslashes to forward slashes first (handles Windows paths)
-    path_str = str(path).replace('\\', '/')
-    
-    # Check if it looks like a Windows path (drive letter)
-    if len(path_str) > 1 and path_str[1] == ':':
-        # Strip drive letter
-        path_str = path_str[2:].lstrip('/')
-        # Try to find FinancialDevelopment and strip up to it
-        parts = path_str.split('/')
+    original = str(path)
+
+    # Windows drive-letter path (C:\...): only meaningful if it points into a
+    # FinancialDevelopment checkout. Strip through the marker segment and try
+    # to resolve against THIS repo root; otherwise leave unchanged below.
+    normalized = original.replace('\\', '/')
+    if len(normalized) > 1 and normalized[1] == ':':
+        parts = normalized[2:].lstrip('/').split('/')
         for i, part in enumerate(parts):
             if part.lower() == 'financialdevelopment':
-                # Strip everything up to and including FinancialDevelopment
-                path_str = '/'.join(parts[i+1:])
-                break
-    
-    p = Path(path_str).resolve()
+                candidate = repo_root() / '/'.join(parts[i + 1:])
+                try:
+                    return str(candidate.relative_to(repo_root())).replace(os.sep, '/')
+                except ValueError:
+                    pass
+        # Drive-letter path that is not a FinancialDevelopment checkout:
+        # foreign absolute path — leave unchanged.
+        return original
+
+    # Absolute path (POSIX or native Windows): if it is under the repo root,
+    # make it relative; otherwise return unchanged so readers can still use it.
+    p = Path(original)
+    if os.path.isabs(p):
+        try:
+            rel = p.resolve().relative_to(repo_root())
+            return str(rel).replace(os.sep, '/')
+        except ValueError:
+            return original
+
+    # Relative path: resolve against repo root (not CWD), then re-relativize.
+    resolved = (repo_root() / normalized).resolve()
     try:
-        rel = p.relative_to(repo_root())
-        # Normalize to POSIX-style forward slashes
+        rel = resolved.relative_to(repo_root())
         return str(rel).replace(os.sep, '/')
     except ValueError:
-        # Path is outside repo root; return unchanged
-        return str(path)
+        return original
 
 
 def from_rel(rel_path: str) -> Path:
@@ -103,40 +116,33 @@ def resolve_stored(path: str) -> Path | None:
     """Resolve a stored artifact path to an absolute Path.
 
     Handles three cases:
-      1. Already absolute and exists -> use it
-      2. Windows-style absolute (C:\\...) -> strip FinancialDevelopment suffix and rejoin
-      3. Repo-relative -> join with repo root
+      1. Already absolute and exists (POSIX or Windows drive-letter, with or
+         without the FinancialDevelopment marker) -> use it as-is
+      2. Repo-relative POSIX ('outputs/r1/chart.png') -> join with repo root
+      3. Missing file in any case -> None
 
     Returns None if the resolved path doesn't exist (caller decides fallback).
     """
     if not path:
         return None
 
-    # First check for Windows-style paths (drive letter) which os.path.isabs() may not
-    # recognize on non-Windows platforms. This handles paths like C:\Users\...
-    if len(path) > 1 and path[1] == ':':
-        rest = path[2:].replace('\\', '/').lstrip('/')
-        # Try to find FinancialDevelopment and strip everything up to and including it
-        parts = rest.split('/')
+    # Windows-style drive-letter path pointing into a FinancialDevelopment
+    # checkout on ANOTHER machine: strip through the marker and rejoin here.
+    normalized = path.replace('\\', '/')
+    if len(normalized) > 1 and normalized[1] == ':':
+        parts = normalized[2:].lstrip('/').split('/')
         for i, part in enumerate(parts):
             if part.lower() == 'financialdevelopment':
-                # Strip up to and including FinancialDevelopment, keep the rest
-                rest = '/'.join(parts[i+1:])
-                break
-        resolved = repo_root() / rest
-        if resolved.exists():
-            return resolved
-        return None
+                rest = '/'.join(parts[i + 1:])
+                resolved = repo_root() / rest
+                return resolved if resolved.exists() else None
 
-    # Already absolute?
-    if os.path.isabs(path):
-        resolved = Path(path)
-        if resolved.exists():
-            return resolved
-        return None
+    # Absolute path (POSIX or native Windows drive-letter). On the host that
+    # produced it, this is a real existing file — use it directly.
+    p = Path(path)
+    if os.path.isabs(p):
+        return p if p.exists() else None
 
-    # Repo-relative
+    # Repo-relative: join with repo root (not CWD).
     resolved = from_rel(path)
-    if resolved.exists():
-        return resolved
-    return None
+    return resolved if resolved.exists() else None

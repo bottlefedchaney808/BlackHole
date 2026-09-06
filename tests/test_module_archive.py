@@ -15,6 +15,7 @@ parallelism.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -616,7 +617,7 @@ class TestRepoRelativeArtifactPaths:
                     None,
                     "cli",
                     "2026-08-01T00:00:00+00:00",
-                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    json.dumps([{"path": legacy_path, "kind": "png"}]),
                     "{}",
                 ),
             )
@@ -679,7 +680,7 @@ class TestBackfillArchivePaths:
                     None,
                     "cli",
                     "2026-08-01T00:00:00+00:00",
-                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    json.dumps([{"path": legacy_path, "kind": "png"}]),
                     "{}",
                 ),
             )
@@ -723,7 +724,7 @@ class TestBackfillArchivePaths:
                     None,
                     "cli",
                     "2026-08-01T00:00:00+00:00",
-                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    json.dumps([{"path": legacy_path, "kind": "png"}]),
                     "{}",
                 ),
             )
@@ -845,7 +846,7 @@ class TestBackfillArchivePaths:
                     None,
                     "cli",
                     "2026-08-01T00:00:00+00:00",
-                    f'[{{"path": "{legacy_path}", "kind": "png"}}]',
+                    json.dumps([{"path": legacy_path, "kind": "png"}]),
                     "{}",
                 ),
             )
