@@ -843,8 +843,10 @@ def discover_adapters() -> list[str]:
 def _focus_from_args(args: argparse.Namespace) -> dict[str, Any]:
     focus: dict[str, Any] = {
         "ticker": args.ticker,
-        "option_type": args.option_type,
-        "strike": args.strike,
+        # --option-type/--strike were dropped from the CLI in Phase 7; read via
+        # getattr so module runs don't crash on a missing attribute.
+        "option_type": getattr(args, "option_type", None),
+        "strike": getattr(args, "strike", None),
     }
     if args.expiry:
         focus["expiration_date"] = args.expiry

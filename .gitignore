@@ -39,6 +39,8 @@ comparison_*.pdf
 outputs/
 Backtests/outputs/
 *_hedging_heatmap_*.png
+*_dealer_book_*.png
+*_position_book_*.png
 *_variance_swap_plots_*.png
 *_garch_*.png
 *_gamma_records_*.csv

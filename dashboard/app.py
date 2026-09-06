@@ -265,6 +265,18 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FinancialDevelopment Dashboard", lifespan=_lifespan)
+
+# Local interactive-artifact boards (widget console, file:// / Desktop webview origins)
+# need cross-origin access to the widget API. The server binds 127.0.0.1 only and no
+# credentials are used, so a permissive origin list is safe for this loopback tool.
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 app.mount(
     "/static",
     StaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")),
