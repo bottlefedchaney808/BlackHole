@@ -1,6 +1,7 @@
 """Covers dashboard.app._swaps_snapshot() -- the file read that replaced the
 four swap-DB queries home() used to run on every load. See
 docs/superpowers/specs/2026-08-27-swaps-dashboard-split-design.md.
+Phase 5 updates: tools_*.html pages retired, redirect to Quant Console.
 """
 
 import json
@@ -53,47 +54,31 @@ def test_home_page_renders_without_swap_card(monkeypatch, tmp_path):
     assert "Orchestrator runs" in r.text
 
 
-def test_tools_page_includes_swap_card(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        dashboard_app, "SWAPS_DASHBOARD_SNAPSHOT_PATH", str(tmp_path / "missing.json")
-    )
-    r = client.get("/tools")
-    assert r.status_code == 200
-    assert "swapLiveBadge" in r.text
+# Phase 5: tools_*.html pages retired, redirect to Quant Console
+# --------------------------------------------------------------------------
 
 
-def test_tools_page_shows_ingestion_pill_from_snapshot(monkeypatch, tmp_path):
-    """Regression test for CARL R1-F1, moved from home() to /tools now that
-    the swap card lives only there: the snapshot's ingestion rows must
-    actually render, not just exist in the JSON."""
-    snapshot_path = tmp_path / "overview_snapshot.json"
-    payload = {
-        "generated_at": "2026-08-27T12:00:00Z",
-        "stats": {
-            "total_records": 5,
-            "unique_upis": 2,
-            "by_regulator_asset_class": [],
-            "earliest_date": None,
-            "latest_date": None,
-        },
-        "stats_error": None,
-        "top_products": [],
-        "top_error": None,
-        "ingestion": [
-            {
-                "regulator": "SEC",
-                "asset_class": "EQ",
-                "last_cumulative_date": "2026-08-20",
-            }
-        ],
-        "ingestion_error": None,
-        "last_scrape": None,
-        "scrape_error": None,
-    }
-    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr(
-        dashboard_app, "SWAPS_DASHBOARD_SNAPSHOT_PATH", str(snapshot_path)
-    )
+def test_tools_page_redirects_to_quant():
+    """Phase 5: /tools routes redirect to Quant Console where widgets provide
+    the same functionality. TestClient follows redirects by default, so we
+    check the final rendered page contains Quant Console content."""
     r = client.get("/tools")
-    assert r.status_code == 200
-    assert "SEC/EQ" in r.text
+    assert r.status_code == 200  # After redirect
+    # The Quant Console page should be served
+    assert "Quant Console" in r.text or "quant-widget" in r.text
+
+
+def test_tools_page_includes_swap_card_removed():
+    """Phase 5: The swap card moved to the swaps dashboard. The old tools page
+    is now a redirect and no longer contains swap card content."""
+    r = client.get("/tools")
+    # After redirect to /quant, the swap card should NOT be present
+    assert "swapLiveBadge" not in r.text
+
+
+def test_tools_subroutes_redirect_to_quant():
+    """Phase 5: Sub-routes like /tools/simulations redirect to /quant."""
+    r = client.get("/tools/simulations")
+    assert r.status_code == 200  # After redirect
+    # The Quant Console page should be served
+    assert "Quant Console" in r.text or "quant-widget" in r.text
