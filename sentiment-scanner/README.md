@@ -92,4 +92,43 @@ stops appearing and YouTube transcript-based sentiment starts flowing again.
 If the server is simply not running, the scanner treats this as an expected,
 non-fatal condition — the same way it treats "no API key configured"
 elsewhere — and continues scanning the other sources (StockTwits, Reddit,
-options/swap data) normally.
+YouTube transcripts, options/swap data) normally.
+
+## Reddit Atom-feed scanner — rate-limited public feed
+
+`scanner/reddit.py` fetches posts from public Reddit Atom feeds (e.g.
+`https://www.reddit.com/r/wallstreetbets/new/.rss`). Reddit's JSON/API and OAuth
+routes return 403 from this host; only the public Atom feed endpoint works.
+
+### Constraints
+
+- **Rate limit**: ~1 request per minute per IP. The scraper sleeps on HTTP 429
+  and retries once, then waits and retries if still rate-limited.
+- **Anonymous access**: No API keys or authentication required.
+- **Only Atom feeds**: `.rss`/`.atom` endpoints only; `.json` endpoints block.
+
+### Using the Reddit scanner
+
+The scanner is invoked automatically by `main.py` during `--trending` scans.
+Pass `--skip-reddit` to disable it if needed:
+
+```bash
+python sentiment-scanner/main.py --trending --skip-reddit
+```
+
+### Live verification
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'sentiment-scanner')
+from scanner.reddit import RedditScraper
+rs = RedditScraper()
+posts = rs.get_hot_posts('wallstreetbets', limit=5)
+print(f'Fetched {len(posts)} posts')
+rs.close()
+"
+```
+
+Expect ≥3 posts if the Atom feed is reachable. Wait ≥65 seconds between
+repeated Reddit calls to respect the ~1 req/min/IP limit.
