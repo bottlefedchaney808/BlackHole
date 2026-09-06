@@ -391,7 +391,7 @@ def run_youtube_scanner(ticker, engine):
 def run_reddit_scanner(ticker, engine):
     """Run Reddit Atom-feed scanner for a ticker, scanning posts mentioning $TICKER.
 
-    Returns formatted line string or None if no data or error.
+    Returns (formatted_line, raw_result) tuple or (None, None) if no data or error.
     """
     try:
         rs = _reddit_scan()
@@ -399,7 +399,7 @@ def run_reddit_scanner(ticker, engine):
         rs.close()
 
         # Filter posts that mention this ticker
-        ticker_posts = [p for p in posts if ticker.lower() in p.get("cashtags", [])]
+        ticker_posts = [p for p in posts if ticker.lower() in [c.lower() for c in p.get("cashtags", [])]]
 
         if ticker_posts:
             # Calculate simple sentiment: count bullish/bearish keywords
@@ -439,10 +439,10 @@ def run_reddit_scanner(ticker, engine):
                 "thesis_ratio": 0.5,
             })
 
-            return format_reddit_line(result)
+            return format_reddit_line(result), result
     except Exception:
         pass
-    return None
+    return None, None
 
 
 def format_reddit_line(result):
@@ -496,12 +496,13 @@ def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=Fals
                     print(yt_line)
         if not skip_reddit:
             try:
-                reddit_result = run_reddit_scanner(ticker, engine)
+                reddit_line, reddit_result = run_reddit_scanner(ticker, engine)
             except Exception as e:
                 print(f"  {ticker:6s} | Reddit: ERROR — {e}")
                 reddit_result = None
             if reddit_result:
-                print(reddit_result)
+                scanner_raw["reddit"] = reddit_result
+                print(reddit_line)
         time.sleep(0.5)  # brief pause between tickers
     return alerts, cycle_raw
 

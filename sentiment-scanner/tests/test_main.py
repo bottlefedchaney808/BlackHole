@@ -729,7 +729,7 @@ class TestScanTrendingSkipReddit:
             ),
         )
         monkeypatch.setattr(main_mod, "_youtube_scan", lambda t: None)
-        monkeypatch.setattr(main_mod, "run_reddit_scanner", lambda t, e: "  AAPL | Reddit: line")
+        monkeypatch.setattr(main_mod, "run_reddit_scanner", lambda t, e: ("  AAPL | Reddit: line", {"ticker": "AAPL"}))
         monkeypatch.setattr(main_mod.time, "sleep", lambda s: None)
 
         alerts, cycle_raw = main_mod.scan_trending(st, engine, skip_reddit=True)
@@ -738,6 +738,44 @@ class TestScanTrendingSkipReddit:
         assert cycle_raw == {"AAPL": {"gex": cycle_raw["AAPL"]["gex"]}}
         # run_reddit_scanner should not have been called
         assert engine.record_narrative.call_count == 0
+        # scanner_raw['reddit'] should not be present when skipped
+        assert "reddit" not in cycle_raw["AAPL"]
+
+    def test_reddit_result_attaches_to_scanner_raw(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        st = MagicMock()
+        st.get_trending.return_value = [{"symbol": "AAPL"}]
+        engine = MagicMock()
+
+        # Mock the actual RedditScraper behavior
+        class FakeScraper:
+            def get_hot_posts(self, subreddit, limit=25):
+                return [{"title": "AAPL is going to the moon!", "body": "Buy now!", "cashtags": ["AAPL"]}]
+            def close(self):
+                pass
+
+        monkeypatch.setattr(main_mod, "_reddit_scan", FakeScraper)
+        monkeypatch.setattr(main_mod, "scan_ticker", lambda st, t, e: None)
+        monkeypatch.setattr(
+            main_mod, "run_options_scanners",
+            lambda ticker, engine, benchmark, skip_gex: (
+                [f"  {ticker}: line"], {"gex": _FakeScan("gex")},
+            ),
+        )
+        monkeypatch.setattr(main_mod, "_youtube_scan", lambda t: None)
+        monkeypatch.setattr(main_mod.time, "sleep", lambda s: None)
+
+        alerts, cycle_raw = main_mod.scan_trending(st, engine, skip_reddit=False)
+
+        assert alerts == []
+        # scanner_raw['reddit'] should be attached
+        assert "reddit" in cycle_raw["AAPL"]
+        # Verify the raw result structure
+        assert "ticker" in cycle_raw["AAPL"]["reddit"]
+        assert cycle_raw["AAPL"]["reddit"]["ticker"] == "AAPL"
+        # engine.record_narrative should have been called by run_reddit_scanner
+        assert engine.record_narrative.call_count >= 1
 
 
 def test_run_reddit_scanner_format_line():
