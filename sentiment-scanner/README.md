@@ -94,16 +94,33 @@ non-fatal condition — the same way it treats "no API key configured"
 elsewhere — and continues scanning the other sources (StockTwits, Reddit,
 YouTube transcripts, options/swap data) normally.
 
-## Reddit Atom-feed scanner — rate-limited public feed
+## Reddit scanner — Arctic Shift mirror (primary) + Atom feed (fallback)
 
-`scanner/reddit.py` fetches posts from public Reddit Atom feeds (e.g.
-`https://www.reddit.com/r/wallstreetbets/new/.rss`). Reddit's JSON/API and OAuth
-routes return 403 from this host; only the public Atom feed endpoint works.
+`scanner/reddit.py` uses the **Arctic Shift mirror API** as its primary Reddit data
+source, with the public Atom feed as a graceful fallback.
+
+### Data source: Arctic Shift mirror API
+
+The primary backend fetches from the unofficial Arctic Shift mirror
+(`https://arctic-shift.photon-reddit.com/api`), which provides:
+
+- **Posts search**: `/api/posts/search?subreddit=<sub>&limit=N` and
+  `/api/posts/search?subreddit=<sub>&query=<kw>&limit=N`
+- **Comments search**: `/api/comments/search?subreddit=<sub>&limit=N&sort=desc`
+- **Response format**: `data:[{title,score,author,created_utc,permalink,selftext}]`
+  for posts and `data:[{body,score,author,link_id}]` for comments.
+
+**Pros**: Higher rate limits, keyword search, comment support, no auth needed.
+**Note**: Slight lag behind live Reddit (unofficial mirror).
+
+### Fallback: Reddit Atom feed
+
+If the Arctic Shift API is unreachable, the scanner falls back to the public
+Reddit Atom feed (e.g. `https://www.reddit.com/r/wallstreetbets/new/.rss`).
 
 ### Constraints
 
-- **Rate limit**: ~1 request per minute per IP. The scraper sleeps on HTTP 429
-  and retries once, then waits and retries if still rate-limited.
+- **Rate limit (Atom)**: ~1 request per minute per IP for the Atom fallback.
 - **Anonymous access**: No API keys or authentication required.
 - **Only Atom feeds**: `.rss`/`.atom` endpoints only; `.json` endpoints block.
 
@@ -130,5 +147,6 @@ rs.close()
 "
 ```
 
-Expect ≥3 posts if the Atom feed is reachable. Wait ≥65 seconds between
-repeated Reddit calls to respect the ~1 req/min/IP limit.
+Arctic Shift backend returns data immediately (no rate limit). If falling back
+to Atom feeds, expect ≥3 posts if the feed is reachable. Wait ≥65 seconds
+between repeated Reddit calls to respect the ~1 req/min/IP limit.
