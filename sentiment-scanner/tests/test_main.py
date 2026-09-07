@@ -213,6 +213,7 @@ class TestScanTrendingReturnsRaw:
             ),
         )
         monkeypatch.setattr(main_mod, "_youtube_scan", lambda t: None)
+        monkeypatch.setattr(main_mod, "run_reddit_scanner", lambda t, e: (None, None))
         monkeypatch.setattr(main_mod.time, "sleep", lambda s: None)
 
         alerts, cycle_raw = main_mod.scan_trending(st, engine, skip_youtube=True)
@@ -750,8 +751,13 @@ class TestScanTrendingSkipReddit:
 
         # Mock the actual RedditScraper behavior
         class FakeScraper:
-            def get_hot_posts(self, subreddit, limit=25):
-                return [{"title": "AAPL is going to the moon!", "body": "Buy now!", "cashtags": ["AAPL"]}]
+            def search_posts_arctic(self, subreddit, ticker, limit=25):
+                return [{"title": "AAPL is going to the moon!", "selftext": "Buy now!",
+                         "score": 10, "author": "u_t", "created_utc": 0,
+                         "permalink": "/r/wallstreetbets/comments/abc/"}]
+            def get_recent_comments(self, subreddit, limit=50):
+                return [{"body": "AAPL calls are printing", "score": 5,
+                         "author": "u_c", "link_id": "t3_abc"}]
             def close(self):
                 pass
 
