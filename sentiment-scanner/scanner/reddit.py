@@ -13,6 +13,7 @@ Features:
 from __future__ import annotations
 
 import html
+import json
 import re
 import sys
 import time
@@ -27,6 +28,9 @@ from .stocktwits import TICKER_BLACKLIST  # Reuse existing blacklist
 
 USER_AGENT = "hermes-agent/1.0 (reddit-reading skill)"
 TIMEOUT = 25
+ARCTIC_BASE = "https://arctic-shift.photon-reddit.com/api"
+ARCTIC_TIMEOUT = 15
+ARCTIC_USER_AGENT = "hermes-agent/1.0 (findev sentiment-scanner)"
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 WWW = "https://www.reddit.com"
 MCP_AVAILABLE = True  # Now works without MCP via Atom feeds
@@ -115,6 +119,37 @@ def _get(url: str, headers: Optional[Dict] = None, retry_on_429: bool = True) ->
         raise
 
 
+def _arctic_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
+    """Fetch from Arctic Shift API with 15s timeout and one retry.
+
+    Returns parsed JSON dict on success, None on failure.
+    """
+    url = f"{ARCTIC_BASE}{path}"
+    if params:
+        query = urllib.parse.urlencode(params, doseq=True)
+        url = f"{url}?{query}"
+
+    hdrs = {"User-Agent": ARCTIC_USER_AGENT, "Accept": "application/json"}
+
+    # First attempt
+    try:
+        req = urllib.request.Request(url, headers=hdrs)
+        with urllib.request.urlopen(req, timeout=ARCTIC_TIMEOUT) as resp:
+            data = resp.read()
+            return json.loads(data.decode("utf-8"))
+    except Exception:
+        pass
+
+    # One retry
+    try:
+        req = urllib.request.Request(url, headers=hdrs)
+        with urllib.request.urlopen(req, timeout=ARCTIC_TIMEOUT) as resp:
+            data = resp.read()
+            return json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+
+
 # ── RedditScraper class ───────────────────────────────────────────────────────
 
 class RedditScraper:
@@ -127,6 +162,7 @@ class RedditScraper:
     def __init__(self):
         """Initialize scraper. Always available via Atom feeds."""
         self.available = True
+        self.backend = None
 
     def get_hot_posts(self, subreddit: str = "wallstreetbets", limit: int = 25) -> List[Dict]:
         """Fetch hot posts from a subreddit.
@@ -155,8 +191,113 @@ class RedditScraper:
             print(f"reddit: error fetching {url}: {exc}", file=sys.stderr)
             return []
 
+    def get_hot_posts_arctic(self, subreddit: str = "wallstreetbets", limit: int = 25) -> List[Dict]:
+        """Fetch hot posts from a subreddit via Arctic Shift API.
+
+        Args:
+            subreddit: Reddit subreddit name (default: wallstreetbets)
+            limit: Max number of posts to fetch (default: 25)
+
+        Returns:
+            List of post dicts with keys: id, title, author, score, created_utc,
+            permalink, selftext[:500]
+            Returns [] on error.
+        """
+        params = {"subreddit": subreddit, "limit": limit}
+        result = _arctic_get("/posts/search", params)
+
+        if not result or "data" not in result:
+            return []
+
+        posts = []
+        for item in result["data"]:
+            body = item.get("selftext", "") or ""
+            # Truncate body to 500 chars
+            if len(body) > 500:
+                body = body[:500]
+
+            posts.append({
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "author": item.get("author"),
+                "score": item.get("score"),
+                "created_utc": item.get("created_utc"),
+                "permalink": item.get("permalink"),
+                "selftext": body,
+            })
+
+        return posts
+
+    def search_posts_arctic(self, subreddit: str, query: str, limit: int = 25) -> List[Dict]:
+        """Search posts in a subreddit via Arctic Shift API.
+
+        Args:
+            subreddit: Reddit subreddit name
+            query: Search query string
+            limit: Max number of posts to fetch (default: 25)
+
+        Returns:
+            List of post dicts with keys: id, title, author, score, created_utc,
+            permalink, selftext[:500]
+            Returns [] on error.
+        """
+        params = {"subreddit": subreddit, "query": query, "limit": limit}
+        result = _arctic_get("/posts/search", params)
+
+        if not result or "data" not in result:
+            return []
+
+        posts = []
+        for item in result["data"]:
+            body = item.get("selftext", "") or ""
+            if len(body) > 500:
+                body = body[:500]
+
+            posts.append({
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "author": item.get("author"),
+                "score": item.get("score"),
+                "created_utc": item.get("created_utc"),
+                "permalink": item.get("permalink"),
+                "selftext": body,
+            })
+
+        return posts
+
+    def get_recent_comments(self, subreddit: str = "wallstreetbets", limit: int = 50) -> List[Dict]:
+        """Fetch recent comments from a subreddit via Arctic Shift API.
+
+        Args:
+            subreddit: Reddit subreddit name (default: wallstreetbets)
+            limit: Max number of comments to fetch (default: 50)
+
+        Returns:
+            List of comment dicts with keys: body, score, author, link_id
+            Returns [] on error.
+        """
+        params = {"subreddit": subreddit, "limit": limit, "sort": "desc"}
+        result = _arctic_get("/comments/search", params)
+
+        if not result or "data" not in result:
+            return []
+
+        comments = []
+        for item in result["data"]:
+            comments.append({
+                "body": item.get("body"),
+                "score": item.get("score"),
+                "author": item.get("author"),
+                "link_id": item.get("link_id"),
+            })
+
+        return comments
+
     def scan_all(self) -> Dict[str, List[Dict]]:
         """Fetch hot posts from all configured subreddits.
+
+        Tries Arctic Shift first, falls back to Atom if Arctic fails.
+        Sets self.backend to 'arctic' or 'atom' for logging.
 
         Returns:
             Dict mapping subreddit name to list of posts.
@@ -166,9 +307,18 @@ class RedditScraper:
         result = {}
 
         for sub in subreddits:
-            posts = self.get_hot_posts(subreddit=sub, limit=25)
+            # Try Arctic first
+            posts = self.get_hot_posts_arctic(subreddit=sub, limit=25)
+
             if posts:
                 result[sub] = posts
+                self.backend = "arctic"
+            else:
+                # Fall back to Atom
+                posts = self.get_hot_posts(subreddit=sub, limit=25)
+                if posts:
+                    result[sub] = posts
+                    self.backend = "atom"
 
         return result
 
