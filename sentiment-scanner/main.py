@@ -389,51 +389,86 @@ def run_youtube_scanner(ticker, engine):
 
 
 def run_reddit_scanner(ticker, engine):
-    """Run Reddit Atom-feed scanner for a ticker, scanning posts mentioning $TICKER.
+    """Run Reddit Arctic Shift scanner for a ticker.
 
+    Uses Arctic Shift API to search posts mentioning $TICKER and get recent comments.
     Returns (formatted_line, raw_result) tuple or (None, None) if no data or error.
     """
     try:
         rs = _reddit_scan()
-        posts = rs.get_hot_posts("wallstreetbets", limit=25)
+
+        # Search posts for this ticker in wallstreetbets
+        ticker_posts = rs.search_posts_arctic("wallstreetbets", ticker, limit=25)
+
+        # Get recent comments and filter for ticker mentions
+        all_comments = rs.get_recent_comments("wallstreetbets", limit=50)
+        ticker_comments = [c for c in all_comments if ticker.lower() in c.get("body", "").lower()]
+
         rs.close()
 
-        # Filter posts that mention this ticker
-        ticker_posts = [p for p in posts if ticker.lower() in [c.lower() for c in p.get("cashtags", [])]]
+        # Combine posts and comments for analysis
+        all_ticker_mentions = ticker_posts + ticker_comments
 
-        if ticker_posts:
-            # Calculate simple sentiment: count bullish/bearish keywords
+        if all_ticker_mentions:
+            # Calculate sentiment using score-weighted approach
             bullish_keywords = ["buy", "long", "call", "moon", "rocket", "hodl", "bull"]
             bearish_keywords = ["sell", "short", "put", "bear", "drop", "crash", "bearish"]
 
-            bullish_count = sum(
-                1 for p in ticker_posts
-                if any(kw in p.get("title", "").lower() or kw in p.get("body", "").lower() for kw in bullish_keywords)
-            )
-            bearish_count = sum(
-                1 for p in ticker_posts
-                if any(kw in p.get("title", "").lower() or kw in p.get("body", "").lower() for kw in bearish_keywords)
-            )
+            # Score-weighted counting: posts use their score, comments use their score
+            bullish_score = 0.0
+            bearish_score = 0.0
+            post_count = len(ticker_posts)
+            comment_count = len(ticker_comments)
 
-            total = len(ticker_posts)
-            bullish_pct = bullish_count / total if total > 0 else 0
-            bearish_pct = bearish_count / total if total > 0 else 0
+            for p in ticker_posts:
+                score = p.get("score", 0) or 0
+                text = (p.get("title", "") or "") + " " + (p.get("selftext", "") or "")
+                is_bullish = any(kw in text.lower() for kw in bullish_keywords)
+                is_bearish = any(kw in text.lower() for kw in bearish_keywords)
+                if is_bullish and not is_bearish:
+                    bullish_score += score
+                elif is_bearish and not is_bullish:
+                    bearish_score += score
+
+            for c in ticker_comments:
+                score = c.get("score", 0) or 0
+                body = c.get("body", "") or ""
+                is_bullish = any(kw in body.lower() for kw in bullish_keywords)
+                is_bearish = any(kw in body.lower() for kw in bearish_keywords)
+                if is_bullish and not is_bearish:
+                    bullish_score += score
+                elif is_bearish and not is_bullish:
+                    bearish_score += score
+
+            total_score = abs(bullish_score) + abs(bearish_score)
+            if total_score > 0:
+                bullish_pct = bullish_score / total_score if bullish_score >= 0 else 0
+                bearish_pct = bearish_score / total_score if bearish_score >= 0 else 0
+            else:
+                bullish_pct = 0.5
+                bearish_pct = 0.5
+
+            # Ensure percentages are in valid range
+            bullish_pct = max(0.0, min(1.0, bullish_pct))
+            bearish_pct = max(0.0, min(1.0, bearish_pct))
 
             result = {
-                "post_count": total,
-                "bullish_count": bullish_count,
-                "bearish_count": bearish_count,
-                "bullish_pct": bullish_pct,
-                "bearish_pct": bearish_pct,
+                "post_count": post_count,
+                "comment_count": comment_count,
+                "bullish_score": round(bullish_score, 2),
+                "bearish_score": round(bearish_score, 2),
+                "bullish_pct": round(bullish_pct, 3),
+                "bearish_pct": round(bearish_pct, 3),
+                "total_mentions": post_count + comment_count,
                 "ticker": ticker,
             }
 
-            # Record to engine
+            # Record to engine with Reddit sentiment data
             engine.record_narrative(ticker, {
                 "narrative_score": 0,
-                "bullish_pct": bullish_pct,
-                "bearish_pct": bearish_pct,
-                "volume": total,
+                "bullish_pct": round(bullish_pct * 100, 1),
+                "bearish_pct": round(bearish_pct * 100, 1),
+                "volume": post_count + comment_count,
                 "contested_narrative_score": 0,
                 "war_score": 0,
                 "thesis_ratio": 0.5,
@@ -446,13 +481,14 @@ def run_reddit_scanner(ticker, engine):
 
 
 def format_reddit_line(result):
-    """Format Reddit scanner result as a line for console output."""
+    """Format Reddit scanner result as a line for console output (mirrors stocktwits style)."""
     if not result:
         return None
     return (
-        f"  {result['ticker']:6s} | Reddit: {result['post_count']:<3d} posts | "
-        f"Bull: {result['bullish_pct']:.0%} | Bear: {result['bearish_pct']:.0%}"
+        f"  {result['ticker']:6s} | Reddit: {result.get('post_count', 0):<3d} posts / {result.get('comment_count', 0):<3d} comments | "
+        f"Bull: {result.get('bullish_pct', 0):.0%} | Bear: {result.get('bearish_pct', 0):.0%}"
     )
+
 
 
 def scan_trending(st, engine, benchmark="SPY", skip_gex=False, skip_youtube=False, skip_reddit=False):
