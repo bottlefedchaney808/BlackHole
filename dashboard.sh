@@ -13,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$SCRIPT_DIR"
 unset PYTHONPATH
 unset PYTHONHOME
+# Point swaps queries at the OneDrive live book (323 GB, ~71M rows).
+# If SWAPS_DB_PATH is already set (e.g. in your user env), it wins.
+export SWAPS_DB_PATH="${SWAPS_DB_PATH:-C:\Users\bottl\OneDrive\Stocks\Swaps\swaps.db}"
 # Overview widgets 2-4 (vol/quant signals, per-position analysis, surface
 # showcase) make real ThetaData calls on their own background cadence -- on
 # by default here since a yearly ThetaData strip has no marginal per-call

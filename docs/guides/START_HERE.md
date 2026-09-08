@@ -117,7 +117,15 @@ THETADATA_CF_ACCESS_CLIENT_SECRET=...
 
 These credentials are required for any run that touches live market data.
 
-### 5.2 Run the pipeline
+### 5.2 Swaps data layout
+
+The swaps query layer reads from `swaps.db` in the repo root (~4.66 MB,
+~941 rows with `effective_date >= 2026-01-01`) unless `SWAPS_DB_PATH` is set.
+Set `SWAPS_DB_PATH=C:\Users\bottl\OneDrive\Stocks\Swaps\swaps.db` to query the
+full ~71M-row OneDrive live book (this is what `dashboard.bat`/`run_scheduler.bat`
+do automatically). Full layout details: `docs/SWAPS_DB_LAYOUT.md`.
+
+### 5.3 Run the pipeline
 
 Start the dashboard and run modules as widgets (the widget-native path):
 

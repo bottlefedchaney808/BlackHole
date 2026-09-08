@@ -4,6 +4,9 @@ REM and opens it in your default browser. Binds to localhost only.
 cd /d "%~dp0"
 set PYTHONPATH=
 set PYTHONHOME=
+REM Point swaps queries at the OneDrive live book (323 GB, ~71M rows).
+REM If SWAPS_DB_PATH is already set (e.g. in your user env), it wins.
+if not defined SWAPS_DB_PATH set SWAPS_DB_PATH=C:\Users\bottl\OneDrive\Stocks\Swaps\swaps.db
 REM Overview widgets 2-4 (vol/quant signals, per-position analysis, surface
 REM showcase) make real ThetaData calls on their own background cadence --
 REM on by default here since a yearly ThetaData strip has no marginal

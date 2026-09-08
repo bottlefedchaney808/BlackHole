@@ -21,7 +21,10 @@ logger = setup_logging(
 
 # Database file path (SWAPS_DB_PATH env var overrides, e.g. for a mounted
 # Docker volume; see .env.example / docker-compose.yml)
-DB_PATH = os.environ.get('SWAPS_DB_PATH') or os.path.join(os.path.dirname(__file__), 'swaps.db')
+DB_PATH = os.environ.get('SWAPS_DB_PATH')
+if DB_PATH is None:
+    DB_PATH = os.path.join(os.path.dirname(__file__), 'swaps.db')
+    logger.warning("SWAPS_DB_PATH unset; using repo-root recent-window DB")
 
 # Busy timeout (ms) applied to every connection this module opens, so that a
 # connection blocked behind another process's write lock waits and retries

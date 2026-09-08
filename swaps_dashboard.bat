@@ -6,6 +6,9 @@ REM docs/superpowers/specs/2026-08-27-swaps-dashboard-split-design.md.
 cd /d "%~dp0"
 set PYTHONPATH=
 set PYTHONHOME=
+REM Point swaps queries at the OneDrive live book (323 GB, ~71M rows).
+REM If SWAPS_DB_PATH is already set (e.g. in your user env), it wins.
+if not defined SWAPS_DB_PATH set SWAPS_DB_PATH=C:\Users\bottl\OneDrive\Stocks\Swaps\swaps.db
 if not exist ".venv\Scripts\python.exe" (
     echo Shared .venv not found at %~dp0.venv — run: python -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
     echo.

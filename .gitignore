@@ -62,6 +62,9 @@ artifacts/
 # DTCC/swaps ingestion pipeline: raw pulls, derived DB, per-run output dirs
 CFTC_SLICE_EQUITIES_*/
 dtcc_data/
+# swaps.db is the GitHub-sized recent-window primary (effective_date >= 2026-01-01).
+# Live queries point at OneDrive/Stocks/Swaps/swaps.db via SWAPS_DB_PATH.
+# Keep volatile WAL/SHM/lock sidecars ignored so they never get staged.
 swaps.db
 swaps.db-shm
 swaps.db-wal

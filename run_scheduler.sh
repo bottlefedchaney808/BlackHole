@@ -9,6 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$SCRIPT_DIR"
 unset PYTHONPATH
 unset PYTHONHOME
+# Point swaps queries at the OneDrive live book (323 GB, ~71M rows).
+# If SWAPS_DB_PATH is already set (e.g. in your user env), it wins.
+export SWAPS_DB_PATH="${SWAPS_DB_PATH:-C:\Users\bottl\OneDrive\Stocks\Swaps\swaps.db}"
 
 VENV_PYTHON=""
 for candidate in "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/.venv/bin/python"; do

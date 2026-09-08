@@ -127,7 +127,10 @@ DEFAULT_TIMEOUT_SEC = int(os.environ.get("SUITE_CHILD_TIMEOUT_SEC", "1800"))
 
 # SWAPS_DB_PATH env var overrides, e.g. for a mounted Docker volume; see
 # .env.example / docker-compose.yml
-DB_PATH = os.environ.get("SWAPS_DB_PATH") or os.path.join(ROOT, "swaps.db")
+DB_PATH = os.environ.get("SWAPS_DB_PATH")
+if DB_PATH is None:
+    DB_PATH = os.path.join(ROOT, "swaps.db")
+    logger.warning("SWAPS_DB_PATH unset; using repo-root recent-window DB")
 
 
 def _warn_if_schema_outdated() -> None:
