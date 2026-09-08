@@ -47,7 +47,24 @@
     #legs span.on { color: #0e1117; background: #34d399; border-color: #34d399; }
     #legs span.off { opacity: 0.55; }
     #legs span.pending { color: #94a3b8; }
-    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; }
+    #overlays {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 26px;
+      padding: 0 12px;
+      color: #A9B7D0;
+      font: 11px/1 system-ui, sans-serif;
+    }
+    #overlays label {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #overlays input { accent-color: #38BDF8; margin: 0; }
+    #chart { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; }
   </style>
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
@@ -74,6 +91,15 @@
       <span data-leg="whale" title="Whale flow (sampled later)">WH</span>
       <span data-leg="liquidity" title="Dealer liquidity (sampled later)">LQ</span>
     </div>
+  </div>
+  <div id="overlays">
+    <label><input type="checkbox" data-overlay="ema20" checked>ema20</label>
+    <label><input type="checkbox" data-overlay="ema50" checked>ema50</label>
+    <label><input type="checkbox" data-overlay="vwap" checked>vwap</label>
+    <label><input type="checkbox" data-overlay="bb" checked>bb</label>
+    <label><input type="checkbox" data-overlay="whale" checked>whale</label>
+    <label><input type="checkbox" data-overlay="volume" checked>volume</label>
+    <label><input type="checkbox" data-overlay="flow" checked>flow</label>
   </div>
   <div id="chart"></div>
   <script>
@@ -152,6 +178,57 @@
       };
     }
 
+    // ---- overlay toggles (A1) --------------------------------------------
+    // Which optional series render. OHLC and the buy/add/hold/sell markers are
+    // always on -- they are the chart, not an overlay.
+    const OVERLAY_KEYS = ["ema20", "ema50", "vwap", "bb", "whale", "volume", "flow"];
+    const OVERLAY_STORE = "chart-app-overlays";
+    // Series name -> overlay key, so the ECharts legend mirrors the checkboxes.
+    const SERIES_OVERLAY = {
+      ema20: "ema20", ema50: "ema50", vwap: "vwap",
+      bb_upper: "bb", bb_mid: "bb", bb_lower: "bb",
+      whale: "whale", volume: "volume",
+      call: "flow", put: "flow", net: "flow",
+    };
+
+    function enabledOverlays() {
+      const out = {};
+      OVERLAY_KEYS.forEach((k) => { out[k] = true; });
+      document.querySelectorAll("#overlays [data-overlay]").forEach((el) => {
+        out[el.dataset.overlay] = !!el.checked;
+      });
+      return out;
+    }
+
+    function legendSelected(ov) {
+      const sel = {};
+      Object.keys(SERIES_OVERLAY).forEach((name) => {
+        sel[name] = !!ov[SERIES_OVERLAY[name]];
+      });
+      return sel;
+    }
+
+    function saveOverlays() {
+      try {
+        localStorage.setItem(OVERLAY_STORE, JSON.stringify(enabledOverlays()));
+      } catch (_err) {
+        /* private mode / quota -- toggles still work for this session */
+      }
+    }
+
+    function restoreOverlays() {
+      let saved = null;
+      try {
+        saved = JSON.parse(localStorage.getItem(OVERLAY_STORE) || "null");
+      } catch (_err) {
+        saved = null;
+      }
+      if (!saved || typeof saved !== "object") return;
+      document.querySelectorAll("#overlays [data-overlay]").forEach((el) => {
+        if (typeof saved[el.dataset.overlay] === "boolean") el.checked = saved[el.dataset.overlay];
+      });
+    }
+
     function render(state) {
       const ticker = state.ticker || "";
       const interval = state.interval || "";
@@ -179,7 +256,8 @@
         itemStyle: { color: b.close >= b.open ? UP : DOWN },
       }));
 
-      const hasFlow = !!state.flow;
+      const ov = enabledOverlays();
+      const hasFlow = !!state.flow && ov.flow;
       const flowCall = hasFlow ? (state.flow.call || []) : [];
       const flowPut = hasFlow ? (state.flow.put || []) : [];
       const flowNet = hasFlow ? (state.flow.net || []) : [];
@@ -187,6 +265,11 @@
       const key = ticker + "|" + interval + "|" + bars.length;
       const resetZoom = key !== lastKey;
       lastKey = key;
+      // Dropping a series only takes effect under notMerge, so an overlay
+      // toggle has to force a full setOption too -- but keep the user's zoom.
+      const overlayKey = JSON.stringify(ov);
+      const overlaysChanged = overlayKey !== lastOverlayKey;
+      lastOverlayKey = overlayKey;
       const show = Math.min(bars.length, VISIBLE[interval] || bars.length || 1);
       const startPct = bars.length ? 100 * (bars.length - show) / bars.length : 0;
 
@@ -200,6 +283,7 @@
           itemHeight: 6,
           textStyle: { color: MUTED, fontSize: 10 },
           inactiveColor: "#334155",
+          selected: legendSelected(ov),
           data: hasFlow
             ? ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale", "call", "put", "net"]
             : ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
@@ -250,21 +334,23 @@
               borderColor0: DOWN,
             },
           },
-          line("ema20", overlays.ema20 || [], "#fbbf24", 1.4),
-          line("ema50", overlays.ema50 || [], "#60a5fa", 1.4),
-          line("vwap", overlays.vwap || [], "#34d399", 1.2, "dashed"),
-          line("bb_upper", overlays.bb_upper || [], "#64748B", 1),
-          line("bb_mid", overlays.bb_mid || [], "#94a3b8", 1, "dotted"),
-          line("bb_lower", overlays.bb_lower || [], "#64748B", 1),
-          whaleMarks(bars, state.signals || []),
+          ...(ov.ema20 ? [line("ema20", overlays.ema20 || [], "#fbbf24", 1.4)] : []),
+          ...(ov.ema50 ? [line("ema50", overlays.ema50 || [], "#60a5fa", 1.4)] : []),
+          ...(ov.vwap ? [line("vwap", overlays.vwap || [], "#34d399", 1.2, "dashed")] : []),
+          ...(ov.bb ? [
+            line("bb_upper", overlays.bb_upper || [], "#64748B", 1),
+            line("bb_mid", overlays.bb_mid || [], "#94a3b8", 1, "dotted"),
+            line("bb_lower", overlays.bb_lower || [], "#64748B", 1),
+          ] : []),
+          ...(ov.whale ? [whaleMarks(bars, state.signals || [])] : []),
           markerSeries(bars, markers),
-          {
+          ...(ov.volume ? [{
             name: "volume",
             type: "bar",
             xAxisIndex: 1,
             yAxisIndex: 1,
             data: volumes,
-          },
+          }] : []),
           ...(hasFlow ? [
             line("call", flowCall, "#34d399", 1.2, null, 2, 2),
             line("put", flowPut, "#f87171", 1.2, null, 2, 2),
@@ -273,7 +359,19 @@
         ],
         textStyle: { color: TEXT },
       };
-      if (resetZoom) {
+      const rebuild = resetZoom || overlaysChanged;
+      if (rebuild) {
+        // notMerge drops dataZoom unless we re-supply it. On a pure overlay
+        // toggle, carry the user's current window over instead of snapping back.
+        let zoomStart = startPct;
+        let zoomEnd = 100;
+        if (!resetZoom) {
+          const cur = (chart.getOption() || {}).dataZoom;
+          if (cur && cur.length) {
+            if (cur[0].start != null) zoomStart = cur[0].start;
+            if (cur[0].end != null) zoomEnd = cur[0].end;
+          }
+        }
         opt.dataZoom = [
           {
             type: "inside",
@@ -288,8 +386,8 @@
             xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
             height: 22,
             bottom: 6,
-            start: startPct,
-            end: 100,
+            start: zoomStart,
+            end: zoomEnd,
             borderColor: "#334155",
             fillerColor: "rgba(56,189,248,0.15)",
             handleStyle: { color: "#38BDF8" },
@@ -298,10 +396,15 @@
           },
         ];
       }
-      chart.setOption(opt, resetZoom);
+      chart.setOption(opt, rebuild);
+      // The canvas may still have been zero-size when init() measured it
+      // (iframe not laid out yet) -- resizing after every paint is cheap.
+      chart.resize();
     }
 
     let lastKey = "";
+    let lastOverlayKey = "";
+    let lastState = null;
     const VISIBLE = {
       "3m": 80, "5m": 80, "10m": 80, "15m": 80,
       "30m": 80, "1h": 80, "4h": 80, "1d": 180,
@@ -316,6 +419,7 @@
         const res = await fetch("/api/state");
         if (!res.ok) return;
         const state = await res.json();
+        lastState = state;
         render(state);
         if (state.ticker) document.getElementById("ticker").value = state.ticker;
         if (state.interval) document.getElementById("interval").value = state.interval;
@@ -349,6 +453,10 @@
         await poll();
       } finally {
         btn.disabled = false;
+        // A symbol/interval switch repaints with notMerge; if the canvas was
+        // measured at zero (fresh iframe) that paints blank until something
+        // else triggers a resize. Do it here instead of waiting.
+        chart.resize();
       }
     }
 
@@ -358,9 +466,49 @@
     });
     document.getElementById("interval").addEventListener("change", loadSymbol);
 
-    poll();
+    restoreOverlays();
+    document.querySelectorAll("#overlays [data-overlay]").forEach((el) => {
+      el.addEventListener("change", () => {
+        saveOverlays();
+        // Repaint from the frame we already have -- a toggle is a view
+        // change, not a data fetch.
+        if (lastState) render(lastState);
+        else poll();
+      });
+    });
+
+    // Embedded use (dashboard Chart tab / Overview hero): ?ticker=SPY&interval=15m
+    // pins the frame to a symbol on boot instead of inheriting server state.
+    const qs = new URLSearchParams(window.location.search);
+    const qsTicker = (qs.get("ticker") || "").trim().toUpperCase();
+    const qsInterval = (qs.get("interval") || "").trim();
+    if (qsTicker || qsInterval) {
+      if (qsTicker) document.getElementById("ticker").value = qsTicker;
+      if (qsInterval) {
+        const sel = document.getElementById("interval");
+        if (Array.prototype.some.call(sel.options, (o) => o.value === qsInterval)) {
+          sel.value = qsInterval;
+        }
+      }
+      loadSymbol();
+    } else {
+      poll();
+    }
     setInterval(poll, 5000);
+
     window.addEventListener("resize", () => chart.resize());
+    // The iframe's own box can change without a window resize (parent grid
+    // relayout, sidebar add/remove) -- ResizeObserver is the only thing that
+    // catches that.
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => chart.resize());
+      ro.observe(document.getElementById("chart"));
+    }
+    // Parent-page nudge (dashboard chart.html posts this on iframe load and
+    // when the tab becomes visible again).
+    window.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "chart-resize") chart.resize();
+    });
   </script>
 </body>
 </html>

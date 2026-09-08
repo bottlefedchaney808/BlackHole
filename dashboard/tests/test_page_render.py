@@ -88,3 +88,24 @@ def test_chart_has_side_panel():
     resp = client.get('/chart')
     html = resp.text
     assert 'chart-side-panel' in html or 'chart-grid' in html
+
+
+def test_chart_sidebar_has_add_widget_control():
+    """Chart sidebar can add widgets from the module catalog (capped at 4)."""
+    html = client.get('/chart').text
+    assert 'id="chartAddWidget"' in html
+    assert "fetch('/api/widgets/catalog'" in html
+    assert 'MAX_WIDGETS = 4' in html
+
+
+def test_chart_sidebar_empty_state_is_not_a_dead_end():
+    """Empty sidebar points at the + control instead of just saying 'none'."""
+    html = client.get('/chart').text
+    assert 'Add IV Rank or VRP from +' in html
+
+
+def test_chart_sidebar_widgets_are_removable():
+    """Each sidebar widget carries an x button wired to the layout DELETE."""
+    html = client.get('/chart').text
+    assert 'chart-cell-remove' in html
+    assert "method: 'DELETE'" in html
