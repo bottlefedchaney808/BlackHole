@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Overview -- BlackHole Investments Dashboard{% endblock %}
+{% block body_class %}page-overview{% endblock %}
 
 {% block content %}
 <h1>Overview</h1>
@@ -10,20 +11,19 @@
 </p>
 
 <!-- ------------------------------------------------------------------ -->
-<!-- Overview Hero: SPY chart + four metric cards -->
+<!-- Overview Hero: compact metric strip, then the native chart full-bleed.
+     chart_app_url MUST be the :8791 native app. An empty src becomes
+     "?ticker=..." which reloads THIS dashboard inside itself. -->
 <div class="overview-hero">
-  <!-- Left: IV Rank widget (SPY) -->
-  <quant-widget slug="iv_rank" data-context='{"ticker": "SPY"}'></quant-widget>
-  <!-- Left: VRP from signals cache (SPY) -->
-  <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
-  <!-- Center: SPY 15m chart iframe -->
-  <div class="overview-hero-chart">
-    <iframe src="{{ chart_app_url }}?ticker=SPY&interval=15m" width="100%" height="100%" frameborder="0"></iframe>
+  <div class="overview-hero-metrics">
+    <quant-widget slug="iv_rank" data-context='{"ticker": "SPY"}'></quant-widget>
+    <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
+    <quant-widget slug="skew" data-context='{"ticker": "SPY"}'></quant-widget>
+    <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
   </div>
-  <!-- Right: Skew widget (SPY) -->
-  <quant-widget slug="skew" data-context='{"ticker": "SPY"}'></quant-widget>
-  <!-- Right: Signals score (SPY) -->
-  <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
+  <div class="overview-hero-chart">
+    <iframe src="{{ chart_app_url }}?ticker=SPY&interval=15m" title="SPY 15m native chart" width="100%" height="100%" frameborder="0"></iframe>
+  </div>
 </div>
 
 <!-- ------------------------------------------------------------------ -->
@@ -94,27 +94,41 @@ import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-
 </script>
 
 <style>
-/* Overview hero grid: 220px iv_rank, 220px signals (VRP), minmax SPY iframe, 220px skew, 220px signals score */
+/* Overview hero: 4 metric chips in a short strip, native chart eats the rest. */
 .overview-hero {
-  display: grid;
-  grid-template-columns: 220px 220px minmax(0, 1fr) 220px 220px;
-  gap: 12px;
-  min-height: 420px;
-  padding: 12px;
-  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 52px);
+  min-height: 0;
+  gap: 8px;
+  padding: 8px;
+  margin: 0;
 }
-.overview-hero quant-widget,
+.overview-hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  flex: 0 0 132px;
+  min-height: 0;
+}
+.overview-hero-metrics quant-widget,
 .overview-hero .overview-hero-chart {
   display: block;
-  border-radius: 12px;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border, #24304f);
+  border-radius: 8px;
+}
+.overview-hero-chart {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .overview-hero-chart iframe {
   width: 100%;
   height: 100%;
   border: 0;
-  min-height: 380px;
+  display: block;
 }
 /* Grid layout for overview widgets - matches quant.html console-grid pattern */
 .widget-grid {

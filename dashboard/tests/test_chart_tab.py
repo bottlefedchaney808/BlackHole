@@ -24,18 +24,19 @@ def test_chart_page_is_full_bleed():
     r = client.get('/chart')
     assert r.status_code == 200
     assert 'page-chart' in r.text
-    assert 'body.page-chart main { max-width: none;' in r.text
+    assert 'body.page-chart main,' in r.text
+    assert 'max-width: none;' in r.text
 
 
 def test_chart_layout_is_chart_left_sidebar_right():
-    """Chart column takes the stretch (minmax(0, 1fr)) and can shrink below
-    its intrinsic width; the sidebar is a fixed 320px on the right."""
+    """Chart column takes the stretch (minmax(0, 1fr)); sidebar is 280px."""
     r = client.get('/chart')
     html = r.text
-    assert 'grid-template-columns: minmax(0, 1fr) 320px;' in html
+    assert 'grid-template-columns: minmax(0, 1fr) 280px;' in html
     # chart iframe is emitted before the sidebar -> chart renders on the left
     assert html.index('id="chartFrame"') < html.index('chart-side-panel')
-    assert 'height:calc(100vh - 120px)' in html
+    assert 'height: calc(100vh - 48px)' in html
+    assert 'height:100%' in html
 
 
 def test_chart_pings_iframe_to_resize():
@@ -44,3 +45,15 @@ def test_chart_pings_iframe_to_resize():
     html = client.get('/chart').text
     assert "postMessage({ type: 'chart-resize' }, '*')" in html
     assert "visibilitychange" in html
+
+
+def test_overview_hero_points_at_native_chart_not_self():
+    """Empty chart_app_url made src='?ticker=...' which nested this dashboard."""
+    r = client.get('/')
+    assert r.status_code == 200
+    html = r.text
+    assert 'page-overview' in html
+    assert 'http://127.0.0.1:8791?ticker=SPY&interval=15m' in html
+    assert 'src="?ticker=' not in html
+    assert 'overview-hero-chart' in html
+    assert 'overview-hero-metrics' in html

@@ -775,6 +775,7 @@ def home(request: Request):
         {
             "active": "home",
             "swaps_dashboard_url": SWAPS_DASHBOARD_URL,
+            "chart_app_url": CHART_APP_URL,
             "runs": runs,
             "runs_error": runs_error,
             "suites": SUITE_LABELS,
