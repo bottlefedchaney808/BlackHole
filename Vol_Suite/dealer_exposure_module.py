@@ -22,6 +22,7 @@ a fake "ok".
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,7 @@ def fetch_dealer_exposure(
     any failure -- see module docstring's fail-loud contract.
     """
     from dealer_positioning import (
+        plot_expiry_book_greek_exposure,
         plot_expiry_book_heatmap,
         plot_expiry_book_single_greek,
     )
@@ -78,10 +80,21 @@ def fetch_dealer_exposure(
         files = [
             plot_expiry_book_heatmap(result, output_dir=output_dir),
         ]
+        # Combined 2x2 Gamma/Delta/Vanna/Charm grid -- the single "4-panel"
+        # exposure chart. Rendered from the SAME fetched snapshot (no extra
+        # data pulls). Best-effort: a charting failure must not fail the fetch,
+        # so it's wrapped like the singles below rather than raised through.
+        try:
+            files.append(
+                plot_expiry_book_greek_exposure(result, output_dir=output_dir)
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "combined 4-panel greek exposure chart failed", exc_info=True
+            )
         # Chain exposure per greek, one LARGE chart each (gamma/delta/vanna/
-        # charm) -- replaces the old combined 2x2 comparison (same data,
-        # duplicated). Rendered from the SAME fetched snapshot -- no extra
-        # data pulls. Best-effort: a charting failure must not fail the fetch.
+        # charm). Rendered from the SAME fetched snapshot -- no extra data pulls.
+        # Best-effort: a charting failure must not fail the fetch.
         for _g in ("gamma", "delta", "vanna", "charm"):
             try:
                 files.append(

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}FinancialDevelopment Dashboard{% endblock %}</title>
+<title>{% block title %}BlackHole Investments Dashboard{% endblock %}</title>
 <style>
 /* Everything inline -- this runs offline on localhost, no CDN anything.
    Palette matches shared/chart_theme.py's dark navy-to-blue theme (no
@@ -219,7 +219,7 @@ pre.json {
 </head>
 <body class="{% block body_class %}{% endblock %}">
 <header class="topbar">
-  <div class="brand">FinancialDevelopment <span>/ live dashboard</span></div>
+  <div class="brand">BlackHole Investments <span>/ live dashboard</span></div>
   <nav class="tabs">
     <a href="/" class="{{ 'on' if active == 'home' else '' }}">Overview</a>
     <a href="/quant" class="{{ 'on' if active == 'quant' else '' }}">Quant Console</a>

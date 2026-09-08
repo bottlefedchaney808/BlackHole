@@ -1,4 +1,4 @@
-# Quant TUI — terminal client for the FinancialDevelopment widget API.
+# Quant TUI — terminal client for the BlackHole Investments widget API.
 # Same surfaces as quant.html: GET /api/widgets/catalog, POST /api/widgets/{slug}/run,
 # GET /api/widgets/{slug}/state. No business logic lives here.
 #

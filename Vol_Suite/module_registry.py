@@ -810,7 +810,7 @@ def _selection_only_marker(slug: str) -> Any:
 
 MODULES: list[ModuleSpec] = [
     ModuleSpec(
-        name="Dealer Exposure",
+        name="Expiry Exposure",
         slug="dealer_exposure",
         suite="vol_suite",
         category="exposure",
