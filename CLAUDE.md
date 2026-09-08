@@ -332,5 +332,5 @@ widget runs from arbitrary text. Don't expose it beyond localhost without adding
 ## Notable env vars
 
 All in the single root `.env` (see `.env.example`): `THETADATA_CF_ACCESS_CLIENT_ID`/`_SECRET`
-(required — ThetaData/PotatoHedge proxy credentials), `SWAPS_DB_PATH` (defaults to `./swaps.db`),
+(required — ThetaData/PotatoHedge proxy credentials), `SWAPS_DB_PATH` (unset = repo-root recent-window `./swaps.db` ~941 rows; launchers set it to the OneDrive live book — see `docs/SWAPS_DB_LAYOUT.md`),
 `LOG_LEVEL`, `DATA_SOURCES` (which `adapters/` are active).
