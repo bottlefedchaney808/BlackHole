@@ -69,6 +69,10 @@ nav.tabs a:hover { color: var(--text); }
 nav.tabs a.on { color: var(--text); border-bottom-color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); }
 
 main { max-width: 1500px; margin: 0 auto; padding: 22px 20px 64px; }
+/* Full-bleed opt-out: pages that own the whole viewport (Chart) fill the
+   body_class block with "page-chart" and escape the centered 1500px column,
+   which otherwise leaves black gutters on a wide monitor. */
+body.page-chart main { max-width: none; padding: 12px 16px; }
 h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; }
 h2 { font-size: 15px; margin: 0; letter-spacing: -0.01em; }
 .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
@@ -213,7 +217,7 @@ pre.json {
 .share a.shareurl { font-family: var(--mono); font-size: 12px; word-break: break-all; max-width: 320px; }
 </style>
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 <header class="topbar">
   <div class="brand">FinancialDevelopment <span>/ live dashboard</span></div>
   <nav class="tabs">
