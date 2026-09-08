@@ -228,11 +228,27 @@ def _tool_modules() -> list[ModuleSpec]:
     return [from_tool_spec(tool_spec) for tool_spec in TOOLS]
 
 
+def _dashboard_cache_modules() -> list[ModuleSpec]:
+    """Dashboard's cache-backed widgets: positions, signals, position_analysis, surfaces.
+    
+    These are written by background jobs and agent pushes, not by the generic
+    widget run API. We include them in all_modules() so resolve_modules() works
+    for POST /api/widgets/{slug}/run, but they're registered via dashboard's
+    _cache_widget_modules() helper which is called during app init.
+    """
+    try:
+        from dashboard.cache_widgets import CACHE_WIDGET_SPECS
+        return CACHE_WIDGET_SPECS
+    except Exception:
+        return []
+
+
 def all_modules() -> list[ModuleSpec]:
     """Every registered module, repo-wide: the four suites' MODULES lists
-    plus every Tools/registry.py entry adapted via from_tool_spec.
+    plus every Tools/registry.py entry adapted via from_tool_spec,
+    plus dashboard's cache-backed widgets.
     """
-    return _suite_modules() + _tool_modules()
+    return _suite_modules() + _tool_modules() + _dashboard_cache_modules()
 
 
 def resolve_modules(slugs: list[str]) -> list[ModuleSpec]:

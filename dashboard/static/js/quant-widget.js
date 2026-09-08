@@ -327,6 +327,8 @@ class QuantWidget extends HTMLElement {
     this._resync();
     this._loadCatalog();
     if (this._syncEnabled()) this._maybeFetchState();
+    // For cache-backed widgets, also try the legacy unscoped cache
+    this._maybeFetchLegacy();
   }
 
   disconnectedCallback() {
@@ -343,6 +345,7 @@ class QuantWidget extends HTMLElement {
     if (name === 'slug' && this._built) {
       this._renderHeader();
       this._loadCatalog();
+      this._updateInjectButton();
     }
   }
 
@@ -422,6 +425,15 @@ class QuantWidget extends HTMLElement {
     runRow.appendChild(this._stateEl);
     panel.appendChild(runRow);
 
+    // inject button (positions only, visible when payload has ≥1 ticker)
+    this._injectBtn = document.createElement('button');
+    this._injectBtn.type = 'button';
+    this._injectBtn.className = 'qw-run';
+    this._injectBtn.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+    this._injectBtn.textContent = 'Inject as context';
+    this._injectBtn.addEventListener('click', function () { this._injectPositions(); }.bind(this));
+    runRow.appendChild(this._injectBtn);
+
     // output
     this._out = document.createElement('div');
     this._out.className = 'qw-out';
@@ -436,6 +448,7 @@ class QuantWidget extends HTMLElement {
 
     this._renderHeader();
     this._renderPlaceholder();
+    this._updateInjectButton();
   }
 
   _renderHeader() {
@@ -480,6 +493,7 @@ class QuantWidget extends HTMLElement {
         this._catalogLoaded = true;
       }
       this._renderHeader();
+      this._updateInjectButton();
     }.bind(this)).catch(function () { /* keep data-* fallback */ });
   }
 
@@ -734,6 +748,81 @@ class QuantWidget extends HTMLElement {
       this._renderResult(result);
       this._setState('ready');
     }.bind(this)).catch(function () { /* read-only best effort; ignore */ });
+  }
+
+  /** Fetch from legacy unscoped cache for cache-backed widgets (positions,
+   *  signals, position_analysis, surfaces). Runs on mount if the scoped
+   *  cache read fails or returns no status field. */
+  _maybeFetchLegacy() {
+    const slug = this._slugAttr();
+    if (!slug) return;
+    // Cache-backed widgets only
+    const legacySlugs = ['positions', 'signals', 'position_analysis', 'surfaces'];
+    if (legacySlugs.indexOf(slug) === -1) return;
+    // Don't overwrite a user-run result
+    if (this._hasRun) return;
+    fetch('/api/widgets/' + encodeURIComponent(slug), {
+      headers: { Accept: 'application/json' }
+    }).then(function (res) {
+      if (!res.ok) return null;
+      return res.json();
+    }).then(function (json) {
+      if (!json || this._hasRun || !this._out) return;
+      // json is the full row: {payload, status, computed_at}
+      const result = {
+        status: json.status || 'ok',
+        metrics: json.payload || {},
+        artifacts: [],
+        context_patch: null,
+        slug: slug
+      };
+      this._hasRun = true;
+      this._lastResult = result;
+      this._renderResult(result);
+      this._setState('ready');
+    }.bind(this)).catch(function () { /* read-only best effort; ignore */ });
+  }
+
+  /** Update inject button visibility: only for positions widget, only when
+   *  the last payload has ≥1 ticker. Called on mount and after each render. */
+  _updateInjectButton() {
+    if (!this._built || !this._injectBtn) return;
+    const slug = this._slugAttr();
+    const visible = (slug === 'positions' && this._lastResult && this._lastResult.metrics);
+    this._injectBtn.style.display = visible ? '' : 'none';
+  }
+
+  /** POST /api/context/inject-positions to write held_tickers into the Context Store.
+   *  Does NOT auto-run siblings — they pick up on next Run if synced. */
+  async _injectPositions() {
+    const slug = this._slugAttr();
+    if (slug !== 'positions') return;
+    const metrics = this._lastResult && this._lastResult.metrics;
+    if (!metrics) return;
+    const positions = metrics.positions || [];
+    if (!Array.isArray(positions) || positions.length === 0) return;
+
+    // Extract unique tickers from positions
+    const heldTickers = positions
+      .map(p => p.ticker)
+      .filter(t => t && typeof t === 'string')
+      .map(t => t.toUpperCase())
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .sort();
+
+    try {
+      const res = await fetch('/api/context/inject-positions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ positions: positions })
+      });
+      if (res.ok) {
+        // Update syncBus basket so synced siblings see the new scope
+        syncBus.setScope({ basket: heldTickers });
+      }
+    } catch (e) {
+      console.error('inject-positions failed', e);
+    }
   }
 
   _emit(name, detail) {

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Overview -- FinancialDevelopment Dashboard{% endblock %}
+{% block title %}Overview -- BlackHole Investments Dashboard{% endblock %}
 
 {% block content %}
 <h1>Overview</h1>
@@ -9,53 +9,30 @@
   This page is read-only status widgets -- more coming.
 </p>
 
-<div class="cards" style="margin-bottom:18px;">
-  <div class="card">
-    <div class="k">Orchestrator runs</div>
-    <div class="v">{{ runs | length }}{% if runs | length == 20 %}+{% endif %}</div>
-    <div class="x">most recent shown below</div>
+<!-- ------------------------------------------------------------------ -->
+<!-- Overview Hero: SPY chart + four metric cards -->
+<div class="overview-hero">
+  <!-- Left: IV Rank widget (SPY) -->
+  <quant-widget slug="iv_rank" data-context='{"ticker": "SPY"}'></quant-widget>
+  <!-- Left: VRP from signals cache (SPY) -->
+  <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
+  <!-- Center: SPY 15m chart iframe -->
+  <div class="overview-hero-chart">
+    <iframe src="{{ chart_app_url }}?ticker=SPY&interval=15m" width="100%" height="100%" frameborder="0"></iframe>
   </div>
+  <!-- Right: Skew widget (SPY) -->
+  <quant-widget slug="skew" data-context='{"ticker": "SPY"}'></quant-widget>
+  <!-- Right: Signals score (SPY) -->
+  <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
 </div>
 
 <!-- ------------------------------------------------------------------ -->
+<!-- Widget Grid: positions / position_analysis / surfaces -->
 <div class="widget-grid">
   <quant-widget id="positionsWidget" slug="positions" data-output-kind="metrics" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
   <quant-widget id="signalsWidget" slug="signals" data-output-kind="metrics" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
   <quant-widget id="positionAnalysisWidget" slug="position_analysis" data-output-kind="distribution" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
   <quant-widget id="surfacesWidget" slug="surfaces" data-output-kind="chart" data-context='{"ticker": "SPXW", "expiry": "", "basket": ""}'></quant-widget>
-
-  <div class="panel widget">
-    <header>
-      <h2>Orchestrator run history</h2>
-      <span class="note">last 20 rows &middot; trigger new runs from <a href="/quant">Quant Console</a></span>
-    </header>
-    {% if runs_error %}<div class="body"><div class="errbox">{{ runs_error }}</div></div>
-    {% elif not runs %}<div class="body"><div class="empty">No orchestrator runs logged yet.</div></div>
-    {% else %}
-    <div class="tablewrap">
-      <table>
-        <thead><tr>
-          <th class="num">id</th><th>run_type</th><th>ticker</th><th>focus</th>
-          <th>started</th><th>completed</th><th>status</th><th>result</th>
-        </tr></thead>
-        <tbody>
-        {% for r in runs %}
-          <tr>
-            <td class="num">{{ r.id }}</td>
-            <td class="mono small">{{ r.run_type }}</td>
-            <td><strong>{{ r.ticker }}</strong></td>
-            <td class="small muted">{{ r.focus_summary }}</td>
-            <td class="small mono">{{ r.started_at | ts }}</td>
-            <td class="small mono">{{ r.completed_at | ts }}</td>
-            <td><span class="pill {{ (r.status or 'plain') | lower }}">{{ r.status or '--' }}</span></td>
-            <td class="small mono muted">{{ r.id }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
 
   <div class="panel widget">
     <header><h2>Latest suite output</h2><span class="note">jump to a suite's Output tab</span></header>
@@ -76,10 +53,16 @@
   fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } })
     .then(function(r) { return r.ok ? r.json() : []; })
     .then(function(instances) {
-      // If layout has instances, they replace the hardcoded widgets
+      // If layout has instances, they replace ONLY the widget-grid widgets
+      // The hero is kept intact and applies to all layouts
       if (instances && instances.length > 0) {
         var grid = document.querySelector('.widget-grid');
+        // Keep the "Latest suite output" panel, replace only the quant-widget instances
+        var suitePanel = grid.querySelector('.panel.widget[header*="Latest suite"]');
         grid.innerHTML = '';
+        if (suitePanel) {
+          grid.appendChild(suitePanel);
+        }
         instances.forEach(function(inst) {
           var widget = document.createElement('quant-widget');
           widget.setAttribute('slug', inst.slug);
@@ -87,7 +70,6 @@
           if (inst.scope_override) {
             widget.setAttribute('data-context', JSON.stringify(inst.scope_override));
           }
-          // Use catalog output_kind if available, else fallback
           widget.dataset.widgetInstanceId = inst.widget_instance_id;
           grid.appendChild(widget);
         });
@@ -112,6 +94,28 @@ import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-
 </script>
 
 <style>
+/* Overview hero grid: 220px iv_rank, 220px signals (VRP), minmax SPY iframe, 220px skew, 220px signals score */
+.overview-hero {
+  display: grid;
+  grid-template-columns: 220px 220px minmax(0, 1fr) 220px 220px;
+  gap: 12px;
+  min-height: 420px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.overview-hero quant-widget,
+.overview-hero .overview-hero-chart {
+  display: block;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border, #24304f);
+}
+.overview-hero-chart iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  min-height: 380px;
+}
 /* Grid layout for overview widgets - matches quant.html console-grid pattern */
 .widget-grid {
   display: grid;

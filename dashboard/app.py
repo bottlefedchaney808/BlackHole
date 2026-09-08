@@ -79,6 +79,7 @@ from dashboard.output_runs import (
     discover_runs,
     get_run,
 )
+from dashboard.cache_widgets import CACHE_WIDGET_SPECS
 from dashboard.quant_modules import MODULE_REGISTRY
 from dashboard.widget_cache import WidgetCache
 from dashboard.worker_env import build_worker_env
@@ -190,7 +191,7 @@ CONTEXT_STORE_PATH = os.environ.get("CONTEXT_STORE_PATH") or WIDGET_CACHE_PATH
 # "v2 payload is None" for every expiry; SPXW returns real rows). SPXW is
 # genuinely SPX's own listed options (the standard daily/weekly-expiring
 # ones), not a different underlying.
-OVERVIEW_WATCHLIST = ["SPXW", "NDAQ"]
+OVERVIEW_WATCHLIST = ["SPY", "SPXW", "NDAQ"]
 
 # Background widget jobs are opt-in (default off) -- widgets 2-4 make real,
 # billed ThetaData calls (screener + hedge-optimizer greeks + 3 VaR sims per
@@ -264,7 +265,7 @@ async def _lifespan(app: FastAPI):
     _WIDGET_JOB_TASKS.clear()
 
 
-app = FastAPI(title="FinancialDevelopment Dashboard", lifespan=_lifespan)
+app = FastAPI(title="BlackHole Investments Dashboard", lifespan=_lifespan)
 
 # Local interactive-artifact boards (widget console, file:// / Desktop webview origins)
 # need cross-origin access to the widget API. The server binds 127.0.0.1 only and no
@@ -1833,6 +1834,34 @@ def get_context(scope: str | None = None):
     if scope:
         rows = [r for r in rows if r["scope"] == scope]
     return {"scope": scope, "entries": rows}
+
+
+@app.post("/api/context/inject-positions")
+async def post_context_inject_positions(request: Request):
+    """Inject positions data into the Context Store under the current scope.
+
+    Writes 'positions' and 'held_tickers' with source_slug='positions'.
+    Does NOT auto-run sibling widgets.
+    """
+    body = await _parse_body(request)
+    positions = body.get("positions")
+    if not isinstance(positions, list):
+        raise HTTPException(status_code=400, detail="positions must be a list")
+
+    # Extract unique tickers from positions
+    held_tickers = sorted({p.get("ticker") for p in positions if p.get("ticker")})
+
+    # Write to context store (use a simple global scope with ticker)
+    store = _context_store()
+    store.put({"ticker": "GLOBAL"}, "positions", {"positions": positions}, source_slug="positions", audit=False)
+    store.put({"ticker": "GLOBAL"}, "held_tickers", held_tickers, source_slug="positions", audit=False)
+
+    # Return the data that quant-widget.js will publish to syncBus
+    return {
+        "ok": True,
+        "held_tickers": held_tickers,
+        "positions_count": len(positions),
+    }
 
 
 @app.get("/api/widgets/{widget_id}")

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Quant Console -- FinancialDevelopment Dashboard{% endblock %}
+{% block title %}Quant Console -- BlackHole Investments Dashboard{% endblock %}
 
 {% block content %}
 <style>
@@ -97,7 +97,7 @@
 /* Console grid — cells host <quant-widget> plus per-instance chrome. */
 .grid-actions { display: flex; gap: 6px; align-items: center; }
 .grid-actions button { font-size: 11px; padding: 5px 10px; }
-.console-grid { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 12px; }
+.console-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 16px; padding: 12px; }
 .console-cell { display: flex; flex-direction: column; gap: 8px; }
 .cell-chrome {
   display: flex; align-items: center; gap: 8px;

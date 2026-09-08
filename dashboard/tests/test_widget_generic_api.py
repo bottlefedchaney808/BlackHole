@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import dashboard.app as dashboard_app
 from dashboard.app import app
+from dashboard.widget_cache import WidgetCache
 
 pytestmark = pytest.mark.unit
 client = TestClient(app)
@@ -180,3 +181,135 @@ def test_context_empty_returns_200(monkeypatch, tmp_path):
     data = r.json()
     assert data["scope"] == "ticker:SPY"
     assert data["entries"] == []
+
+
+# --------------------------------------------------------------------------
+# Cache-backed widgets (positions, signals, position_analysis, surfaces)
+# --------------------------------------------------------------------------
+
+
+def test_catalog_includes_cache_widgets(monkeypatch, tmp_path):
+    """Cache-backed widgets appear in the catalog with optional ticker."""
+    _db_paths(monkeypatch, tmp_path)
+    r = client.get("/api/widgets/catalog")
+    assert r.status_code == 200
+    data = r.json()
+    widgets = {w["slug"]: w for w in data["widgets"]}
+
+    for slug in ("positions", "signals", "position_analysis", "surfaces"):
+        assert slug in widgets, f"{slug} should be in catalog"
+        assert widgets[slug]["inputs"]["ticker"] == "optional"
+        assert widgets[slug]["inputs"]["expiry"] == "none"
+        assert widgets[slug]["inputs"]["basket"] == "none"
+
+
+def test_run_cache_positions_200_after_cache_write(monkeypatch, tmp_path):
+    """POST /api/widgets/positions/run returns 200 after cache is written directly."""
+    _db_paths(monkeypatch, tmp_path)
+    
+    # Write directly to the cache using WidgetCache
+    cache = WidgetCache(tmp_path / "widgets.db")
+    cache.set("positions", {
+        "positions": [
+            {"ticker": "SPY", "qty": 100, "instrument_type": "equity"},
+            {"ticker": "QQQ", "qty": 50, "instrument_type": "equity"}
+        ],
+        "accounts": ["ABC123"]
+    }, status="ok")
+
+    # Now run the positions widget (cache-backed)
+    r = client.post("/api/widgets/positions/run", json={})
+    assert r.status_code == 200, "Cache-backed positions/run should not 404"
+    data = r.json()
+    assert data["slug"] == "positions"
+    assert data["status"] == "ok"
+    assert "positions" in data["metrics"]
+    assert len(data["metrics"]["positions"]) == 2
+
+
+def test_run_cache_signals_200_after_cache_write(monkeypatch, tmp_path):
+    """POST /api/widgets/signals/run returns 200 after cache is written."""
+    _db_paths(monkeypatch, tmp_path)
+    
+    cache = WidgetCache(tmp_path / "widgets.db")
+    cache.set("signals", {"tickers": [{"ticker": "SPXW", "signal": "LONG", "score": 75, "vrp_pct": 2.1, "data_quality": "good"}]}, status="ok")
+
+    r = client.post("/api/widgets/signals/run", json={})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["slug"] == "signals"
+    assert data["status"] == "ok"
+    assert "tickers" in data["metrics"]
+
+
+def test_run_cache_position_analysis_200_after_cache_write(monkeypatch, tmp_path):
+    """POST /api/widgets/position_analysis/run returns 200 after cache is written."""
+    _db_paths(monkeypatch, tmp_path)
+    
+    cache = WidgetCache(tmp_path / "widgets.db")
+    cache.set("position_analysis", {"positions": [{"ticker": "SPY", "hedge": {}, "hedge_headline": "Buy 100 SPY"}]}, status="ok")
+
+    r = client.post("/api/widgets/position_analysis/run", json={})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["slug"] == "position_analysis"
+    assert data["status"] == "ok"
+    assert "positions" in data["metrics"]
+
+
+def test_run_cache_surfaces_200_after_cache_write(monkeypatch, tmp_path):
+    """POST /api/widgets/surfaces/run returns 200 after cache is written."""
+    _db_paths(monkeypatch, tmp_path)
+    
+    cache = WidgetCache(tmp_path / "widgets.db")
+    cache.set("surfaces", {"iv": "base64png...", "vanna": "base64png...", "charm": "base64png..."}, status="ok")
+
+    r = client.post("/api/widgets/surfaces/run", json={})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["slug"] == "surfaces"
+    assert data["status"] == "ok"
+    assert "iv" in data["metrics"] or "message" in data["metrics"]
+
+
+def test_cache_positions_idle_when_empty(monkeypatch, tmp_path):
+    """Cache-backed positions returns idle status when cache is empty."""
+    _db_paths(monkeypatch, tmp_path)
+    
+    # Clear any existing positions by writing empty
+    cache = WidgetCache(tmp_path / "widgets.db")
+    cache.set("positions", {}, status="idle")
+
+    r = client.post("/api/widgets/positions/run", json={})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] in ("idle", "ok")
+    assert "message" in data["metrics"] or "positions" in data["metrics"]
+
+
+def test_inject_positions_writes_context_store(monkeypatch, tmp_path):
+    """POST /api/context/inject-positions writes to Context Store and returns held_tickers."""
+    _db_paths(monkeypatch, tmp_path)
+
+    positions = [
+        {"ticker": "SPY", "qty": 100, "instrument_type": "equity"},
+        {"ticker": "QQQ", "qty": 50, "instrument_type": "equity"},
+        {"ticker": "SPY", "qty": 25, "instrument_type": "equity"}  # duplicate ticker
+    ]
+    r = client.post("/api/context/inject-positions", json={"positions": positions})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["positions_count"] == 3
+    # held_tickers should be deduplicated and sorted
+    assert data["held_tickers"] == ["QQQ", "SPY"]
+
+    # Verify context store was written
+    r = client.get("/api/context")
+    assert r.status_code == 200
+    ctx = r.json()
+    entries = {e["key"]: e for e in ctx["entries"]}
+    assert "positions" in entries
+    assert entries["positions"]["source_slug"] == "positions"
+    assert "held_tickers" in entries
+    assert entries["held_tickers"]["source_slug"] == "positions"
