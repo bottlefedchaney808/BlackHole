@@ -44,10 +44,10 @@ class TestModuleSpecRegistration:
         # their own coverage. This still asserts the four Task 3 slugs are
         # present and untouched, just not that they're the ONLY entries.
         slugs = {m.slug for m in vs_registry.MODULES}
-        assert {"dealer_exposure", "dealer_flow", "position_book", "dual_book"} <= slugs
+        assert {"expiry_exposure", "dealer_flow", "position_book", "dual_book"} <= slugs
 
     def test_dealer_exposure_spec_fields(self):
-        m = _by_slug("dealer_exposure")
+        m = _by_slug("expiry_exposure")
         assert m.suite == "vol_suite"
         assert m.category == "exposure"
         assert m.requires == []
@@ -59,7 +59,7 @@ class TestModuleSpecRegistration:
         m = _by_slug("dealer_flow")
         assert m.suite == "vol_suite"
         assert m.category == "flow"
-        assert m.requires == ["dealer_exposure"]
+        assert m.requires == ["expiry_exposure"]
         assert m.default_selected is False
         assert m.archive.key_shape == "ticker_expiry"
         assert m.cli_entry == "Vol_Suite/dealer_flow_module.py"
@@ -92,7 +92,7 @@ class TestAllModulesAggregation:
     def test_all_modules_includes_all_four_without_raising(self):
         modules = all_modules()
         slugs = {m.slug for m in modules}
-        assert {"dealer_exposure", "dealer_flow", "position_book", "dual_book"} <= slugs
+        assert {"expiry_exposure", "dealer_flow", "position_book", "dual_book"} <= slugs
 
     def test_all_modules_has_no_duplicate_slugs(self):
         modules = all_modules()

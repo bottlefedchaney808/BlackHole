@@ -44,7 +44,7 @@ LEGACY_SUITE_SLUGS: dict[str, list[str]] = {
         "mc", "mc_heston_lsm", "baw", "model_comparison",
     ],
     "vol": [
-        "dealer_exposure", "dealer_flow", "position_book", "dual_book",
+        "expiry_exposure", "dealer_flow", "position_book", "dual_book",
         "chain_scanner", "svi_smile", "surface_greek", "surface_market_iv",
         "surface_flow_strike_time", "surface_flow_strike_expiry",
         "group_screener", "vol_surface_2d", "vrp_term_structure",

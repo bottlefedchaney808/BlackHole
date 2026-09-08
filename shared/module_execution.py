@@ -64,6 +64,12 @@ def _expand_module_requires(selected: list[Any]) -> list[Any]:
     while pending:
         module = pending.pop()
         for req_slug in module.requires:
+            try:
+                from shared.module_registry import SLUG_ALIASES
+
+                req_slug = SLUG_ALIASES.get(req_slug, req_slug)
+            except Exception:
+                pass
             if req_slug in included:
                 continue
             try:

@@ -43,7 +43,7 @@ _SURFACE_SLUGS = {
 # arithmetic comments) rather than renamed everywhere Task 5 already
 # referenced it.
 _ALL_TEN_SLUGS = {
-    "dealer_exposure",
+    "expiry_exposure",
     "dealer_flow",
     "position_book",
     "dual_book",
@@ -86,7 +86,7 @@ class TestModuleSpecRegistration:
         # Task 5 must not remove/modify the six pre-existing entries.
         slugs = {m.slug for m in vs_registry.MODULES}
         assert {
-            "dealer_exposure",
+            "expiry_exposure",
             "dealer_flow",
             "position_book",
             "dual_book",

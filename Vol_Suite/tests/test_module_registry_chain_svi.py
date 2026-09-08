@@ -140,7 +140,7 @@ class TestRepoRootImport:
             "suites = {m.suite for m in modules}; "
             "assert 'vol_suite' in suites, (suites, len(modules)); "
             "slugs = {m.slug for m in modules}; "
-            "assert {'dealer_exposure', 'dealer_flow', 'position_book', "
+            "assert {'expiry_exposure', 'dealer_flow', 'position_book', "
             "'dual_book', 'chain_scanner', 'svi_smile'} <= slugs, slugs; "
             "print('OK')"
         )

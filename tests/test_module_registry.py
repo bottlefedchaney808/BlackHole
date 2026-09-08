@@ -80,6 +80,16 @@ def test_resolve_modules_empty_list_returns_empty_list():
     assert resolve_modules([]) == []
 
 
+def test_dealer_exposure_alias_resolves_to_expiry_exposure():
+    """Catalog slug is expiry_exposure; dealer_exposure remains a resolve alias."""
+    canonical = resolve_modules(["expiry_exposure"])
+    aliased = resolve_modules(["dealer_exposure"])
+    assert canonical and aliased
+    assert canonical[0].slug == "expiry_exposure"
+    assert aliased[0] is canonical[0]
+    assert canonical[0].name == "Expiry Exposure"
+
+
 def test_resolve_modules_returns_matching_specs_in_requested_order():
     tool_slugs = [t.slug for t in TOOLS]
     assert len(tool_slugs) >= 2

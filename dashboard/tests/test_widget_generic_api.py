@@ -60,7 +60,7 @@ def test_catalog_contains_dealer_exposure_or_dealer_flow(monkeypatch, tmp_path):
     r = client.get("/api/widgets/catalog")
     assert r.status_code == 200
     slugs = {w["slug"] for w in r.json()["widgets"]}
-    assert "dealer_exposure" in slugs or "dealer_flow" in slugs
+    assert "expiry_exposure" in slugs or "dealer_flow" in slugs
 
 
 # --------------------------------------------------------------------------

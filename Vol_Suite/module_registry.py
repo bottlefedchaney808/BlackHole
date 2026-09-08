@@ -811,7 +811,7 @@ def _selection_only_marker(slug: str) -> Any:
 MODULES: list[ModuleSpec] = [
     ModuleSpec(
         name="Expiry Exposure",
-        slug="dealer_exposure",
+        slug="expiry_exposure",
         suite="vol_suite",
         category="exposure",
         run=_run_dealer_exposure,
@@ -828,7 +828,7 @@ MODULES: list[ModuleSpec] = [
         run=_run_dealer_flow,
         cli_entry="Vol_Suite/dealer_flow_module.py",
         default_selected=False,
-        requires=["dealer_exposure"],
+        requires=["expiry_exposure"],
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(

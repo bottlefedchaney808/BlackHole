@@ -42,7 +42,7 @@ see `docs/guides/CROSS_PLATFORM.md` for exactly how path/venv resolution works o
 | Tools module (`/tools`, same uvicorn process as dashboard) | `tools.bat` | — |
 | DTCC live poller (leave running, polls every 5 min) | `run_scheduler.bat` | `run_scheduler.sh` |
 | Run registered modules as widgets (dashboard / Quant Console) | open `http://127.0.0.1:8787`, browse `GET /api/widgets/catalog`, run `POST /api/widgets/{slug}/run` | same (any browser) |
-| Run registered modules in-process (scripted/agent) | `.venv\Scripts\python.exe -c "import shared.module_execution as me; print(me.run_selected_modules(['dealer_exposure'], {'ticker':'SPY'}))"` | same |
+| Run registered modules in-process (scripted/agent) | `.venv\Scripts\python.exe -c "import shared.module_execution as me; print(me.run_selected_modules(['expiry_exposure'], {'ticker':'SPY'}))"` | same |
 | Orchestrator module-CLI shell (interactive/`--modules` mode; the only surviving orchestrator CLI) | `orchestrator.py --modules slug,slug --ticker SPY` (`--modules-category`, `--all-modules`, `--list-modules`) | same |
 | One-time full swap history backfill (resumable, hours-long) | `python backfill.py` | same |
 | Query swap DB directly | `python swaps_query.py`, or `from swaps_query import SwapsQuery` | same |

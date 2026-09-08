@@ -148,7 +148,7 @@ def _archive_standalone_run(ticker: str, result: Any, files: list[str]) -> None:
         from shared.module_archive import record as archive_record
         from shared.module_registry import ArtifactRef, ModuleResult, resolve_modules
 
-        module_spec = resolve_modules(["dealer_exposure"])[0]
+        module_spec = resolve_modules(["expiry_exposure"])[0]
         context = {"ticker": ticker, "expiry": result.expiry}
         metrics = {
             "ticker": result.ticker,

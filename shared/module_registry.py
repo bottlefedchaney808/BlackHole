@@ -111,9 +111,10 @@ class ModuleResult:
 class ModuleSpec:
     """Describes one launchable, selectable, archivable unit.
 
-    name:             human display, e.g. "Dealer Exposure (SPX)"
-    slug:             stable id, e.g. "dealer_exposure" -- used in CLI
-                      --modules, DB, URLs
+    name:             human display, e.g. "Expiry Exposure"
+    slug:             stable id, e.g. "expiry_exposure" -- used in CLI
+                      --modules, DB, URLs. Alias: dealer_exposure (do not
+                      confuse with the Dealer Book tab).
     suite:            "vol_suite" | "options_suite" | "var_tools" |
                       "sentiment_scanner" | "tools" (adapted Tools/ entries)
     category:         "exposure" | "flow" | "scanner" | "pricing_model" |
@@ -125,7 +126,7 @@ class ModuleSpec:
     default_selected: whether a unified run includes it when no --modules
                       is given
     requires:         slugs this module's run() depends on (e.g. dealer_flow
-                      requires dealer_exposure's fetch)
+                      requires expiry_exposure's fetch)
     archive:          tells the archiver what kind of artifacts/keys to
                       expect for this module
     description:      one or two sentence UI description
@@ -251,19 +252,28 @@ def all_modules() -> list[ModuleSpec]:
     return _suite_modules() + _tool_modules() + _dashboard_cache_modules()
 
 
+# Old widget slug. Canonical is expiry_exposure (the catalog name).
+# Dealer Book is a different surface (dashboard tab), not this module.
+SLUG_ALIASES: dict[str, str] = {
+    "dealer_exposure": "expiry_exposure",
+}
+
+
 def resolve_modules(slugs: list[str]) -> list[ModuleSpec]:
     """Look up each slug in all_modules(), preserving the input order.
 
     Raises ValueError naming the bad slug (and listing valid slugs) on an
     unknown slug. An empty input list returns an empty list, no error.
+    `dealer_exposure` is accepted as an alias for `expiry_exposure`.
     """
     if not slugs:
         return []
     index = {module.slug: module for module in all_modules()}
     resolved: list[ModuleSpec] = []
     for slug in slugs:
+        key = SLUG_ALIASES.get(slug, slug)
         try:
-            resolved.append(index[slug])
+            resolved.append(index[key])
         except KeyError:
             valid = ", ".join(sorted(index)) or "(none registered)"
             raise ValueError(

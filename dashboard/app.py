@@ -862,10 +862,10 @@ async def dealer_book_load(request: Request):
         # to price method B's flow-built book, so fetch it directly.
         from shared.module_registry import resolve_modules
 
-        a_result = resolve_modules(["dealer_exposure"])[0].run(context)
+        a_result = resolve_modules(["expiry_exposure"])[0].run(context)
         if a_result.status != "ok":
             raise RuntimeError(
-                f"dealer_exposure failed: {a_result.metrics.get('error')}"
+                f"expiry_exposure failed: {a_result.metrics.get('error')}"
             )
         prod = (a_result.context_patch or {}).get("dealer_exposure_result")
         if prod is None:
@@ -976,7 +976,7 @@ def dealer_book_history(ticker: str = "", expiry: str = ""):
             limit=50,
         )
         # filter to the two relevant slugs for this tab
-        relevant = [r for r in rows if r.get("module_slug") in ("dealer_exposure", "position_book")]
+        relevant = [r for r in rows if r.get("module_slug") in ("expiry_exposure", "dealer_exposure", "position_book")]
         return JSONResponse({"rows": relevant})
     except Exception as exc:
         return JSONResponse({"error": str(exc), "rows": []}, status_code=500)
