@@ -195,10 +195,17 @@ class TestNewtonRaphsonClosedLoopStress:
         [0.12, 0.25, 0.45], [0.0, 0.02],
     )))
     def test_atm_put_recovers_input_vol(self, spy, sigma, q):
-        """ATM puts round-trip to ~2e-3 -- American early-exercise tree error."""
+        """ATM puts round-trip as tightly as calls now.
+
+        This used to allow 5e-3 and blame "American early-exercise tree
+        error". It was not the tree: the solver inverted against
+        Barone-Adesi-Whaley while the price came from Leisen-Reimer, so the
+        gap was the model difference. With LR on both sides the measured
+        error across the whole grid is 4e-05 at worst.
+        """
         _, result = self._solve(550.0, 550.0, 0.25, 0.05, sigma, q, False)
         assert result.status == "ok", result.metrics
-        assert result.metrics["sigma"] == pytest.approx(sigma, rel=5e-3)
+        assert result.metrics["sigma"] == pytest.approx(sigma, rel=1e-3)
 
     def test_zero_yield_does_not_reach_the_network(self, spy):
         self._solve(550.0, 550.0, 0.25, 0.05, 0.25, 0.0, True)

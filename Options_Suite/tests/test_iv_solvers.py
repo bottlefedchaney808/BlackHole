@@ -246,21 +246,13 @@ class TestAmericanIVIdentifiability:
         consistent with any vol at or below it, so it is a genuine upper
         bound, not a guess. Verified by repricing at it.
         """
-        from barone_adesi_whaley import baw_american_price
-
-        p = self.DEEP_ITM_PUT
-        intrinsic = p["K"] - p["S"]
+        intrinsic = self.DEEP_ITM_PUT["K"] - self.DEEP_ITM_PUT["S"]
         sigma_est, _converged = self._solve(self._price(0.12))
         assert sigma_est > 0.0
-        # Reprice with the SOLVER'S pricer (BAW), not Leisen-Reimer. Checking
-        # against LR would fold in the deliberate BAW-vs-LR model difference
-        # and fail for a reason that has nothing to do with this behaviour.
-        reprice = float(
-            baw_american_price(
-                p["S"], p["K"], p["T"], p["r"], sigma_est, p["q"], p["cp"], 200
-            )
-        )
-        assert reprice == pytest.approx(intrinsic, abs=1e-3), (
+        # Repriced with Leisen-Reimer, which is BOTH how the market price was
+        # made here and the solver's own default pricer -- no cross-model gap
+        # to explain away.
+        assert self._price(sigma_est) == pytest.approx(intrinsic, abs=1e-3), (
             "the returned sigma must still reproduce the market price"
         )
 
@@ -289,21 +281,180 @@ class TestAmericanIVIdentifiability:
         assert converged is True, f"K={K} cp={cp} sigma={sigma} should solve"
 
     @pytest.mark.unit
-    def test_solver_still_recovers_vol_when_priced_with_its_own_model(self):
-        """Accuracy is unchanged where IV is identifiable.
+    def test_round_trip_is_exact_where_iv_is_identifiable(self):
+        """Above the boundary the same deep-ITM strike solves essentially exactly.
 
-        Priced with Barone-Adesi-Whaley -- the solver's own default pricer --
-        the round-trip is exact. (Pricing with Leisen-Reimer instead leaves a
-        small residual: that is deliberate model independence between the two
-        IV estimates, per implied_volatility_nr_american's docstring, not
-        solver error.)
+        Leisen-Reimer prices it and Leisen-Reimer inverts it -- one model end
+        to end -- so there is no cross-model residual to absorb. Measured
+        worst case across the whole call/put x strike x vol x dividend grid is
+        4e-05 relative, which is why this asserts 1e-4 rather than the 1e-3
+        that a Barone-Adesi-Whaley default needed.
         """
+        sigma_est, converged = self._solve(self._price(0.25))
+        assert converged is True
+        assert sigma_est == pytest.approx(0.25, rel=1e-4)
+
+    @pytest.mark.unit
+    def test_barone_adesi_whaley_is_still_available_explicitly(self):
+        """Switching the DEFAULT must not remove BAW as an option."""
+        from NewtonRaphsonIV import implied_volatility_nr_american
         from barone_adesi_whaley import baw_american_price
 
         p = self.DEEP_ITM_PUT
         price = float(
-            baw_american_price(p["S"], 605.0, p["T"], p["r"], 0.25, p["q"], False, 200)
+            baw_american_price(p["S"], p["K"], p["T"], p["r"], 0.25, p["q"], False, 200)
         )
-        sigma_est, converged = self._solve(price)
+        sigma_est, converged = implied_volatility_nr_american(
+            price, p["S"], p["K"], p["T"], p["r"], p["cp"], q=p["q"], seed=0.2,
+            pricer=baw_american_price,
+        )
         assert converged is True
         assert sigma_est == pytest.approx(0.25, rel=1e-3)
+
+
+class TestEuropeanIVIdentifiability:
+    """The same defect in the EUROPEAN solver, reached by a different route.
+
+    implied_volatility_nr has no early-exercise boundary, so it is immune to
+    the flat-intrinsic floor that breaks the American solver -- it recovers
+    0.12 exactly on the K=605 put where the American one could not. It fails
+    by SATURATION instead: far enough from the money the Black-Scholes price
+    is numerically pinned to its asymptote (0 for a runaway OTM strike,
+    K*exp(-rT) / S*exp(-qT) for deep ITM), and a whole range of sigma
+    reproduces it.
+
+    Measured (S=550, T=0.25, r=0.05, q=0, put): a K=300 put prices to 7e-136
+    at sigma=0.05 and 7e-25 at sigma=0.12 -- a difference of 7e-25 against a
+    price tolerance of 1e-4, i.e. the same price as far as the solver can
+    tell -- and it answered 0.28481 with converged=True for both. The number
+    was a function of the seed and the iteration path, not of the price.
+
+    Note the contrast with the American boundary case, which is degenerate in
+    a strictly stronger sense: there the price is EXACTLY intrinsic, bit for
+    bit, at every sigma below the boundary. Here the prices differ, just by
+    astronomically less than anything the solver treats as a difference. That
+    is why this class asserts indistinguishability at `tol` rather than float
+    equality the way TestAmericanIVIdentifiability can.
+    """
+
+    TOL = 1e-4  # implied_volatility_nr's default price tolerance
+
+    BASE = dict(S=550.0, T=0.25, r=0.05, q=0.0)
+
+    def _price(self, K, sigma, cp, q=None):
+        from NewtonRaphsonIV import black_scholes_func
+
+        b = self.BASE
+        return float(
+            black_scholes_func(
+                b["S"], K, b["T"], b["r"], sigma, cp, b["q"] if q is None else q
+            )
+        )
+
+    def _solve(self, price, K, cp, q=None):
+        from NewtonRaphsonIV import implied_volatility_nr
+
+        b = self.BASE
+        return implied_volatility_nr(
+            price, b["S"], K, b["T"], b["r"], cp, q=b["q"] if q is None else q
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("K,cp", [(300.0, False), (1000.0, True)])
+    def test_the_setup_really_is_degenerate(self, K, cp):
+        """Guard the premise, so this class cannot silently test nothing."""
+        lo, hi = (self._price(K, sig, cp) for sig in (0.05, 0.12))
+        assert abs(hi - lo) < self.TOL, (
+            f"K={K} cp={cp} must price indistinguishably across a 7-vol-point "
+            f"spread to be degenerate: {lo!r} vs {hi!r}"
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "K,cp,sigma",
+        [
+            (300.0, False, 0.05),   # far-OTM put, price pinned at 0
+            (300.0, False, 0.12),
+            (1000.0, True, 0.05),   # far-OTM call, price pinned at 0
+            (1000.0, True, 0.12),
+            (800.0, False, 0.05),   # deep-ITM put, price pinned at its floor
+            (400.0, True, 0.05),    # deep-ITM call, price pinned at its floor
+        ],
+    )
+    def test_saturated_price_is_not_reported_as_converged(self, K, cp, sigma):
+        """The fix: an unidentifiable European price must not claim a solve."""
+        _est, converged = self._solve(self._price(K, sigma, cp), K, cp)
+        assert converged is False, (
+            f"K={K} cp={cp} sigma={sigma}: price is saturated, so many vols "
+            "reproduce it -- there is no IV to converge on"
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("K", [450.0, 500.0, 525.0, 550.0, 575.0, 600.0, 650.0])
+    @pytest.mark.parametrize("cp", [True, False])
+    @pytest.mark.parametrize("sigma", [0.12, 0.25, 0.45])
+    @pytest.mark.parametrize("q", [0.0, 0.02])
+    def test_guard_does_not_reject_identifiable_strikes(self, K, cp, sigma, q):
+        """Over-rejection is the dangerous direction -- pin it broadly.
+
+        Every strike here has real time value, so the price does determine a
+        vol and the solver must both converge AND recover it. 84 combinations
+        of strike x right x vol x dividend.
+        """
+        est, converged = self._solve(self._price(K, sigma, cp, q), K, cp, q)
+        assert converged is True, f"K={K} cp={cp} sigma={sigma} q={q} should solve"
+        assert est == pytest.approx(sigma, rel=1e-3)
+
+    @pytest.mark.unit
+    def test_guard_is_conservative_across_the_grid(self):
+        """The guard must never reject a solve that was accurate to 1%.
+
+        Unlike the American boundary case -- bimodal, degenerate points
+        probing ~1000x below solvable ones -- this degrades CONTINUOUSLY as
+        vega decays, so no threshold partitions it cleanly. What the tol=1e-4
+        default does guarantee, measured over the whole grid, is the safe
+        direction: nothing accurate to 1% is ever flagged, and nothing worse
+        than 10% is ever missed. This asserts that property directly rather
+        than hard-coding the counts, so it keeps meaning if the grid changes.
+        """
+        strikes = (300.0, 350.0, 400.0, 450.0, 500.0, 525.0,
+                   550.0, 575.0, 600.0, 650.0, 700.0, 800.0, 900.0, 1000.0)
+        vols = (0.05, 0.08, 0.12, 0.18, 0.25, 0.35, 0.45, 0.60)
+        rejected_but_accurate, accepted_but_wrong = [], []
+        for cp in (True, False):
+            for K in strikes:
+                for sigma in vols:
+                    for q in (0.0, 0.02):
+                        est, conv = self._solve(self._price(K, sigma, cp, q), K, cp, q)
+                        err = abs(est - sigma) / sigma
+                        if conv and err > 0.10:
+                            accepted_but_wrong.append((K, cp, sigma, q, est, err))
+                        if not conv and err <= 0.01:
+                            rejected_but_accurate.append((K, cp, sigma, q, est, err))
+        assert rejected_but_accurate == [], (
+            "guard rejected a solve that was accurate to 1% -- it has become "
+            f"over-aggressive, and vol_manager RAISES on that: {rejected_but_accurate[:5]}"
+        )
+        assert accepted_but_wrong == [], (
+            "guard passed a solve off by more than 10% as converged: "
+            f"{accepted_but_wrong[:5]}"
+        )
+
+    @pytest.mark.unit
+    def test_american_solver_is_unaffected_by_the_shared_helper(self):
+        """Both solvers now share _vol_is_identifiable; the American case is
+        the one that already had coverage, so assert the refactor moved no
+        behaviour: the K=605 boundary put that the European solver handles
+        fine must still be rejected by the American one."""
+        from NewtonRaphsonIV import implied_volatility_nr_american
+        from american_binomial import leisen_reimer_american_price
+
+        price = float(leisen_reimer_american_price(550.0, 605.0, 0.25, 0.05, 0.12, 0.0, False, 200))
+        _est, converged = implied_volatility_nr_american(
+            price, 550.0, 605.0, 0.25, 0.05, False, q=0.0, seed=0.2
+        )
+        assert converged is False
+        # ... while the European solver, having no boundary, recovers it.
+        est_eu, conv_eu = self._solve(self._price(605.0, 0.12, False), 605.0, False)
+        assert conv_eu is True
+        assert est_eu == pytest.approx(0.12, rel=1e-3)

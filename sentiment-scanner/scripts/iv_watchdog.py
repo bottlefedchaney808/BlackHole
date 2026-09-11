@@ -58,9 +58,24 @@ def mid(row):
     return None
 
 def invert_iv(px, S, K, T, r, cp):
+    """Invert one quote to an IV, or None if the price cannot identify one.
+
+    The `converged` flag is honoured, not discarded. A wing strike whose
+    price is saturated (far enough OTM/ITM that a whole range of vols
+    reproduces it to within the solver's tolerance) comes back
+    converged=False with a plausible-LOOKING number attached -- and these
+    IVs are averaged into avg20, which is what the percentile rank below is
+    computed against. Letting one through does not look like an error, it
+    looks like a slightly different IV rank. Dropping the point leaves it
+    out of the average instead, which every call site already handles: they
+    all guard on `if iv:`, and a ticker with no usable ATM row reports
+    "no ATM IV row" rather than inventing one.
+    """
     try:
-        iv, _c = implied_volatility_nr(px, S, K, T, r, cp=cp, q=0.0,
-                                       tol=1e-5, max_iterations=200, seed=0.4)
+        iv, converged = implied_volatility_nr(px, S, K, T, r, cp=cp, q=0.0,
+                                              tol=1e-5, max_iterations=200, seed=0.4)
+        if not converged:
+            return None
         return iv if iv and 0.03 < iv < 3.0 else None
     except Exception:
         return None

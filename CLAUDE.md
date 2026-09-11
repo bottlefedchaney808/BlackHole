@@ -368,7 +368,35 @@ widget runs from arbitrary text. Don't expose it beyond localhost without adding
   `method="LeisenReimer"` and derives Greeks from LR's tree (better strike/step convergence for
   American options). A regression to plain CRR for the default path is a bug Jason has reported
   more than once. `test_crr_binomial.py` covers CRR as a *separate* model; don't let it become the
-  default.
+  default. **This extends to the IV solver (2026-09-11):**
+  `NewtonRaphsonIV.implied_volatility_nr_american` now inverts against Leisen-Reimer too. It
+  defaulted to Barone-Adesi-Whaley while `vol_manager.py`'s own NewtonRaphson branch documented
+  the opposite ("same tree the Leisen-Reimer method uses") — code and caller disagreed about
+  which model a solved IV came from. BAW is a closed-form *approximation*, so inverting it
+  against LR-generated prices left a residual that looked like solver error: worst-case
+  round-trip across the strike/vol/dividend grid was ~1.3e-2 for puts, and is **4e-05** now that
+  one model is used end to end. BAW is still reachable via `pricer=baw_american_price`; don't
+  let it drift back to being the default.
+- **A solved IV is only real if the price could have identified it (2026-09-11).** Both solvers in
+  `Options_Suite/NewtonRaphsonIV.py` declare success on `|price - C| < tol`, and there are option
+  shapes where price is FLAT in sigma across a whole interval — so that test is satisfied by every
+  vol in the band and the loop reports whichever one it drifted to, with `converged=True`. Two
+  causes, one shared guard (`_vol_is_identifiable`, which probes one vol point DOWN and compares
+  against `tol` itself rather than a new magic number):
+  `implied_volatility_nr_american` hits it on the **early-exercise boundary** (price exactly
+  intrinsic, bit for bit, for every sigma below the boundary — measured S=550/K=605 put: 55.00000 at
+  sigma 0.10, 0.12 and 0.15, all answered 0.15590); `implied_volatility_nr` has no boundary but hits
+  it by **saturation** (far-OTM price pinned near 0, deep-ITM near `K·e^(-rT)`/`S·e^(-qT)` — measured
+  K=300 put: 7e-136 at sigma 0.05 vs 7e-25 at 0.12, both answered 0.28481). The American case is
+  bimodal (>1000x separation); the European one degrades **continuously** as vega decays, so no
+  threshold partitions it cleanly — what `tol=1e-4` guarantees is the safe direction: never flags a
+  solve accurate to 1%, always flags one worse than 10%. The guard must stay conservative because
+  `vol_manager.py` RAISES on `converged=False`. Callers must honour the flag —
+  `sentiment-scanner/scripts/iv_watchdog.py` discarded it into an IV *percentile rank*, where a
+  fabricated wing IV reads as a slightly different rank rather than an error. Same family as
+  `MCHestonLSM._bs_iv_batch`'s `min_vega_frac`→NaN floor. Pinned by
+  `Options_Suite/tests/test_iv_solvers.py` (`TestAmericanIVIdentifiability`,
+  `TestEuropeanIVIdentifiability`).
 - **Options_Suite sigma must be SOLVED, never defaulted (fixed 2026-09-10).** Every model adapter
   in `Options_Suite/module_registry.py` used to do `sigma = float(context.get("sigma") or 0.25)`,
   and nothing in the widget path supplies sigma — so CRR/LR/BAW/MC each priced at a flat 25% vol
