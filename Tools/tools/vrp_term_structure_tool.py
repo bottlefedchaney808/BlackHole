@@ -35,7 +35,7 @@ _VOL_SUITE_ROOT = _REPO_ROOT / "Vol_Suite"
 if str(_VOL_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_VOL_SUITE_ROOT))
 
-from Tools.registry import ToolSpec  # noqa: E402
+from Tools.spec import ToolSpec  # noqa: E402
 
 
 def _import_vrp_module():

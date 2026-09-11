@@ -61,7 +61,7 @@ if str(_OPTIONS_SUITE_ROOT) not in sys.path:
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from Tools.registry import ToolSpec
+from Tools.spec import ToolSpec
 
 GREEK_SURFACE_MODES = {"greek_surface", "greek-surface", "greeks"}
 IV_SURFACE_MODES = {"iv_surface_market", "iv-surface-market", "iv_surface", "iv"}

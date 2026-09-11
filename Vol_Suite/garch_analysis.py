@@ -122,10 +122,15 @@ def run_garch_analysis(
     # --- 2. Pre-tests ---
     print("\n  Performing preliminary tests...")
     arch_lm_p = np.nan
+    adf_p = np.nan
     try:
         adf = adfuller(log_returns.dropna(), maxlag=10)
+        # Captured, not just printed. This result used to be computed, shown,
+        # and then dropped -- it gated nothing, so a non-stationary series
+        # still produced a fully confident narrative downstream.
+        adf_p = float(adf[1])
         print(
-            f"  ADF test: stat={adf[0]:.4f}, p={adf[1]:.4e} -> {'stationary' if adf[1] < 0.05 else 'non-stationary'}"
+            f"  ADF test: stat={adf[0]:.4f}, p={adf_p:.4e} -> {'stationary' if adf_p < 0.05 else 'non-stationary'}"
         )
         arch_test = het_arch(log_returns.dropna().values, nlags=10)
         arch_lm_p = float(arch_test[1])
@@ -409,8 +414,36 @@ def run_garch_analysis(
     except Exception:
         vol_params, insignificant = {}, []
 
-    if insignificant or (not np.isnan(arch_lm_p) and arch_lm_p >= 0.05):
+    # Non-stationarity is a third way the fit can be uninterpretable, and it
+    # was the one nothing checked. alpha+beta >= 1 is an IGARCH/explosive fit:
+    # shocks never decay, there is no unconditional variance to revert to (the
+    # code already knows -- uncond_vol is set to NaN for exactly this case),
+    # and every mean-reversion statement below is false. It used to fall
+    # straight through to "persistence is VERY HIGH -> shocks decay slowly",
+    # which is not a strong version of the truth but the opposite of it.
+    #
+    # The ADF pre-test is on the RETURN series (is the input stationary at
+    # all), the persistence check is on the FITTED variance process; either
+    # failing makes the narrative unsupportable, so both gate here.
+    non_stationary_fit = (not np.isnan(persistence)) and persistence >= 1.0
+    non_stationary_input = (not np.isnan(adf_p)) and adf_p >= 0.05
+
+    if (insignificant
+            or (not np.isnan(arch_lm_p) and arch_lm_p >= 0.05)
+            or non_stationary_fit
+            or non_stationary_input):
         print("  MODEL NOT INTERPRETABLE — findings suppressed.")
+        if non_stationary_fit:
+            print(
+                f"    - Non-stationary fit: persistence α+β = {persistence:.4f} >= 1. "
+                "Shocks never decay and no unconditional volatility exists, so no "
+                "mean-reversion or persistence-regime read is valid."
+            )
+        if non_stationary_input:
+            print(
+                f"    - ADF pre-test p={adf_p:.3f}: return series is not stationary, "
+                "so the GARCH fit is on an invalid input."
+            )
         if not np.isnan(arch_lm_p) and arch_lm_p >= 0.05:
             print(
                 f"    - ARCH LM pre-test p={arch_lm_p:.3f}: no volatility clustering to model."

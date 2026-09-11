@@ -57,7 +57,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from shared.module_registry import ParamSpec
 
-from Tools.registry import ToolSpec  # noqa: E402
+from Tools.spec import ToolSpec  # noqa: E402
 
 _CHAIN_STRATEGIES_FILENAME = "chain_strategies.json"
 

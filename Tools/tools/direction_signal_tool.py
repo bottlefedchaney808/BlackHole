@@ -18,7 +18,7 @@ _REPO_ROOT = _TOOLS_DIR.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from Tools.registry import ToolSpec  # noqa: E402
+from Tools.spec import ToolSpec  # noqa: E402
 
 _MODULES = {
     'whale': ('whale_scanner', 'scan'),

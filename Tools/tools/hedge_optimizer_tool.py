@@ -42,7 +42,7 @@ for _p in (str(_VAR_SUITE_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from Tools.registry import ToolSpec
+from Tools.spec import ToolSpec
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,11 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 # there overstated RV ~20% and distorted VRP (same fix as variance_swap_live.py).
 DEFAULT_A = expiry_selector.DEFAULT_A
 TRADING_DAYS = 252
+# Tail band for tail_mass_z, in standard deviations of the underlying's own
+# log-return over the option's life. 2 sigma is the conventional "tail" and,
+# unlike the flat 0.5F/2.0F band tail_mass uses, means the same thing on a
+# 15%-vol name as on a 100%-vol one.
+TAIL_Z_THRESHOLD = 2.0
 RISK_FREE_RATE = 0.05  # fallback only; live rate pulled from the yield curve
 
 
@@ -63,6 +68,12 @@ class ScreenResult:
     num_strikes: int
     score: float
     signal: str
+    # Vol-normalized tail mass (see compute_fair_variance_strike). This is the
+    # ranking-safe version of tail_mass; tail_mass itself is not comparable
+    # across tickers of different vol. NOT yet wired into `score` -- doing so
+    # re-calibrates a live trading signal and needs a pass over real chains to
+    # re-tune the 0.20 threshold. See PROJECT_AUDIT_AND_SPEC.md finding #5.
+    tail_mass_z: float = float("nan")
     # "ok" or "insufficient_price_history". When not "ok", vrp_pct/rv_*_pct
     # are NaN (the underlying realized-vol read failed, not "0.0" of real
     # realized vol) and `signal` is forced to "INSUFFICIENT DATA" regardless
@@ -178,8 +189,34 @@ def compute_fair_variance_strike(chain: ChainData, S0: float, T_years: float) ->
     call_contrib = float(np.sum(contributions[K > F]))
     total_contrib = put_contrib + call_contrib
     skew_bias = put_contrib / total_contrib if total_contrib > 0 else 0.5
+    # tail_mass: flat, UNNORMALIZED moneyness band. Kept as-is because it
+    # feeds the composite score below against a hardcoded 0.20 threshold, and
+    # re-scaling it silently would move live BUY/SELL signals.
+    #
+    # It has a known defect, the same one replication_reference.py's
+    # range_truncation_score was already fixed for: a fixed +/-100%/-50%
+    # strike band is a different DISTANCE at every vol level, so this
+    # confounds "how much value sits in unreliable far strikes" (what it is
+    # for) with "how volatile is this name" (what it actually varies with).
+    # At atm_iv=25%, T=0.25 the 2.0*F edge sits ~5.5 sigma out; at 100% vol
+    # it is ~1.4 sigma. The same number means different things per ticker,
+    # which is exactly what makes it unusable for RANKING tickers.
     tail_mask = (K < 0.5 * F) | (K > 2.0 * F)
     tail_mass = float(np.sum(contributions[tail_mask])) / total_contrib if total_contrib > 0 else 0.0
+
+    # tail_mass_z: the same quantity with the band measured in standard
+    # deviations of the underlying's own log-return over the option's life --
+    # z = |log(K/F)| / (atm_iv * sqrt(T)) -- so TAIL_Z_THRESHOLD sigma means
+    # the same thing on a 15%-vol name and a 100%-vol name. This mirrors
+    # replication_reference.py's sigma_scale = mean_iv * sqrt(T).
+    # NaN (never 0.0) when atm_iv is unavailable, so a missing input cannot
+    # read as "no tail mass".
+    if math.isnan(atm_iv) or atm_iv <= 0 or T_years <= 0 or total_contrib <= 0:
+        tail_mass_z = float("nan")
+    else:
+        sigma_scale = atm_iv * math.sqrt(T_years)
+        z = np.abs(np.log(K / F)) / sigma_scale
+        tail_mass_z = float(np.sum(contributions[z > TAIL_Z_THRESHOLD])) / total_contrib
     return {
         "expiry": chain.expiry, "S0": S0, "F": F, "T_years": T_years,
         "fair_variance_annualized": fair_variance,
@@ -193,6 +230,7 @@ def compute_fair_variance_strike(chain: ChainData, S0: float, T_years: float) ->
         "K_min": float(K.min()), "K_max": float(K.max()),
         "skew_bias": skew_bias,
         "tail_mass": tail_mass,
+        "tail_mass_z": tail_mass_z,
         "strike_table": {"strikes": K, "deltaK": dK, "weights": weights, "otm_prices": OTM2, "contributions": contributions}
     }
 
@@ -260,6 +298,7 @@ def screen_ticker(ticker: str, target_years: float, expiration: str = None) -> S
         vrp_pct = float('nan') if insufficient_data else vrp_for_score
         skew_bias = result["skew_bias"]
         tail_mass = result["tail_mass"]
+        tail_mass_z = result.get("tail_mass_z", float("nan"))
 
         # Same pattern as realized vol: if ATM IV is missing, it's not "0.0 convexity"
         # but rather "unknown convexity". Use a stand-in for scoring while keeping
@@ -298,7 +337,7 @@ def screen_ticker(ticker: str, target_years: float, expiration: str = None) -> S
             rv_60_pct=rv_60*100 if not math.isnan(rv_60) else float('nan'),
             rv_90_pct=rv_90*100 if not math.isnan(rv_90) else float('nan'),
             rv_match_pct=rv_match*100 if not math.isnan(rv_match) else float('nan'),
-            skew_bias=skew_bias, tail_mass=tail_mass,
+            skew_bias=skew_bias, tail_mass=tail_mass, tail_mass_z=tail_mass_z,
             num_strikes=result["num_strikes_used"], score=score, signal=signal,
             data_quality="insufficient_price_history" if insufficient_data else "ok",
         )

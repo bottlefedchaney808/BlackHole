@@ -308,3 +308,94 @@ def test_fair_variance_consistency_with_boundary_correction():
         f"Fair vol mismatch: screener={fair_vol_screener}, live={fair_vol_live}, "
         f"diff={abs(fair_vol_screener - fair_vol_live)}"
     )
+
+
+class TestTailMassVolNormalization:
+    """`tail_mass` uses a flat 0.5F/2.0F strike band, so it measures a
+    different DISTANCE at every vol level -- the same defect
+    replication_reference.py's range_truncation_score was already fixed for.
+    `tail_mass_z` measures the band in sigma of the underlying's own
+    log-return over the option's life instead.
+    """
+
+    @staticmethod
+    def _flat_smile_chain(sigma, S0=100.0, T=0.25, r=0.04):
+        import math
+
+        import numpy as np
+        from scipy.stats import norm
+
+        from variance_swap_screener import ChainData
+
+        def bs(S, K, T, r, sig, cp):
+            d1 = (math.log(S / K) + (r + sig * sig / 2) * T) / (sig * math.sqrt(T))
+            d2 = d1 - sig * math.sqrt(T)
+            if cp:
+                return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+            return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+        K = np.arange(40.0, 221.0, 2.5)
+        return ChainData(
+            expiry="20261016",
+            strikes=K,
+            call_mid=np.array([bs(S0, k, T, r, sigma, True) for k in K]),
+            put_mid=np.array([bs(S0, k, T, r, sigma, False) for k in K]),
+            call_iv=np.full(len(K), sigma),
+            put_iv=np.full(len(K), sigma),
+            r=r,
+            q=0.0,
+        )
+
+    def test_flat_band_tail_mass_is_driven_by_vol_not_by_the_chain(self):
+        """Characterization of the defect, so it cannot be 'fixed' unnoticed.
+
+        The chain is IDENTICAL across these runs -- same strikes, same range.
+        Only the vol level moves. A genuine tail/truncation diagnostic would
+        be roughly unchanged; this swings by orders of magnitude.
+        """
+        from variance_swap_screener import compute_fair_variance_strike
+
+        low = compute_fair_variance_strike(self._flat_smile_chain(0.15), 100.0, 0.25)
+        high = compute_fair_variance_strike(self._flat_smile_chain(1.00), 100.0, 0.25)
+        assert low["tail_mass"] < 0.001
+        assert high["tail_mass"] > 0.01, (
+            "if this stops holding, tail_mass may have been normalized -- "
+            "update the score threshold discussion in PROJECT_AUDIT_AND_SPEC #5"
+        )
+
+    def test_normalized_tail_mass_is_stable_across_vol_on_the_same_chain(self):
+        """The fix: identical chain shape => comparable tail_mass_z."""
+        from variance_swap_screener import compute_fair_variance_strike
+
+        vals = [
+            compute_fair_variance_strike(self._flat_smile_chain(s), 100.0, 0.25)["tail_mass_z"]
+            for s in (0.15, 0.25, 0.40)
+        ]
+        assert max(vals) - min(vals) < 0.005, f"tail_mass_z should be stable, got {vals}"
+
+    def test_normalized_tail_mass_is_nan_when_atm_iv_is_missing(self):
+        """A missing input must not read as 'no tail mass'."""
+        import math
+
+        import numpy as np
+
+        from variance_swap_screener import compute_fair_variance_strike
+
+        ch = self._flat_smile_chain(0.25)
+        ch.call_iv = np.full(len(ch.strikes), float("nan"))
+        ch.put_iv = np.full(len(ch.strikes), float("nan"))
+        res = compute_fair_variance_strike(ch, 100.0, 0.25)
+        assert math.isnan(res["tail_mass_z"])
+
+    def test_score_still_uses_the_unnormalized_metric(self):
+        """Deliberate: rewiring the score re-calibrates a live trading signal.
+
+        Pinned so the migration is a conscious edit, not a drive-by.
+        """
+        import inspect
+
+        import variance_swap_screener as vss
+
+        src = inspect.getsource(vss.screen_ticker)
+        assert "(0.20 - tail_mass)" in src
+        assert "(0.20 - tail_mass_z)" not in src

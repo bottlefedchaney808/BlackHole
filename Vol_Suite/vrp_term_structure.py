@@ -58,8 +58,31 @@ class VrpTermPoint:
     T_years: float  # actual time-to-maturity in years
     fair_vol_pct: float  # fair variance swap strike vol (%)
     atm_iv_pct: float  # ATM implied volatility (%)
-    vrp_pct: float  # VRP = fair_vol_pct - atm_iv_pct
+    # NAME WARNING -- this field is NOT the same quantity as the `vrp_pct`
+    # that variance_swap_screener.py and variance_swap_live.py publish, and
+    # the two are routinely read side by side.
+    #
+    #   here:                    fair_vol_pct - atm_iv_pct   (both IMPLIED)
+    #   screener / live:         fair_vol_pct - realized     (the textbook VRP)
+    #
+    # Fair-minus-ATM-implied is the CONVEXITY premium -- what the sibling
+    # modules publish under the name `convexity_premium_vol_pct` /
+    # `convexity_pct`. So this module's "vrp_pct" is the siblings'
+    # "convexity", and this module had no field for what they call VRP at
+    # all. Kept under the original name because 54 files reference it; read
+    # `convexity_pct` (identical value, correct name) in new code, and
+    # `vrp_vs_realized_pct` for the quantity the rest of the repo means by
+    # VRP. Renaming this outright is the real fix and needs one deliberate
+    # cross-repo pass -- see docs/PROJECT_AUDIT_AND_SPEC.md finding #4.
+    vrp_pct: float  # = convexity_pct. NOT fair-minus-realized. See above.
     rv_30d_pct: float  # trailing 30-day realized vol (%), annualized
+    # Same value as vrp_pct, under the name the rest of the repo uses for it.
+    convexity_pct: float = float("nan")
+    # The textbook VRP: fair_vol_pct - rv_30d_pct. Matches what
+    # variance_swap_screener.vrp_pct and variance_swap_live's `vrp` mean.
+    # NaN when realized vol is unavailable -- never 0.0, which would read as
+    # a measured "fair vol equals realized vol".
+    vrp_vs_realized_pct: float = float("nan")
     model_implied_vrp_pct: float | None = (
         None  # cross-check against fair_vol_pct via a jump-diffusion model
     )
@@ -171,7 +194,12 @@ def compute_vrp_term_structure(
 
             fair_vol_pct = result["fair_variance_swap_strike_vol_pct"]
             atm_iv_pct = result["atm_implied_vol_pct"]
-            vrp = fair_vol_pct - atm_iv_pct  # convexity premium = VRP at this tenor
+            # Fair-minus-ATM-implied. This is the CONVEXITY premium; the rest
+            # of the repo reserves "VRP" for fair-minus-REALIZED (computed
+            # below as vrp_vs_realized). The old comment here read
+            # "convexity premium = VRP at this tenor", equating two things
+            # the sibling modules deliberately keep apart.
+            vrp = fair_vol_pct - atm_iv_pct
 
             model_implied_vrp_pct = None
             if jump_model_cls is not None:
@@ -206,6 +234,12 @@ def compute_vrp_term_structure(
                     atm_iv_pct=atm_iv_pct,
                     vrp_pct=vrp,
                     rv_30d_pct=rv_val_pct,
+                    convexity_pct=vrp,
+                    vrp_vs_realized_pct=(
+                        float("nan")
+                        if math.isnan(rv_val_pct)
+                        else fair_vol_pct - rv_val_pct
+                    ),
                     model_implied_vrp_pct=model_implied_vrp_pct,
                 )
             )

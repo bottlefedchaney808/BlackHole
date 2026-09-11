@@ -23,7 +23,7 @@ _VAR_SUITE_ROOT = _REPO_ROOT / "VaR_Tools_Simulations"
 if str(_VAR_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_VAR_SUITE_ROOT))
 
-from Tools.registry import ToolSpec  # noqa: E402
+from Tools.spec import ToolSpec  # noqa: E402
 
 _MODES = {
     'price_dist': '_build_price_dist_from_context',
