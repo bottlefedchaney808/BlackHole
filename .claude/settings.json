@@ -4,6 +4,8 @@
       "mcp__robinhood__get_option_quotes",
       "mcp__robinhood__review_equity_order",
       "mcp__robinhood__get_equity_positions",
+      "mcp__robinhood__get_equity_news",
+      "mcp__robinhood__get_equity_fundamentals",
       "mcp__robinhood__get_option_instruments",
       "mcp__claude-in-chrome__get_page_text",
       "Bash(tasklist *)",

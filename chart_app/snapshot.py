@@ -6,7 +6,13 @@ from typing import Any
 
 from chart_app.flow_pane import bin_flow
 from chart_app.flow_stamp import apply_whale, stamp_whale
-from chart_app.score_engine import classic_overlays, gated_markers, price_scores
+from chart_app.score_engine import (
+    classic_overlays,
+    direction_coverage,
+    gated_markers,
+    oscillators,
+    price_scores,
+)
 
 
 def _rh_payload(rh: dict[str, Any] | None) -> dict[str, Any]:
@@ -83,6 +89,9 @@ def build_state(cache, ticker: str, interval: str, rh=None, *, flow_fn=None, flo
         "scores": scores,
         "markers": gated_markers(rows),
         "overlays": classic_overlays(records),
+        # Separate from overlays: these have their own y-scales and get
+        # their own panes client-side (see score_engine.oscillators).
+        "oscillators": oscillators(records),
         "live": {
             "conviction": _conviction(last_signals, last_score),
             "score": last_score,
@@ -95,6 +104,10 @@ def build_state(cache, ticker: str, interval: str, rh=None, *, flow_fn=None, flo
             },
         },
         "signals": [row["signals"] for row in rows],
+        # Says whether the Direction legs had enough bars at this
+        # timeframe to compute at all -- all-False from "not enough
+        # history" and all-False from "nothing fired" look identical.
+        "direction": direction_coverage(records),
         "rh": _rh_payload(rh),
         **({"flow": flow} if flow is not None else {}),
     }

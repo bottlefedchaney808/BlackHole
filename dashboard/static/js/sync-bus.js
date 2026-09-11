@@ -155,12 +155,61 @@ export class ScopeBus extends EventTarget {
   }
 }
 
+/*
+ * Cross-TAB persistence.
+ *
+ * The bus is page-global, which was enough while the desk was the only page
+ * with a scope bar. With Volatility / Models / Sentiment / Chart each owning
+ * one, "scope is entered once" stopped being true the moment you changed
+ * tabs: every navigation dropped the ticker and you retyped it on arrival.
+ *
+ * So the SINGLETON (only the singleton -- an explicitly constructed ScopeBus
+ * stays isolated, which is what the tests rely on) hydrates from
+ * localStorage on creation and writes back on every change. Every access is
+ * wrapped: localStorage throws in a private window and is simply absent in
+ * Node, and a storage failure must never take the scope bar down with it.
+ *
+ * Note this is per-viewer convenience state, not the Context Store. The
+ * Context Store (server-side, scope-keyed) is what carries actual RESULTS
+ * between tabs; this only carries which ticker you were looking at.
+ */
+const STORAGE_KEY = 'quantScope.v1';
+
+function loadPersistedScope() {
+  try {
+    const raw = globalThis.localStorage && globalThis.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      ticker: typeof parsed.ticker === 'string' ? parsed.ticker : '',
+      expiry: typeof parsed.expiry === 'string' ? parsed.expiry : '',
+      basket: Array.isArray(parsed.basket) ? parsed.basket : null
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function persistScope(scope) {
+  try {
+    if (!globalThis.localStorage) return;
+    globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(scope));
+  } catch (e) {
+    /* private window, quota, blocked site data -- scope still works in-page */
+  }
+}
+
 function ensureGlobalSingleton() {
   if (!globalThis[GLOBAL_KEY]) {
-    globalThis[GLOBAL_KEY] = new ScopeBus();
+    const bus = new ScopeBus(loadPersistedScope() || undefined);
+    bus.addEventListener('scopechange', function (event) {
+      persistScope(event.detail.scope);
+    });
+    globalThis[GLOBAL_KEY] = bus;
   }
   return globalThis[GLOBAL_KEY];
 }
 
-/** Page-global bus. Import this; widgets subscribe to it. */
+/** Page-global bus, persisted across tabs. Import this; widgets subscribe. */
 export const syncBus = ensureGlobalSingleton();

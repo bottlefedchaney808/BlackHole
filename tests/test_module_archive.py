@@ -452,7 +452,10 @@ class TestArchiverHookWiredAtCliEntry:
 
         assert len(calls) == 1
         slug, triggered_by, context = calls[0]
-        assert slug == "dealer_exposure"
+        # Stale expectation left behind by the dealer_exposure -> expiry_exposure
+        # widget-slug rename (96dfeaa); the standalone CLI archives under the
+        # module's current slug.
+        assert slug == "expiry_exposure"
         assert triggered_by == "cli"
         assert context == {"ticker": "SPY", "expiry": "20261016"}
 

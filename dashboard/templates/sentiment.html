@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}Sentiment -- BlackHole Investments Dashboard{% endblock %}
+
+{#
+  The Sentiment tab: what people are saying, and whether the options market
+  is paying for it.
+
+  Two halves, deliberately on one page:
+
+    * The SHELF -- the morning scans, X/Twitter buzz reports, reddit and
+      StockTwits notes, rumor watchlists and desk notes, read straight off
+      disk (the Obsidian vault's Trading folder, plus the repo's
+      trading_journal/). This is the record of the narrative.
+    * The SCANNERS -- GEX, unusual OI, IV rank, skew, max pain, vol
+      dispersion, earnings and VRP, plus the screener's focus tickers and the
+      position book as context.
+
+  The pairing is the point: a rumor with no options premium behind it is
+  noise, and unusual OI with no story attached is unexplained. Neither half
+  answers the question alone.
+#}
+
+{% block content %}
+<div class="tabpage" id="sentPage">
+  <h1>Sentiment</h1>
+  <p class="sub">
+    The narrative and the premium, side by side. The shelf below reads your
+    scan notes off disk; the scanners price what the chain thinks of them.
+  </p>
+
+  <section class="panel library" id="libraryPanel">
+    <header>
+      <h2>Scan library</h2>
+      <span class="note" id="libCount">loading&hellip;</span>
+      <select id="libShelf" class="picker"><option value="all">all shelves</option></select>
+      <label class="libfilter">
+        <input type="checkbox" id="libScoped"> only the scope ticker
+      </label>
+      <button type="button" class="ghost sm" id="libRefresh">Refresh</button>
+    </header>
+    <div class="body librarybody">
+      <div class="liblist" id="libList"><div class="empty">loading&hellip;</div></div>
+      <div class="libnote" id="libNote">
+        <div class="empty">Pick a note to read it.</div>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "_panel_tab.html" %}
+<script id="panelData" type="application/json">{{ panels | tojson }}</script>
+<script type="module">
+import { initPanelTab } from '/static/js/panel-tab.js?v={{ asset_v }}';
+import { syncBus } from '/static/js/sync-bus.js?v={{ asset_v }}';
+
+const panels = JSON.parse(document.getElementById('panelData').textContent);
+
+initPanelTab({
+  tab: 'sentiment',
+  title: 'Scanners & context',
+  panels: panels,
+  mount: document.getElementById('sentPage'),
+  note: 'Check what you want to run against this scope. Focus tickers and the position ' +
+        'book are context sources -- run them first and the scanners below are seeded with them.'
+});
+
+/* ---------------------------------------------------------------------------
+ * The shelf.
+ *
+ * A note is markdown on disk; rendering it needs no library, and no library
+ * is available anyway (this dashboard runs offline on localhost, no CDN).
+ * The renderer below escapes FIRST and applies formatting to the escaped
+ * text, so nothing in a note can inject markup -- these files are written by
+ * an agent and by hand, and treating them as trusted HTML would be a hole for
+ * no benefit.
+ * ------------------------------------------------------------------------ */
+
+const listEl = document.getElementById('libList');
+const noteEl = document.getElementById('libNote');
+const countEl = document.getElementById('libCount');
+const shelfEl = document.getElementById('libShelf');
+const scopedEl = document.getElementById('libScoped');
+
+let NOTES = [];
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function renderMarkdown(text) {
+  const lines = esc(text).split(/\r?\n/);
+  const out = [];
+  let inList = false;
+  let inCode = false;
+  lines.forEach(function (line) {
+    if (/^```/.test(line)) {
+      if (inCode) { out.push('</pre>'); inCode = false; }
+      else { out.push('<pre class="md-code">'); inCode = true; }
+      return;
+    }
+    if (inCode) { out.push(line); return; }
+
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + inline(bullet[1]) + '</li>');
+      return;
+    }
+    if (inList) { out.push('</ul>'); inList = false; }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length + 2, 6);
+      out.push('<h' + level + '>' + inline(heading[2]) + '</h' + level + '>');
+      return;
+    }
+    if (/^\s*$/.test(line)) { out.push(''); return; }
+    if (/^\s*\|.*\|\s*$/.test(line)) { out.push('<div class="md-row">' + inline(line) + '</div>'); return; }
+    out.push('<p>' + inline(line) + '</p>');
+  });
+  if (inList) out.push('</ul>');
+  if (inCode) out.push('</pre>');
+  return out.join('\n');
+}
+
+function inline(s) {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[\[([^\]]+)\]\]/g, '<em class="wikilink">$1</em>');
+}
+
+function renderList() {
+  const ticker = (syncBus.getScope().ticker || '').toUpperCase();
+  const shelf = shelfEl.value;
+  let rows = NOTES.slice();
+  if (shelf && shelf !== 'all') rows = rows.filter(function (r) { return r.shelf === shelf; });
+  if (scopedEl.checked && ticker) {
+    rows = rows.filter(function (r) { return r.note.toUpperCase().indexOf(ticker) !== -1; });
+  }
+  countEl.textContent = rows.length + ' note' + (rows.length === 1 ? '' : 's') +
+    (scopedEl.checked && ticker ? ' mentioning ' + ticker : '');
+  listEl.innerHTML = '';
+  if (!rows.length) {
+    listEl.innerHTML = '<div class="empty">nothing on this shelf</div>';
+    return;
+  }
+  rows.forEach(function (row) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'libitem';
+    item.innerHTML =
+      '<span class="libitem-name">' + esc(row.note) + '</span>' +
+      '<span class="libitem-meta"><em>' + esc(row.shelf) + '</em>' + esc(row.modified) + '</span>';
+    item.addEventListener('click', function () {
+      listEl.querySelectorAll('.libitem').forEach(function (n) { n.classList.remove('on'); });
+      item.classList.add('on');
+      openNote(row);
+    });
+    listEl.appendChild(item);
+  });
+}
+
+async function openNote(row) {
+  noteEl.innerHTML = '<div class="empty">loading…</div>';
+  try {
+    const res = await fetch('/api/library/note?path=' + encodeURIComponent(row.path),
+      { headers: { Accept: 'application/json' } });
+    if (!res.ok) {
+      const detail = await res.json().catch(function () { return {}; });
+      throw new Error(detail.detail || ('HTTP ' + res.status));
+    }
+    const note = await res.json();
+    noteEl.innerHTML =
+      '<div class="libnote-head"><h3>' + esc(note.name) + '</h3>' +
+      '<span class="pill plain">' + esc(note.shelf) + '</span></div>' +
+      '<div class="md">' + renderMarkdown(note.text) + '</div>' +
+      (note.truncated ? '<p class="small muted">…truncated; open the file for the rest.</p>' : '');
+  } catch (err) {
+    noteEl.innerHTML = '<div class="errbox">' + esc(err.message || err) + '</div>';
+  }
+}
+
+async function loadLibrary() {
+  countEl.textContent = 'loading…';
+  try {
+    const res = await fetch('/api/library', { headers: { Accept: 'application/json' } });
+    const json = await res.json();
+    NOTES = json.notes || [];
+    const shelves = json.shelves || [];
+    const current = shelfEl.value;
+    shelfEl.innerHTML = '<option value="all">all shelves</option>';
+    shelves.forEach(function (s) {
+      const option = document.createElement('option');
+      option.value = s;
+      option.textContent = s;
+      shelfEl.appendChild(option);
+    });
+    shelfEl.value = current && shelves.indexOf(current) !== -1 ? current : 'all';
+    renderList();
+  } catch (err) {
+    countEl.textContent = 'failed';
+    listEl.innerHTML = '<div class="errbox">' + esc(err.message || err) + '</div>';
+  }
+}
+
+shelfEl.addEventListener('change', renderList);
+scopedEl.addEventListener('change', renderList);
+document.getElementById('libRefresh').addEventListener('click', loadLibrary);
+syncBus.subscribe(function () { if (scopedEl.checked) renderList(); });
+
+loadLibrary();
+</script>
+
+<style>
+.library > header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.library > header h2 { margin: 0; }
+.library > header .note { color: var(--muted); font-size: 12px; flex: 1; }
+.libfilter { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.libfilter input { accent-color: var(--accent); }
+.picker {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px;
+}
+.librarybody {
+  display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 0; padding: 0 !important;
+}
+@media (max-width: 900px) { .librarybody { grid-template-columns: 1fr; } }
+.liblist {
+  border-right: 1px solid var(--border); max-height: 420px; overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.libitem {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  background: none; border: none; border-bottom: 1px solid #1b2440;
+  border-radius: 0; padding: 8px 12px; text-align: left; cursor: pointer;
+  color: var(--text); box-shadow: none; font-weight: 400;
+}
+.libitem:hover { background: var(--panel-2); transform: none; filter: none; box-shadow: none; }
+.libitem.on { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.libitem-name { font-size: 13px; font-weight: 600; }
+.libitem-meta { display: flex; gap: 8px; font-size: 11px; color: var(--muted); }
+.libitem-meta em { font-style: normal; color: var(--accent-2); }
+.libnote { padding: 14px 18px; max-height: 420px; overflow-y: auto; }
+.libnote-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.libnote-head h3 { margin: 0; font-size: 15px; }
+.md { font-size: 13.5px; line-height: 1.6; }
+.md h3, .md h4, .md h5, .md h6 { margin: 14px 0 5px; font-size: 13.5px; color: var(--accent-2); }
+.md p { margin: 0 0 7px; }
+.md ul { margin: 0 0 8px; padding-left: 20px; }
+.md li { margin-bottom: 3px; }
+.md code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.md .md-code {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; overflow-x: auto; font-size: 12px;
+}
+.md .md-row { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+.md .wikilink { color: var(--accent); font-style: normal; }
+</style>
+{% endblock %}

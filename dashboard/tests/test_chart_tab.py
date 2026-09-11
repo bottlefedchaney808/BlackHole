@@ -29,10 +29,10 @@ def test_chart_page_is_full_bleed():
 
 
 def test_chart_layout_is_chart_left_sidebar_right():
-    """Chart column takes the stretch (minmax(0, 1fr)); sidebar is 280px."""
+    """Chart column takes the stretch (minmax(0, 1fr)); sidebar is fixed-width."""
     r = client.get('/chart')
     html = r.text
-    assert 'grid-template-columns: minmax(0, 1fr) 280px;' in html
+    assert 'grid-template-columns: minmax(0, 1fr) 320px;' in html
     # chart iframe is emitted before the sidebar -> chart renders on the left
     assert html.index('id="chartFrame"') < html.index('chart-side-panel')
     assert 'height: calc(100vh - 48px)' in html
@@ -47,13 +47,20 @@ def test_chart_pings_iframe_to_resize():
     assert "visibilitychange" in html
 
 
-def test_overview_hero_points_at_native_chart_not_self():
-    """Empty chart_app_url made src='?ticker=...' which nested this dashboard."""
-    r = client.get('/')
-    assert r.status_code == 200
-    html = r.text
-    assert 'page-overview' in html
-    assert 'http://127.0.0.1:8791?ticker=SPY&interval=15m' in html
+def test_chart_iframe_points_at_native_chart_not_self():
+    """Regression guard, moved here from the Overview hero: an empty
+    chart_app_url rendered src='?ticker=...', which nested this dashboard
+    inside itself. The desk page no longer embeds the chart at all (the
+    chart has its own tab), so /chart is the only place this can regress."""
+    html = client.get('/chart').text
+    assert 'src="http://127.0.0.1:8791"' in html
     assert 'src="?ticker=' not in html
-    assert 'overview-hero-chart' in html
-    assert 'overview-hero-metrics' in html
+
+
+def test_desk_does_not_embed_the_chart():
+    """The old Overview hero was a calc(100vh) iframe that pushed the entire
+    page below the fold."""
+    html = client.get('/').text
+    assert 'page-overview' in html
+    assert 'overview-hero-chart' not in html
+    assert '<iframe' not in html

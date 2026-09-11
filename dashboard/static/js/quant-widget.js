@@ -46,8 +46,16 @@
  * element (idempotent).
  */
 
-import { syncBus } from './sync-bus.js';
-import { renderResult, esc } from './widget-renderers.js';
+// The page stamps THIS module's URL with ?v=<mtime> (dashboard/app.py's
+// asset_v), but a static import specifier is a fixed string, so these
+// siblings would resolve to the bare unversioned URL and could still come
+// from a stale browser cache -- which is exactly how a shipped renderer fix
+// stayed invisible in the page while being correct on the server. The static
+// mount now sends Cache-Control: no-cache so the browser revalidates every
+// load; the marker below exists to evict copies cached *before* that header
+// existed. Bump it only if a stale sibling ever resurfaces.
+import { syncBus } from './sync-bus.js?m=2';
+import { renderResult, esc } from './widget-renderers.js?m=2';
 
 const SCOPE_FIELDS = ['ticker', 'expiry', 'basket'];
 
@@ -170,6 +178,21 @@ const SHADOW_CSS = `
 }
 .qw-field input:focus { outline: 2px solid var(--qw-accent-soft); border-color: var(--qw-accent); }
 .qw-field input:disabled { opacity: .5; }
+.qw-params {
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  padding: 8px 14px 0; border-top: 1px dashed var(--qw-border); margin-top: 8px;
+}
+.qw-param {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--qw-muted); cursor: pointer; user-select: none;
+}
+.qw-param:hover { color: var(--qw-text); }
+.qw-param input[type="checkbox"] { accent-color: var(--qw-accent); cursor: pointer; }
+.qw-param select, .qw-param input[type="number"], .qw-param input[type="text"] {
+  font: inherit; font-size: 12px; color: var(--qw-text);
+  background: var(--qw-bg2); border: 1px solid var(--qw-border);
+  border-radius: 6px; padding: 3px 6px;
+}
 .qw-runrow {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 8px 14px 12px;
@@ -183,6 +206,15 @@ const SHADOW_CSS = `
 }
 .qw-run:hover { filter: brightness(1.1); transform: translateY(-1px); }
 .qw-run:disabled { opacity: .55; cursor: not-allowed; filter: none; transform: none; }
+.qw-run-quiet {
+  background: transparent; border: 1px solid var(--qw-border);
+  color: var(--qw-muted); font-weight: 600; box-shadow: none;
+}
+.qw-run-quiet:hover { filter: none; color: var(--qw-text); border-color: var(--qw-accent); }
+.qw-fed {
+  padding: 0 14px 8px; font-size: 11px; color: var(--qw-muted);
+  font-family: var(--qw-mono); overflow-wrap: anywhere;
+}
 .qw-state { color: var(--qw-muted); font-size: 12px; }
 .qw-state.ok { color: var(--qw-ok); }
 .qw-state.err { color: var(--qw-err); }
@@ -240,6 +272,14 @@ const SHADOW_CSS = `
 }
 .qw-sub[open] > summary { border-bottom: 1px solid var(--qw-border); }
 .qw-sub .metric-grid { margin: 8px; }
+/* An object that turned up inside a table cell (see widget-renderers.js's
+   nestedCell) -- collapsed, so a nested payload cannot blow up the row. */
+.qw-cell-sub > summary {
+  cursor: pointer; color: var(--qw-muted); font-size: 11px; white-space: nowrap;
+}
+.qw-cell-sub > summary:hover { color: var(--qw-text); }
+.qw-cell-sub[open] > summary { color: var(--qw-text); margin-bottom: 5px; }
+.qw-cell-sub .tablewrap { max-width: 420px; }
 .qw-rows { margin-top: 8px; }
 .qw-rows > .small { margin: 0 0 4px; text-transform: uppercase; letter-spacing: .05em; }
 .tablewrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--qw-border); border-radius: 8px; }
@@ -303,7 +343,7 @@ function parseDataContext(el) {
 
 class QuantWidget extends HTMLElement {
   static get observedAttributes() {
-    return ['slug', 'synced', 'data-output-kind'];
+    return ['slug', 'synced', 'data-output-kind', 'scope-ui', 'mode'];
   }
 
   constructor() {
@@ -346,6 +386,9 @@ class QuantWidget extends HTMLElement {
       this._renderHeader();
       this._loadCatalog();
       this._updateInjectButton();
+    }
+    if ((name === 'scope-ui' || name === 'mode') && this._built) {
+      this._applyChrome();
     }
   }
 
@@ -409,7 +452,17 @@ class QuantWidget extends HTMLElement {
       scopeRow.appendChild(wrap);
       this._inputs[field] = input;
     });
+    this._scopeRow = scopeRow;
     panel.appendChild(scopeRow);
+
+    // Module-specific options (ModuleSpec.params). Unlike scope, these
+    // belong to one module, so they stay on the card even when the page
+    // owns scope. Built lazily once the catalog arrives.
+    this._paramRow = document.createElement('div');
+    this._paramRow.className = 'qw-params';
+    this._paramRow.style.display = 'none';
+    this._paramInputs = {};
+    panel.appendChild(this._paramRow);
 
     // run row
     const runRow = document.createElement('div');
@@ -434,6 +487,14 @@ class QuantWidget extends HTMLElement {
     this._injectBtn.addEventListener('click', function () { this._injectPositions(); }.bind(this));
     runRow.appendChild(this._injectBtn);
 
+    // "what fed this run" line -- answers the standing question of whether a
+    // widget actually saw the position book / a sibling's output, which the
+    // Provenance sidebar could never tell you per-run.
+    this._fedEl = document.createElement('div');
+    this._fedEl.className = 'qw-fed small muted';
+    this._fedEl.style.display = 'none';
+    panel.appendChild(this._fedEl);
+
     // output
     this._out = document.createElement('div');
     this._out.className = 'qw-out';
@@ -449,6 +510,42 @@ class QuantWidget extends HTMLElement {
     this._renderHeader();
     this._renderPlaceholder();
     this._updateInjectButton();
+    this._applyChrome();
+  }
+
+  /** Is this a cache-backed status panel rather than a runnable tool?
+   *  Cache widgets (positions/signals/position_analysis/surfaces) read a row
+   *  a background job or agent push wrote; their run() ignores ticker/expiry
+   *  entirely. Giving them scope inputs and a Run button advertised control
+   *  that does not exist, so they render as status panels: no inputs, a
+   *  Refresh instead of Run, and no sync toggle. */
+  isStatusPanel() {
+    const explicit = (this.getAttribute('mode') || '').toLowerCase();
+    if (explicit === 'status') return true;
+    if (explicit === 'tool') return false;
+    return !!(this._catalog && this._catalog.category === 'cache');
+  }
+
+  /** Scope inputs are hidden when the host page owns scope (one page-level
+   *  header instead of the same three fields repeated on every card). */
+  scopeUIHidden() {
+    const attr = (this.getAttribute('scope-ui') || '').toLowerCase();
+    if (attr === 'hidden' || attr === 'off' || attr === 'none') return true;
+    return this.isStatusPanel();
+  }
+
+  _applyChrome() {
+    if (!this._built) return;
+    const status = this.isStatusPanel();
+    if (this._scopeRow) {
+      this._scopeRow.style.display = this.scopeUIHidden() ? 'none' : '';
+    }
+    if (this._runBtn) {
+      this._runBtn.textContent = status ? 'Refresh' : 'Run';
+      this._runBtn.classList.toggle('qw-run-quiet', status);
+    }
+    const toggle = this.shadowRoot && this.shadowRoot.querySelector('.qw-toggle');
+    if (toggle) toggle.style.display = status ? 'none' : '';
   }
 
   _renderHeader() {
@@ -493,8 +590,85 @@ class QuantWidget extends HTMLElement {
         this._catalogLoaded = true;
       }
       this._renderHeader();
+      this._buildParams();
       this._updateInjectButton();
+      this._applyChrome();
+      // A status panel's payload is a cache read, not a billed fetch, so it
+      // can populate itself on mount instead of showing "Not run yet".
+      if (this.isStatusPanel() && !this._hasRun) this.run();
     }.bind(this)).catch(function () { /* keep data-* fallback */ });
+  }
+
+  /** Render ModuleSpec.params as controls. Called once, when the catalog
+   *  arrives (the spec is the only source of what a module accepts). */
+  _buildParams() {
+    if (!this._built || !this._paramRow) return;
+    const specs = (this._catalog && this._catalog.params) || [];
+    this._paramRow.innerHTML = '';
+    this._paramInputs = {};
+    if (!specs.length) {
+      this._paramRow.style.display = 'none';
+      return;
+    }
+    specs.forEach((spec) => {
+      const kind = String(spec.kind || 'bool').toLowerCase();
+      const wrap = document.createElement('label');
+      wrap.className = 'qw-param qw-param-' + kind;
+      if (spec.help) wrap.title = spec.help;
+
+      let input;
+      if (kind === 'bool') {
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !!spec.default;
+        wrap.appendChild(input);
+        const text = document.createElement('span');
+        text.textContent = spec.label || spec.name;
+        wrap.appendChild(text);
+      } else if (kind === 'choice') {
+        const text = document.createElement('span');
+        text.textContent = spec.label || spec.name;
+        wrap.appendChild(text);
+        input = document.createElement('select');
+        (spec.choices || []).forEach(function (c) {
+          const opt = document.createElement('option');
+          opt.value = c;
+          opt.textContent = c;
+          input.appendChild(opt);
+        });
+        if (spec.default != null) input.value = String(spec.default);
+        wrap.appendChild(input);
+      } else {
+        const text = document.createElement('span');
+        text.textContent = spec.label || spec.name;
+        wrap.appendChild(text);
+        input = document.createElement('input');
+        input.type = kind === 'number' ? 'number' : 'text';
+        input.step = 'any';
+        if (spec.default != null) input.value = String(spec.default);
+        wrap.appendChild(input);
+      }
+      input.dataset.paramName = spec.name;
+      input.dataset.paramKind = kind;
+      this._paramInputs[spec.name] = input;
+      this._paramRow.appendChild(wrap);
+    });
+    this._paramRow.style.display = '';
+  }
+
+  /** Current param values, shaped for the run body's `params` object. */
+  params() {
+    const out = {};
+    Object.keys(this._paramInputs || {}).forEach((name) => {
+      const el = this._paramInputs[name];
+      const kind = el.dataset.paramKind;
+      if (kind === 'bool') out[name] = !!el.checked;
+      else if (kind === 'number') {
+        const n = parseFloat(el.value);
+        if (!isNaN(n)) out[name] = n;
+      } else if (el.value !== '') out[name] = el.value;
+    });
+    return out;
   }
 
   outputKind() {
@@ -625,9 +799,12 @@ class QuantWidget extends HTMLElement {
     if (scope.expiry) body.scope.expiry = scope.expiry;
     if (scope.basket && scope.basket.length) body.scope.basket = scope.basket;
 
+    const own = this.params();
+    if (Object.keys(own).length) body.params = Object.assign({}, own);
+
     const extra = parseDataContext(this);
     if (extra) {
-      const params = {};
+      const params = body.params || {};
       Object.keys(extra).forEach(function (key) {
         if (key === 'ticker' || key === 'expiry' || key === 'basket') {
           body.scope[key] = extra[key];
@@ -683,6 +860,8 @@ class QuantWidget extends HTMLElement {
       this._lastError = null;
       this._hasRun = true;
       this._renderResult(result);
+      this._renderFed(json);
+      this._updateInjectButton();
       this._setState('ready');
       this._emit('qw:run-success', { slug: slug, scope: body.scope, result: result });
       return result;
@@ -779,8 +958,24 @@ class QuantWidget extends HTMLElement {
       this._hasRun = true;
       this._lastResult = result;
       this._renderResult(result);
+      this._updateInjectButton();
       this._setState('ready');
     }.bind(this)).catch(function () { /* read-only best effort; ignore */ });
+  }
+
+  /** Render the run route's `ran` / `context_seeded` fields as one muted
+   *  line under the controls: which modules this click actually executed (a
+   *  `requires` dependency runs too) and which stored context keys it was
+   *  fed. */
+  _renderFed(envelope) {
+    if (!this._fedEl) return;
+    const parts = [];
+    const ran = envelope && Array.isArray(envelope.ran) ? envelope.ran : [];
+    if (ran.length > 1) parts.push('ran: ' + ran.join(' \u2192 '));
+    const fed = envelope && Array.isArray(envelope.context_seeded) ? envelope.context_seeded : [];
+    if (fed.length) parts.push('fed: ' + fed.join(', '));
+    this._fedEl.textContent = parts.join('  \u00b7  ');
+    this._fedEl.style.display = parts.length ? '' : 'none';
   }
 
   /** Update inject button visibility: only for positions widget, only when
@@ -788,7 +983,11 @@ class QuantWidget extends HTMLElement {
   _updateInjectButton() {
     if (!this._built || !this._injectBtn) return;
     const slug = this._slugAttr();
-    const visible = (slug === 'positions' && this._lastResult && this._lastResult.metrics);
+    const visible = (
+      slug === 'positions' &&
+      this.getAttribute('inject') !== 'off' &&
+      this._lastResult && this._lastResult.metrics
+    );
     this._injectBtn.style.display = visible ? '' : 'none';
   }
 

@@ -49,9 +49,13 @@ def test_home_page_renders_without_swap_card(monkeypatch, tmp_path):
     assert r.status_code == 200
     assert "swapLiveBadge" not in r.text
     assert "Trigger a run" not in r.text
-    # Regression test for CARL R2-F4: the non-swap "Orchestrator runs" card must
-    # survive the template edit that removed the swap-only cards around it.
-    assert "Orchestrator runs" in r.text
+    # The "Orchestrator runs" card this used to guard (CARL R2-F4) was removed
+    # from the template by an earlier change -- this assertion had been failing
+    # before the desk rewrite, not because of it. What still matters is that the
+    # page renders its own content rather than an empty shell, so pin the desk's
+    # own landmarks instead of a card that no longer exists anywhere.
+    assert 'id="bookPanel"' in r.text
+    assert 'id="scopeBar"' in r.text
 
 
 # Phase 5: tools_*.html pages retired, redirect to Quant Console

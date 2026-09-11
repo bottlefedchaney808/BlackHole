@@ -226,11 +226,24 @@ pre.json {
 <header class="topbar">
   <div class="brand">BlackHole Investments <span>/ live dashboard</span></div>
   <nav class="tabs">
-    <a href="/" class="{{ 'on' if active == 'home' else '' }}">Overview</a>
-    <a href="/quant" class="{{ 'on' if active == 'quant' else '' }}">Quant Console</a>
+    {# Quant Console folded into the desk page: one surface, book-driven scope.
+
+       The Suite-output tab is gone from here. It was a filesystem browser
+       that knew nothing about widget runs, and its slot is now Volatility --
+       the three panel tabs (Volatility / Models / Sentiment) each own a
+       coherent set of analysis that used to be twelve identical cards on the
+       desk. The /suites/* routes still resolve for anything holding a direct
+       link to an output file; they are just no longer a destination.
+
+       The desk keeps what a desk is for: the book, and the tools you reach
+       for AFTER the big suites have run -- hedge optimizer, sims, VaR,
+       screeners, options tools. #}
+    <a href="/" class="{{ 'on' if active in ('home', 'quant') else '' }}">Desk</a>
     <a href="/chart" class="{{ 'on' if active == 'chart' else '' }}">Chart</a>
+    <a href="/volatility" class="{{ 'on' if active == 'volatility' else '' }}">Volatility</a>
+    <a href="/models" class="{{ 'on' if active == 'models' else '' }}">Models</a>
     <a href="/dealer-book" class="{{ 'on' if active == 'dealer-book' else '' }}">Dealer Book</a>
-    <a href="/suites/options" class="{{ 'on' if active == 'suites' else '' }}">Suite output</a>
+    <a href="/sentiment" class="{{ 'on' if active == 'sentiment' else '' }}">Sentiment</a>
   </nav>
   <div class="share" id="shareControl">
     <span class="label">Share:</span>

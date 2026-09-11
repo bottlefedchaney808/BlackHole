@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Volatility -- BlackHole Investments Dashboard{% endblock %}
+
+{#
+  The Volatility tab. Replaces the old Suite output tab, which was a
+  filesystem browser that knew nothing about widget runs.
+
+  Everything here estimates or prices volatility itself, on one scope:
+  GARCH, the jump-model zoo, variance-swap replication, VRP, SVI, all four
+  surfaces, and the correlation/covariance matrix.
+
+  Three of those could not render on a generic card at all, which is the
+  reason this page exists rather than more cards on the desk:
+
+    * the four surface_* modules return artifacts=[] -- the grid rides on
+      context_patch and nothing ever drew it. This page asks the server for
+      the PNG (via Tools/tools/surface_explorer_tool.py, which already knew
+      how to render these exact grids).
+    * vrp_term_structure in Vol_Suite is runnable=False by design -- a gated
+      step inside _run_core_analysis whose run() raises. The runnable VRP is
+      the Tools entry point, which this page calls instead.
+    * variance_swap and garch DO write PNGs, into outputs/<run_id>/, which
+      GET /files used to reject with a 403 because it only served artifacts/.
+
+  Results deposited here (garch_conditional_vol, jump_diffusion,
+  correlation_matrix, volatilities, ...) go to the Context Store, which is
+  what the Models tab and the desk's VaR tools read back.
+#}
+
+{% block content %}
+<div class="tabpage" id="volPage">
+  <h1>Volatility</h1>
+  <p class="sub">
+    One scope, every vol estimate. Results land in the Context Store, so the
+    Models tab and the desk's VaR tools read them back instead of recomputing
+    or falling back to a flat 0.25.
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "_panel_tab.html" %}
+<script id="panelData" type="application/json">{{ panels | tojson }}</script>
+<script type="module">
+import { initPanelTab } from '/static/js/panel-tab.js?v={{ asset_v }}';
+
+const panels = JSON.parse(document.getElementById('panelData').textContent);
+
+initPanelTab({
+  tab: 'volatility',
+  title: 'Vol panels',
+  panels: panels,
+  mount: document.getElementById('volPage'),
+  note: 'Every panel below runs on this scope. Click a ticker in your book to focus it. ' +
+        'Surfaces and VRP are per-ticker; the correlation matrix runs on the basket.',
+  // Tenor is scope here, not a per-panel knob: the variance swap, the jump
+  // calibration and VRP must all be talking about the same horizon or their
+  // numbers are not comparable to each other.
+  extraFields: [
+    { name: 'target_years', label: 'Tenor (yrs)', default: '0.25', placeholder: '0.25' }
+  ]
+});
+</script>
+{% endblock %}

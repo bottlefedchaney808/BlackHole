@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Models -- BlackHole Investments Dashboard{% endblock %}
+
+{#
+  The Models tab: everything Options_Suite, on one contract.
+
+  The scope bar carries three fields the other tabs do not need -- strike,
+  right and tenor -- because "which contract" is what a pricer is asked
+  about, and putting those on each of eleven cards is exactly the per-card
+  scope duplication the desk rebuild removed.
+
+  DEFAULT PRICING MODEL is a real setting here, not decoration:
+  Leisen-Reimer is the repo default and a regression to plain CRR for the
+  default path is a bug that has been reported more than once (CLAUDE.md's
+  fragile surfaces). The selector below pins which pricer is treated as the
+  headline; it does not silently change what any other card computes.
+
+  Context pull: every panel run is seeded from the Context Store first, so a
+  Heston MC started after the Volatility tab's jump calibration begins from
+  that fit rather than paying for its own. The strip at the top shows what is
+  actually available for the current scope.
+#}
+
+{% block content %}
+<div class="tabpage" id="modelsPage">
+  <h1>Models</h1>
+  <p class="sub">
+    Price one contract every way, and find where the chain disagrees with the
+    models. Pulls GARCH / jump / variance results from the Volatility tab
+    through the Context Store.
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "_panel_tab.html" %}
+<script id="panelData" type="application/json">{{ panels | tojson }}</script>
+<script type="module">
+import { initPanelTab } from '/static/js/panel-tab.js?v={{ asset_v }}';
+
+const panels = JSON.parse(document.getElementById('panelData').textContent);
+
+const tab = initPanelTab({
+  tab: 'models',
+  title: 'Pricing panels',
+  panels: panels,
+  mount: document.getElementById('modelsPage'),
+  note: 'Ticker, expiry, strike and right define the contract every pricer below quotes. ' +
+        'Leave strike blank to price at-the-money (snapped to a listed strike).',
+  extraFields: [
+    { name: 'strike', label: 'Strike', placeholder: 'ATM' },
+    { name: 'option_type', label: 'Right', choices: ['call', 'put'], default: 'call' },
+    { name: 'target_years', label: 'Tenor (yrs)', default: '0.25' }
+  ]
+});
+
+/* ---------------------------------------------------------------------------
+ * Default pricing model.
+ *
+ * Leisen-Reimer, always, unless deliberately changed here: it has better
+ * strike/step convergence than CRR for American options and is what main.py
+ * resolves sigma and greeks from. The picker marks that card and moves it to
+ * the front of a "Run selected" batch so the headline number is computed
+ * first; it never rewires what another pricer does.
+ * ------------------------------------------------------------------------ */
+const PRICERS = ['leisen_reimer', 'crr', 'baw', 'mc', 'mc_heston_lsm'];
+const DEFAULT_KEY = 'panelTab.models.defaultPricer';
+
+function readDefault() {
+  try { return localStorage.getItem(DEFAULT_KEY) || 'leisen_reimer'; }
+  catch (e) { return 'leisen_reimer'; }
+}
+
+const bar = document.querySelector('#modelsPage .scopebar-main');
+const wrap = document.createElement('label');
+wrap.className = 'sc-field';
+const label = document.createElement('span');
+label.textContent = 'Default pricer';
+wrap.appendChild(label);
+const select = document.createElement('select');
+PRICERS.forEach(function (id) {
+  const spec = panels.find(function (p) { return p.id === id; });
+  if (!spec) return;
+  const option = document.createElement('option');
+  option.value = id;
+  option.textContent = spec.title;
+  select.appendChild(option);
+});
+select.value = readDefault();
+wrap.appendChild(select);
+bar.insertBefore(wrap, bar.querySelector('button'));
+
+function markDefault() {
+  const chosen = select.value;
+  tab.cards.forEach(function (card) {
+    const isDefault = card.spec.id === chosen;
+    card.node.classList.toggle('is-default', isDefault);
+    let badge = card.node.querySelector('.default-badge');
+    if (isDefault && !badge) {
+      badge = document.createElement('span');
+      badge.className = 'pill plain default-badge';
+      badge.textContent = 'default';
+      card.node.querySelector('.panelcard-title h3').appendChild(badge);
+    } else if (!isDefault && badge) {
+      badge.remove();
+    }
+    // The default pricer is always part of a run — unchecking it would make
+    // the headline price quietly absent.
+    if (isDefault) {
+      const box = card.node.querySelector('.panel-toggle');
+      if (!box.checked) { box.checked = true; box.dispatchEvent(new Event('change')); }
+    }
+  });
+}
+
+select.addEventListener('change', function () {
+  try { localStorage.setItem(DEFAULT_KEY, select.value); } catch (e) { /* ignore */ }
+  markDefault();
+});
+markDefault();
+</script>
+<style>
+.panelcard.is-default { border-color: var(--accent); }
+.panelcard.is-default .panelcard-head { background: var(--accent-soft); }
+.default-badge { margin-left: 8px; vertical-align: middle; }
+</style>
+{% endblock %}

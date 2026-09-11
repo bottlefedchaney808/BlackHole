@@ -120,10 +120,10 @@
 </main>
 
 <script type="module">
-  import { syncBus } from '/static/js/sync-bus.js';
+  import { syncBus } from '/static/js/sync-bus.js?v={{ asset_v }}';
   // quant-widget.js registers the custom element as a side effect; importing
   // it here (or relying on the sandbox <script> below) is all a page needs.
-  import '/static/js/quant-widget.js';
+  import '/static/js/quant-widget.js?v={{ asset_v }}';
 
   const $ = function (id) { return document.getElementById(id); };
   const scopeForm = $('scopeForm');

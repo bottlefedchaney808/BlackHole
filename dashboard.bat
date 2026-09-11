@@ -2,6 +2,11 @@
 REM Launches the live local dashboard (swap data + orchestrator control panel)
 REM and opens it in your default browser. Binds to localhost only.
 cd /d "%~dp0"
+REM DASHBOARD_NO_BROWSER=1 marks an EMBEDDED launch (Hermes Desktop's FinDev
+REM tab, or any tool that renders the dashboard itself). It suppresses the
+REM browser tab this script would otherwise open, and skips every `pause` --
+REM a pause has no stdin under a tool/PTY launch and would hang forever.
+REM Interactive humans running dashboard.bat directly are unaffected.
 set PYTHONPATH=
 set PYTHONHOME=
 REM Point swaps queries at the OneDrive live book (323 GB, ~71M rows).
@@ -15,7 +20,7 @@ if not defined DASHBOARD_WIDGET_JOBS_ENABLED set DASHBOARD_WIDGET_JOBS_ENABLED=1
 if not exist ".venv\Scripts\python.exe" (
     echo Shared .venv not found at %~dp0.venv — run: python -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
     echo.
-    pause
+    if not defined DASHBOARD_NO_BROWSER pause
     exit /b 1
 )
 REM Catch a stale/incomplete venv (packages missing vs. requirements.txt)
@@ -29,7 +34,7 @@ if errorlevel 1 (
     echo.
     echo Fix: .venv\Scripts\python.exe -m pip install -r requirements.txt
     echo.
-    pause
+    if not defined DASHBOARD_NO_BROWSER pause
     exit /b 1
 )
 REM Refuse to start a second dashboard on the same port -- besides just
@@ -39,9 +44,9 @@ netstat -ano | findstr /C:"127.0.0.1:8787" | findstr "LISTENING" >nul
 if not errorlevel 1 (
     echo A dashboard already appears to be running on port 8787.
     echo Only run ONE instance of dashboard.bat at a time.
-    echo Opening your existing dashboard in the browser instead...
-    start "" http://127.0.0.1:8787
-    pause
+    if not defined DASHBOARD_NO_BROWSER echo Opening your existing dashboard in the browser instead...
+    if not defined DASHBOARD_NO_BROWSER start "" http://127.0.0.1:8787
+    if not defined DASHBOARD_NO_BROWSER pause
     exit /b 0
 )
 REM Also make sure the native chart app (chart_app, :8791) is up, since the
@@ -54,7 +59,7 @@ if errorlevel 1 (
 )
 REM Give uvicorn a couple seconds to bind before opening the browser tab,
 REM so it doesn't load before anything is listening.
-start "" cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:8787"
+if not defined DASHBOARD_NO_BROWSER start "" cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:8787"
 .venv\Scripts\python.exe -m uvicorn dashboard.app:app --host 127.0.0.1 --port 8787
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -62,5 +67,5 @@ if %ERRORLEVEL% neq 0 (
     echo already in use or "access forbidden", another process or an unrelated
     echo Windows service already owns port 8787 — edit dashboard.bat and pick
     echo a different --port number ^(and update the URL above it^).
-    pause
+    if not defined DASHBOARD_NO_BROWSER pause
 )

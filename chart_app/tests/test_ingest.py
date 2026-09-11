@@ -1,4 +1,6 @@
 from datetime import datetime
+
+import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 from shared.chart_data import CandleRecord, CandlePayload
@@ -77,3 +79,54 @@ def test_launchers_bind_localhost_8791():
     assert "8791" in sh
     assert "8787" not in sh
     assert "chart_app.server:app" in sh
+
+
+def _payload():
+    rec = CandleRecord(datetime(2026, 8, 18, 10, 0), 1, 1, 1, 1, 1)
+    return CandlePayload("SPY", "30m", "20d", "injected", (rec,))
+
+
+def test_refresh_retries_a_transient_provider_timeout(tmp_path):
+    """A provider timeout used to end the refresh with zero bars cached,
+    which looks identical to "this interval has no data"."""
+    from chart_app.bar_cache import BarCache
+    from chart_app.ingest import refresh_cache
+    from shared.chart_data import ChartDataError
+
+    cache = BarCache(str(tmp_path / "bars.db"))
+    calls = {"n": 0}
+
+    def flaky(ticker, interval=None, lookback=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ChartDataError("intraday spot-history provider failed (PHTimeoutError)")
+        return _payload()
+
+    slept = []
+    n = refresh_cache(
+        cache, "SPY", "30m", "20d",
+        daily_fn=None, intrad_fn=flaky, sleep=slept.append,
+    )
+    assert calls["n"] == 2
+    assert slept  # backed off before retrying
+    assert n > 0
+
+
+def test_refresh_does_not_retry_a_validation_error(tmp_path):
+    """A bad ticker/interval fails identically every time; retrying only
+    delays the real error."""
+    from chart_app.bar_cache import BarCache
+    from chart_app.ingest import refresh_cache
+    from shared.chart_data import ChartDataError
+
+    cache = BarCache(str(tmp_path / "bars.db"))
+    calls = {"n": 0}
+
+    def bad(ticker, interval=None, lookback=None):
+        calls["n"] += 1
+        raise ChartDataError("ticker must be a valid symbol")
+
+    with pytest.raises(ChartDataError):
+        refresh_cache(cache, "??", "30m", "20d", daily_fn=None, intrad_fn=bad,
+                      sleep=lambda _s: None)
+    assert calls["n"] == 1

@@ -91,7 +91,14 @@ import smile_by_model
 import surface_grids
 from dealer_exposure_module import fetch_dealer_exposure
 
-from shared.module_registry import ArchiveHint, ArtifactRef, ModuleResult, ModuleSpec
+from shared.module_registry import (
+    ArchiveHint,
+    ArtifactRef,
+    InputSpec,
+    ModuleResult,
+    ModuleSpec,
+    ParamSpec,
+)
 
 
 def _resolve_ticker(context: dict[str, Any]) -> str:
@@ -107,6 +114,22 @@ def _resolve_ticker(context: dict[str, Any]) -> str:
 def _resolve_expiry(context: dict[str, Any]) -> str:
     focus = context.get("focus") or {}
     return str(context.get("expiry") or focus.get("expiry") or "auto").strip()
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    """Coerce a param that arrived over JSON or as a query string.
+
+    A checkbox reaches a module as a real bool from the dashboard but as the
+    string "false"/"0"/"off" from a hand-rolled curl or a saved layout, and
+    `bool("false")` is True -- so the strings are handled explicitly.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _failed(exc: Exception) -> ModuleResult:
@@ -271,6 +294,7 @@ def _run_position_book(context: dict[str, Any]) -> ModuleResult:
                 plot_position_book,
                 plot_position_book_heatmap,
             )
+
             chart_files = [
                 plot_position_book(result, output_dir=output_dir),
                 plot_position_book_heatmap(result, output_dir=output_dir),
@@ -491,12 +515,26 @@ def _svi_chain_scanner_inputs(td: Any, ticker: str, expiration: str):
 
 
 def _run_svi_smile_chain_scanner(
-    td: Any, ticker: str, expiration: str
+    td: Any, ticker: str, expiration: str, capture: dict | None = None
 ) -> dict[str, Any]:
     df, forward, actual_T, spot = _svi_chain_scanner_inputs(td, ticker, expiration)
-    _fitted_df, smile_a, smile_b, svi_params = ocs.fit_svi_smile(
+    fitted_df, smile_a, smile_b, svi_params = ocs.fit_svi_smile(
         df, forward, actual_T, spot=spot
     )
+    if capture is not None:
+        # The fitted frame was being dropped on the floor here, which is why
+        # the SVI card could only ever show scalars. Out-of-band for the same
+        # reason as jump_diffusion's: per-strike arrays do not belong in the
+        # metrics payload every caller serializes. Only the OTM wing is fitted
+        # (fit_svi_smile masks is_otm & iv>0), so plot exactly that.
+        try:
+            fit_rows = fitted_df[fitted_df["is_otm"] & fitted_df["fit_iv"].notna()]
+            capture["strikes"] = [float(v) for v in fit_rows["strike"]]
+            capture["market_ivs"] = [float(v) for v in fit_rows["iv"]]
+            capture["fitted_ivs"] = [float(v) for v in fit_rows["fit_iv"]]
+            capture["spot"] = float(spot)
+        except Exception:  # noqa: BLE001 -- a chart must never fail the fit
+            capture.clear()
     return {
         "ticker": ticker,
         "expiry": expiration,
@@ -587,6 +625,7 @@ def _run_svi_smile(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
             context_patch=None,
         )
 
+    smile: dict[str, Any] = {}
     try:
         ticker = _resolve_ticker(context)
         expiry = _resolve_expiry(context)
@@ -612,7 +651,9 @@ def _run_svi_smile(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
                     )[0]
                 )
                 if mode == "chain_scanner":
-                    metrics = _run_svi_smile_chain_scanner(td, ticker, expiration)
+                    metrics = _run_svi_smile_chain_scanner(
+                        td, ticker, expiration, capture=smile
+                    )
                 else:
                     metrics = _run_svi_smile_exposure_overlay(td, ticker, expiration)
         finally:
@@ -622,7 +663,23 @@ def _run_svi_smile(context: dict[str, Any], *, td: Any = None) -> ModuleResult:
         return _failed(exc)
 
     metrics["mode"] = mode
-    return ModuleResult(status="ok", artifacts=[], metrics=metrics, context_patch=None)
+    artifacts: list[ArtifactRef] = []
+    if smile:
+        chart = _plot_smile_fit(
+            ticker,
+            str(metrics.get("expiry") or ""),
+            smile.get("strikes") or [],
+            smile.get("market_ivs") or [],
+            smile.get("fitted_ivs") or [],
+            smile.get("spot"),
+            "SVI",
+            str(context.get("output_dir") or "."),
+        )
+        if chart:
+            artifacts.append(ArtifactRef(path=chart, kind="png"))
+    return ModuleResult(
+        status="ok", artifacts=artifacts, metrics=metrics, context_patch=None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +759,39 @@ def _run_surface_market_iv(context: dict[str, Any], *, td: Any = None) -> Module
     )
 
 
+# Substrings that mark a "the market was quiet" condition rather than a
+# broken module. `surface_grids` raises ValueError for both cases -- a missing
+# controller method (a real bug) and an empty session (a Sunday, a holiday, a
+# thin name before the open) -- and a card that paints both red teaches you to
+# ignore the colour. A data condition is `skipped` with the reason on it.
+_NO_DATA_MARKERS = (
+    "no trades",
+    "no trades with usable",
+    "no trades matched",
+)
+
+
+def _skipped_if_no_data(exc: Exception, ticker: str) -> ModuleResult | None:
+    """`skipped` for an empty session, None to let the caller fail loudly."""
+    message = str(exc)
+    if not any(marker in message.lower() for marker in _NO_DATA_MARKERS):
+        return None
+    return ModuleResult(
+        status="skipped",
+        artifacts=[],
+        metrics={
+            "ticker": ticker,
+            "message": message,
+            "why": (
+                "no options flow recorded for this session -- a weekend, a "
+                "holiday, before the open, or a name that simply did not "
+                "trade. Not a module failure."
+            ),
+        },
+        context_patch=None,
+    )
+
+
 def _run_surface_flow_strike_time(
     context: dict[str, Any], *, td: Any = None
 ) -> ModuleResult:
@@ -713,7 +803,8 @@ def _run_surface_flow_strike_time(
         session = context.get("session")
         result = surface_grids.build_flow_strike_time(ticker, td=td, session=session)
     except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
-        return _failed(exc)
+        quiet = _skipped_if_no_data(exc, str(context.get("ticker") or ""))
+        return quiet if quiet is not None else _failed(exc)
 
     metrics: dict[str, Any] = {
         "ticker": result["ticker"],
@@ -753,7 +844,8 @@ def _run_surface_flow_strike_expiry(
             max_dte=max_dte,
         )
     except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
-        return _failed(exc)
+        quiet = _skipped_if_no_data(exc, str(context.get("ticker") or ""))
+        return quiet if quiet is not None else _failed(exc)
 
     metrics: dict[str, Any] = {
         "ticker": result["ticker"],
@@ -767,6 +859,721 @@ def _run_surface_flow_strike_expiry(
         artifacts=[],
         metrics=metrics,
         context_patch={"surface_flow_strike_expiry_result": result},
+    )
+
+
+# ---------------------------------------------------------------------------
+# variance_swap
+# ---------------------------------------------------------------------------
+#
+# The variance-swap replication pricer (Carr-Madan / Demeterfi) is the piece
+# Vol_Suite is arguably built around -- fair variance strike, ATM IV, the
+# convexity premium between them, and VRP against realized vol -- and it
+# already had a clean programmatic entry point in `variance_swap_live.
+# run_variance_swap_live`. It was simply never registered, so it did not
+# appear in the catalog and could not be run as a widget at all; the only
+# `vrp_term_structure` entry nearby is a selection-only marker that raises.
+#
+# This is a thin adapter, same pattern as the dealer-book cluster: no
+# suite-internal math changes.
+
+
+def _run_variance_swap(context: dict[str, Any]) -> ModuleResult:
+    """Price a variance swap on the focus ticker at the resolved expiry."""
+    try:
+        import variance_swap_live as vsl
+
+        ticker = _resolve_ticker(context)
+        expiry = _resolve_expiry(context)
+        expiration = None if expiry in ("", "auto") else expiry.replace("-", "")
+        target_years = float(context.get("target_years") or 0.25)
+        output_dir = str(context.get("output_dir") or ".")
+
+        files, interp, result = vsl.run_variance_swap_live(
+            ticker,
+            target_years=target_years,
+            output_dir=output_dir,
+            expiration=expiration,
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    result = result or {}
+    fair_vol = result.get("fair_variance_swap_strike_vol_pct")
+    atm_iv = result.get("atm_implied_vol_pct")
+    convexity = result.get("convexity_premium_vol_pct")
+    # `strike_table` holds numpy arrays per strike -- fine for the plotting
+    # path that produced it, but it is neither JSON-serializable nor useful
+    # on a card, so it stays out of metrics. Everything scalar goes on.
+    metrics: dict[str, Any] = {
+        "headline": (
+            f"{ticker} fair vol {fair_vol:.2f}%"
+            if fair_vol is not None
+            else f"{ticker} fair vol --"
+        )
+        + (f" vs ATM IV {atm_iv:.2f}%" if atm_iv is not None else "")
+        + (f" · convexity {convexity:+.2f} pts" if convexity is not None else ""),
+        "ticker": ticker,
+        "interp": interp,
+    }
+    for key, value in result.items():
+        if key == "strike_table":
+            continue
+        metrics[key] = value
+
+    # Optional companion jump fit on the SAME chain. This does not alter the
+    # replication fair strike above -- that stays pure Carr-Madan/Demeterfi
+    # over market prices. It sits beside it so you can see how much of the
+    # fair variance a jump model attributes to jumps rather than diffusion,
+    # and how well the model actually fits the smile it was read off.
+    jump_model = str(context.get("jump_model") or "none").strip()
+    if jump_model.lower() not in ("", "none"):
+        try:
+            chain, spot = _jump_chain(ticker, expiration or "", target_years)
+            model_cls, calib = _calibrate_named_model(
+                jump_model, chain, spot, target_years
+            )
+            jump_block: dict[str, Any] = {
+                "model_name": calib.model_name,
+                "params": calib.params,
+                # Scoped to the calibration mask (MAX_CALIB_STRIKES), not the
+                # full smile -- see CLAUDE.md's jump-diffusion note.
+                "rmse_iv": calib.rmse_iv,
+            }
+            if calib.model_name == _JUMP_SHARE_MODEL:
+                fitted = model_cls.from_array(
+                    [calib.params[p] for p in model_cls.param_names]
+                )
+                share = fitted.jump_variance_share(target_years)
+                jump_block["jump_variance_share"] = share
+                if fair_vol is not None:
+                    # Split the replication fair VARIANCE (not vol) by the
+                    # model's jump share, then re-express each leg as a vol.
+                    fair_var = (fair_vol / 100.0) ** 2
+                    jump_block["jump_leg_vol_pct"] = (
+                        100.0 * (fair_var * share) ** 0.5
+                    )
+                    jump_block["diffusive_leg_vol_pct"] = (
+                        100.0 * (fair_var * (1.0 - share)) ** 0.5
+                    )
+            metrics["jump_fit"] = jump_block
+            if "jump_variance_share" in jump_block:
+                metrics["headline"] += (
+                    f" · {jump_block['jump_variance_share']:.0%} jump"
+                )
+        except Exception as exc:  # noqa: BLE001
+            # A failed companion fit must not lose you the variance swap the
+            # module was actually asked for.
+            metrics["jump_fit"] = {
+                "status": "error",
+                "model": jump_model,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    artifacts = [
+        ArtifactRef(path=f, kind="png" if str(f).endswith(".png") else "csv")
+        for f in (files or [])
+    ]
+    return ModuleResult(
+        status="ok",
+        artifacts=artifacts,
+        metrics=metrics,
+        context_patch={"variance_swap_result": metrics},
+    )
+
+
+# ---------------------------------------------------------------------------
+# jump_diffusion / jump_model_comparison / garch
+# ---------------------------------------------------------------------------
+#
+# Three more pieces that existed, were tested, and had clean programmatic
+# entry points, but were never registered -- so they had no catalog entry and
+# could not be run as widgets. They only ever executed as inline steps of
+# `volatility_suite._run_core_analysis`, which means reaching them required a
+# full suite run.
+#
+# `jump_diffusion` reuses volatility_suite's own
+# `_calibrate_default_jump_model` rather than reimplementing the calibration:
+# that helper is deliberately self-contained (fetches its own spot / rate /
+# dividend / chain) and already returns the dict shape suite_context.json's
+# `jump_diffusion` key expects, including the `{status: error, error: ...}`
+# failure form. Imported lazily inside run() -- volatility_suite is ~2900
+# lines and importing it at registry-import time would slow every catalog
+# read and every CLI listing.
+
+
+# Models whose calibrated parameters expose a plain diffusive `sigma`, which
+# is what garch_bridge.jump_filtered_returns needs as a measure-consistent
+# threshold scale. Heston and Bates carry stochastic variance (v0/theta)
+# rather than a constant sigma, so they cannot fill that role -- offering
+# them here would produce a KeyError at run time instead of a choice.
+_DIFFUSIVE_SIGMA_MODELS = ("Merton", "Kou", "VarianceGamma")
+
+# Only Bates decomposes total variance into jump vs. diffusive legs
+# (BatesModel.jump_variance_share), which is the input
+# garch_bridge.adjust_garch_forecast scales the forecast by.
+_JUMP_SHARE_MODEL = "Bates"
+
+
+def _calibrate_named_model(name: str, chain: Any, spot: float, T: float):
+    """Calibrate one model of the zoo by its display name."""
+    from jump_diffusion.calibration import calibrate
+    from jump_diffusion.models import ALL_MODELS
+
+    model_cls = next((m for m in ALL_MODELS if m.name == name), None)
+    if model_cls is None:
+        raise ValueError(
+            f"unknown jump model {name!r}; known: "
+            + ", ".join(m.name for m in ALL_MODELS)
+        )
+    return model_cls, calibrate(model_cls, chain, spot, T)
+
+
+def _jump_chain(ticker: str, expiration: str, target_years: float):
+    """Fetch (chain, spot, T) for the jump-model calibrators.
+
+    Same fetch volatility_suite._calibrate_default_jump_model does; factored
+    out here because the comparison module needs the chain itself, not the
+    calibrated result.
+    """
+    from thetadata_client import ThetaDataController
+    from variance_swap_live import fetch_chain_thetadata
+
+    td = ThetaDataController()
+    try:
+        spot = float(td.fetch_spot_price(ticker))
+        r = float(td.fetch_risk_free_rate(target_years))
+        q = float(td.fetch_dividend_yield(ticker, spot))
+        chain = fetch_chain_thetadata(td, ticker, expiration, r, q)
+    finally:
+        td.close()
+    return chain, spot
+
+
+def _resolved_expiration(
+    context: dict[str, Any], ticker: str, target_years: float
+) -> str:
+    """context expiry -> a concrete YYYYMMDD, resolving 'auto' the way the
+    rest of the suite does (one shared expiry per run)."""
+    expiry = _resolve_expiry(context)
+    if expiry and expiry != "auto":
+        return expiry.replace("-", "")
+    from thetadata_client import ThetaDataController
+
+    td = ThetaDataController()
+    try:
+        return expiry_selector.resolve_expiration(td, ticker, None, target_years)[0]
+    finally:
+        td.close()
+
+
+def _plot_smile_fit(
+    ticker: str,
+    expiry: str,
+    strikes,
+    market_ivs,
+    fitted_ivs,
+    spot,
+    label: str,
+    output_dir: str,
+    rmse=None,
+) -> str | None:
+    """Draw model-vs-market IV and return the PNG path (None if it can't).
+
+    A calibration card that shows only RMSE asks you to trust one number.
+    The smile is the diagnostic that actually tells you WHERE the fit is
+    wrong -- a model can post a tidy RMSE and still miss the whole put wing,
+    which is the half that matters for a hedge. Market points are scattered,
+    the fit is a line, and spot is marked so the wings are readable.
+
+    Never raises: a chart is a nice-to-have, and a plotting failure must not
+    turn a good calibration into a failed module run.
+    """
+    try:
+        import os
+        from datetime import datetime
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        k = np.asarray(strikes, dtype=float)
+        mkt = np.asarray(market_ivs, dtype=float)
+        fit = np.asarray(fitted_ivs, dtype=float)
+        if k.size == 0 or k.size != mkt.size or k.size != fit.size:
+            return None
+
+        # Drop legs the vendor could not solve. `calibration.calibrate` masks
+        # on ~isnan only, so strikes where ThetaData reports implied_vol=0 --
+        # deep-ITM legs with almost no extrinsic value, the same rows
+        # expiry_book_production.normalize_snapshot_rows had to repair --
+        # survive into market_ivs as a literal 0.0. Plotted raw they draw a
+        # flat shelf of zeros along the bottom (confirmed live on SPY: ~490
+        # points from strike 150 to 640) that compresses the real smile into
+        # the top of the axis. The CALIBRATION is unaffected: it fits the
+        # MAX_CALIB_STRIKES nearest spot, which are all genuinely solved.
+        usable = np.isfinite(k) & np.isfinite(mkt) & np.isfinite(fit) & (mkt > 0)
+        if not usable.any():
+            return None
+        k, mkt, fit = k[usable], mkt[usable], fit[usable]
+
+        order = np.argsort(k)
+        k, mkt, fit = k[order], mkt[order], fit[order]
+
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.scatter(k, mkt * 100.0, s=34, zorder=3, label="Market IV", color="#2b6cb0")
+        ax.plot(k, fit * 100.0, lw=2, zorder=2, label=f"{label} fit", color="#c05621")
+        try:
+            if spot and float(spot) > 0:
+                ax.axvline(
+                    float(spot), ls="--", lw=1, color="#718096",
+                    label=f"spot {float(spot):.2f}",
+                )
+        except (TypeError, ValueError):
+            pass
+
+        title = f"{ticker} {expiry} - {label} fit vs market smile"
+        if isinstance(rmse, (int, float)):
+            # Scoped to the calibration mask (MAX_CALIB_STRIKES), not the
+            # full smile -- say so rather than implying whole-curve accuracy.
+            title += f"  (RMSE on calibrated strikes {rmse:.4f})"
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel("Strike")
+        ax.set_ylabel("Implied vol (%)")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=9)
+        fig.tight_layout()
+
+        os.makedirs(output_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe = str(label).replace(" ", "_")
+        path = os.path.join(output_dir, f"{ticker}_{safe}_smile_fit_{ts}.png")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return path
+    except Exception:
+        return None
+
+
+def _run_jump_diffusion(context: dict[str, Any]) -> ModuleResult:
+    """Calibrate the default jump model (Bates unless JUMP_MODEL_DEFAULT says
+    otherwise) plus the Merton sigma the GARCH jump-day filter wants."""
+    try:
+        ticker = _resolve_ticker(context)
+        target_years = float(context.get("target_years") or 0.25)
+        expiration = _resolved_expiration(context, ticker, target_years)
+
+        from volatility_suite import _calibrate_default_jump_model
+
+        # capture= asks for the smile arrays so the card can draw the fit;
+        # they stay out of the returned dict (and so out of suite_context).
+        smile: dict[str, Any] = {}
+        result = _calibrate_default_jump_model(
+            ticker, expiration, target_years, capture=smile
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    result = result or {}
+    # The helper's documented failure form is a dict, not an exception -- a
+    # calibration that could not fit must not render as a green "ok" card.
+    if result.get("status") == "error":
+        return ModuleResult(
+            status="failed",
+            artifacts=[],
+            metrics={"ticker": ticker, "expiry": expiration, **result},
+            context_patch=None,
+        )
+
+    params = result.get("params") or {}
+    rmse = result.get("rmse_iv")
+    metrics: dict[str, Any] = {
+        "headline": (
+            f"{ticker} {result.get('model_name', 'jump model')} calibrated"
+            + (f" · RMSE(IV) {rmse:.4f}" if isinstance(rmse, (int, float)) else "")
+            + (
+                f" · jump share {result['jump_variance_share']:.1%}"
+                if isinstance(result.get("jump_variance_share"), (int, float))
+                else ""
+            )
+        ),
+        "ticker": ticker,
+        "expiry": expiration,
+        "model_name": result.get("model_name"),
+        # rmse_iv is scoped to the calibration mask (MAX_CALIB_STRIKES), not
+        # the full smile -- see CLAUDE.md's jump-diffusion note.
+        "rmse_iv": rmse,
+        "jump_variance_share": result.get("jump_variance_share"),
+        "merton_sigma": result.get("merton_sigma"),
+        "params": params,
+    }
+    artifacts: list[ArtifactRef] = []
+    chart = _plot_smile_fit(
+        ticker,
+        expiration,
+        smile.get("strikes") or [],
+        smile.get("market_ivs") or [],
+        smile.get("fitted_ivs") or [],
+        smile.get("spot"),
+        str(result.get("model_name") or "jump model"),
+        str(context.get("output_dir") or "."),
+        rmse=rmse,
+    )
+    if chart:
+        artifacts.append(ArtifactRef(path=chart, kind="png"))
+
+    return ModuleResult(
+        status="ok",
+        artifacts=artifacts,
+        metrics=metrics,
+        context_patch={"jump_diffusion": result},
+    )
+
+
+def _run_jump_model_comparison(context: dict[str, Any]) -> ModuleResult:
+    """Calibrate every model in the zoo (VG / Heston / Bates / Kou / Merton)
+    on one chain and rank them by RMSE in IV space."""
+    try:
+        ticker = _resolve_ticker(context)
+        target_years = float(context.get("target_years") or 0.25)
+        expiration = _resolved_expiration(context, ticker, target_years)
+        chain, spot = _jump_chain(ticker, expiration, target_years)
+
+        from jump_diffusion.comparison import run_comparison
+
+        comparison = run_comparison(chain, spot, target_years)
+    except Exception as exc:  # noqa: BLE001
+        return _failed(exc)
+
+    # run_comparison returns CalibrationResult objects plus numpy arrays under
+    # jump_contribution; neither is JSON-shaped, so flatten to a rows table the
+    # metrics renderer can show and drop the raw arrays.
+    models = comparison.get("models") or {}
+    rows = []
+    for name, res in models.items():
+        if res is None:
+            rows.append({"model": name, "rmse_iv": None, "status": "failed"})
+            continue
+        rows.append(
+            {
+                "model": name,
+                "rmse_iv": getattr(res, "rmse_iv", None),
+                "status": "ok",
+                **{k: v for k, v in (getattr(res, "params", {}) or {}).items()},
+            }
+        )
+    rows.sort(key=lambda r: (r["rmse_iv"] is None, r["rmse_iv"]))
+    best = comparison.get("best_fit")
+    return ModuleResult(
+        status="ok",
+        artifacts=[],
+        metrics={
+            "headline": (
+                f"{ticker} {expiration} · best fit {best}"
+                if best
+                else f"{ticker} {expiration} · no model converged"
+            ),
+            "ticker": ticker,
+            "expiry": expiration,
+            "best_fit": best,
+            "models": rows,
+        },
+        context_patch={"jump_model_comparison": {"best_fit": best, "models": rows}},
+    )
+
+
+def _run_garch(context: dict[str, Any]) -> ModuleResult:
+    """GARCH(1,1) conditional volatility for the focus ticker.
+
+    The annualized conditional vol is what VaR's `_resolve_vol_and_quality`
+    reads back out of the Context Store instead of falling back to a flat
+    0.25 (see CLAUDE.md's Context-Store fragile surface), so it goes out on
+    context_patch under the same `garch_vol` key that consumer expects.
+    """
+    try:
+        ticker = _resolve_ticker(context)
+        output_dir = str(context.get("output_dir") or ".")
+
+        # Jump enhancement (jump_diffusion/garch_bridge.py), both legs
+        # opt-in from the card:
+        #   jump_filter        -> winsorize jump-attributable days out of the
+        #                         return series BEFORE the fit, using a
+        #                         model-implied diffusive sigma as the
+        #                         threshold scale (a rolling-std threshold is
+        #                         contaminated by the jumps it is detecting).
+        #   jump_adjust_forecast -> scale the resulting conditional-vol
+        #                         forecast by Bates' option-implied
+        #                         jump-variance share.
+        # Anything already threaded in by a prior jump_diffusion run in the
+        # same context wins over a fresh calibration -- that is the whole
+        # point of the Context Store.
+        prior = context.get("jump_diffusion") or {}
+        merton_sigma = prior.get("merton_sigma")
+        jump_share = prior.get("jump_variance_share")
+        provenance = "context" if (merton_sigma or jump_share) else None
+
+        want_filter = _as_bool(context.get("jump_filter"), default=False)
+        want_adjust = _as_bool(context.get("jump_adjust_forecast"), default=False)
+        filter_model = str(context.get("jump_filter_model") or "Merton").strip()
+
+        if (want_filter and merton_sigma is None) or (
+            want_adjust and jump_share is None
+        ):
+            target_years = float(context.get("target_years") or 0.25)
+            expiration = _resolved_expiration(context, ticker, target_years)
+            chain, spot = _jump_chain(ticker, expiration, target_years)
+            provenance = "calibrated"
+            if want_filter and merton_sigma is None:
+                if filter_model not in _DIFFUSIVE_SIGMA_MODELS:
+                    raise ValueError(
+                        f"{filter_model} has no constant diffusive sigma; "
+                        f"choose one of {', '.join(_DIFFUSIVE_SIGMA_MODELS)}"
+                    )
+                _, calib = _calibrate_named_model(
+                    filter_model, chain, spot, target_years
+                )
+                merton_sigma = calib.params["sigma"]
+            if want_adjust and jump_share is None:
+                bates_cls, bates_calib = _calibrate_named_model(
+                    _JUMP_SHARE_MODEL, chain, spot, target_years
+                )
+                fitted = bates_cls.from_array(
+                    [bates_calib.params[p] for p in bates_cls.param_names]
+                )
+                jump_share = fitted.jump_variance_share(target_years)
+
+        from garch_analysis import run_garch_module
+
+        # Keep the GarchModuleResult itself: it is a tuple SUBCLASS carrying
+        # an out-of-band `.error`, and destructuring straight into three names
+        # throws that away -- which is the difference between "the fit raised"
+        # and "the fit worked but produced no conditional-vol series", both of
+        # which give cond_vol None.
+        garch_result = run_garch_module(
+            ticker,
+            output_dir=output_dir,
+            merton_sigma=merton_sigma if want_filter else None,
+            jump_variance_share=jump_share if want_adjust else None,
+        )
+        files, interp, cond_vol = garch_result
+    except Exception as exc:  # noqa: BLE001
+        return _failed(exc)
+
+    error = getattr(garch_result, "error", None)
+    metrics: dict[str, Any] = {
+        "ticker": ticker,
+        "garch_cond_vol": cond_vol,
+        "garch_cond_vol_pct": None if cond_vol is None else 100.0 * float(cond_vol),
+        "jump_filter": want_filter,
+        "jump_filter_model": filter_model if want_filter else None,
+        "jump_filter_sigma": merton_sigma if want_filter else None,
+        "jump_adjust_forecast": want_adjust,
+        "jump_variance_share": jump_share if want_adjust else None,
+        "jump_params_from": provenance,
+        "interp": interp,
+    }
+    if error:
+        metrics["error"] = str(error)
+        return ModuleResult(
+            status="failed", artifacts=[], metrics=metrics, context_patch=None
+        )
+    enhancements = []
+    if want_filter:
+        enhancements.append(f"{filter_model} jump-filtered")
+    if want_adjust:
+        enhancements.append("jump-adjusted")
+    metrics["headline"] = (
+        f"{ticker} GARCH(1,1) conditional vol "
+        + (f"{100.0 * float(cond_vol):.2f}%" if cond_vol is not None else "unavailable")
+        + (f" · {' + '.join(enhancements)}" if enhancements else " · plain")
+    )
+    return ModuleResult(
+        status="ok" if cond_vol is not None else "skipped",
+        artifacts=[ArtifactRef(path=f, kind="png") for f in (files or [])],
+        metrics=metrics,
+        # Two keys, one number, deliberately. `garch_vol` is the name
+        # Vol_Suite's own suite_context/orchestrator path has always used;
+        # `garch_conditional_vol` is the name VaR actually reads back out of
+        # the Context Store (VaR_Tools_Simulations/module_registry.py::
+        # _resolve_vol -> store.get(scope, "garch_conditional_vol")). Writing
+        # only the first meant every VaR widget silently fell through to the
+        # flat 0.25 fallback no matter how many times GARCH had run on the
+        # same scope -- the exact Context-Store threading regression
+        # CLAUDE.md's fragile-surfaces section warns about.
+        context_patch=(
+            {"garch_vol": cond_vol, "garch_conditional_vol": cond_vol}
+            if cond_vol is not None
+            else None
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# correlation_matrix
+# ---------------------------------------------------------------------------
+#
+# `correlation_engine.py` computes the correlation AND covariance matrices,
+# per-name vols/betas, and basket-level vol/beta/Sharpe/diversification --
+# and has had a clean programmatic entry point (`run_correlation_engine`)
+# the whole time, which writes a heatmap PNG plus two CSVs. It was never
+# registered, so the matrix had nowhere to live in the UI and, more
+# importantly, nothing ever wrote a real correlation matrix into the Context
+# Store.
+#
+# That second half is the point. VaR's corr_sim/mc_sim resolve their
+# correlation input as `context['corr_matrix']` -> Context Store
+# `correlation_matrix` -> **identity**, and their vols as
+# `context['volatilities']` -> Context Store `garch_conditional_vol` ->
+# **flat 0.25**. With nothing writing either key, every basket VaR on the
+# desk was silently a zero-correlation simulation at a made-up 25% vol. This
+# module is what fills them: run it on a basket and the VaR tools downstream
+# stop falling back.
+
+
+def _resolve_basket(context: dict[str, Any]) -> list[str]:
+    """Every place a basket can arrive from on the desk, in priority order.
+
+    The desk feeds a basket from three different places (the scope bar's
+    chips, `Basket = my book`, and the highlight-pack scanner), so this
+    accepts all of their key names rather than demanding one.
+    """
+    for key in ("basket", "tickers", "held_tickers"):
+        raw = context.get(key)
+        if isinstance(raw, str):
+            raw = raw.split(",")
+        if isinstance(raw, (list, tuple)) and raw:
+            out = [str(t).strip().upper() for t in raw if str(t).strip()]
+            if out:
+                return list(dict.fromkeys(out))
+    focus = context.get("ticker") or (context.get("focus") or {}).get("ticker")
+    return [str(focus).strip().upper()] if focus else []
+
+
+def _resolve_weights(
+    context: dict[str, Any], tickers: list[str]
+) -> list[float] | None:
+    """Market-value weights from the position book when it is in context.
+
+    Equal-weighting a book you are not equally weighted in reports a basket
+    vol you do not have. Falls back to None (equal weight, the engine's own
+    default) when no book is present or none of it overlaps the basket.
+    """
+    explicit = context.get("weights")
+    if isinstance(explicit, (list, tuple)) and len(explicit) == len(tickers):
+        return [float(w) for w in explicit]
+    book = context.get("positions")
+    rows = book.get("positions") if isinstance(book, dict) else book
+    if not isinstance(rows, list) or not rows:
+        return None
+    by_ticker: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tkr = str(row.get("ticker") or "").strip().upper()
+        try:
+            value = abs(float(row.get("market_value")))
+        except (TypeError, ValueError):
+            continue
+        if tkr and value:
+            by_ticker[tkr] = by_ticker.get(tkr, 0.0) + value
+    weights = [by_ticker.get(t, 0.0) for t in tickers]
+    return weights if sum(weights) > 0 else None
+
+
+def _run_correlation_matrix(context: dict[str, Any]) -> ModuleResult:
+    """Correlation / covariance / basket stats over the scope's basket.
+
+    A single name is not a basket, so that case fails loudly rather than
+    returning a 1x1 matrix of 1.0.
+    """
+    try:
+        import correlation_engine as ce
+
+        tickers = _resolve_basket(context)
+        if len(tickers) < 2:
+            raise ValueError(
+                "correlation_matrix needs at least 2 tickers; got "
+                f"{tickers or 'none'}. Set a basket (the desk's 'Basket = my "
+                "book' button fills it from your positions)."
+            )
+        market = str(context.get("market") or "SPY").strip().upper()
+        period = str(context.get("period") or "2y").strip()
+        output_dir = str(context.get("output_dir") or ".")
+
+        stats = ce.compute_basket_stats(
+            tickers,
+            weights=_resolve_weights(context, tickers),
+            market_ticker=market,
+            period=period,
+        )
+        files, interp = ce.run_correlation_engine(
+            tickers, market=market, period=period, output_dir=output_dir
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
+        return _failed(exc)
+
+    used = list(stats.tickers)
+    corr = [[float(v) for v in row] for row in stats.correlation_matrix]
+    cov = [[float(v) for v in row] for row in stats.covariance_matrix]
+
+    # The matrix as rows the card's table renderer can show directly: a bare
+    # nested list renders as an unreadable JSON blob.
+    corr_rows = [
+        {"": name, **{used[j]: round(corr[i][j], 3) for j in range(len(used))}}
+        for i, name in enumerate(used)
+    ]
+    top_pairs = sorted(
+        (
+            {
+                "pair": f"{p.ticker1}/{p.ticker2}",
+                "corr": round(float(p.correlation), 3),
+                "cov": round(float(p.covariance), 6),
+                "beta": round(float(p.beta), 3),
+            }
+            for p in (stats.correlation_pairs or [])
+        ),
+        key=lambda r: -abs(r["corr"]),
+    )[:12]
+
+    metrics: dict[str, Any] = {
+        "headline": (
+            f"{len(used)} names \u00b7 basket vol "
+            f"{100.0 * float(stats.basket_vol):.1f}%"
+            f" \u00b7 beta {float(stats.basket_beta):.2f}"
+            f" \u00b7 diversification {float(stats.diversification_ratio):.2f}"
+        ),
+        "tickers": used,
+        "basket_vol": float(stats.basket_vol),
+        "basket_beta": float(stats.basket_beta),
+        "basket_sharpe": float(stats.basket_sharpe),
+        "dispersion_score": float(stats.dispersion_score),
+        "diversification_ratio": float(stats.diversification_ratio),
+        "dropped_tickers": list(stats.dropped_tickers or []),
+        "correlation_rows": corr_rows,
+        "top_pairs": top_pairs,
+        "interp": interp,
+    }
+
+    artifacts = [
+        ArtifactRef(path=f, kind="png" if str(f).endswith(".png") else "csv")
+        for f in (files or [])
+    ]
+    return ModuleResult(
+        status="ok",
+        artifacts=artifacts,
+        metrics=metrics,
+        # These keys are exactly what VaR_Tools_Simulations/
+        # module_registry.py::_resolve_corr and _resolve_vol look for. Keyed
+        # by this run's basket scope, so a VaR run on the same basket picks
+        # them up instead of an identity matrix at a flat 0.25.
+        context_patch={
+            "correlation_matrix": corr,
+            "covariance_matrix": cov,
+            "volatilities": [float(stats.individual_vols.get(t, 0.0)) for t in used],
+            "correlation_tickers": used,
+        },
     )
 
 
@@ -941,6 +1748,7 @@ MODULES: list[ModuleSpec] = [
         suite="vol_suite",
         category="pipeline_step",
         run=_selection_only_marker("group_screener"),
+        runnable=False,  # run() raises; pipeline-selection marker only
         cli_entry=None,
         default_selected=False,
         requires=[],
@@ -952,6 +1760,7 @@ MODULES: list[ModuleSpec] = [
         suite="vol_suite",
         category="pipeline_step",
         run=_selection_only_marker("vol_surface_2d"),
+        runnable=False,  # run() raises; pipeline-selection marker only
         cli_entry=None,
         default_selected=False,
         requires=[],
@@ -963,6 +1772,7 @@ MODULES: list[ModuleSpec] = [
         suite="vol_suite",
         category="pipeline_step",
         run=_selection_only_marker("vrp_term_structure"),
+        runnable=False,  # run() raises; pipeline-selection marker only
         cli_entry=None,
         default_selected=False,
         requires=[],
@@ -974,9 +1784,167 @@ MODULES: list[ModuleSpec] = [
         suite="vol_suite",
         category="pipeline_step",
         run=_selection_only_marker("sentiment_backtest"),
+        runnable=False,  # run() raises; pipeline-selection marker only
         cli_entry=None,
         default_selected=False,
         requires=[],
         archive=ArchiveHint(key_shape="ticker_expiry"),
+    ),
+    ModuleSpec(
+        name="Variance Swap",
+        slug="variance_swap",
+        suite="vol_suite",
+        category="pricing",
+        run=_run_variance_swap,
+        cli_entry="Vol_Suite/variance_swap_live.py",
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+        description=(
+            "Variance-swap replication (Carr-Madan/Demeterfi): fair variance "
+            "strike, ATM IV, convexity premium and VRP vs realized vol."
+        ),
+        inputs=InputSpec(ticker="required", expiry="optional"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
+        params=(
+            ParamSpec(
+                name="jump_model",
+                label="Enhance with jump model",
+                kind="choice",
+                default="none",
+                choices=("none", "Merton", "Heston", "Bates", "Kou", "VarianceGamma"),
+                help=(
+                    "Fit this model to the same chain alongside the "
+                    "replication. Bates additionally splits the fair variance "
+                    "into jump and diffusive legs."
+                ),
+            ),
+        ),
+    ),
+    ModuleSpec(
+        name="Jump Diffusion",
+        slug="jump_diffusion",
+        suite="vol_suite",
+        category="pricing",
+        run=_run_jump_diffusion,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+        description=(
+            "Calibrate the default jump model (Bates/Merton) in IV space; "
+            "feeds dealer positioning, VRP and the strategy recommender."
+        ),
+        inputs=InputSpec(ticker="required", expiry="optional"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
+    ),
+    ModuleSpec(
+        name="Jump Model Comparison",
+        slug="jump_model_comparison",
+        suite="vol_suite",
+        category="pricing",
+        run=_run_jump_model_comparison,
+        cli_entry=None,
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker_expiry"),
+        description=(
+            "Calibrate the whole model zoo (VG, Heston, Bates, Kou, Merton) "
+            "on one chain and rank by RMSE in IV space."
+        ),
+        inputs=InputSpec(ticker="required", expiry="optional"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
+    ),
+    ModuleSpec(
+        name="GARCH(1,1)",
+        slug="garch",
+        suite="vol_suite",
+        category="metrics",
+        run=_run_garch,
+        cli_entry="Vol_Suite/garch_analysis.py",
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="ticker"),
+        description=(
+            "GARCH(1,1) conditional volatility; the vol VaR reads back from "
+            "the Context Store instead of a flat 0.25 fallback."
+        ),
+        inputs=InputSpec(ticker="required"),
+        output_kind="metrics",
+        sample={"ticker": "SPY"},
+        params=(
+            ParamSpec(
+                name="jump_filter",
+                label="Filter jump days before fitting",
+                kind="bool",
+                default=False,
+                help=(
+                    "Winsorize jump-attributable days out of the return "
+                    "series so the fit reflects diffusive clustering only."
+                ),
+            ),
+            ParamSpec(
+                name="jump_filter_model",
+                label="Jump filter model",
+                kind="choice",
+                default="Merton",
+                choices=_DIFFUSIVE_SIGMA_MODELS,
+                help=(
+                    "Supplies the diffusive sigma used as the jump-detection "
+                    "threshold. Only models with a constant sigma qualify."
+                ),
+            ),
+            ParamSpec(
+                name="jump_adjust_forecast",
+                label="Adjust forecast by jump share",
+                kind="bool",
+                default=False,
+                help=(
+                    "Scale the conditional-vol forecast by Bates' "
+                    "option-implied jump-variance share."
+                ),
+            ),
+        ),
+    ),
+    ModuleSpec(
+        name="Correlation Matrix",
+        slug="correlation_matrix",
+        suite="vol_suite",
+        category="metrics",
+        run=_run_correlation_matrix,
+        cli_entry="Vol_Suite/correlation_engine.py",
+        default_selected=False,
+        requires=[],
+        archive=ArchiveHint(key_shape="global"),
+        description=(
+            "Correlation + covariance matrix, per-name vol/beta and basket "
+            "vol/beta/Sharpe/diversification over the scope basket. Writes "
+            "correlation_matrix / covariance_matrix / volatilities to the "
+            "Context Store, which is what VaR's corr_sim and mc_sim read "
+            "instead of falling back to an identity matrix at a flat 0.25."
+        ),
+        inputs=InputSpec(ticker="optional", basket="required"),
+        output_kind="metrics",
+        sample={"basket": ["SPY", "QQQ", "IWM"]},
+        params=(
+            ParamSpec(
+                name="period",
+                label="History window",
+                kind="choice",
+                default="2y",
+                choices=("6m", "1y", "2y", "5y"),
+                help="Price history the returns are estimated over.",
+            ),
+            ParamSpec(
+                name="market",
+                label="Market proxy (beta)",
+                kind="text",
+                default="SPY",
+                help="Benchmark each name's beta is measured against.",
+            ),
+        ),
     ),
 ]

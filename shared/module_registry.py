@@ -27,6 +27,7 @@ HOW A LATER PHASE ADDS A REAL MODULE
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -68,6 +69,35 @@ class InputSpec:
     ticker: str = "none"
     expiry: str = "none"
     basket: str = "none"
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    """One module-specific option, rendered as a control on the widget card.
+
+    Scope (ticker/expiry/basket) is shared page-wide and declared by
+    InputSpec; a ParamSpec is the opposite -- a knob that belongs to one
+    module and no other, and that a caller passes under ``params`` (the
+    dashboard's ``POST /api/widgets/{slug}/run`` body, or just a key in the
+    context dict for a scripted call).
+
+    Added because several modules already accepted meaningful options that
+    had no way to reach them from the UI: GARCH takes the jump-filter inputs
+    from ``jump_diffusion/garch_bridge.py``, and the variance-swap pricer can
+    fit a companion jump model, but a widget card could only ever run them at
+    their defaults.
+
+    kind:    "bool" | "choice" | "number" | "text"
+    choices: allowed values when kind == "choice" (first is not implicitly
+             the default -- state `default` explicitly)
+    """
+
+    name: str
+    label: str
+    kind: str = "bool"
+    default: Any = None
+    choices: tuple[str, ...] = ()
+    help: str = ""
 
 
 @dataclass(frozen=True)
@@ -151,12 +181,26 @@ class ModuleSpec:
     inputs: InputSpec = field(default_factory=InputSpec)
     output_kind: str = "metrics"
     sample: dict[str, Any] = field(default_factory=dict)
+    params: tuple[ParamSpec, ...] = ()
+    #: False for a slug that exists only so a UI can *select* it as part of a
+    #: larger pipeline run -- its own run() raises. Such a module must not be
+    #: offered as an addable tool card, since clicking Run can only ever
+    #: produce a NotImplementedError.
+    runnable: bool = True
 
 
 # Suites whose module_registry.py::MODULES lists get aggregated by
 # all_modules(). Kept as a plain tuple of importable module names (not
 # imports at module scope) so a broken/missing suite registry can't crash
 # import of shared.module_registry itself -- see _suite_modules() below.
+logger = logging.getLogger(__name__)
+
+# Why a suite's registry failed to import, keyed by dotted name. Populated by
+# _suite_modules() on every call. Read it when the catalog looks short -- a
+# suite that fails to import contributes ZERO modules and used to do so with
+# no trace at all.
+SUITE_IMPORT_ERRORS: dict[str, str] = {}
+
 _SUITE_REGISTRY_MODULES: tuple[str, ...] = (
     "Vol_Suite.module_registry",
     "sentiment-scanner.module_registry",
@@ -181,10 +225,26 @@ def _suite_modules() -> list[ModuleSpec]:
         # plain package names alike).
         try:
             mod = importlib.import_module(dotted_name)
-        except Exception:
-            # Defensive by design: a suite's registry may not exist yet, or
-            # may be broken, without that hiding every other suite's modules.
+        except Exception as exc:
+            # Still defensive by design -- one suite's broken registry must not
+            # hide the other three. But NOT silent any more: swallowing this
+            # bare meant a flat-import collision could drop an entire suite
+            # from the catalog with no trace. Concretely: Options_Suite and
+            # Vol_Suite BOTH ship an `expiry_selector.py` and only Vol_Suite's
+            # defines DEFAULT_A, so if Options_Suite precedes Vol_Suite on
+            # sys.path, Vol_Suite's registry raises AttributeError here and all
+            # 19 of its modules -- expiry_exposure, garch, correlation_matrix,
+            # the surface_* set -- vanish from GET /api/widgets/catalog, with
+            # resolve_modules() reporting only "Unknown module slug".
+            SUITE_IMPORT_ERRORS[dotted_name] = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "module registry: suite %s failed to import (%s: %s); "
+                "its modules are MISSING from the catalog",
+                dotted_name, type(exc).__name__, exc,
+            )
             continue
+        else:
+            SUITE_IMPORT_ERRORS.pop(dotted_name, None)
         suite_modules = getattr(mod, "MODULES", None)
         if suite_modules:
             modules.extend(suite_modules)
@@ -220,6 +280,10 @@ def from_tool_spec(tool_spec: ToolSpec) -> ModuleSpec:
         inputs=InputSpec(),
         output_kind="metrics",
         sample={},
+        # Carry the tool's own knobs through. Without this a ToolSpec that
+        # declares params is adapted into a ModuleSpec with none, and the
+        # card renders no controls for options its run() requires.
+        params=tuple(getattr(tool_spec, "params", ()) or ()),
     )
 
 
@@ -231,7 +295,7 @@ def _tool_modules() -> list[ModuleSpec]:
 
 def _dashboard_cache_modules() -> list[ModuleSpec]:
     """Dashboard's cache-backed widgets: positions, signals, position_analysis, surfaces.
-    
+
     These are written by background jobs and agent pushes, not by the generic
     widget run API. We include them in all_modules() so resolve_modules() works
     for POST /api/widgets/{slug}/run, but they're registered via dashboard's
@@ -239,6 +303,7 @@ def _dashboard_cache_modules() -> list[ModuleSpec]:
     """
     try:
         from dashboard.cache_widgets import CACHE_WIDGET_SPECS
+
         return CACHE_WIDGET_SPECS
     except Exception:
         return []

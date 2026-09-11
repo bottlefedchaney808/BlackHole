@@ -65,10 +65,21 @@ class ToolSpec:
     run: Callable[[dict[str, Any]], dict[str, Any]]
     suite: str = "tools"
     category: str = "tool"
+    # Tool-specific knobs, rendered as controls wherever this tool appears.
+    #
+    # ModuleSpec has had `params` since the ParamSpec system landed; ToolSpec
+    # did not, so an adapted Tools/ entry reached the UI with no controls at
+    # all no matter how many options its run() accepted. The backtesting tool
+    # is the clearest case: it dispatches five genuinely different backtests
+    # on `context['mode']` and has no default, so from a card it could only
+    # ever raise "unknown mode". Typed as Any to keep this module free of a
+    # shared.module_registry import -- that module imports ToolSpec (under
+    # TYPE_CHECKING) and a real import here would close the cycle.
+    params: tuple[Any, ...] = ()
 
 
 TOOL_SPEC_FIELDS = {
-    "name", "slug", "description", "run", "suite", "category"
+    "name", "slug", "description", "run", "suite", "category", "params"
 }
 
 

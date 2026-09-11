@@ -33,9 +33,10 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 import uuid
-from pathlib import Path
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -46,7 +47,6 @@ from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from starlette.concurrency import run_in_threadpool
 
 from dashboard.tunnel import TunnelManager, TunnelStartError, TunnelUnavailable
 
@@ -71,7 +71,6 @@ from dashboard import (
     worker_worktree,
 )
 from dashboard.layouts import router as layouts_router
-from dashboard.quant_console_agent import router as quant_console_agent_router
 from dashboard.output_runs import (
     SUITE_LABELS,
     build_file_view,
@@ -79,13 +78,12 @@ from dashboard.output_runs import (
     discover_runs,
     get_run,
 )
-from dashboard.cache_widgets import CACHE_WIDGET_SPECS
-from dashboard.quant_modules import MODULE_REGISTRY
+from dashboard.quant_console_agent import router as quant_console_agent_router
 from dashboard.widget_cache import WidgetCache
 from dashboard.worker_env import build_worker_env
 from shared.logging import setup_logging
 from Tools.context_loader import list_available_contexts, load_context
-from Tools.registry import TOOLS, get_tool
+from Tools.registry import get_tool
 
 
 # --------------------------------------------------------------------------#
@@ -126,7 +124,6 @@ def _get_unified_module_groups() -> list[tuple[str, list[dict[str, str]]]]:
         opts = sorted(groups[cat], key=lambda o: o["slug"])
         result.append((cat, opts))
     return result
-
 
 
 def _ensure_vol_suite_expiry_selector() -> None:
@@ -227,6 +224,33 @@ def _swaps_snapshot() -> dict[str, Any] | None:
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(DASHBOARD_DIR, "templates"))
 
+
+def _asset_version() -> str:
+    """Cache-busting token for the dashboard's own JS, from newest mtime.
+
+    The pages import their modules by fixed URL (`/static/js/quant-widget.js`),
+    so a browser that cached a copy keeps using it: a shipped JS fix stays
+    invisible in the page while being correct on the server -- which reads as
+    "the fix didn't work" rather than "the browser didn't ask". The
+    Cache-Control: no-cache on the static mount fixes this going forward;
+    stamping the import URLs with the newest source mtime also busts copies
+    already sitting in a browser cache from before that header existed.
+
+    Falls back to the process start time if the directory can't be walked.
+    """
+    newest = 0.0
+    js_dir = os.path.join(DASHBOARD_DIR, "static", "js")
+    try:
+        for entry in os.scandir(js_dir):
+            if entry.is_file():
+                newest = max(newest, entry.stat().st_mtime)
+    except OSError:
+        pass
+    return str(int(newest)) if newest else str(int(time.time()))
+
+
+TEMPLATES.env.globals["asset_v"] = _asset_version()
+
 tunnel_manager = TunnelManager()
 
 
@@ -278,9 +302,31 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+
+class _RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles that always makes the browser revalidate.
+
+    The dashboard's JS ships unversioned (`/static/js/quant-widget.js`, no
+    content hash in the filename) and StaticFiles sends only ETag /
+    Last-Modified with no Cache-Control. Browsers then apply a heuristic
+    freshness window and serve the old file from cache without asking -- which
+    is why an edited widget renderer can be live on the server and still not
+    visible in the page after a reload, making a real fix look like it did not
+    land. `no-cache` does not mean "don't cache": the file is still cached, the
+    browser just has to revalidate, and the existing ETag turns that into a
+    cheap 304.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
 app.mount(
     "/static",
-    StaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")),
+    _RevalidatingStaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")),
     name="static",
 )
 
@@ -553,20 +599,97 @@ def _widget_position_analysis_tick() -> None:
     _widget_cache().set("position_analysis", {"positions": rows}, status="ok")
 
 
-def _widget_surfaces_tick() -> None:
-    """Widget 4: IV, Vanna, Charm surfaces on SPX, dark-themed, base64-encoded
-    into the cache payload (small enough at one ticker / three PNGs -- no
-    need for a separate asset store).
+# Fallback underlying for the desk's surfaces panel when there is no book to
+# pick from. "SPXW" not "SPX": on this ThetaData feed SPX's actual listed
+# options chain is rooted under SPXW -- plain "SPX" resolves a real index
+# price but has no options-chain data behind it (see OVERVIEW_WATCHLIST).
+SURFACES_FALLBACK_TICKER = "SPXW"
 
-    Uses root "SPXW", not "SPX" -- see OVERVIEW_WATCHLIST's comment: SPX's
-    actual listed options chain on this ThetaData feed is rooted under
-    SPXW, confirmed live (plain "SPX" has a real index price but no
-    options-chain data behind it)."""
+# Override to pin the surfaces panel to one name regardless of the book.
+SURFACES_TICKER_OVERRIDE = os.environ.get("WIDGET_SURFACES_TICKER", "").strip().upper()
+
+
+def _surfaces_subject() -> tuple[str, str, list[dict[str, Any]]]:
+    """Which underlying the desk's surfaces panel should model.
+
+    This panel used to be hardcoded to SPXW, which made it the one status
+    card on the desk that could never be about anything you actually hold --
+    a permanent index surface sitting next to your book. It now models the
+    largest single position in that book by absolute market value, which is
+    the name whose surface is most worth a glance, and reports the whole
+    portfolio's weighting alongside so the choice is visible rather than
+    implied.
+
+    Falls back to SPXW (never to nothing) when the book is empty, unpriced,
+    or entirely in names with no listed chain.
+
+    Returns (ticker, reason, portfolio_rows).
+    """
+    if SURFACES_TICKER_OVERRIDE:
+        return (
+            SURFACES_TICKER_OVERRIDE,
+            f"pinned by WIDGET_SURFACES_TICKER={SURFACES_TICKER_OVERRIDE}",
+            [],
+        )
+
+    cached = _widget_cache().get("positions")
+    positions = (cached.get("payload") or {}).get("positions") or [] if cached else []
+
+    by_ticker: dict[str, float] = {}
+    for row in positions:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").strip().upper()
+        value = row.get("market_value")
+        if not ticker or value in (None, ""):
+            continue
+        try:
+            by_ticker[ticker] = by_ticker.get(ticker, 0.0) + abs(float(value))
+        except (TypeError, ValueError):
+            continue
+
+    if not by_ticker:
+        return (
+            SURFACES_FALLBACK_TICKER,
+            "no priced positions in the book -- showing the index",
+            [],
+        )
+
+    total = sum(by_ticker.values()) or 1.0
+    rows = sorted(
+        (
+            {
+                "ticker": t,
+                "market_value": round(v, 2),
+                "weight_pct": round(100.0 * v / total, 2),
+            }
+            for t, v in by_ticker.items()
+        ),
+        key=lambda r: -r["market_value"],
+    )
+    top = rows[0]
+    return (
+        top["ticker"],
+        f"largest position ({top['weight_pct']:.1f}% of a "
+        f"{len(rows)}-name book)",
+        rows,
+    )
+
+
+def _widget_surfaces_tick() -> None:
+    """Widget 4: IV, Vanna and Charm surfaces for a name you actually hold.
+
+    Dark-themed, base64-encoded into the cache payload (small enough at one
+    ticker / three PNGs -- no need for a separate asset store). The subject is
+    chosen by `_surfaces_subject`; the payload carries both the reason it was
+    chosen and the portfolio weights it was chosen from, so the card can say
+    what it is looking at instead of presenting one surface as the book's.
+    """
     import base64
 
     from Tools.tools import surface_explorer_tool
 
-    ticker = "SPXW"
+    ticker, reason, portfolio = _surfaces_subject()
     specs = (
         ("iv", {"mode": "iv_surface_market"}),
         ("vanna", {"mode": "greek_surface", "greek": "vanna"}),
@@ -597,7 +720,14 @@ def _widget_surfaces_tick() -> None:
         else:
             surfaces[key] = {"image_b64": None, "status": "no_chart"}
     _widget_cache().set(
-        "surfaces", {"ticker": ticker, "surfaces": surfaces}, status="ok"
+        "surfaces",
+        {
+            "ticker": ticker,
+            "subject_reason": reason,
+            "portfolio": portfolio,
+            "surfaces": surfaces,
+        },
+        status="ok",
     )
 
 
@@ -767,6 +897,12 @@ async def _parse_body(request: Request) -> dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
+    """The desk page: book-driven scope, status panels, scoped tool cards.
+
+    Carries the alerts contract the retired Quant Console route used to own
+    (`alerts` = pending `quant_alerts` rows, `alert_status` = the last-checked
+    heartbeat) -- merging the two surfaces must not drop the banner.
+    """
     runs, runs_error = _orchestrator_runs(limit=20)
 
     return TEMPLATES.TemplateResponse(
@@ -779,6 +915,8 @@ def home(request: Request):
             "runs": runs,
             "runs_error": runs_error,
             "suites": SUITE_LABELS,
+            "alerts": _fetch_pending_alerts(DB_PATH),
+            "alert_status": _read_alert_status(),
         },
     )
 
@@ -827,6 +965,69 @@ def dealer_book(request: Request):
     )
 
 
+# --------------------------------------------------------------------------
+# The three panel tabs: Volatility, Models, Sentiment.
+#
+# Each is a bespoke page over `dashboard/panels.py`, for the reason the
+# Dealer Book tab is bespoke: a generic card renders whatever a module
+# returns, and several of the most-wanted modules return nothing renderable
+# (see panels.py's docstring). These pages instead ask the server for a
+# result that is guaranteed to carry either a chart or a real table.
+#
+# They share one scope bar and one page-global sync bus, exactly like the
+# desk -- scope is entered once, and normally comes from the book.
+# --------------------------------------------------------------------------
+
+
+def _panel_page(request: Request, tab: str, template: str) -> HTMLResponse:
+    from dashboard.panels import panels_for_tab
+
+    return TEMPLATES.TemplateResponse(
+        request,
+        template,
+        {
+            "active": tab,
+            "tab": tab,
+            "panels": [p.to_json() for p in panels_for_tab(tab)],
+        },
+    )
+
+
+@app.get("/volatility", response_class=HTMLResponse)
+def volatility_tab(request: Request):
+    """Everything that estimates or prices volatility itself.
+
+    Replaces the Suite output tab in the nav. GARCH, the jump-model zoo, the
+    variance-swap replication, VRP, SVI and all four surfaces on one scope --
+    the surfaces in particular render here for the first time, because this
+    page asks for the PNG the surface modules never drew.
+    """
+    return _panel_page(request, "volatility", "volatility.html")
+
+
+@app.get("/models", response_class=HTMLResponse)
+def models_tab(request: Request):
+    """Options_Suite: pricing one contract every way, and finding mispricings.
+
+    Reads the Volatility tab's results out of the Context Store rather than
+    recomputing them -- a Heston MC that can start from an already-calibrated
+    fit should not pay for the calibration twice.
+    """
+    return _panel_page(request, "models", "models.html")
+
+
+@app.get("/sentiment", response_class=HTMLResponse)
+def sentiment_tab(request: Request):
+    """What people are saying, and whether the options market agrees.
+
+    Two halves: the scanners (GEX, unusual OI, IV rank, skew, max pain, vol
+    dispersion, earnings, VRP) and the context they should be read against --
+    the screener's focus tickers, the position book, and the shelf of scan
+    notes (morning scans, X/Twitter buzz, reddit, rumor watchlists).
+    """
+    return _panel_page(request, "sentiment", "sentiment.html")
+
+
 @app.post("/dealer-book/load")
 async def dealer_book_load(request: Request):
     body = await _parse_body(request)
@@ -845,7 +1046,6 @@ async def dealer_book_load(request: Request):
     os.makedirs(context["output_dir"], exist_ok=True)
 
     try:
-        from orchestrator import run_selected_modules
 
         def _arts(side):
             """ArtifactRef dataclasses -> plain dicts for JSONResponse
@@ -854,9 +1054,7 @@ async def dealer_book_load(request: Request):
                 {"path": a.path, "kind": a.kind}
                 for a in (side.get("artifacts") or [])
                 if hasattr(a, "path")
-            ] or [
-                a for a in (side.get("artifacts") or []) if isinstance(a, dict)
-            ]
+            ] or [a for a in (side.get("artifacts") or []) if isinstance(a, dict)]
 
         # Method A (whole-chain exposure on the selected expiry) runs via
         # the module; its ProductionDealerExposure result is needed below
@@ -876,12 +1074,10 @@ async def dealer_book_load(request: Request):
 
         res_b = resolve_modules(["position_book"])[0].run(context)
         if res_b.status != "ok":
-            raise RuntimeError(
-                f"position_book failed: {res_b.metrics.get('error')}"
-            )
+            raise RuntimeError(f"position_book failed: {res_b.metrics.get('error')}")
         from Vol_Suite.dealer_position_book import (
-            load_history_days,
             accumulate_position_book,
+            load_history_days,
         )
 
         lookback = int(context.get("lookback") or 150)
@@ -901,7 +1097,9 @@ async def dealer_book_load(request: Request):
         for g in ("gamma", "delta", "vanna", "charm"):
             try:
                 b_greeks[g] = plot_flow_book_single_greek(
-                    prod, book.position_by_strike, g,
+                    prod,
+                    book.position_by_strike,
+                    g,
                     output_dir=context["output_dir"],
                 )
             except Exception:
@@ -910,8 +1108,10 @@ async def dealer_book_load(request: Request):
                 )
 
         b_metrics = res_b.metrics or {}
-        side_a = {"artifacts": a_result.artifacts,
-                  "interp": a_result.metrics.get("interp", "")}
+        side_a = {
+            "artifacts": a_result.artifacts,
+            "interp": a_result.metrics.get("interp", ""),
+        }
         side_b = {
             "artifacts": res_b.artifacts,
             "interp": b_metrics.get("interp", "")
@@ -926,8 +1126,11 @@ async def dealer_book_load(request: Request):
         for a in _arts(side_a):
             name = os.path.basename(a["path"]).lower()
             tag = next(
-                (g for g in ("gamma", "delta", "vanna", "charm")
-                 if f"_dealer_book_{g}_" in name),
+                (
+                    g
+                    for g in ("gamma", "delta", "vanna", "charm")
+                    if f"_dealer_book_{g}_" in name
+                ),
                 None,
             )
             if tag:
@@ -935,32 +1138,59 @@ async def dealer_book_load(request: Request):
             else:
                 top_panel.append(a)
 
-        return JSONResponse({
-            "status": "ok",
-            "side_a": {
-                "artifacts": top_panel,
-                "interp": side_a.get("interp", ""),
-            },
-            "greeks": greeks,
-            "greeks_b": b_greeks,
-            "side_b": {
-                "artifacts": _arts(side_b),
-                "interp": side_b.get("interp", ""),
-            },
-        })
+        return JSONResponse(
+            {
+                "status": "ok",
+                "side_a": {
+                    "artifacts": top_panel,
+                    "interp": side_a.get("interp", ""),
+                },
+                "greeks": greeks,
+                "greeks_b": b_greeks,
+                "side_b": {
+                    "artifacts": _arts(side_b),
+                    "interp": side_b.get("interp", ""),
+                },
+            }
+        )
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+# Every directory a module is allowed to have written a servable artifact
+# into. `artifacts/` is where the Dealer Book tab's bespoke route writes; but
+# `run_selected_modules` mints `output_dir=<repo>/outputs/<run_id>/` for every
+# widget/panel run, so a chart-producing module (variance_swap, garch,
+# correlation_matrix, the surface panels) lands its PNG under outputs/ --
+# which this route used to reject with a 403. The card asked for the image,
+# the server refused it, and the chart rendered as a broken <img> with no
+# error anywhere. `Vol_Suite/outputs` covers a standalone suite run whose
+# charts someone wants to pull up here.
+FILE_SERVE_ROOTS = ("artifacts", "outputs", os.path.join("Vol_Suite", "outputs"))
+
+
 @app.get("/files")
 def files(path: str):
-    """Serve one artifact file for the Dealer Book tab (<img src>). Never
-    trusts `path` directly: it must resolve INSIDE the repo's artifacts/
-    tree (realpath check, no symlink/.. traversal escape)."""
-    root = os.path.realpath(os.path.join(ROOT, "artifacts"))
+    """Serve one artifact file (<img src>) for any tab.
+
+    Never trusts `path` directly: it must resolve INSIDE one of
+    FILE_SERVE_ROOTS (realpath check, so neither `..` nor a symlink can
+    escape the repo)."""
     target = os.path.realpath(path)
-    if os.path.commonpath([root, target]) != root:
-        raise HTTPException(status_code=403, detail="path outside artifacts/")
+    for rel in FILE_SERVE_ROOTS:
+        root = os.path.realpath(os.path.join(ROOT, rel))
+        if not os.path.isdir(root):
+            continue
+        try:
+            if os.path.commonpath([root, target]) == root:
+                break
+        except ValueError:
+            continue  # different drive on Windows -- not under this root
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="path outside " + "/, ".join(FILE_SERVE_ROOTS) + "/",
+        )
     if not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(target)
@@ -970,6 +1200,7 @@ def files(path: str):
 def dealer_book_history(ticker: str = "", expiry: str = ""):
     try:
         from shared import module_archive
+
         rows = module_archive.query(
             ticker=ticker or None,
             expiry=expiry or None,
@@ -977,7 +1208,12 @@ def dealer_book_history(ticker: str = "", expiry: str = ""):
             limit=50,
         )
         # filter to the two relevant slugs for this tab
-        relevant = [r for r in rows if r.get("module_slug") in ("expiry_exposure", "dealer_exposure", "position_book")]
+        relevant = [
+            r
+            for r in rows
+            if r.get("module_slug")
+            in ("expiry_exposure", "dealer_exposure", "position_book")
+        ]
         return JSONResponse({"rows": relevant})
     except Exception as exc:
         return JSONResponse({"error": str(exc), "rows": []}, status_code=500)
@@ -987,8 +1223,9 @@ def dealer_book_history(ticker: str = "", expiry: str = ""):
 @app.get("/api/widget/archived/{module_slug}")
 def widget_archived(module_slug: str):
     try:
-        from shared import module_archive
         from dashboard.widget_archive_renderer import render_widget
+        from shared import module_archive
+
         rows = module_archive.query(module_slug=module_slug, limit=1)
         if rows:
             return render_widget(module_slug, rows[0])
@@ -997,7 +1234,9 @@ def widget_archived(module_slug: str):
         return {"error": str(exc)}
 
 
-def _lookup_run(run_id: str) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
+def _lookup_run(
+    run_id: str,
+) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
     """Resolve one orchestrator_runs row by id (the runs history table).
 
     Phase 7: the former in-memory fast-poll run registry is gone, so there is no
@@ -1682,6 +1921,7 @@ async def ack_alert(alert_id: int):
 # routes.
 # --------------------------------------------------------------------------
 
+
 def _scope_key_for_context(context: dict[str, Any]) -> str:
     """Normalize a run context into the cache/Context-Store scope key.
 
@@ -1703,7 +1943,10 @@ def _artifact_to_dict(artifact: Any) -> dict[str, Any]:
     dealer_book_load helper's conversion)."""
     if isinstance(artifact, dict):
         return artifact
-    return {"path": getattr(artifact, "path", ""), "kind": getattr(artifact, "kind", "")}
+    return {
+        "path": getattr(artifact, "path", ""),
+        "kind": getattr(artifact, "kind", ""),
+    }
 
 
 @app.get("/api/widgets/catalog")
@@ -1731,22 +1974,112 @@ def widgets_catalog():
                 "sample": m.sample,
                 "default_selected": m.default_selected,
                 "requires": list(m.requires),
+                # Module-specific knobs the card renders as controls, and
+                # whether the slug can be run on its own at all (a
+                # selection-only pipeline marker cannot).
+                "params": [
+                    {
+                        "name": prm.name,
+                        "label": prm.label,
+                        "kind": prm.kind,
+                        "default": prm.default,
+                        "choices": list(prm.choices),
+                        "help": prm.help,
+                    }
+                    for prm in getattr(m, "params", ())
+                ],
+                "runnable": getattr(m, "runnable", True),
             }
         )
     return {"widgets": entries}
 
 
+def _seed_context_from_store(context: dict[str, Any]) -> list[str]:
+    """Pre-load everything previously computed for this scope into ``context``.
+
+    The Context Store was write-only from the dashboard's side until this
+    existed: ``POST /api/widgets/{slug}/run`` wrote each module's
+    ``context_patch`` in, and the only reader was ``GET /api/context``'s
+    provenance list, which shows key names and never values. So a module that
+    consumes another's output (``dealer_flow`` reading
+    ``dealer_exposure_result``, VaR reading vol stats) always saw an empty
+    context and reported "skipped" no matter how many siblings had already run.
+
+    Scopes are seeded broad-to-narrow so the most specific value wins, and an
+    explicit key already in ``context`` (i.e. sent in the request body) always
+    beats a stored one:
+
+        basket:...  ->  ticker:SPY  ->  ticker_expiry:SPY|2026-12-18
+
+    ``ticker:GLOBAL`` is seeded first and unconditionally: it is where the
+    position book lives (see ``POST /api/context/inject-positions``), which
+    every scope should be able to see.
+
+    Returns the list of keys actually seeded (for the run response's
+    ``context_seeded`` field, so the UI can show what a run was fed).
+    Never raises -- a Context-Store failure must not break a widget run.
+    """
+    seeded: list[str] = []
+    try:
+        from shared.context_store import Scope
+
+        store = _context_store()
+        candidates: list[dict[str, Any]] = [{"ticker": "GLOBAL"}]
+        basket = context.get("basket")
+        if basket:
+            candidates.append({"basket": basket})
+        ticker = context.get("ticker")
+        if ticker:
+            candidates.append({"ticker": ticker})
+            if context.get("expiry"):
+                candidates.append({"ticker": ticker, "expiry": context["expiry"]})
+
+        for scope_dict in candidates:
+            try:
+                entries = store.load(Scope.from_dict(scope_dict))
+            except Exception:
+                continue  # unusable scope (e.g. empty basket); try the next
+            for key, value in entries.items():
+                if key in context:
+                    continue  # an explicit request-body value always wins
+                context[key] = value
+                if key not in seeded:
+                    seeded.append(key)
+    except Exception:
+        logging.getLogger(__name__).exception("context seeding failed; running bare")
+    return seeded
+
+
 @app.post("/api/widgets/{slug}/run")
 async def run_widget(slug: str, request: Request):
-    """Resolve one module, run it synchronously on the body as context, write
-    the result to the scoped cache and any context_patch to the Context Store,
-    and return the ModuleResult JSON. Unknown slug -> 404. Module-level
-    failures surface as status=error/failed in the body, not a 500."""
-    from shared.module_registry import ModuleResult, resolve_modules
+    """Run one module (plus its ``requires`` dependencies) synchronously.
+
+    Execution goes through ``shared.module_execution.run_selected_modules`` --
+    the same entry point the orchestrator CLI uses -- rather than calling
+    ``spec.run(context)`` directly. Calling ``run()`` directly, which is what
+    this route used to do, skipped three things the contract promises:
+
+    * ``requires`` expansion and topological ordering, so ``dealer_flow``
+      (requires ``expiry_exposure``) returned ``status="skipped"`` forever
+      with a message explaining that its caller had failed to expand requires;
+    * ``context_patch`` merging between modules in one run;
+    * ``run_id`` / ``output_dir`` minting, so chart-producing modules fell back
+      to ``output_dir="."`` and dropped PNGs in the repo root.
+
+    Before the run, ``_seed_context_from_store`` loads prior results for this
+    scope into the context, which is what makes a widget's output usable by
+    the next widget instead of only by the provenance panel.
+
+    Every module executed (the requested one and any dependency pulled in) is
+    written to the scoped cache, so a dependency's own card shows its result
+    too. Unknown slug -> 404. Module-level failures surface as
+    status=error/failed in the body, not a 500.
+    """
+    from shared.module_registry import resolve_modules
 
     body = await _parse_body(request)
     try:
-        spec = resolve_modules([slug])[0]
+        resolve_modules([slug])
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except IndexError:
@@ -1764,54 +2097,77 @@ async def run_widget(slug: str, request: Request):
         context.update(scope_part)
         context.update(params_part)
     else:
-        context = body
+        context = dict(body)
+
+    # Scope key is computed from the caller's scope BEFORE seeding, so seeded
+    # keys can never change which cache row this run writes to.
+    scope_key = _scope_key_for_context(context)
+    seeded = _seed_context_from_store(context)
+
+    from starlette.concurrency import run_in_threadpool
+
+    from shared.module_execution import run_selected_modules
+
     try:
-        result = spec.run(context)
+        # Off the event loop: module runs are synchronous and can take minutes
+        # (a ThetaData chain pull, and now its `requires` dependencies too).
+        # Called inline, one widget run froze every other request on the
+        # dashboard -- including the sibling widgets on the same page -- for
+        # its whole duration.
+        run = await run_in_threadpool(run_selected_modules, [slug], context)
+        results = run.get("results") or {}
+        order = list(run.get("order") or [])
     except Exception as exc:  # defensive: a raw raise from a module run
-        result = ModuleResult(
-            status="error",
-            artifacts=[],
-            metrics={"error": str(exc)},
-            context_patch=None,
+        from shared.module_registry import ModuleResult
+
+        results = {
+            slug: ModuleResult(
+                status="error",
+                artifacts=[],
+                metrics={"error": str(exc)},
+                context_patch=None,
+            )
+        }
+        order = [slug]
+
+    # Cache every module this run executed, not just the requested one: a
+    # dependency pulled in by `requires` has its own card, and it should show
+    # the result it just produced rather than "not run yet".
+    cache = _widget_cache()
+    for ran_slug, ran_result in results.items():
+        cache.set_scoped(
+            ran_slug,
+            scope_key,
+            {
+                "artifacts": [
+                    _artifact_to_dict(a) for a in (ran_result.artifacts or [])
+                ],
+                "metrics": ran_result.metrics,
+            },
+            status=ran_result.status,
         )
 
-    scope_key = _scope_key_for_context(context)
-    cache = _widget_cache()
-    cache.set_scoped(
-        slug,
-        scope_key,
+    result = results.get(slug)
+    if result is None:  # pragma: no cover -- run_selected_modules always includes it
+        raise HTTPException(status_code=500, detail=f"no result for {slug!r}")
+
+    # run_selected_modules already persisted every context_patch to the store
+    # (shared/module_execution.py::_persist_context_patch_to_store), so this
+    # route no longer writes it a second time.
+    # _json_safe for the same reason the panel route uses it: one NaN in
+    # metrics turns the whole response into a 500 and the card renders nothing.
+    return _json_safe(
         {
+            "status": result.status,
+            "slug": slug,
+            "scope": scope_key,
             "artifacts": [_artifact_to_dict(a) for a in (result.artifacts or [])],
             "metrics": result.metrics,
-        },
-        status=result.status,
+            "context_patch": result.context_patch,
+            "ran": order,
+            "context_seeded": seeded,
+        }
     )
-
-    # Persist any context_patch into the Context Store (Phase 1), keyed by the
-    # same scope, so downstream widgets can read it back. A failure here must
-    # never 500 the run -- the widget result is still valid.
-    patch = result.context_patch
-    if patch:
-        try:
-            from shared.context_store import Scope
-
-            scope = Scope.from_dict(context)
-            store = _context_store()
-            for key, value in patch.items():
-                store.put(scope, key, value, source_slug=slug)
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "context_patch write failed for widget %s", slug
-            )
-
-    return {
-        "status": result.status,
-        "slug": slug,
-        "scope": scope_key,
-        "artifacts": [_artifact_to_dict(a) for a in (result.artifacts or [])],
-        "metrics": result.metrics,
-        "context_patch": result.context_patch,
-    }
 
 
 @app.get("/api/widgets/{slug}/state")
@@ -1854,8 +2210,20 @@ async def post_context_inject_positions(request: Request):
 
     # Write to context store (use a simple global scope with ticker)
     store = _context_store()
-    store.put({"ticker": "GLOBAL"}, "positions", {"positions": positions}, source_slug="positions", audit=False)
-    store.put({"ticker": "GLOBAL"}, "held_tickers", held_tickers, source_slug="positions", audit=False)
+    store.put(
+        {"ticker": "GLOBAL"},
+        "positions",
+        {"positions": positions},
+        source_slug="positions",
+        audit=False,
+    )
+    store.put(
+        {"ticker": "GLOBAL"},
+        "held_tickers",
+        held_tickers,
+        source_slug="positions",
+        audit=False,
+    )
 
     # Return the data that quant-widget.js will publish to syncBus
     return {
@@ -1863,6 +2231,130 @@ async def post_context_inject_positions(request: Request):
         "held_tickers": held_tickers,
         "positions_count": len(positions),
     }
+
+
+@app.get("/api/panels")
+def panels_catalog(tab: str | None = None):
+    """Panel metadata for one tab (or every tab). No run callables."""
+    from dashboard.panels import PANELS, panels_for_tab
+
+    specs = panels_for_tab(tab) if tab else list(PANELS)
+    return {"tab": tab, "panels": [p.to_json() for p in specs]}
+
+
+@app.post("/api/panels/{panel_id}/run")
+async def run_panel(panel_id: str, request: Request):
+    """Run one panel against the posted scope, seeded from the Context Store.
+
+    Same three guarantees as `POST /api/widgets/{slug}/run`, which is the
+    point -- a panel is a different presentation of the same execution path,
+    not a bypass of it:
+
+    * the context is seeded from the Context Store first, so a Models panel
+      sees the Volatility tab's GARCH/jump/variance results and a VaR tool
+      sees the correlation matrix;
+    * the work happens in a threadpool, because a chain pull takes minutes
+      and running it inline freezes every other request on the dashboard;
+    * a module-level failure comes back as status=failed in the body with the
+      reason attached, never as a 500 with nothing on the card.
+    """
+    from dashboard.panels import get_panel, panel_run_dir
+
+    spec = get_panel(panel_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown panel {panel_id!r}")
+
+    body = await _parse_body(request)
+    scope_part = body.get("scope") if isinstance(body.get("scope"), dict) else {}
+    params_part = body.get("params") if isinstance(body.get("params"), dict) else {}
+    context: dict[str, Any] = {
+        k: v for k, v in body.items() if k not in ("scope", "params")
+    }
+    context.update(scope_part)
+    context.update(params_part)
+    context["_tab"] = spec.tab
+    # A FRESH directory per run, not a shared per-tab one. Several suite
+    # entry points collect their output by listing output_dir and matching a
+    # filename prefix (garch_analysis.run_garch_module globs
+    # "{ticker}_garch_*.png"), so a shared directory makes every run return
+    # every earlier run's charts too -- confirmed live on SPY. See
+    # panels.panel_run_dir.
+    context.setdefault("output_dir", panel_run_dir(spec.tab, panel_id))
+
+    scope_key = _scope_key_for_context(context)
+    seeded = _seed_context_from_store(context)
+
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        result = await run_in_threadpool(spec.run, context)
+    except Exception as exc:  # defensive: a raw raise from a panel runner
+        logging.getLogger(__name__).exception("panel %s raised", panel_id)
+        result = {
+            "status": "failed",
+            "artifacts": [],
+            "metrics": {"error": f"{type(exc).__name__}: {exc}"},
+            "ran": [],
+        }
+
+    result = dict(result or {})
+    result.setdefault("status", "ok")
+    result.setdefault("artifacts", [])
+    result.setdefault("metrics", {})
+    result["panel"] = panel_id
+    result["title"] = spec.title
+    result["output_kind"] = spec.output_kind
+    result["scope"] = scope_key
+    result["context_seeded"] = seeded
+    return _json_safe(result)
+
+
+def _json_safe(value):
+    """Replace NaN / +-Inf with None so a result can be serialized.
+
+    Not cosmetic -- without it the route returns HTTP 500 and the card shows
+    nothing. `JSONResponse` calls json.dumps(allow_nan=False) and raises
+    "Out of range float values are not JSON compliant" on the first NaN, so
+    ONE non-finite number anywhere in `metrics` loses the whole payload.
+
+    This repo produces NaN deliberately: Vol_Suite's screener fix made missing
+    realized vol NaN (instead of a lying 0.0), and an SVI fit that cannot
+    solve a wing reports smile_a / smile_b as NaN. Those are real "no value"
+    signals, and `null` is exactly how JSON spells that -- so this preserves
+    the meaning rather than inventing a number. Confirmed live: the SVI Smile
+    panel 500'd on `smile_a: nan` while the fit itself was fine.
+    """
+    import math
+
+    if isinstance(value, float):
+        return None if (math.isnan(value) or math.isinf(value)) else value
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.get("/api/library")
+def library_index(shelf: str | None = None, ticker: str | None = None):
+    """The scan shelf: every markdown note, newest first, bucketed."""
+    from dashboard.panels import library_panel
+
+    result = library_panel({"shelf": shelf or "all", "ticker": ticker or ""})
+    return result["metrics"]
+
+
+@app.get("/api/library/note")
+def library_note(path: str):
+    """One note's markdown. Containment-checked against the library roots."""
+    from dashboard.panels import read_library_note
+
+    try:
+        return read_library_note(path)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="note not found")
 
 
 @app.get("/api/widgets/{widget_id}")
@@ -1889,30 +2381,18 @@ async def post_widget_positions(request: Request):
     return {"ok": True}
 
 
-@app.get("/quant", response_class=HTMLResponse)
-def quant_console(request: Request):
-    """Quant Console module-card view (Task 6 of the quant-console plan).
+@app.get("/quant")
+def quant_console():
+    """Folded into the desk page (GET /).
 
-    One card per `dashboard.quant_modules.MODULE_REGISTRY` entry -- this
-    route serves that list plus the shell markup. Run triggering/polling now
-    happens through the synchronous generic widget API (POST
-    /api/widgets/{slug}/run, /api/widgets/{slug}/state); the old dashboard
-    run-launch and run-tracking routes were removed in Phase 7.
-
-    Also carries `alerts` (Task 15's pending `quant_alerts` rows) and
-    `alert_status` (the last-checked heartbeat) into the template.
+    Overview and Quant Console had grown into two surfaces doing the same job
+    with different halves of the machinery: Overview held the cache-backed
+    status cards, Quant Console held the catalog and the run buttons, and
+    neither could see your positions. The desk page is the merge -- book at
+    the top as the scope source, catalog picker and tool cards below it -- so
+    this route redirects rather than serving a second, competing console.
     """
-    return TEMPLATES.TemplateResponse(
-        request,
-        "quant.html",
-        {
-            "active": "quant",
-            "modules": MODULE_REGISTRY,
-            "unified_module_groups": _get_unified_module_groups(),
-            "alerts": _fetch_pending_alerts(DB_PATH),
-            "alert_status": _read_alert_status(),
-        },
-    )
+    return RedirectResponse(url="/", status_code=307)
 
 
 @app.get("/suites/{suite}", response_class=HTMLResponse)
@@ -2132,11 +2612,9 @@ def _run_tool_safe(
 @app.get("/tools", response_class=HTMLResponse)
 @app.get("/tools/{path:path}", response_class=HTMLResponse)
 def tools_redirect(request: Request, path: str = ""):
-    """Redirect legacy /tools routes to Quant Console, where the generic
+    """Redirect legacy /tools routes to the desk page, where the generic
     widgets provide the same functionality via the widget system."""
-    # Build the redirect URL - add the path if provided
-    # All tools routes redirect to the main Quant Console page
-    return RedirectResponse(url="/quant")
+    return RedirectResponse(url="/")
 
 
 @app.get("/health")

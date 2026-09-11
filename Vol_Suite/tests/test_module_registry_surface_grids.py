@@ -96,7 +96,10 @@ class TestModuleSpecRegistration:
         # 10 as of Task 5, + 4 selection-only markers from Task 6
         # (group_screener/vol_surface_2d/vrp_term_structure/
         # sentiment_backtest) = 14.
-        assert len(vs_registry.MODULES) == 14
+        # >= not ==: this guards that Task 5's entries survive, not that
+        # the registry never grows. An exact count turned every later
+        # ModuleSpec addition into a failure here.
+        assert len(vs_registry.MODULES) >= 14
 
 
 class TestAllModulesAggregation:
@@ -134,7 +137,7 @@ class TestRepoRootImport:
             # surface_flow_strike_expiry) = 10, + 4 more from Task 6
             # (group_screener/vol_surface_2d/vrp_term_structure/
             # sentiment_backtest selection-only markers) = 14.
-            "assert len(m.MODULES) == 14, m.MODULES; "
+            "assert len(m.MODULES) >= 14, m.MODULES; "
             "assert {ms.slug for ms in m.MODULES} >= set("
             f"{sorted(_SURFACE_SLUGS)!r}); "
             "print('OK')"
@@ -183,7 +186,7 @@ class TestRepoRootImport:
             f"assert set({sorted(_ALL_TEN_SLUGS)!r}) <= slugs, slugs; "
             "import Vol_Suite.module_registry as m; "
             # 10 as of Task 5, + 4 selection-only markers from Task 6 = 14.
-            "assert len(m.MODULES) == 14, m.MODULES; "
+            "assert len(m.MODULES) >= 14, m.MODULES; "
             "print('OK')"
         )
         proc = subprocess.run(
@@ -452,8 +455,10 @@ class TestSurfaceFlowStrikeTimeRun:
         assert calls == ["20260828"]
 
     def test_build_failure_does_not_fake_success(self, monkeypatch):
+        """Fail-loud: a real build failure must never come back as ok."""
+
         def boom(ticker, td=None, session=None):
-            raise ValueError("no trades for 'SPY' on session 20260901")
+            raise ValueError("ThetaDataController has no option_session_trades")
 
         monkeypatch.setattr(vs_registry.surface_grids, "build_flow_strike_time", boom)
 
@@ -461,7 +466,32 @@ class TestSurfaceFlowStrikeTimeRun:
 
         assert out.status == "failed"
         assert out.status != "ok"
-        assert "no trades" in out.metrics["error"]
+        assert "option_session_trades" in out.metrics["error"]
+
+    def test_quiet_session_is_skipped_not_failed(self, monkeypatch):
+        """An empty session is a data condition, not a broken module.
+
+        `surface_grids` raises ValueError for both -- a missing controller
+        method (the test above) and a session with no trades in it (a
+        weekend, a holiday, before the open, a name that simply did not
+        trade). Painting both red teaches you to ignore the colour, so the
+        quiet case reports `skipped` with the reason attached.
+
+        Still not `ok`: the fail-loud guarantee is that a build failure never
+        looks like a successful build, and `skipped` does not.
+        """
+
+        def quiet(ticker, td=None, session=None):
+            raise ValueError("no trades for 'SPY' on session 20260901")
+
+        monkeypatch.setattr(vs_registry.surface_grids, "build_flow_strike_time", quiet)
+
+        out = vs_registry._run_surface_flow_strike_time({"ticker": "SPY"}, td=_FakeTD())
+
+        assert out.status == "skipped"
+        assert out.status != "ok"
+        assert "no trades" in out.metrics["message"]
+        assert out.context_patch is None
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +564,28 @@ class TestSurfaceFlowStrikeExpiryRun:
         assert out.status == "failed"
         assert out.status != "ok"
         assert "no listed expiries" in out.metrics["error"]
+
+    def test_quiet_session_is_skipped_not_failed(self, monkeypatch):
+        """Same split as the strike x time builder: a session with no flow in
+        it is `skipped` with a reason, while a genuinely broken build (the
+        test above -- no listed expiries at all) stays `failed`."""
+
+        def quiet(
+            ticker, td=None, session=None, max_expiries=12, min_dte=0, max_dte=60
+        ):
+            raise ValueError("no trades matched any of the 12 listed expiries")
+
+        monkeypatch.setattr(
+            vs_registry.surface_grids, "build_flow_strike_expiry", quiet
+        )
+
+        out = vs_registry._run_surface_flow_strike_expiry(
+            {"ticker": "SPY"}, td=_FakeTD()
+        )
+
+        assert out.status == "skipped"
+        assert out.status != "ok"
+        assert "no trades matched" in out.metrics["message"]
 
     def test_missing_ticker_fails_loud_not_silently(self):
         out = vs_registry._run_surface_flow_strike_expiry({})

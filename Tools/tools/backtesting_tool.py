@@ -55,6 +55,8 @@ if str(_VOL_SUITE_ROOT) not in sys.path:
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from shared.module_registry import ParamSpec
+
 from Tools.registry import ToolSpec  # noqa: E402
 
 _CHAIN_STRATEGIES_FILENAME = "chain_strategies.json"
@@ -736,4 +738,38 @@ TOOL_SPEC = ToolSpec(
         "(convention-free nets vs forward returns). Select via context['mode']."
     ),
     run=run,
+    # `mode` has no default in run() -- it dispatches five unrelated
+    # backtests and guessing one for you would silently run the wrong study.
+    # Declaring it as a choice is what lets a card ask instead of failing.
+    params=(
+        ParamSpec(
+            name="mode",
+            label="Backtest",
+            kind="choice",
+            default="dealer_gamma_study",
+            choices=(
+                "dealer_gamma_study",
+                "strategy_pnl",
+                "stock_strategy_backtest",
+                "option_strategy_backtest",
+                "broker_book_accuracy",
+            ),
+            help=(
+                "Which of the five backtests to run. These are independent "
+                "studies, not settings of one study."
+            ),
+        ),
+        ParamSpec(
+            name="sign_model",
+            label="Dealer sign model",
+            kind="choice",
+            default="live",
+            choices=("live", "legacy"),
+            help=(
+                "dealer_gamma_study only. 'live' is the production "
+                "expiry_book dealer-frame model; 'legacy' keeps the old "
+                "v1/v2 sign conventions for comparison."
+            ),
+        ),
+    ),
 )

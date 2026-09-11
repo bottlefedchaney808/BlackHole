@@ -6,6 +6,7 @@ Leisen-Reimer remains the default_selected pricing method per CLAUDE.md.
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,102 @@ if str(_OPTS_DIR) not in sys.path:
 
 from shared.module_registry import ArchiveHint, InputSpec, ModuleResult, ModuleSpec
 
+
 def _failed(exc: Exception) -> ModuleResult:
-    return ModuleResult(status="failed", artifacts=[], metrics={"error": str(exc)}, context_patch=None)
+    return ModuleResult(
+        status="failed", artifacts=[], metrics={"error": str(exc)}, context_patch=None
+    )
 
 
-def _extract_pricing_args(context: dict[str, Any]) -> tuple[str, float, float, float, float, float, bool, str]:
+_DEFAULT_TARGET_YEARS = 0.25
+
+
+def _years_to_expiry(expiry: Any) -> float:
+    """Year fraction to an expiry date, or the 3-month default.
+
+    Accepts the two forms scope carries: "YYYY-MM-DD" (what the scope bar
+    shows) and "YYYYMMDD" (what ThetaData uses). "auto", empty, or an
+    unparseable value falls back to `_DEFAULT_TARGET_YEARS` rather than
+    raising -- an unreadable expiry should cost you the exact maturity, not
+    the whole pricing run.
+    """
+    from datetime import date, datetime
+
+    text = str(expiry or "").strip()
+    if not text or text.lower() == "auto":
+        return _DEFAULT_TARGET_YEARS
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            parsed = datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+        days = (parsed - date.today()).days
+        # Same-day expiry is a real thing (0DTE); floor it so the pricers get
+        # a positive T instead of dividing by zero.
+        return max(days, 0.25) / 365.0
+    return _DEFAULT_TARGET_YEARS
+
+
+def _resolve_sigma(
+    context: dict[str, Any],
+    ticker: str,
+    K: float,
+    T: float,
+    option_type: str,
+    method: str,
+) -> tuple[float, str]:
+    """Solve sigma from live market data, the way main.py does.
+
+    Returns (sigma, provenance). `provenance` is "context" when the caller
+    supplied one, "<method>" when VolManager solved it from the chain, and
+    "fallback:0.25" when the solve failed.
+
+    Why this exists: CRR, Leisen-Reimer, BAW and MC each did
+    `sigma = float(context.get("sigma") or 0.25)`, so from a widget card --
+    which never supplies sigma -- every one of them priced at a flat 25%
+    vol and reported the result as a price. Not a wrong price for the wrong
+    reason; a price of a different option. `main.py::run_context_mode` has
+    always gone through `VolManager.get_sigma(..., method="LeisenReimer")`,
+    and VolManager deliberately raises rather than substituting a default
+    (see its own "NO FALLBACKS" comment), so a failure here is surfaced in
+    `sigma_source` instead of being laundered into the number.
+    """
+    supplied = context.get("sigma") or (context.get("focus") or {}).get("sigma")
+    if supplied:
+        return float(supplied), "context"
+    try:
+        from vol_manager import VolManager
+
+        sigma = float(
+            VolManager().get_sigma(ticker, K, T, method=method, option_type=option_type)
+        )
+        if sigma > 0:
+            return sigma, method
+    except Exception as exc:  # noqa: BLE001 -- reported, not swallowed
+        return 0.25, f"fallback:0.25 ({type(exc).__name__}: {exc})"
+    return 0.25, "fallback:0.25 (solver returned non-positive sigma)"
+
+
+def _first_set(*values: Any) -> Any:
+    """First value that is not None -- a legitimate 0.0 survives.
+
+    Deliberately NOT an `or` chain. `r` and `q` are routinely and correctly
+    zero (a non-dividend-paying name, a zero-rate scenario, a controlled
+    test), and `0.0 or fallback` silently discards the caller's number and
+    falls through to a live market fetch instead. That is how the
+    Newton-Raphson closed-loop test started recovering sigma=0.2570 from a
+    price generated at sigma=0.2500: an explicit `dividend_yield=0.0` was
+    dropped and replaced with SPY's live ~0.98% yield mid-solve.
+    """
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _extract_pricing_args(
+    context: dict[str, Any],
+) -> tuple[str, float, float, float, float, float, bool, str]:
     """Pull (ticker, S, K, T, r, q, is_call, option_type) from the context.
 
     Context may carry either flat keys or a nested ``focus`` block.  Any
@@ -30,26 +122,100 @@ def _extract_pricing_args(context: dict[str, Any]) -> tuple[str, float, float, f
     focus = context.get("focus") or {}
     ticker = str(context.get("ticker") or focus.get("ticker") or "").strip().upper()
     if not ticker:
-        raise ValueError("Options_Suite module requires context['ticker'] or context['focus']['ticker']")
+        raise ValueError(
+            "Options_Suite module requires context['ticker'] or context['focus']['ticker']"
+        )
 
-    S = float(context.get("spot") or focus.get("spot") or context.get("S") or focus.get("S") or 0.0)
+    # Everything below is fetched live when the caller did not supply it.
+    #
+    # These adapters used to demand that spot, strike AND target_years all
+    # arrive pre-filled in the context, and raise otherwise. Nothing in the
+    # widget path fills them: a card knows a ticker (and maybe an expiry), so
+    # every Options_Suite model failed on "No usable spot price for SPY; got
+    # S=0.0" before it priced anything -- all eight of them, always.
+    # `main.py::run_context_mode` has always fetched its own spot / rate /
+    # dividend and defaulted the strike to ATM; this is the same behaviour,
+    # so the two entry points agree instead of one being unusable.
+    _md = None
+
+    def market_data():
+        nonlocal _md
+        if _md is None:
+            from market_data import MarketDataController
+
+            _md = MarketDataController()
+        return _md
+
+    S = float(
+        context.get("spot")
+        or focus.get("spot")
+        or context.get("S")
+        or focus.get("S")
+        or 0.0
+    )
+    if S <= 0:
+        S = float(market_data().fetch_spot_price(ticker))
     if S <= 0:
         raise ValueError(f"No usable spot price for {ticker}; got S={S}")
 
-    K_raw = context.get("strike") or focus.get("strike") or context.get("K") or focus.get("K")
-    if K_raw is None:
-        raise ValueError(f"Options_Suite module requires context['strike'] (or focus.strike) for {ticker}")
-    K = float(K_raw)
-
-    T = context.get("target_years") or focus.get("target_years") or context.get("T") or focus.get("T")
+    T = (
+        context.get("target_years")
+        or focus.get("target_years")
+        or context.get("T")
+        or focus.get("T")
+    )
     if T is None:
-        raise ValueError(f"Options_Suite module requires context['target_years'] (or focus.target_years) for {ticker}")
+        T = _years_to_expiry(context.get("expiry") or focus.get("expiry"))
     T = float(T)
+    if T <= 0:
+        raise ValueError(f"Non-positive time to maturity for {ticker}: T={T}")
 
-    r = float(context.get("r") or context.get("risk_free_rate") or focus.get("r") or focus.get("risk_free_rate") or 0.05)
-    q = float(context.get("q") or context.get("dividend_yield") or focus.get("q") or focus.get("dividend_yield") or 0.0)
+    K_raw = (
+        context.get("strike")
+        or focus.get("strike")
+        or context.get("K")
+        or focus.get("K")
+    )
+    if K_raw is None:
+        # ATM by default, snapped to a listed strike -- the same default
+        # main.py uses when the context carries no strike.
+        K_raw = round(float(S), 2)
+    try:
+        K = float(
+            market_data().validate_strike(
+                ticker,
+                float(K_raw),
+                target_years=T,
+                expiration_date=(context.get("expiry") or focus.get("expiry") or None),
+            )["closest"]
+        )
+    except Exception:
+        # Strike validation needs a listed chain; without one, price the
+        # requested strike as given rather than losing the whole run.
+        K = float(K_raw)
 
-    option_type = str(context.get("option_type") or focus.get("option_type") or "call").strip().lower()
+    # _first_set, not `or`: a caller-supplied 0.0 rate / yield is a real
+    # number and must not fall through to a live fetch. See _first_set.
+    r = _first_set(
+        context.get("r"),
+        context.get("risk_free_rate"),
+        focus.get("r"),
+        focus.get("risk_free_rate"),
+    )
+    r = float(r) if r is not None else float(market_data().fetch_risk_free_rate(T=T))
+    q = _first_set(
+        context.get("q"),
+        context.get("dividend_yield"),
+        focus.get("q"),
+        focus.get("dividend_yield"),
+    )
+    q = float(q) if q is not None else float(market_data().fetch_dividend_yield(ticker))
+
+    option_type = (
+        str(context.get("option_type") or focus.get("option_type") or "call")
+        .strip()
+        .lower()
+    )
     is_call = option_type == "call"
 
     return ticker, S, K, T, r, q, is_call, option_type
@@ -57,15 +223,23 @@ def _extract_pricing_args(context: dict[str, Any]) -> tuple[str, float, float, f
 
 def _run_crr(context: dict[str, Any]) -> ModuleResult:
     try:
-        from american_binomial import crr_american_price, crr_all_greeks
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
-        sigma = float(context.get("sigma") or 0.25)
+        from american_binomial import crr_all_greeks, crr_american_price
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
+        sigma, sigma_source = _resolve_sigma(context, ticker, K, T, option_type, "CRR")
         price = float(crr_american_price(S, K, T, r, sigma, q, is_call))
         greeks = crr_all_greeks(S, K, T, r, sigma, q, is_call)
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "crr", "price": price, "greeks": greeks, "sigma": sigma},
+            metrics={
+                "ticker": ticker,
+                "model": "crr",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+            },
             context_patch=None,
         )
     except Exception as exc:
@@ -75,14 +249,24 @@ def _run_crr(context: dict[str, Any]) -> ModuleResult:
 def _run_leisen_reimer(context: dict[str, Any]) -> ModuleResult:
     try:
         from american_binomial import leisen_reimer_american_price, lr_all_greeks
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
-        sigma = float(context.get("sigma") or 0.25)
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
+        sigma, sigma_source = _resolve_sigma(
+            context, ticker, K, T, option_type, "LeisenReimer"
+        )
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
         greeks = lr_all_greeks(S, K, T, r, sigma, q, is_call)
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "leisen_reimer", "price": price, "greeks": greeks, "sigma": sigma},
+            metrics={
+                "ticker": ticker,
+                "model": "leisen_reimer",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+            },
             context_patch=None,
         )
     except Exception as exc:
@@ -93,20 +277,29 @@ def _run_newton_raphson_iv(context: dict[str, Any]) -> ModuleResult:
     try:
         from american_binomial import leisen_reimer_american_price, lr_all_greeks
         from NewtonRaphsonIV import implied_volatility_nr_american
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
         market_price = float(context.get("market_price") or context.get("price") or 0.0)
         if market_price <= 0:
             raise ValueError("Newton-Raphson IV requires context['market_price'] > 0")
         seed = float(context.get("seed") or 0.2)
-        sigma, converged = implied_volatility_nr_american(market_price, S, K, T, r, is_call, q=q, seed=seed)
+        sigma, converged = implied_volatility_nr_american(
+            market_price, S, K, T, r, is_call, q=q, seed=seed
+        )
+        sigma_source = "newton_raphson_iv (solved from the market price)"
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
         greeks = lr_all_greeks(S, K, T, r, sigma, q, is_call)
         return ModuleResult(
             status="ok",
             artifacts=[],
             metrics={
-                "ticker": ticker, "model": "newton_raphson_iv", "price": price,
-                "greeks": greeks, "sigma": sigma, "converged": converged,
+                "ticker": ticker,
+                "model": "newton_raphson_iv",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+                "converged": converged,
             },
             context_patch=None,
         )
@@ -116,15 +309,23 @@ def _run_newton_raphson_iv(context: dict[str, Any]) -> ModuleResult:
 
 def _run_baw(context: dict[str, Any]) -> ModuleResult:
     try:
-        from barone_adesi_whaley import baw_american_price, baw_all_greeks
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
-        sigma = float(context.get("sigma") or 0.25)
+        from barone_adesi_whaley import baw_all_greeks, baw_american_price
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
+        sigma, sigma_source = _resolve_sigma(context, ticker, K, T, option_type, "BAW")
         price = float(baw_american_price(S, K, T, r, sigma, q, is_call))
         greeks = baw_all_greeks(S, K, T, r, sigma, q, is_call)
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "baw", "price": price, "greeks": greeks, "sigma": sigma},
+            metrics={
+                "ticker": ticker,
+                "model": "baw",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+            },
             context_patch=None,
         )
     except Exception as exc:
@@ -134,19 +335,51 @@ def _run_baw(context: dict[str, Any]) -> ModuleResult:
 def _run_mc(context: dict[str, Any]) -> ModuleResult:
     try:
         from MC import AmericanLSMPricer, mc_all_greeks
+
         from Options_Suite.config import PricingConfig
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
-        sigma = float(context.get("sigma") or 0.25)
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
+        sigma, sigma_source = _resolve_sigma(
+            context, ticker, K, T, option_type, "LeisenReimer"
+        )
         cfg = PricingConfig()
         sims = int(context.get("simulations") or cfg.simulations)
         steps = int(context.get("steps") or cfg.steps)
-        pricer = AmericanLSMPricer(S, K, T, r, q, sigma, simulations=sims, steps=steps, option="call" if is_call else "put")
+        pricer = AmericanLSMPricer(
+            S,
+            K,
+            T,
+            r,
+            q,
+            sigma,
+            simulations=sims,
+            steps=steps,
+            option="call" if is_call else "put",
+        )
         price = pricer.price()
-        greeks = mc_all_greeks(S, K, T, r, q, sigma, sims=sims, steps=steps, option="call" if is_call else "put", seed=42)
+        greeks = mc_all_greeks(
+            S,
+            K,
+            T,
+            r,
+            q,
+            sigma,
+            sims=sims,
+            steps=steps,
+            option="call" if is_call else "put",
+            seed=42,
+        )
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "mc", "price": price, "greeks": greeks, "sigma": sigma},
+            metrics={
+                "ticker": ticker,
+                "model": "mc",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+            },
             context_patch=None,
         )
     except Exception as exc:
@@ -155,25 +388,43 @@ def _run_mc(context: dict[str, Any]) -> ModuleResult:
 
 def _run_sabr(context: dict[str, Any]) -> ModuleResult:
     try:
-        from SABRModel import SABRModel, sabr_all_greeks
         from american_binomial import leisen_reimer_american_price
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
+        from SABRModel import SABRModel, sabr_all_greeks
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
         calibration = context.get("sabr_calibration") or context.get("calibration")
         if not calibration:
-            raise ValueError("SABR module requires context['sabr_calibration'] with alpha/beta/rho/nu")
+            raise ValueError(
+                "SABR module requires context['sabr_calibration'] with alpha/beta/rho/nu"
+            )
         alpha = float(calibration["alpha"])
         beta = float(calibration["beta"])
         rho = float(calibration["rho"])
         nu = float(calibration["nu"])
         model = SABRModel(alpha=alpha, beta=beta, rho=rho, nu=nu)
-        F = S * np.exp((r - q) * T) if "numpy" in globals() else S * __import__("numpy").exp((r - q) * T)
+        # Plain math.exp on a scalar. This was a `np.exp(...) if "numpy" in
+        # globals() else __import__("numpy").exp(...)` ternary whose first
+        # branch could never run -- the module imports numpy as `np`, so the
+        # name "numpy" is never a global -- and which would have raised
+        # NameError on `np` the moment anyone added a module-level
+        # `import numpy`. F is one float here; there is nothing to vectorize.
+        F = S * math.exp((r - q) * T)
         sigma = model.get_vol(F, K, T)
+        sigma_source = "sabr (calibrated smile)"
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
         greeks = sabr_all_greeks(S, K, T, r, q, is_call, calibration)
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "sabr", "price": price, "greeks": greeks, "sigma": sigma, "params": calibration},
+            metrics={
+                "ticker": ticker,
+                "model": "sabr",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+                "params": calibration,
+            },
             context_patch=None,
         )
     except Exception as exc:
@@ -182,21 +433,32 @@ def _run_sabr(context: dict[str, Any]) -> ModuleResult:
 
 def _run_vanna_volga(context: dict[str, Any]) -> ModuleResult:
     try:
-        from VannaVolga import get_vol, vv_all_greeks
         from american_binomial import leisen_reimer_american_price
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
+        from VannaVolga import get_vol, vv_all_greeks
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
         atm_vol = float(context.get("atm_vol") or context.get("sigma") or 0.0)
         rr25 = float(context.get("rr25") or 0.0)
         bf25 = float(context.get("bf25") or 0.0)
         if atm_vol <= 0:
             raise ValueError("Vanna-Volga requires context['atm_vol'] > 0")
         sigma = get_vol(S, K, T, r, q, atm_vol, rr25, bf25)
+        sigma_source = "vanna_volga (from atm_vol/rr25/bf25)"
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
-        greeks = vv_all_greeks(S, K, T, r, q, is_call, atm_vol=atm_vol, rr25=rr25, bf25=bf25)
+        greeks = vv_all_greeks(
+            S, K, T, r, q, is_call, atm_vol=atm_vol, rr25=rr25, bf25=bf25
+        )
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "vanna_volga", "price": price, "greeks": greeks, "sigma": sigma},
+            metrics={
+                "ticker": ticker,
+                "model": "vanna_volga",
+                "price": price,
+                "greeks": greeks,
+                "sigma": sigma,
+                "sigma_source": sigma_source,
+            },
             context_patch=None,
         )
     except Exception as exc:
@@ -205,36 +467,82 @@ def _run_vanna_volga(context: dict[str, Any]) -> ModuleResult:
 
 def _run_mc_heston_lsm(context: dict[str, Any]) -> ModuleResult:
     try:
-        import importlib.util
         import MCHestonLSM
+
         from Options_Suite.config import PricingConfig
-        ticker, S, K, T, r, q, is_call, _ = _extract_pricing_args(context)
-        initial_sigma = float(context.get("sigma") or 0.25)
+
+        ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
+        # Heston LSM calibrates its own variance process; this is only the
+        # starting vol for that calibration, so it keeps its own name.
+        initial_sigma, sigma_source = _resolve_sigma(
+            context, ticker, K, T, option_type, "LeisenReimer"
+        )
         cfg = PricingConfig()
         res = MCHestonLSM.run_heston_full(
-            ticker, S, K, T, r, q, initial_sigma,
-            sims=cfg.heston_sims, steps=cfg.heston_steps,
-            option="call" if is_call else "put", seed=42, exp=context.get("expiry"),
+            ticker,
+            S,
+            K,
+            T,
+            r,
+            q,
+            initial_sigma,
+            sims=cfg.heston_sims,
+            steps=cfg.heston_steps,
+            option="call" if is_call else "put",
+            seed=42,
+            exp=context.get("expiry"),
         )
         calib = res.get("calib") or {}
         if not calib:
             raise RuntimeError("Heston calibration failed -- no calib returned")
         greeks = MCHestonLSM.heston_all_greeks(
-            S, K, T, r, q,
-            V0=calib["v0"], kappa=calib["kappa"], theta=calib["theta"],
-            vol_sigma=calib["xi"], rho=calib["rho"],
+            S,
+            K,
+            T,
+            r,
+            q,
+            V0=calib["v0"],
+            kappa=calib["kappa"],
+            theta=calib["theta"],
+            vol_sigma=calib["xi"],
+            rho=calib["rho"],
             sims=max(4000, cfg.heston_sims // 3),
             steps=max(80, cfg.heston_steps // 2),
-            option="call" if is_call else "put", seed=42,
+            option="call" if is_call else "put",
+            seed=42,
         )
         return ModuleResult(
             status="ok",
             artifacts=[],
-            metrics={"ticker": ticker, "model": "mc_heston_lsm", "price": res.get("price"), "greeks": greeks, "calib": calib},
+            metrics={
+                "ticker": ticker,
+                "model": "mc_heston_lsm",
+                "price": res.get("price"),
+                "greeks": greeks,
+                "calib": calib,
+            },
             context_patch=None,
         )
     except Exception as exc:
         return _failed(exc)
+
+
+def _explicit_expiry(context: dict[str, Any]) -> str | None:
+    """The scope's expiry, or None when the caller said "pick one for me".
+
+    Vol_Suite's modules use the sentinel string ``"auto"`` for "resolve the
+    expiry yourself" (see `Vol_Suite/module_registry.py::_resolve_expiry`),
+    and the dashboard's scope bar passes whatever is in the expiry box
+    straight through -- including an empty box, and including ``auto`` when a
+    Vol_Suite card put it there. Callers that want a *date* therefore have to
+    map those to None rather than handing the literal string ``"auto"`` to a
+    chain lookup, which fails deep inside the vendor call with an unhelpful
+    parse error.
+    """
+    focus = context.get("focus") or {}
+    raw = context.get("expiry") or focus.get("expiry") or focus.get("expiration_date")
+    text = str(raw or "").strip()
+    return None if text.lower() in ("", "auto", "none", "null") else text
 
 
 def _run_model_comparison(context: dict[str, Any]) -> ModuleResult:
@@ -250,22 +558,37 @@ def _run_model_comparison(context: dict[str, Any]) -> ModuleResult:
     """
     try:
         import smile_by_model
-        ticker = str(context.get("ticker") or context.get("focus", {}).get("ticker") or "").strip().upper()
+
+        ticker = (
+            str(context.get("ticker") or context.get("focus", {}).get("ticker") or "")
+            .strip()
+            .upper()
+        )
         if not ticker:
-            raise ValueError("model_comparison requires context['ticker'] or focus.ticker")
+            raise ValueError(
+                "model_comparison requires context['ticker'] or focus.ticker"
+            )
 
         if context.get("synthetic"):
             return _synthetic_model_comparison(ticker, context)
 
         result = smile_by_model.build_iv_smile_by_model(
             ticker,
-            expiry=context.get("expiry") or context.get("focus", {}).get("expiry"),
+            # None, not the literal "auto": build_iv_smile_by_model picks a
+            # listed expiry itself when given None, and chokes on the sentinel.
+            expiry=_explicit_expiry(context),
             strike=context.get("strike") or context.get("focus", {}).get("strike"),
-            option_type=str(context.get("option_type") or context.get("focus", {}).get("option_type") or "call"),
+            option_type=str(
+                context.get("option_type")
+                or context.get("focus", {}).get("option_type")
+                or "call"
+            ),
             include_mc=bool(context.get("include_mc", True)),
             include_heston=bool(context.get("include_heston", True)),
         )
-        return ModuleResult(status="ok", artifacts=[], metrics=result, context_patch=None)
+        return ModuleResult(
+            status="ok", artifacts=[], metrics=result, context_patch=None
+        )
     except Exception as exc:
         return _failed(exc)
 
@@ -273,25 +596,52 @@ def _run_model_comparison(context: dict[str, Any]) -> ModuleResult:
 def _synthetic_model_comparison(ticker: str, context: dict[str, Any]) -> ModuleResult:
     """Return a deterministic multi-model IV smile for offline testing."""
     import numpy as np
+
     spot = float(context.get("spot") or context.get("focus", {}).get("spot") or 100.0)
-    strike = float(context.get("strike") or context.get("focus", {}).get("strike") or spot)
+    strike = float(
+        context.get("strike") or context.get("focus", {}).get("strike") or spot
+    )
     sigma = float(context.get("sigma") or context.get("focus", {}).get("sigma") or 0.25)
-    option_type = str(context.get("option_type") or context.get("focus", {}).get("option_type") or "call").strip().lower()
+    option_type = (
+        str(
+            context.get("option_type")
+            or context.get("focus", {}).get("option_type")
+            or "call"
+        )
+        .strip()
+        .lower()
+    )
     is_call = option_type == "call"
     # Build a small strike grid around the spot
     strikes = np.linspace(spot * 0.85, spot * 1.15, 21)
     # Simple Black-Scholes-ish implied vol smile: base sigma with mild skew
     ivs = sigma + 0.05 * ((strikes / spot) - 1.0) ** 2 + 0.02 * (1.0 - strikes / spot)
     # Use each pricing model to compute a price curve for the smile
-    from american_binomial import leisen_reimer_american_price, crr_american_price
+    from american_binomial import crr_american_price, leisen_reimer_american_price
     from barone_adesi_whaley import baw_american_price
-    T = float(context.get("target_years") or context.get("focus", {}).get("target_years") or 0.25)
-    r = float(context.get("risk_free_rate") or context.get("focus", {}).get("risk_free_rate") or 0.05)
-    q = float(context.get("dividend_yield") or context.get("focus", {}).get("dividend_yield") or 0.0)
+
+    T = float(
+        context.get("target_years")
+        or context.get("focus", {}).get("target_years")
+        or 0.25
+    )
+    r = float(
+        context.get("risk_free_rate")
+        or context.get("focus", {}).get("risk_free_rate")
+        or 0.05
+    )
+    q = float(
+        context.get("dividend_yield")
+        or context.get("focus", {}).get("dividend_yield")
+        or 0.0
+    )
     curves = {}
     for label, price_fn in [
         ("CRR", lambda S, K: crr_american_price(S, K, T, r, sigma, q, is_call)),
-        ("Leisen-Reimer", lambda S, K: leisen_reimer_american_price(S, K, T, r, sigma, q, is_call)),
+        (
+            "Leisen-Reimer",
+            lambda S, K: leisen_reimer_american_price(S, K, T, r, sigma, q, is_call),
+        ),
         ("BAW", lambda S, K: baw_american_price(S, K, T, r, sigma, q, is_call)),
     ]:
         prices = [float(price_fn(spot, K)) for K in strikes]
@@ -333,7 +683,13 @@ MODULES: list[ModuleSpec] = [
         description="Cox-Ross-Rubinstein American binomial tree pricer with its own FD Greeks.",
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "sigma": 0.2},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "sigma": 0.2,
+        },
     ),
     ModuleSpec(
         name="Leisen-Reimer",
@@ -348,7 +704,13 @@ MODULES: list[ModuleSpec] = [
         description="Leisen-Reimer American binomial tree (default pricing method).",
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "sigma": 0.2},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "sigma": 0.2,
+        },
     ),
     ModuleSpec(
         name="Newton-Raphson IV",
@@ -363,7 +725,13 @@ MODULES: list[ModuleSpec] = [
         description="Implied-vol solver via Newton-Raphson against the Leisen-Reimer American price.",
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "market_price": 12.5},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "market_price": 12.5,
+        },
     ),
     ModuleSpec(
         name="SABR",
@@ -378,7 +746,13 @@ MODULES: list[ModuleSpec] = [
         description="SABR Hagan smile-aware American option Greeks.",
         inputs=InputSpec(ticker="required", expiry="required"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "sabr_calibration": {"alpha": 0.3, "beta": 0.5, "rho": -0.3, "nu": 0.5}},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "sabr_calibration": {"alpha": 0.3, "beta": 0.5, "rho": -0.3, "nu": 0.5},
+        },
     ),
     ModuleSpec(
         name="Vanna-Volga",
@@ -393,7 +767,15 @@ MODULES: list[ModuleSpec] = [
         description="Vanna-Volga smile-aware price and Greeks from 25-delta market quotes.",
         inputs=InputSpec(ticker="required", expiry="required"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "atm_vol": 0.2, "rr25": 3.0, "bf25": 1.0},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "atm_vol": 0.2,
+            "rr25": 3.0,
+            "bf25": 1.0,
+        },
     ),
     ModuleSpec(
         name="MC",
@@ -408,7 +790,13 @@ MODULES: list[ModuleSpec] = [
         description="Longstaff-Schwartz Monte Carlo American pricer with CRN Greeks.",
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "sigma": 0.2},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "sigma": 0.2,
+        },
     ),
     ModuleSpec(
         name="MC Heston LSM",
@@ -423,7 +811,13 @@ MODULES: list[ModuleSpec] = [
         description="Heston stochastic-vol calibration + LSM American pricer.",
         inputs=InputSpec(ticker="required", expiry="required"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "sigma": 0.2},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "sigma": 0.2,
+        },
     ),
     ModuleSpec(
         name="BAW",
@@ -438,7 +832,13 @@ MODULES: list[ModuleSpec] = [
         description="Barone-Adesi-Whaley analytical American closed-form approximation.",
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="metrics",
-        sample={"ticker": "SPY", "strike": 550, "target_years": 0.25, "option_type": "call", "sigma": 0.2},
+        sample={
+            "ticker": "SPY",
+            "strike": 550,
+            "target_years": 0.25,
+            "option_type": "call",
+            "sigma": 0.2,
+        },
     ),
     ModuleSpec(
         name="Model Comparison",
@@ -453,6 +853,11 @@ MODULES: list[ModuleSpec] = [
         description="Multi-model implied-vol smile comparison across CRR/LR/NR/SABR/VV/BAW/etc.",
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="chart",
-        sample={"ticker": "SPY", "expiry": "20260920", "include_mc": True, "include_heston": True},
+        sample={
+            "ticker": "SPY",
+            "expiry": "20260920",
+            "include_mc": True,
+            "include_heston": True,
+        },
     ),
 ]

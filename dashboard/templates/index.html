@@ -1,146 +1,638 @@
 {% extends "base.html" %}
-{% block title %}Overview -- BlackHole Investments Dashboard{% endblock %}
+{% block title %}Desk -- BlackHole Investments Dashboard{% endblock %}
 {% block body_class %}page-overview{% endblock %}
 
+{#
+  The desk page: your book is the scope source, every tool below inherits it.
+
+  What this replaced, and why: the old Overview was a 132px hero strip of four
+  hardcoded scanner cards (one of them `signals` instantiated twice), a
+  full-viewport chart iframe that pushed everything below the fold, and a grid
+  of four cache-mirror cards that each carried their own TICKER / EXPIRY /
+  BASKET inputs. Those inputs were inert -- the cache widgets' run() ignores
+  context entirely -- so the page offered twelve text boxes and no way to get
+  your actual positions into any of them.
+
+  The rule here is that scope is entered exactly once, at the top, and is
+  normally not typed at all: it comes from the book. Tool cards render with
+  `scope-ui="hidden"` and follow the page-global sync bus.
+#}
+
 {% block content %}
-<h1>Overview</h1>
-<p class="sub">
-  Widgets home &middot; run-triggering lives on <a href="/quant">Quant Console</a> now,
-  swap data lives on its own <a href="{{ swaps_dashboard_url }}" target="_blank">swaps dashboard</a>.
-  This page is read-only status widgets -- more coming.
-</p>
+<div class="desk">
 
-<!-- ------------------------------------------------------------------ -->
-<!-- Overview Hero: compact metric strip, then the native chart full-bleed.
-     chart_app_url MUST be the :8791 native app. An empty src becomes
-     "?ticker=..." which reloads THIS dashboard inside itself. -->
-<div class="overview-hero">
-  <div class="overview-hero-metrics">
-    <quant-widget slug="iv_rank" data-context='{"ticker": "SPY"}'></quant-widget>
-    <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
-    <quant-widget slug="skew" data-context='{"ticker": "SPY"}'></quant-widget>
-    <quant-widget slug="signals" data-context='{"ticker": "SPY"}' data-output-kind="metrics"></quant-widget>
-  </div>
-  <div class="overview-hero-chart">
-    <iframe src="{{ chart_app_url }}?ticker=SPY&interval=15m" title="SPY 15m native chart" width="100%" height="100%" frameborder="0"></iframe>
-  </div>
-</div>
-
-<!-- ------------------------------------------------------------------ -->
-<!-- Widget Grid: positions / position_analysis / surfaces -->
-<div class="widget-grid">
-  <quant-widget id="positionsWidget" slug="positions" data-output-kind="metrics" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
-  <quant-widget id="signalsWidget" slug="signals" data-output-kind="metrics" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
-  <quant-widget id="positionAnalysisWidget" slug="position_analysis" data-output-kind="distribution" data-context='{"ticker": "", "expiry": "", "basket": ""}'></quant-widget>
-  <quant-widget id="surfacesWidget" slug="surfaces" data-output-kind="chart" data-context='{"ticker": "SPXW", "expiry": "", "basket": ""}'></quant-widget>
-
-  <div class="panel widget">
-    <header><h2>Latest suite output</h2><span class="note">jump to a suite's Output tab</span></header>
-    <div class="body">
-      {% for key, label in suites.items() %}
-        <a href="/suites/{{ key }}" class="pill plain" style="margin-right:8px;">{{ label }}</a>
-      {% endfor %}
+  {# Alerts moved here with the console merge -- they are the first thing a
+     desk should show, and folding /quant away must not silently drop them. #}
+  {% if alerts %}
+  <div class="alert-banner" data-role="alert-banner">
+    <div class="alert-banner-head">
+      <strong>{{ alerts|length }} alert{{ 's' if alerts|length != 1 else '' }} need{{ '' if alerts|length != 1 else 's' }} attention</strong>
+      {% if alert_status %}
+        <span class="small muted">alerts last checked {{ alert_status.last_checked_utc }}</span>
+      {% endif %}
     </div>
+    <ul class="alert-list">
+      {% for a in alerts %}
+      <li class="alert-item" data-alert-id="{{ a.id }}">
+        <span class="pill partial">{{ a.ticker }}</span>
+        <span class="alert-detail">{{ a.detail }}</span>
+        <button type="button" class="ghost dismiss-alert-btn" onclick="ackAlert(this, {{ a.id }})">Dismiss</button>
+      </li>
+      {% endfor %}
+    </ul>
   </div>
+  {% elif alert_status %}
+  <p class="small muted alert-status-line">alerts last checked {{ alert_status.last_checked_utc }} &middot; 0 pending</p>
+  {% endif %}
+
+  <!-- ============================================================ -->
+  <!-- Scope bar: the single place scope exists on this page.        -->
+  <!-- ============================================================ -->
+  <section class="scopebar" id="scopeBar">
+    <div class="scopebar-main">
+      <label class="sc-field">
+        <span>Ticker</span>
+        <input id="scTicker" autocomplete="off" spellcheck="false" placeholder="SPY">
+      </label>
+      <label class="sc-field">
+        <span>Expiry</span>
+        <input id="scExpiry" autocomplete="off" spellcheck="false" placeholder="2026-12-18">
+      </label>
+      <div class="sc-field sc-basket">
+        <span>Basket</span>
+        <div class="chips" id="scBasketChips"><em class="muted">empty</em></div>
+      </div>
+      <button type="button" class="ghost" id="scFromBook" title="Set the basket to every ticker you hold">
+        Basket = my book
+      </button>
+      <button type="button" class="ghost" id="scClear">Clear</button>
+    </div>
+    <div class="scopebar-note muted" id="scNote">
+      Every tool card below runs on this scope. Click a position to focus it.
+    </div>
+  </section>
+
+  <div class="desk-grid">
+
+    <!-- ========================================================== -->
+    <!-- The book. Not a quant-widget: it is the page's scope source. -->
+    <!-- ========================================================== -->
+    <section class="panel book" id="bookPanel">
+      <header>
+        <h2>Your book</h2>
+        <span class="note" id="bookStamp">loading…</span>
+        <button type="button" class="ghost sm" id="bookRefresh">Refresh</button>
+      </header>
+      <div class="body">
+        <div id="bookTotals" class="totals"></div>
+        <div id="bookTable" class="booktable-wrap">
+          <div class="empty">loading positions…</div>
+        </div>
+        <div id="bookAccounts" class="accounts"></div>
+        <div id="bookWarn" class="warn-note" hidden></div>
+      </div>
+    </section>
+
+    <!-- ========================================================== -->
+    <!-- Status panels: background-fed, no scope, no Run button.     -->
+    <!-- ========================================================== -->
+    <section class="panel statuses">
+      <header><h2>Status</h2><span class="note">background-fed, not run from here</span></header>
+      <div class="body status-grid">
+        <quant-widget slug="signals" mode="status"></quant-widget>
+        <quant-widget slug="position_analysis" mode="status"></quant-widget>
+        <quant-widget slug="surfaces" mode="status"></quant-widget>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Tools: inherit scope, no inputs of their own.                 -->
+  <!-- ============================================================ -->
+  <section class="panel tools">
+    <header>
+      <h2>Tools</h2>
+      <span class="note" id="toolsNote">running on the scope above</span>
+      <select id="toolPicker" class="picker"><option value="">+ add a tool…</option></select>
+      <button type="button" class="ghost sm" id="runAllTools">Run all</button>
+    </header>
+    <div class="body">
+      <div class="tools-grid" id="toolsGrid"></div>
+      <div class="empty" id="toolsEmpty">No tools yet — add one above.</div>
+    </div>
+  </section>
+
 </div>
-
-<!-- Layout persistence: load instances on page load and attach quant-widget instances -->
-<script>
-(function() {
-  var PAGE = 'overview';
-
-  // Load persisted layout on page load
-  fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } })
-    .then(function(r) { return r.ok ? r.json() : []; })
-    .then(function(instances) {
-      // If layout has instances, they replace ONLY the widget-grid widgets
-      // The hero is kept intact and applies to all layouts
-      if (instances && instances.length > 0) {
-        var grid = document.querySelector('.widget-grid');
-        // Keep the "Latest suite output" panel, replace only the quant-widget instances
-        var suitePanel = grid.querySelector('.panel.widget[header*="Latest suite"]');
-        grid.innerHTML = '';
-        if (suitePanel) {
-          grid.appendChild(suitePanel);
-        }
-        instances.forEach(function(inst) {
-          var widget = document.createElement('quant-widget');
-          widget.setAttribute('slug', inst.slug);
-          widget.setAttribute('synced', inst.sync_enabled ? 'true' : 'false');
-          if (inst.scope_override) {
-            widget.setAttribute('data-context', JSON.stringify(inst.scope_override));
-          }
-          widget.dataset.widgetInstanceId = inst.widget_instance_id;
-          grid.appendChild(widget);
-        });
-      } else {
-        // No persisted layout - use the default 4 widgets
-        // They're already in the DOM above with data-context
-        console.log('No persisted layout for ' + PAGE + ', using default widgets');
-      }
-    })
-    .catch(function(e) {
-      console.error('Failed to load layout for ' + PAGE + ':', e);
-      // Continue with default widgets if load fails
-    });
-})();
-</script>
 {% endblock %}
 
 {% block scripts %}
-<!-- Quant widget custom element (Phase 4) -->
+<script>
+/* Alerts banner dismissal -- removes the row on success (acknowledge, not
+   delete). Plain script, not a module: the inline onclick handler needs it
+   on the global scope. */
+function ackAlert(btn, alertId) {
+  btn.disabled = true;
+  fetch('/alerts/' + encodeURIComponent(alertId) + '/ack', { method: 'POST' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var item = btn.closest('.alert-item');
+      var list = item.parentElement;
+      item.remove();
+      if (!list.children.length) list.closest('.alert-banner').remove();
+    })
+    .catch(function (e) { console.error('ack failed', e); btn.disabled = false; });
+}
+</script>
+
 <script type="module">
-import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-renderers.js
+import '/static/js/quant-widget.js?v={{ asset_v }}';
+import { syncBus } from '/static/js/sync-bus.js?v={{ asset_v }}';
+
+const PAGE = 'desk';
+
+// ---------------------------------------------------------------------------
+// Scope bar <-> sync bus. The bar is the only scope input on the page; every
+// <quant-widget> here renders with scope-ui hidden and follows the bus.
+// ---------------------------------------------------------------------------
+const elTicker = document.getElementById('scTicker');
+const elExpiry = document.getElementById('scExpiry');
+const elChips  = document.getElementById('scBasketChips');
+const elNote   = document.getElementById('scNote');
+
+function renderBasket(basket) {
+  elChips.innerHTML = '';
+  if (!basket || !basket.length) {
+    const em = document.createElement('em');
+    em.className = 'muted';
+    em.textContent = 'empty';
+    elChips.appendChild(em);
+    return;
+  }
+  basket.forEach(function (t) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.textContent = t;
+    chip.title = 'Focus ' + t + ' (click ×  to drop it from the basket)';
+    chip.addEventListener('click', function () { syncBus.setScope({ ticker: t }); });
+    const x = document.createElement('span');
+    x.className = 'chip-x';
+    x.textContent = '×';
+    x.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      const next = (syncBus.getScope().basket || []).filter(function (v) { return v !== t; });
+      syncBus.setScope({ basket: next });
+    });
+    chip.appendChild(x);
+    elChips.appendChild(chip);
+  });
+}
+
+syncBus.subscribe(function (scope) {
+  if (elTicker.value !== scope.ticker) elTicker.value = scope.ticker;
+  if (elExpiry.value !== scope.expiry) elExpiry.value = scope.expiry;
+  renderBasket(scope.basket);
+  highlightBookRows(scope.ticker);
+});
+
+elTicker.addEventListener('input', function () { syncBus.setScope({ ticker: elTicker.value }); });
+elExpiry.addEventListener('input', function () { syncBus.setScope({ expiry: elExpiry.value }); });
+document.getElementById('scClear').addEventListener('click', function () {
+  syncBus.reset({ ticker: '', expiry: '', basket: null });
+  renderBasket(null);
+});
+
+// ---------------------------------------------------------------------------
+// The book. Cache-backed (an agent pushes it via POST /api/widgets/positions);
+// this reads it through the same module route every tool uses so the run also
+// writes held_tickers into the Context Store, which is what every tool run is
+// then seeded with.
+// ---------------------------------------------------------------------------
+let BOOK = { positions: [], accounts: [] };
+
+const num = function (v, digits) {
+  if (v === null || v === undefined || v === '') return '--';
+  const n = Number(v);
+  if (!isFinite(n)) return '--';
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: digits === undefined ? 2 : digits,
+    maximumFractionDigits: digits === undefined ? 2 : digits
+  });
+};
+
+function positionLabel(p) {
+  // Options carry strike/expiry/right when the pusher supplies them; the
+  // current push does not, so fall back to the bare ticker rather than
+  // inventing a contract that is not in the data.
+  const bits = [p.ticker];
+  if (p.instrument_type === 'option') {
+    if (p.expiry) bits.push(String(p.expiry));
+    if (p.strike !== undefined && p.strike !== null) bits.push(num(p.strike, 0));
+    if (p.right) bits.push(String(p.right).toUpperCase());
+  }
+  return bits.join(' ');
+}
+
+function renderBook() {
+  const host = document.getElementById('bookTable');
+  const positions = BOOK.positions || [];
+  if (!positions.length) {
+    host.innerHTML = '<div class="empty">No positions in the cache. An agent pushes these via POST /api/widgets/positions.</div>';
+    document.getElementById('bookTotals').innerHTML = '';
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'booktable';
+  table.innerHTML =
+    '<thead><tr>' +
+    '<th>Acct</th><th>Position</th><th>Type</th><th class="r">Qty</th>' +
+    '<th class="r">Avg</th><th class="r">Last</th><th class="r">Value</th><th class="r">P/L</th>' +
+    '</tr></thead>';
+  const tbody = document.createElement('tbody');
+
+  positions.forEach(function (p) {
+    const tr = document.createElement('tr');
+    tr.className = 'bookrow';
+    tr.dataset.ticker = String(p.ticker || '').toUpperCase();
+    tr.title = 'Click to focus ' + p.ticker + ' in the scope bar';
+    const pl = Number(p.unrealized_pl);
+    const plClass = !isFinite(pl) ? '' : (pl > 0 ? 'pos' : (pl < 0 ? 'neg' : ''));
+    tr.innerHTML =
+      '<td>' + (p.account || '') + '</td>' +
+      '<td class="strong">' + positionLabel(p) + '</td>' +
+      '<td class="muted">' + (p.instrument_type || '') + '</td>' +
+      '<td class="r">' + num(p.qty, 4) + '</td>' +
+      '<td class="r">' + num(p.avg_price) + '</td>' +
+      '<td class="r">' + num(p.current_price) + '</td>' +
+      '<td class="r">' + num(p.market_value) + '</td>' +
+      '<td class="r ' + plClass + '">' + num(p.unrealized_pl) + '</td>';
+    tr.addEventListener('click', function () {
+      const patch = { ticker: tr.dataset.ticker };
+      if (p.expiry) patch.expiry = String(p.expiry);
+      syncBus.setScope(patch);
+      elNote.textContent = 'Scope focused on ' + tr.dataset.ticker + ' from your book.';
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  host.innerHTML = '';
+  host.appendChild(table);
+
+  // Totals across the book.
+  let value = 0, pl = 0, priced = 0;
+  positions.forEach(function (p) {
+    const v = Number(p.market_value); const l = Number(p.unrealized_pl);
+    if (isFinite(v)) { value += v; priced += 1; }
+    if (isFinite(l)) pl += l;
+  });
+  const unpriced = positions.length - priced;
+  document.getElementById('bookTotals').innerHTML =
+    '<div class="tot"><span>Positions</span><b>' + positions.length + '</b></div>' +
+    '<div class="tot"><span>Market value</span><b>' + num(value) + '</b></div>' +
+    '<div class="tot"><span>Unrealized</span><b class="' + (pl >= 0 ? 'pos' : 'neg') + '">' + num(pl) + '</b></div>' +
+    (unpriced ? '<div class="tot"><span>Unpriced legs</span><b class="warn">' + unpriced + '</b></div>' : '');
+
+  // Be explicit about the data gap rather than rendering around it: option
+  // rows in the cache carry no strike / expiry / right, so they cannot be
+  // resolved to a contract and cannot set an expiry when clicked.
+  const bareOptions = positions.filter(function (p) {
+    return p.instrument_type === 'option' && !p.expiry;
+  }).length;
+  const warn = document.getElementById('bookWarn');
+  if (bareOptions) {
+    warn.hidden = false;
+    warn.textContent =
+      bareOptions + ' option ' + (bareOptions === 1 ? 'leg carries' : 'legs carry') +
+      ' no strike/expiry/right in the pushed payload, so clicking them sets the ticker only. ' +
+      'The pusher needs to include those fields for contract-level scope.';
+  } else {
+    warn.hidden = true;
+  }
+
+  const accounts = BOOK.accounts || [];
+  document.getElementById('bookAccounts').innerHTML = accounts.length
+    ? accounts.map(function (a) {
+        return '<div class="acct"><span>' + (a.account || '?') + '</span>' +
+               '<b>' + num(a.total_value) + '</b>' +
+               '<em class="muted">cash ' + num(a.cash) + '</em></div>';
+      }).join('')
+    : '';
+}
+
+/* The book is a cache row an agent pushed, not a live broker read, so it can
+ * be arbitrarily old while the page presents it as your current position. Say
+ * how old, and shout once it is old enough to trade off by mistake. */
+function renderStamp(el, computedAt) {
+  el.classList.remove('stale', 'ok');
+  if (!computedAt) { el.textContent = 'no timestamp'; el.classList.add('stale'); return; }
+  const then = new Date(computedAt);
+  if (isNaN(then.getTime())) { el.textContent = 'as of ' + computedAt; return; }
+  const mins = Math.max(0, (Date.now() - then.getTime()) / 60000);
+  let age;
+  if (mins < 90) age = Math.round(mins) + 'm ago';
+  else if (mins < 60 * 36) age = Math.round(mins / 60) + 'h ago';
+  else age = Math.round(mins / 1440) + 'd ago';
+  el.textContent = 'as of ' + age;
+  el.title = computedAt;
+  // 6h: past a trading session, so it predates anything you did today.
+  el.classList.add(mins > 360 ? 'stale' : 'ok');
+}
+
+function highlightBookRows(ticker) {
+  const t = (ticker || '').toUpperCase();
+  document.querySelectorAll('.bookrow').forEach(function (tr) {
+    tr.classList.toggle('on', !!t && tr.dataset.ticker === t);
+  });
+}
+
+async function loadBook(opts) {
+  const stamp = document.getElementById('bookStamp');
+  stamp.textContent = 'loading…';
+  try {
+    const res = await fetch('/api/widgets/positions/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ scope: {} })
+    });
+    const json = await res.json();
+    const m = (json && json.metrics) || {};
+    BOOK = { positions: m.positions || [], accounts: m.accounts || [] };
+    renderStamp(stamp, m.computed_at);
+    renderBook();
+    highlightBookRows(syncBus.getScope().ticker);
+
+    // Publish the book: basket + Context Store, so a tool run is fed the book
+    // whether or not anyone remembered to press a button.
+    const held = m.held_tickers || [];
+    if (held.length) {
+      const cur = syncBus.getScope().basket || [];
+      if (!opts || opts.publishBasket !== false) {
+        const same = cur.length === held.length && cur.every(function (t, i) { return t === held[i]; });
+        if (!same && !cur.length) syncBus.setScope({ basket: held });
+      }
+      fetch('/api/context/inject-positions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ positions: BOOK.positions })
+      }).catch(function () { /* best effort; the run route already wrote it */ });
+    }
+  } catch (err) {
+    stamp.textContent = 'failed';
+    document.getElementById('bookTable').innerHTML =
+      '<div class="empty">Could not load the book: ' + (err && err.message ? err.message : err) + '</div>';
+  }
+}
+
+document.getElementById('bookRefresh').addEventListener('click', function () { loadBook(); });
+document.getElementById('scFromBook').addEventListener('click', function () {
+  const held = Array.from(new Set((BOOK.positions || [])
+    .map(function (p) { return String(p.ticker || '').toUpperCase(); })
+    .filter(Boolean))).sort();
+  syncBus.setScope({ basket: held });
+  elNote.textContent = 'Basket set to your ' + held.length + ' held tickers.';
+});
+
+// ---------------------------------------------------------------------------
+// Tools rail: catalog picker + persisted layout. Tool cards never render their
+// own scope inputs (scope-ui="hidden") -- they follow the bar.
+// ---------------------------------------------------------------------------
+const grid = document.getElementById('toolsGrid');
+const picker = document.getElementById('toolPicker');
+const emptyMsg = document.getElementById('toolsEmpty');
+let CATALOG = [];
+
+function refreshEmpty() {
+  emptyMsg.style.display = grid.children.length ? 'none' : '';
+}
+
+function addTool(slug, instanceId, persist) {
+  const wrap = document.createElement('div');
+  wrap.className = 'toolcard';
+  wrap.dataset.slug = slug;
+  wrap.dataset.instanceId = instanceId || (slug + '-' + Date.now().toString(36));
+
+  const bar = document.createElement('div');
+  bar.className = 'toolcard-bar';
+  const label = document.createElement('span');
+  label.className = 'mono small muted';
+  label.textContent = slug;
+  bar.appendChild(label);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'ghost sm';
+  close.textContent = '×';
+  close.title = 'Remove this tool';
+  close.addEventListener('click', function () {
+    wrap.remove();
+    refreshEmpty();
+    saveLayout();
+  });
+  bar.appendChild(close);
+  wrap.appendChild(bar);
+
+  const w = document.createElement('quant-widget');
+  w.setAttribute('slug', slug);
+  w.setAttribute('synced', 'true');
+  w.setAttribute('scope-ui', 'hidden');   // scope lives in the bar, once
+  w.setAttribute('inject', 'off');        // the book publishes itself
+  wrap.appendChild(w);
+
+  grid.appendChild(wrap);
+  refreshEmpty();
+  if (persist !== false) saveLayout();
+  return wrap;
+}
+
+function saveLayout() {
+  const instances = Array.from(grid.children).map(function (card, i) {
+    return {
+      widget_instance_id: card.dataset.instanceId,
+      slug: card.dataset.slug,
+      position: i,
+      sync_enabled: true,
+      scope_override: null,
+      config_json: null
+    };
+  });
+  fetch('/api/layout/' + PAGE, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ instances: instances })
+  }).catch(function () { /* layout persistence is a convenience, not a blocker */ });
+}
+
+picker.addEventListener('change', function () {
+  const slug = picker.value;
+  picker.value = '';
+  if (slug) addTool(slug);
+});
+
+document.getElementById('runAllTools').addEventListener('click', function () {
+  grid.querySelectorAll('quant-widget').forEach(function (w) {
+    if (typeof w.run === 'function') w.run();
+  });
+});
+
+fetch('/api/widgets/catalog', { headers: { Accept: 'application/json' } })
+  .then(function (r) { return r.ok ? r.json() : { widgets: [] }; })
+  .then(function (body) {
+    CATALOG = (body && body.widgets) || [];
+    const bySuite = {};
+    CATALOG.forEach(function (e) {
+      if (e.category === 'cache') return;  // status panels, not tools
+      (bySuite[e.suite] = bySuite[e.suite] || []).push(e);
+    });
+    Object.keys(bySuite).sort().forEach(function (suite) {
+      const og = document.createElement('optgroup');
+      og.label = suite;
+      bySuite[suite].sort(function (a, b) { return a.name.localeCompare(b.name); })
+        .forEach(function (e) {
+          const opt = document.createElement('option');
+          opt.value = e.slug;
+          opt.textContent = e.name + (e.requires && e.requires.length ? '  (pulls in ' + e.requires.join(', ') + ')' : '');
+          og.appendChild(opt);
+        });
+      picker.appendChild(og);
+    });
+    return fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } });
+  })
+  .then(function (r) { return r && r.ok ? r.json() : []; })
+  .then(function (instances) {
+    (instances || []).forEach(function (inst) {
+      addTool(inst.slug, inst.widget_instance_id, false);
+    });
+    refreshEmpty();
+  })
+  .catch(function () { refreshEmpty(); });
+
+// Boot.
+loadBook();
 </script>
 
 <style>
-/* Overview hero: 4 metric chips in a short strip, native chart eats the rest. */
-.overview-hero {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 52px);
-  min-height: 0;
-  gap: 8px;
-  padding: 8px;
-  margin: 0;
+.desk { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ---- alerts (moved from the retired Quant Console) ---- */
+.alert-banner {
+  background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 10px;
+  padding: 12px 14px;
 }
-.overview-hero-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  flex: 0 0 132px;
-  min-height: 0;
-}
-.overview-hero-metrics quant-widget,
-.overview-hero .overview-hero-chart {
-  display: block;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+.alert-banner-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.alert-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.alert-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.alert-item .alert-detail { flex: 1; min-width: 200px; font-size: 13px; }
+.alert-status-line { margin: 0; }
+
+/* ---- scope bar ---- */
+.scopebar {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--panel-2, #121a30);
   border: 1px solid var(--border, #24304f);
-  border-radius: 8px;
+  border-radius: 12px; padding: 10px 14px;
+  box-shadow: 0 6px 24px -12px #000;
 }
-.overview-hero-chart {
-  flex: 1 1 auto;
-  min-height: 0;
+.scopebar-main { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.sc-field { display: flex; flex-direction: column; gap: 4px; }
+.sc-field > span {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted, #94a3b8);
 }
-.overview-hero-chart iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display: block;
+.sc-field input {
+  font: inherit; color: var(--text, #f8fafc); background: var(--panel, #0c1122);
+  border: 1px solid var(--border, #24304f); border-radius: 7px; padding: 6px 9px;
+  min-width: 140px;
 }
-/* Grid layout for overview widgets - matches quant.html console-grid pattern */
-.widget-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
-  gap: 16px;
-  padding: 12px;
+.sc-field input:focus { outline: 2px solid var(--accent-soft, #3b82f622); border-color: var(--accent, #3b82f6); }
+.sc-basket { flex: 1 1 260px; min-width: 200px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 32px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-soft, #3b82f622); color: var(--text, #f8fafc);
+  border: 1px solid var(--accent, #3b82f6); border-radius: 999px;
+  padding: 3px 8px; font-size: 12px; font-weight: 600; cursor: pointer;
 }
-/* Make the quant-widget instances fill their grid cells */
-.widget-grid quant-widget {
-  display: block;
-  width: 100%;
+.chip:hover { filter: brightness(1.2); }
+.chip-x { color: var(--muted, #94a3b8); font-weight: 700; }
+.chip-x:hover { color: var(--err, #f87171); }
+.scopebar-note { font-size: 12px; margin-top: 8px; }
+
+/* ---- layout ---- */
+.desk-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
 }
+@media (max-width: 1100px) { .desk-grid { grid-template-columns: 1fr; } }
+
+.panel > header { display: flex; align-items: center; gap: 10px; }
+.panel > header h2 { margin: 0; font-size: 15px; }
+.panel > header .note { color: var(--muted, #94a3b8); font-size: 12px; }
+.panel > header .ghost.sm, .panel > header .picker { margin-left: auto; }
+.panel > header .ghost.sm + .ghost.sm { margin-left: 0; }
+.ghost.sm { font-size: 12px; padding: 4px 10px; }
+.picker {
+  font: inherit; font-size: 12px; color: var(--text, #f8fafc);
+  background: var(--panel, #0c1122); border: 1px solid var(--border, #24304f);
+  border-radius: 7px; padding: 5px 8px; max-width: 320px;
+}
+
+/* ---- book ---- */
+#bookStamp.ok { color: var(--ok, #34d399); }
+#bookStamp.stale {
+  color: var(--warn, #fbbf24); font-weight: 650;
+  background: var(--warn-soft, #fbbf2422);
+  border: 1px solid var(--warn, #fbbf24);
+  border-radius: 999px; padding: 1px 9px;
+}
+.totals { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+.tot { display: flex; flex-direction: column; }
+.tot span { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted, #94a3b8); }
+.tot b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.booktable-wrap { overflow-x: auto; }
+.booktable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.booktable th {
+  text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted, #94a3b8); font-weight: 600;
+  padding: 6px 10px; border-bottom: 1px solid var(--border, #24304f); white-space: nowrap;
+}
+.booktable td { padding: 6px 10px; border-bottom: 1px solid #1b2440; font-variant-numeric: tabular-nums; }
+.booktable th.r, .booktable td.r { text-align: right; }
+.booktable td.strong { font-weight: 650; }
+.bookrow { cursor: pointer; }
+.bookrow:hover { background: var(--accent-soft, #3b82f622); }
+.bookrow.on { background: var(--accent-soft, #3b82f622); box-shadow: inset 3px 0 0 var(--accent, #3b82f6); }
+.pos { color: var(--ok, #34d399); }
+.neg { color: var(--err, #f87171); }
+.warn { color: var(--warn, #fbbf24); }
+.accounts { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.acct { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.acct span { color: var(--muted, #94a3b8); font-size: 11px; text-transform: uppercase; }
+.acct b { font-variant-numeric: tabular-nums; }
+.warn-note {
+  margin-top: 10px; font-size: 12px; color: var(--warn, #fbbf24);
+  background: var(--warn-soft, #fbbf2422); border: 1px solid var(--warn, #fbbf24);
+  border-radius: 8px; padding: 7px 10px;
+}
+.empty {
+  padding: 20px; text-align: center; color: var(--muted, #94a3b8); font-size: 12px;
+  border: 1px dashed var(--border, #24304f); border-radius: 8px;
+}
+
+/* ---- status panels ---- */
+.status-grid { display: flex; flex-direction: column; gap: 10px; }
+.status-grid quant-widget { display: block; }
+
+/* ---- tools ---- */
+.tools-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+}
+@media (max-width: 900px) { .tools-grid { grid-template-columns: 1fr; } }
+.toolcard { display: flex; flex-direction: column; min-width: 0; }
+.toolcard-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 2px 5px;
+}
+.toolcard quant-widget { display: block; min-width: 0; }
 </style>
 {% endblock %}

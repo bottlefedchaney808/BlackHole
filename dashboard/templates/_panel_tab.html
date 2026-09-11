@@ -1,0 +1,196 @@
+{#
+  Shared styling for the three panel tabs (Volatility / Models / Sentiment).
+
+  One partial rather than three copies: these pages are deliberately the same
+  workbench with different panels in it, and the moment the CSS diverges they
+  stop reading as one surface. Anything genuinely page-specific goes in that
+  page's own <style> block, after this include.
+#}
+<style>
+.tabpage { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ---- scope bar (same rule as the desk: scope is entered once, up here) ---- */
+.scopebar {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 10px 14px;
+  box-shadow: 0 6px 24px -12px #000;
+}
+.scopebar-main { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.sc-field { display: flex; flex-direction: column; gap: 4px; }
+.sc-field > span {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+}
+.sc-field input, .sc-field select {
+  font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px;
+  min-width: 120px;
+}
+.sc-field input:focus, .sc-field select:focus {
+  outline: 2px solid var(--accent-soft); border-color: var(--accent);
+}
+.sc-basket { flex: 1 1 240px; min-width: 180px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 32px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-soft); color: var(--text);
+  border: 1px solid var(--accent); border-radius: 999px;
+  padding: 3px 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.chip:hover { filter: brightness(1.2); }
+.chip.ghostchip { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
+.chip.ghostchip:hover { color: var(--text); border-color: var(--accent); }
+.chip-x { color: var(--muted); font-weight: 700; }
+.chip-x:hover { color: var(--err); }
+.scopebar-note { font-size: 12px; margin-top: 8px; }
+
+/* ---- top row: book strip + context strip ---- */
+.tab-toprow {
+  display: grid; gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+}
+@media (max-width: 1000px) { .tab-toprow { grid-template-columns: 1fr; } }
+.tab-toprow .panel { margin-bottom: 0; }
+.bookchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bookstrip .body, .ctxstrip .body { padding: 10px 14px; }
+.ctxbody { display: flex; flex-wrap: wrap; gap: 6px; }
+.ctxchip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 8px; font-size: 11.5px;
+}
+.ctxchip b { font-family: var(--mono); font-weight: 600; }
+.ctxchip em { font-style: normal; font-size: 10.5px; }
+.bookstrip .note.ok { color: var(--ok); }
+.bookstrip .note.stale {
+  color: var(--warn); font-weight: 650; background: var(--warn-soft);
+  border: 1px solid var(--warn); border-radius: 999px; padding: 1px 9px;
+}
+
+/* ---- controls ---- */
+.tabcontrols { margin-bottom: 0; }
+.tabcontrols > header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tabcontrols > header h2 { margin: 0; }
+.tabcontrols > header .note { color: var(--muted); font-size: 12px; flex: 1; }
+.ghost.sm { font-size: 12px; padding: 4px 10px; }
+
+.groupheading {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin: 10px 0 -4px; font-weight: 600;
+}
+
+/* ---- panel cards ---- */
+.panel-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+}
+@media (max-width: 900px) { .panel-grid { grid-template-columns: 1fr; } }
+
+.panelcard {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; min-width: 0;
+  display: flex; flex-direction: column;
+  box-shadow: 0 1px 2px rgba(0,0,0,.16), 0 12px 28px -16px rgba(0,0,0,.4);
+  transition: opacity .15s ease, border-color .15s ease;
+}
+/* Unchecked panels stay visible but recede: hiding them makes "why didn't
+   that run" unanswerable without opening a menu. */
+.panelcard.off { opacity: .55; }
+.panelcard.off:hover { opacity: .85; }
+.panelcard.busy { border-color: var(--accent); box-shadow: 0 0 22px -6px var(--accent-glow); }
+
+.panelcard-head {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 14px; border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.panelcard-head .panel-toggle { margin-top: 3px; flex: 0 0 auto; accent-color: var(--accent); }
+.panelcard-title { flex: 1; min-width: 0; }
+.panelcard-title h3 { margin: 0; font-size: 14.5px; letter-spacing: -0.01em; }
+.panelcard-title p { margin: 3px 0 0; line-height: 1.45; }
+.panelcard-head button { flex: 0 0 auto; }
+
+.panel-params {
+  display: flex; flex-wrap: wrap; gap: 10px 16px;
+  padding: 9px 14px; border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+}
+.pp-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.pp-field > span { text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.pp-field input[type="text"], .pp-field input[type="number"], .pp-field select {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 7px; min-width: 110px;
+}
+.pp-field.pp-bool { flex-direction: row; align-items: center; gap: 6px; }
+.pp-field.pp-bool > span { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.pp-field.pp-bool input { accent-color: var(--accent); }
+
+.panelcard-prov {
+  padding: 6px 14px; border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 11px; word-break: break-word;
+}
+.panelcard-body { padding: 12px 14px; min-width: 0; overflow-x: auto; }
+.panelcard-body .empty { padding: 18px; }
+
+/* Charts are the point of these tabs -- let them use the card's full width. */
+.panelcard-body .qw-artifacts { display: flex; flex-direction: column; gap: 10px; }
+.panelcard-body .qw-artifacts figure { margin: 0; }
+.panelcard-body .qw-artifact-img {
+  width: 100%; height: auto; display: block;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
+}
+.panelcard-body table { font-size: 12.5px; }
+.panelcard-body pre.json { max-height: 260px; }
+.panelcard-body .qw-result-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+
+/* ---- renderer output ----
+   `widget-renderers.js::renderResult` is shared with <quant-widget>, which
+   styles its output inside a shadow root. These cards render it in the LIGHT
+   dom, where none of that reaches -- so the same classes are restated here
+   against the page's own tokens. Without this block a metrics table renders
+   as an unstyled stack of bare divs. Keep in sync with the shadow-root CSS in
+   quant-widget.js if either changes. */
+.panelcard-body .qw-headline { margin: 6px 0 0; font-size: 13px; }
+.panelcard-body .qw-warnings { margin: 6px 0 0; padding-left: 18px; color: var(--warn); }
+.panelcard-body .qw-result-title { color: var(--muted); }
+.panelcard-body .metric-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px; margin-top: 8px;
+}
+.panelcard-body .metric-card {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; min-width: 0;
+}
+.panelcard-body .metric-label {
+  color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; word-break: break-word;
+}
+.panelcard-body .metric-value {
+  font-size: 16px; font-weight: 620; margin-top: 4px;
+  letter-spacing: -0.02em; word-break: break-word; font-family: var(--mono);
+}
+.panelcard-body .qw-rows { margin-top: 8px; }
+.panelcard-body .qw-rows > .small {
+  margin: 0 0 4px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+}
+.panelcard-body .qw-sub {
+  margin-top: 8px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--panel-2);
+}
+.panelcard-body .qw-sub > summary {
+  cursor: pointer; padding: 6px 10px; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em; user-select: none;
+}
+.panelcard-body .qw-sub[open] > summary { border-bottom: 1px solid var(--border); }
+.panelcard-body .qw-sub .metric-grid { margin: 8px; }
+.panelcard-body .qw-cell-sub > summary {
+  cursor: pointer; color: var(--muted); font-size: 11px; white-space: nowrap;
+}
+.panelcard-body .qw-cell-sub > summary:hover { color: var(--text); }
+.panelcard-body .qw-cell-sub .tablewrap { max-width: 420px; }
+.panelcard-body .tablewrap {
+  overflow-x: auto; max-width: 100%;
+  border: 1px solid var(--border); border-radius: 8px; margin-top: 6px;
+}
+.panelcard-body .qw-artifact-note { margin-top: 8px; }
+</style>

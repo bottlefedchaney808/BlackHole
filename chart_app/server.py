@@ -34,15 +34,22 @@ from shared.spot_history import (
 # Mirrors the LOOKBACK map in static/index.html -- how much history to pull
 # per interval so a background refresh keeps enough bars to backfill any gap
 # since the last poll, not just a rolling window.
+# `1h` and `4h` used to ask for "60d" and "1y". Both are rejected outright by
+# shared/spot_history.py::validate_intraday_lookback -- it caps intraday
+# lookback at 30 days and only accepts an <N>d / <N>w string -- so those two
+# timeframes raised ChartDataError before a single bar was fetched and could
+# never load. Intraday history is aggregated from one-minute rows, which is
+# also why the cap exists; 30 days is the most the provider path will serve.
+_MAX_INTRADAY_LOOKBACK = "30d"
 _LOOKBACK = {
     "3m": "5d",
     "5m": "5d",
     "10m": "10d",
     "15m": "5d",
     "30m": "20d",
-    "1h": "60d",
-    "4h": "1y",
-    "1d": "1y",
+    "1h": _MAX_INTRADAY_LOOKBACK,   # ~7 bars/session * 21 sessions
+    "4h": _MAX_INTRADAY_LOOKBACK,   # ~2 bars/session * 21 sessions
+    "1d": "1y",                     # daily path, not the intraday validator
 }
 
 
@@ -139,14 +146,32 @@ def create_app(
 
     @app.post("/api/refresh")
     def post_refresh(body: _RefreshBody) -> dict[str, Any]:
-        upserted = refresh_cache(
-            cache,
-            session["ticker"],
-            session["interval"],
-            body.lookback,
-            daily_fn=daily_fn,
-            intrad_fn=intrad_fn,
-        )
+        """Pull history for the current symbol/interval into the bar cache.
+
+        Returns the failure instead of raising it. A provider timeout (a
+        coarse interval is aggregated from a lot of one-minute rows, so it
+        can genuinely time out) used to escape as a bare 500 "Internal
+        Server Error", which the page had no way to distinguish from an
+        interval that simply has no data -- both left an empty chart with no
+        explanation. Now the caller gets the reason and can say so.
+        """
+        try:
+            upserted = refresh_cache(
+                cache,
+                session["ticker"],
+                session["interval"],
+                body.lookback,
+                daily_fn=daily_fn,
+                intrad_fn=intrad_fn,
+            )
+        except Exception as exc:  # noqa: BLE001 -- reported to the caller
+            return {
+                "ok": False,
+                "upserted": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+                "ticker": session["ticker"],
+                "interval": session["interval"],
+            }
         session["flow_cache"].clear()
         return {"ok": True, "upserted": upserted}
 

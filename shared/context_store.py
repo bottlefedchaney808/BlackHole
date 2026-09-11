@@ -214,7 +214,15 @@ class ContextStore:
                 (scope_key, entry_key, before_hash, after_hash, changed_keys, source_slug, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (scope_key, entry_key, before_hash, after_hash, changed, source_slug, self._now()),
+            (
+                scope_key,
+                entry_key,
+                before_hash,
+                after_hash,
+                changed,
+                source_slug,
+                self._now(),
+            ),
         )
 
     def put(
@@ -291,6 +299,53 @@ class ContextStore:
                     return None
             return value
 
+    def load(
+        self,
+        scope: dict[str, Any] | Scope,
+        *,
+        max_age_s: int | None = None,
+    ) -> dict[str, Any]:
+        """Return every stored entry for ``scope`` as a ``{key: value}`` dict.
+
+        The bulk counterpart to :meth:`get`. Added so a caller that is about
+        to run a module can seed its execution context with everything
+        previously computed under the same scope -- until this existed the
+        Context Store was write-only from the dashboard's point of view
+        (``describe()`` returns provenance rows, not values, so the only
+        reader displayed key names and never the data).
+
+        ``max_age_s`` filters out entries older than the given number of
+        seconds (``None`` = no age filtering), matching :meth:`get`.
+        """
+        s = Scope.from_dict(scope)
+        scope_key = s.to_db_key()
+        out: dict[str, Any] = {}
+        cutoff = (
+            datetime.now(UTC) - timedelta(seconds=max_age_s)
+            if max_age_s is not None
+            else None
+        )
+        with self._pool().get_connection_context() as conn:
+            rows = conn.execute(
+                """
+                SELECT entry_key, value_json, computed_at FROM context_entries
+                WHERE scope_key = ?
+                """,
+                (scope_key,),
+            ).fetchall()
+        for entry_key, value_json, computed_at in rows:
+            if cutoff is not None:
+                try:
+                    computed_dt = datetime.fromisoformat(computed_at)
+                    if computed_dt.tzinfo is None:
+                        computed_dt = computed_dt.replace(tzinfo=UTC)
+                except ValueError:
+                    continue  # malformed timestamp; treat as stale
+                if computed_dt < cutoff:
+                    continue
+            out[entry_key] = _deserialize(value_json)
+        return out
+
     def describe(
         self,
         scope: dict[str, Any] | Scope | None = None,
@@ -302,7 +357,9 @@ class ContextStore:
         """
         s = Scope.from_dict(scope) if scope is not None else None
         scope_key = s.to_db_key() if s is not None else None
-        query = "SELECT scope_key, entry_key, source_slug, computed_at FROM context_entries"
+        query = (
+            "SELECT scope_key, entry_key, source_slug, computed_at FROM context_entries"
+        )
         params: tuple[Any, ...] = ()
         if scope_key is not None:
             query += " WHERE scope_key = ?"

@@ -26,6 +26,7 @@ are migrated off the orchestrator namespace.
 
 from typing import Any
 
+
 def _all_modules() -> list[Any]:
     """Current registry modules, read through orchestrator's namespace.
 
@@ -140,8 +141,6 @@ def _write_run_manifest(
     import logging
     from pathlib import Path
 
-    from shared.artifact_paths import repo_root
-
     logger = logging.getLogger(__name__)
 
     run_id = context.get("run_id")
@@ -164,9 +163,7 @@ def _write_run_manifest(
             # Extract ticker/expiry from context or module archive convention
             focus = context.get("focus") or {}
             ticker = (
-                str(context.get("ticker") or focus.get("ticker") or "")
-                .strip()
-                .upper()
+                str(context.get("ticker") or focus.get("ticker") or "").strip().upper()
             )
             ticker = ticker or None
             expiry = str(context.get("expiry") or focus.get("expiry") or "").strip()
@@ -199,7 +196,9 @@ def _write_run_manifest(
             "order": [module.slug for module in ordered],
             "results": results_out,
             "artifacts": artifacts_out,
-            "started_at": context.get("run_started_at", dt.datetime.now(dt.UTC).isoformat()),
+            "started_at": context.get(
+                "run_started_at", dt.datetime.now(dt.UTC).isoformat()
+            ),
             "ended_at": dt.datetime.now(dt.UTC).isoformat(),
         }
 
@@ -237,7 +236,7 @@ def _persist_context_patch_to_store(
 
     try:
         # Lazy import ContextStore and Scope
-        from shared.context_store import ContextStore, Scope
+        from shared.context_store import ContextStore
 
         # Build scope from context: prefer ticker+expiry if available, fall back to basket
         scope_dict: dict[str, Any] = {}
@@ -245,7 +244,7 @@ def _persist_context_patch_to_store(
             scope_dict["basket"] = context["basket"]
         elif "ticker" in context:
             scope_dict["ticker"] = context["ticker"]
-            if "expiry" in context and context["expiry"]:
+            if context.get("expiry"):
                 scope_dict["expiry"] = context["expiry"]
 
         # If we have a valid scope, persist each key in context_patch
@@ -269,6 +268,39 @@ def _persist_context_patch_to_store(
             source_slug,
             exc_info=True,
         )
+
+
+def _make_console_lossy() -> None:
+    """Stop a console-encoding failure from killing a module run.
+
+    Several suites print banner lines containing box-drawing characters
+    (U+2500 and friends). On Windows a console/pipe that defaults to cp1252
+    cannot encode those, so the bare `print` raises UnicodeEncodeError --
+    inside the module, mid-computation. That is how every Options_Suite
+    pricer ended up silently falling back to a flat 0.25 sigma: not because
+    the IV solver failed, but because `VolManager.get_sigma` printed a
+    reference banner on the way and the print threw.
+
+    Rendering an un-encodable character as "?" is the correct trade here:
+    the alternative is losing the computation over a decoration. This only
+    affects how bytes reach the console -- no value a module returns passes
+    through it. Idempotent, and a no-op on a stream that has no
+    `reconfigure` (a StringIO under pytest, for instance).
+    """
+    import sys
+
+    # "surrogateescape" (Python's default for stdout on Windows here) is NOT
+    # sufficient: it round-trips undecodable *input* bytes, and does nothing
+    # for encoding a legitimate character like U+2500 that simply has no
+    # cp1252 mapping. Only the lossy handlers below actually prevent the
+    # raise, so anything outside that set gets replaced.
+    _SAFE = ("replace", "backslashreplace", "xmlcharrefreplace", "ignore")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if getattr(stream, "errors", None) not in _SAFE:
+                stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001 -- best effort; never fail a run for this
+            pass
 
 
 def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str, Any]:
@@ -306,17 +338,21 @@ def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str,
             "results": {slug: ModuleResult, ...},
         }
     """
+    _make_console_lossy()
+
     # Entry-time mutation: mint run_id and set default output_dir if missing.
     # Explicit caller output_dir is respected; run_id is always assigned.
     if "run_id" not in context:
         import datetime as dt
         import secrets
+
         now = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
         ran = secrets.token_hex(2)
         context["run_id"] = f"{now}-{ran}"
 
     if "output_dir" not in context:
         from shared.artifact_paths import repo_root
+
         out_dir = repo_root() / "outputs" / context["run_id"]
         out_dir.mkdir(parents=True, exist_ok=True)
         context["output_dir"] = str(out_dir)

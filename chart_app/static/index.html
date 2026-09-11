@@ -64,6 +64,9 @@
       user-select: none;
     }
     #overlays input { accent-color: #38BDF8; margin: 0; }
+    /* Direction leg with too few bars to compute -- distinct from
+       a leg that computed and did not fire. */
+    #legs [data-leg].na { opacity: .35; text-decoration: line-through; }
     #chart { position: absolute; top: 66px; left: 0; right: 0; bottom: 0; }
   </style>
   <script src="/static/vendor/echarts.min.js"></script>
@@ -100,6 +103,13 @@
     <label><input type="checkbox" data-overlay="whale" checked>whale</label>
     <label><input type="checkbox" data-overlay="volume" checked>volume</label>
     <label><input type="checkbox" data-overlay="flow" checked>flow</label>
+    <label><input type="checkbox" data-overlay="ema200">ema200</label>
+    <label><input type="checkbox" data-overlay="vwapb">vwap&#177;&#963;</label>
+    <label><input type="checkbox" data-overlay="atr">atr ch</label>
+    <label><input type="checkbox" data-overlay="pdhl">pd h/l</label>
+    <label><input type="checkbox" data-overlay="rsi">rsi</label>
+    <label><input type="checkbox" data-overlay="cci">cci</label>
+    <label><input type="checkbox" data-overlay="macd">macd</label>
   </div>
   <div id="chart"></div>
   <script>
@@ -181,7 +191,18 @@
     // ---- overlay toggles (A1) --------------------------------------------
     // Which optional series render. OHLC and the buy/add/hold/sell markers are
     // always on -- they are the chart, not an overlay.
-    const OVERLAY_KEYS = ["ema20", "ema50", "vwap", "bb", "whale", "volume", "flow"];
+    const OVERLAY_KEYS = [
+      "ema20", "ema50", "vwap", "bb", "whale", "volume", "flow",
+      // Added indicators. Default off: `enabledOverlays()` reads the live
+      // checkbox state, and a saved overlay-store from before these existed
+      // simply has no entry for them, so they stay unchecked until asked for.
+      "ema200", "vwapb", "atr", "pdhl",
+      // Oscillators. Each gets its OWN pane rather than sharing the
+      // price axis -- RSI is 0-100, CCI swings in the hundreds and MACD
+      // is in price-difference units, so none of them can share a scale
+      // with candles (or with each other).
+      "rsi", "cci", "macd",
+    ];
     const OVERLAY_STORE = "chart-app-overlays";
     // Series name -> overlay key, so the ECharts legend mirrors the checkboxes.
     const SERIES_OVERLAY = {
@@ -189,6 +210,12 @@
       bb_upper: "bb", bb_mid: "bb", bb_lower: "bb",
       whale: "whale", volume: "volume",
       call: "flow", put: "flow", net: "flow",
+      ema200: "ema200",
+      vwap_up: "vwapb", vwap_dn: "vwapb",
+      atr_up: "atr", atr_dn: "atr",
+      pdh: "pdhl", pdl: "pdhl",
+      rsi: "rsi", cci: "cci",
+      macd: "macd", macd_signal: "macd", macd_hist: "macd",
     };
 
     function enabledOverlays() {
@@ -233,6 +260,18 @@
       const ticker = state.ticker || "";
       const interval = state.interval || "";
       document.getElementById("label").textContent = ticker + "  " + interval;
+      // Tell an embedding page what is on screen. The dashboard's Chart tab
+      // hosts this app in a cross-origin iframe (:8791 inside :8787), so
+      // postMessage is the only channel; it uses this to filter the position
+      // panel beside the chart down to the symbol being charted.
+      if (window.parent && window.parent !== window) {
+        try {
+          window.parent.postMessage(
+            { type: "chart-symbol", ticker: ticker, interval: interval },
+            "*"
+          );
+        } catch (_err) { /* embedder gone; nothing to tell */ }
+      }
       const live = state.live || {};
       const bits = [];
       if (state.as_of) bits.push(state.as_of);
@@ -240,14 +279,28 @@
       if (live.conviction) bits.push(live.conviction);
       document.getElementById("stamp").textContent = bits.join("  ·  ");
       const sig = live.signals || {};
+      // "Not enough bars at this timeframe" and "computed, nothing fired"
+      // both render as every leg dark, so say which it is.
+      const dir = state.direction || { active: true };
       document.querySelectorAll("#legs [data-leg]").forEach((el) => {
-        const on = !!sig[el.dataset.leg];
+        const on = dir.active && !!sig[el.dataset.leg];
         el.classList.toggle("on", on);
         el.classList.toggle("off", !on);
+        el.classList.toggle("na", !dir.active);
+        el.title = dir.active
+          ? el.dataset.leg
+          : "needs " + dir.min_bars + " bars, have " + dir.bars +
+            " at this timeframe";
       });
+      if (!dir.active) {
+        const stampEl = document.getElementById("stamp");
+        stampEl.textContent += (stampEl.textContent ? "  ·  " : "") +
+          "direction inactive (" + dir.bars + "/" + dir.min_bars + " bars)";
+      }
 
       const bars = state.bars || [];
       const overlays = state.overlays || {};
+      const osc = state.oscillators || {};
       const markers = state.markers || [];
       const cats = bars.map((b) => b.ts);
       const ohlc = bars.map((b) => [b.open, b.close, b.low, b.high]);
@@ -273,6 +326,66 @@
       const show = Math.min(bars.length, VISIBLE[interval] || bars.length || 1);
       const startPct = bars.length ? 100 * (bars.length - show) / bars.length : 0;
 
+      // ---- pane layout -------------------------------------------------
+      // Panes are computed, not branched. This used to be a pair of
+      // `hasFlow ? [...3 panes] : [...2 panes]` ternaries repeated three
+      // times (grid, xAxis, yAxis); adding an oscillator pane to that shape
+      // would have meant eight hand-written combinations. Now each optional
+      // pane declares itself and the geometry falls out.
+      const panes = [{ key: "price", weight: 60 }];
+      if (ov.volume) panes.push({ key: "volume", weight: 10, splitLine: false });
+      if (hasFlow) panes.push({ key: "flow", weight: 16 });
+      if (ov.rsi) panes.push({ key: "rsi", weight: 14, min: 0, max: 100 });
+      if (ov.cci) panes.push({ key: "cci", weight: 14 });
+      if (ov.macd) panes.push({ key: "macd", weight: 14 });
+
+      const GAP = 3;                       // % of chart height between panes
+      const TOP = 1.2;                     // room for the legend
+      const totalWeight = panes.reduce((a, p) => a + p.weight, 0);
+      const usable = 100 - TOP - 4 - GAP * (panes.length - 1);
+      const PANE = { grid: [], xAxis: [], yAxis: [], index: {}, all: [] };
+      let cursor = TOP;
+      panes.forEach((pane, i) => {
+        const height = usable * (pane.weight / totalWeight);
+        PANE.index[pane.key] = i;
+        PANE.all.push(i);
+        PANE.grid.push({
+          left: 56, right: 16,
+          top: cursor.toFixed(2) + "%",
+          height: height.toFixed(2) + "%",
+        });
+        PANE.xAxis.push({
+          type: "category", data: cats, gridIndex: i,
+          // Only the bottom pane carries date labels; the rest would just
+          // repeat them and eat vertical space.
+          axisLabel: { color: MUTED, show: i === panes.length - 1 },
+          axisLine: { lineStyle: { color: GRID } },
+          splitLine: { show: false },
+        });
+        PANE.yAxis.push({
+          scale: pane.min === undefined,
+          min: pane.min, max: pane.max,
+          gridIndex: i,
+          axisLabel: { color: MUTED },
+          splitLine: pane.splitLine === false
+            ? { show: false }
+            : { lineStyle: { color: "#1b2433" } },
+        });
+        cursor += height + GAP;
+      });
+      const paneOf = (key) => PANE.index[key];
+      const oscSeries = (name, key, data, color, type) => ({
+        name: name,
+        type: type || "line",
+        xAxisIndex: paneOf(key),
+        yAxisIndex: paneOf(key),
+        data: data || [],
+        showSymbol: false,
+        lineStyle: { width: 1.3, color: color },
+        itemStyle: { color: color },
+        connectNulls: false,
+      });
+
       const opt = {
         backgroundColor: "#0e1117",
         animation: false,
@@ -284,42 +397,19 @@
           textStyle: { color: MUTED, fontSize: 10 },
           inactiveColor: "#334155",
           selected: legendSelected(ov),
-          data: hasFlow
+          data: (hasFlow
             ? ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale", "call", "put", "net"]
-            : ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"],
+            : ["ema20", "ema50", "vwap", "bb_upper", "bb_mid", "bb_lower", "whale"]
+          ).concat([
+            "ema200", "vwap_up", "vwap_dn", "atr_up", "atr_dn", "pdh", "pdl",
+            "rsi", "cci", "macd", "macd_signal", "macd_hist",
+          ]),
         },
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-        axisPointer: { link: [{ xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1] }] },
-        grid: hasFlow
-          ? [
-              { left: 56, right: 16, top: 8, height: "52%" },
-              { left: 56, right: 16, top: "62%", height: "9%" },
-              { left: 56, right: 16, top: "73%", height: "15%" },
-            ]
-          : [
-              { left: 56, right: 16, top: 8, height: "62%" },
-              { left: 56, right: 16, top: "72%", height: "12%" },
-            ],
-        xAxis: hasFlow
-          ? [
-              { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-              { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-              { type: "category", data: cats, gridIndex: 2, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-            ]
-          : [
-              { type: "category", data: cats, gridIndex: 0, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-              { type: "category", data: cats, gridIndex: 1, axisLabel: { color: MUTED }, axisLine: { lineStyle: { color: GRID } }, splitLine: { show: false } },
-            ],
-        yAxis: hasFlow
-          ? [
-              { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
-              { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
-              { scale: true, gridIndex: 2, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
-            ]
-          : [
-              { scale: true, gridIndex: 0, axisLabel: { color: MUTED }, splitLine: { lineStyle: { color: "#1b2433" } } },
-              { scale: true, gridIndex: 1, axisLabel: { color: MUTED }, splitLine: { show: false } },
-            ],
+        axisPointer: { link: [{ xAxisIndex: PANE.all }] },
+        grid: PANE.grid,
+        xAxis: PANE.xAxis,
+        yAxis: PANE.yAxis,
         series: [
           {
             name: "ohlc",
@@ -342,19 +432,45 @@
             line("bb_mid", overlays.bb_mid || [], "#94a3b8", 1, "dotted"),
             line("bb_lower", overlays.bb_lower || [], "#64748B", 1),
           ] : []),
+          ...(ov.ema200 ? [line("ema200", overlays.ema200 || [], "#a78bfa", 1.6)] : []),
+          ...(ov.vwapb ? [
+            line("vwap_up", overlays.vwap_up || [], "#34d399", 1, "dotted"),
+            line("vwap_dn", overlays.vwap_dn || [], "#34d399", 1, "dotted"),
+          ] : []),
+          ...(ov.atr ? [
+            line("atr_up", overlays.atr_up || [], "#f472b6", 1, "dashed"),
+            line("atr_dn", overlays.atr_dn || [], "#f472b6", 1, "dashed"),
+          ] : []),
+          ...(ov.pdhl ? [
+            line("pdh", overlays.pdh || [], "#fbbf24", 1, "dashed"),
+            line("pdl", overlays.pdl || [], "#fbbf24", 1, "dashed"),
+          ] : []),
           ...(ov.whale ? [whaleMarks(bars, state.signals || [])] : []),
           markerSeries(bars, markers),
           ...(ov.volume ? [{
             name: "volume",
             type: "bar",
-            xAxisIndex: 1,
-            yAxisIndex: 1,
+            xAxisIndex: paneOf("volume"),
+            yAxisIndex: paneOf("volume"),
             data: volumes,
           }] : []),
           ...(hasFlow ? [
-            line("call", flowCall, "#34d399", 1.2, null, 2, 2),
-            line("put", flowPut, "#f87171", 1.2, null, 2, 2),
-            line("net", flowNet, "#F4F7FF", 1.1, null, 2, 2),
+            line("call", flowCall, "#34d399", 1.2, null, paneOf("flow"), paneOf("flow")),
+            line("put", flowPut, "#f87171", 1.2, null, paneOf("flow"), paneOf("flow")),
+            line("net", flowNet, "#F4F7FF", 1.1, null, paneOf("flow"), paneOf("flow")),
+          ] : []),
+          // Oscillator panes. `osc` is whatever the server computed; a
+          // missing key renders as an empty series rather than throwing.
+          ...(ov.rsi ? [
+            oscSeries("rsi", "rsi", osc.rsi, "#38bdf8"),
+          ] : []),
+          ...(ov.cci ? [
+            oscSeries("cci", "cci", osc.cci, "#f59e0b"),
+          ] : []),
+          ...(ov.macd ? [
+            oscSeries("macd", "macd", osc.macd, "#60a5fa"),
+            oscSeries("macd_signal", "macd", osc.macd_signal, "#f472b6"),
+            oscSeries("macd_hist", "macd", osc.macd_hist, "#64748b", "bar"),
           ] : []),
         ],
         textStyle: { color: TEXT },
@@ -375,7 +491,7 @@
         opt.dataZoom = [
           {
             type: "inside",
-            xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
+            xAxisIndex: PANE.all,
             filterMode: "none",
             zoomOnMouseWheel: true,
             moveOnMouseMove: true,
@@ -383,7 +499,7 @@
           },
           {
             type: "slider",
-            xAxisIndex: hasFlow ? [0, 1, 2] : [0, 1],
+            xAxisIndex: PANE.all,
             height: 22,
             bottom: 6,
             start: zoomStart,
@@ -409,9 +525,13 @@
       "3m": 80, "5m": 80, "10m": 80, "15m": 80,
       "30m": 80, "1h": 80, "4h": 80, "1d": 180,
     };
+    // Mirrors _LOOKBACK in chart_app/server.py. Intraday lookback is capped
+    // at 30 days by the shared validator, so 1h/4h ask for 30d, not the
+    // 60d/1y they used to (both were rejected before any fetch, which is why
+    // those two timeframes never loaded).
     const LOOKBACK = {
       "3m": "5d", "5m": "5d", "10m": "10d", "15m": "5d",
-      "30m": "20d", "1h": "60d", "4h": "1y", "1d": "1y",
+      "30m": "20d", "1h": "30d", "4h": "30d", "1d": "1y",
     };
 
     async function poll() {
@@ -445,12 +565,23 @@
           return;
         }
         const lookback = LOOKBACK[interval] || "5d";
-        await fetch("/api/refresh", {
+        const refreshRes = await fetch("/api/refresh", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ lookback: lookback }),
         });
+        let refreshBody = null;
+        try { refreshBody = await refreshRes.json(); } catch (_e) { /* non-JSON */ }
         await poll();
+        // Say why a load produced nothing. A coarse interval is aggregated
+        // from a lot of one-minute rows and the provider can time out; that
+        // used to leave an empty chart with no explanation at all.
+        if (refreshBody && refreshBody.ok === false) {
+          const stampEl = document.getElementById("stamp");
+          stampEl.textContent =
+            "load failed for " + (refreshBody.interval || "") + " — " +
+            (refreshBody.error || "unknown error") + " — press Load to retry";
+        }
       } finally {
         btn.disabled = false;
         // A symbol/interval switch repaints with notMerge; if the canvas was

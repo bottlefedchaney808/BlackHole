@@ -219,6 +219,15 @@ function rowTable(rows) {
     cols.forEach(function (k) {
       const td = document.createElement('td');
       const v = row[k];
+      // A cell holding an object or array used to render as the literal string
+      // "[object Object]" -- position_analysis rows carry nested hedge /
+      // price_dist / mc_sim sub-objects, so most of that table was that string.
+      // Nest them as an expandable sub-table instead of stringifying.
+      if (v !== null && typeof v === 'object') {
+        td.appendChild(nestedCell(v));
+        tr.appendChild(td);
+        return;
+      }
       td.textContent = typeof v === 'number' && !Number.isInteger(v)
         ? v.toFixed(4)
         : fmtValue(v);
@@ -230,6 +239,35 @@ function rowTable(rows) {
   table.appendChild(tbody);
   tablewrap.appendChild(table);
   return tablewrap;
+}
+
+/** Render an object/array that turned up inside a table cell.
+ *
+ * Collapsed by default so one nested payload cannot blow the row height out;
+ * the summary previews the scalar fields so the table still says something at
+ * a glance. Recursion is bounded: the inner table's own object cells nest the
+ * same way, and a cycle cannot occur in JSON-sourced data. */
+function nestedCell(value) {
+  const rows = Array.isArray(value) ? value : [value];
+  const scalars = [];
+  if (!Array.isArray(value)) {
+    Object.keys(value).forEach(function (k) {
+      const v = value[k];
+      if (v === null || typeof v !== 'object') scalars.push(k + ' ' + fmtValue(v));
+    });
+  }
+  const details = document.createElement('details');
+  details.className = 'qw-cell-sub';
+  const summary = document.createElement('summary');
+  summary.textContent = Array.isArray(value)
+    ? value.length + ' item' + (value.length === 1 ? '' : 's')
+    : (scalars.slice(0, 3).join(' · ') || Object.keys(value).length + ' fields');
+  details.appendChild(summary);
+  const rowsAreObjects = rows.every(function (r) {
+    return r !== null && typeof r === 'object' && !Array.isArray(r);
+  });
+  details.appendChild(rowsAreObjects ? rowTable(rows) : renderJSON(value));
+  return details;
 }
 
 function scalarGrid(entries, labelPrefix) {
@@ -330,8 +368,12 @@ export function renderMetricsTable(metrics) {
     out.appendChild(ul);
   }
   if (scalars.length) out.appendChild(scalarGrid(scalars, null));
+  // Note whether there were row tables BEFORE moving them out: the move
+  // empties rowsHost, so testing rowsHost.firstChild afterwards was always
+  // false and stamped "(empty metrics)" under a perfectly populated table.
+  const hadRows = !!rowsHost.firstChild;
   while (rowsHost.firstChild) out.appendChild(rowsHost.firstChild);
-  if (!chrome.headline && !chrome.warnings && !scalars.length && !rowsHost.firstChild) {
+  if (!chrome.headline && !chrome.warnings && !scalars.length && !hadRows) {
     out.appendChild(document.createTextNode('(empty metrics)'));
   }
   return out;
@@ -375,7 +417,15 @@ export function renderArtifacts(artifacts) {
     const figure = document.createElement('figure');
     const img = document.createElement('img');
     img.className = 'qw-artifact-img';
-    img.loading = 'lazy';
+    // EAGER, deliberately -- `lazy` deadlocks here and the chart never draws.
+    // .qw-artifact-img is `width:100%; height:auto`, so before the bytes
+    // arrive the element has NO intrinsic height and lays out ~1px tall. A
+    // ~1px box sitting below the fold never intersects the viewport, so a
+    // lazy image is never fetched, so it never gains a height, so it never
+    // intersects: the surface/GARCH/variance PNG stays blank forever while
+    // /files happily returns 200 for the very same URL. These cards show a
+    // handful of charts, not a gallery -- there is nothing to defer.
+    img.loading = 'eager';
     img.alt = a.path ? String(a.path).split(/[\\/]/).pop() : 'artifact';
     img.src = url;
     figure.appendChild(img);

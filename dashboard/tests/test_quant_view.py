@@ -58,15 +58,15 @@ def test_quant_route_loads_widget_js_modules():
 
 
 def test_quant_route_talks_to_generic_widget_api():
-    """The page's own JS (catalog browser / console grid / provenance) must
-    target the Phase 3 generic routes -- not the removed orchestrator
-    launching endpoints. Cheap regression guard against a typo'd path.
+    """/quant now redirects to the desk, which is where the catalog picker
+    and the tool rail live. The generic Phase 3 routes must still be what
+    that page targets -- cheap regression guard against a typo'd path.
     """
-    resp = client.get('/quant')
+    resp = client.get('/quant')          # follows the redirect to /
     html = resp.text
     assert '/api/widgets/catalog' in html
-    assert '/api/layout/quant' in html
-    assert '/api/context' in html
+    assert '/api/layout/' in html
+    assert "PAGE = 'desk'" in html
 
 
 def test_quant_route_launch_card_ui_is_gone():
@@ -92,11 +92,13 @@ def test_quant_route_carries_alerts_contract():
     assert '/ack' in html
 
 
-def test_quant_nav_link_present_and_marked_active():
-    resp = client.get('/quant')
-    html = resp.text
-    assert 'href="/quant"' in html
-    assert 'class="on"' in html or 'class="tabs-on"' in html or ' on"' in html
+def test_quant_folded_into_the_desk_nav():
+    """Quant Console stopped being its own tab when it merged into the desk:
+    the nav shows one entry, and /quant redirects onto it."""
+    resp = client.get('/quant', follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert resp.headers['location'] == '/'
 
-    home_resp = client.get('/')
-    assert 'href="/quant"' in home_resp.text
+    home = client.get('/').text
+    assert 'href="/quant"' not in home
+    assert '>Desk<' in home

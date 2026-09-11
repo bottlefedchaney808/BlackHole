@@ -1,7 +1,194 @@
 {
   "version": 1,
-  "updated_at": "2026-09-04T18:58:08.404961+00:00",
+  "updated_at": "2026-09-10T10:28:39.692993+00:00",
   "packs": [
+    {
+      "group_id": "cns-threshold-alerts-371ccf526749",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "371ccf526749",
+      "created_at": "2026-09-10T10:28:39.690977+00:00",
+      "last_updated_at": "2026-09-10T10:28:39.690977+00:00",
+      "ticker_count": 8,
+      "priority": "high",
+      "source_run_id": "20260910T101210Z",
+      "thesis_summary": "8 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "CHWY",
+        "META",
+        "GLD.X",
+        "AAPL",
+        "PLTR",
+        "ABCL",
+        "CMPS",
+        "BMY"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260910/cns-threshold-alerts-371ccf526749.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260910/cns-threshold-alerts-371ccf526749.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-3719a911dc55",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "3719a911dc55",
+      "created_at": "2026-09-10T09:57:06.909243+00:00",
+      "last_updated_at": "2026-09-10T09:57:06.909243+00:00",
+      "ticker_count": 7,
+      "priority": "high",
+      "source_run_id": "20260910T093229Z",
+      "thesis_summary": "7 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "CHWY",
+        "MELANIA.X",
+        "DKNG",
+        "META",
+        "GLD.X",
+        "PLTR",
+        "AAPL"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260910/cns-threshold-alerts-3719a911dc55.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260910/cns-threshold-alerts-3719a911dc55.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-223e504c39ab",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "223e504c39ab",
+      "created_at": "2026-09-09T18:39:49.456262+00:00",
+      "last_updated_at": "2026-09-09T18:39:49.456262+00:00",
+      "ticker_count": 3,
+      "priority": "high",
+      "source_run_id": "20260909T181953Z",
+      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "PLAY",
+        "PATH",
+        "ODD"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-223e504c39ab.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-223e504c39ab.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-a87c1acc56fb",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "a87c1acc56fb",
+      "created_at": "2026-09-09T18:04:48.648931+00:00",
+      "last_updated_at": "2026-09-09T18:04:48.648931+00:00",
+      "ticker_count": 6,
+      "priority": "high",
+      "source_run_id": "20260909T175406Z",
+      "thesis_summary": "6 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "PATH",
+        "QQQ",
+        "META",
+        "NCLH",
+        "CASY",
+        "ODD"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-a87c1acc56fb.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-a87c1acc56fb.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-3d9928ba8be3",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "3d9928ba8be3",
+      "created_at": "2026-09-09T17:39:04.382178+00:00",
+      "last_updated_at": "2026-09-09T17:39:04.382178+00:00",
+      "ticker_count": 5,
+      "priority": "high",
+      "source_run_id": "20260909T172541Z",
+      "thesis_summary": "5 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "NCLH",
+        "META",
+        "CASY",
+        "TTAN",
+        "XERS"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-3d9928ba8be3.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-3d9928ba8be3.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-3bd52c3ecbc2",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "3bd52c3ecbc2",
+      "created_at": "2026-09-09T17:10:38.082323+00:00",
+      "last_updated_at": "2026-09-09T17:10:38.082323+00:00",
+      "ticker_count": 6,
+      "priority": "high",
+      "source_run_id": "20260909T165551Z",
+      "thesis_summary": "6 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "QQQ",
+        "CELH",
+        "CASY",
+        "TTAN",
+        "IRD",
+        "XERS"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-3bd52c3ecbc2.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-3bd52c3ecbc2.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-16ce25641bbb",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "16ce25641bbb",
+      "created_at": "2026-09-09T16:40:48.005907+00:00",
+      "last_updated_at": "2026-09-09T16:40:48.005907+00:00",
+      "ticker_count": 5,
+      "priority": "high",
+      "source_run_id": "20260909T162431Z",
+      "thesis_summary": "5 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "CELH",
+        "SPY",
+        "META",
+        "NCLH",
+        "XERS"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-16ce25641bbb.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-16ce25641bbb.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-adcb6b07b4d8",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "adcb6b07b4d8",
+      "created_at": "2026-09-09T16:09:27.468845+00:00",
+      "last_updated_at": "2026-09-09T16:09:27.468845+00:00",
+      "ticker_count": 7,
+      "priority": "high",
+      "source_run_id": "20260909T154721Z",
+      "thesis_summary": "7 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "SEDG",
+        "UNH",
+        "META",
+        "NCLH",
+        "SOFI",
+        "CCL",
+        "XERS"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-adcb6b07b4d8.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-adcb6b07b4d8.csv"
+    },
+    {
+      "group_id": "cns-threshold-alerts-ece6f2254316",
+      "group_name": "cns-threshold-alerts",
+      "fingerprint": "ece6f2254316",
+      "created_at": "2026-09-09T15:31:58.650136+00:00",
+      "last_updated_at": "2026-09-09T15:31:58.650136+00:00",
+      "ticker_count": 5,
+      "priority": "high",
+      "source_run_id": "20260909T150035Z",
+      "thesis_summary": "5 highlighted tickers crossing CNS threshold",
+      "tickers": [
+        "LKNCY",
+        "GOOG",
+        "GOOGL",
+        "NKE",
+        "JMKE"
+      ],
+      "json_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-ece6f2254316.json",
+      "csv_path": "sentiment-scanner/data/exports/highlighted_ticker_packs/20260909/cns-threshold-alerts-ece6f2254316.csv"
+    },
     {
       "group_id": "cns-threshold-alerts-78b8bc467f63",
       "group_name": "cns-threshold-alerts",
@@ -109,43 +296,6 @@
       ],
       "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260827\\cns-threshold-alerts-4366db715a11.json",
       "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260827\\cns-threshold-alerts-4366db715a11.csv"
-    },
-    {
-      "group_id": "cns-threshold-alerts-ae1694f61186",
-      "group_name": "cns-threshold-alerts",
-      "fingerprint": "ae1694f61186",
-      "created_at": "2026-08-26T22:46:39.754681+00:00",
-      "last_updated_at": "2026-08-26T22:46:39.754681+00:00",
-      "ticker_count": 3,
-      "priority": "high",
-      "source_run_id": "20260826T222327Z",
-      "thesis_summary": "3 highlighted tickers crossing CNS threshold",
-      "tickers": [
-        "WEN",
-        "ANF",
-        "DJT"
-      ],
-      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260826\\cns-threshold-alerts-ae1694f61186.json",
-      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260826\\cns-threshold-alerts-ae1694f61186.csv"
-    },
-    {
-      "group_id": "cns-threshold-alerts-07474b3714d5",
-      "group_name": "cns-threshold-alerts",
-      "fingerprint": "07474b3714d5",
-      "created_at": "2026-08-25T18:59:59.112626+00:00",
-      "last_updated_at": "2026-08-25T18:59:59.112626+00:00",
-      "ticker_count": 4,
-      "priority": "high",
-      "source_run_id": "20260825T184753Z",
-      "thesis_summary": "4 highlighted tickers crossing CNS threshold",
-      "tickers": [
-        "MBLY",
-        "INTU",
-        "TSLA",
-        "DKS"
-      ],
-      "json_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260825\\cns-threshold-alerts-07474b3714d5.json",
-      "csv_path": "C:\\Users\\bottl\\FinancialDevelopment\\sentiment-scanner\\data\\exports\\highlighted_ticker_packs\\20260825\\cns-threshold-alerts-07474b3714d5.csv"
     }
   ]
 }

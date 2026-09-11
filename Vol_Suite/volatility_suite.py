@@ -68,7 +68,9 @@ from vs_utils import collect_files, compose_pdf_report, timestamped_output_dir
 JUMP_MODEL_DEFAULT = os.getenv("JUMP_MODEL_DEFAULT", "Bates")
 
 
-def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: float):
+def _calibrate_default_jump_model(
+    ticker: str, expiration: str, target_years: float, capture: dict | None = None
+):
     """Calibrate JUMP_MODEL_DEFAULT against the focus ticker's chain at
     *expiration*, plus a cheap Merton fit for the GARCH jump-day filter
     (Task 7/8's tie 1 wants Merton specifically, independent of whichever
@@ -84,6 +86,16 @@ def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: fl
     own spot/rate/dividend/chain data, the same way
     garch_analysis.run_garch_module fetches its own price history, rather
     than depending on _run_core_analysis's internal variable soup.
+
+    ``capture``: optional dict that, when supplied, receives the calibration's
+    raw smile arrays (``strikes`` / ``market_ivs`` / ``fitted_ivs``) so a
+    caller can PLOT the fit. They are handed back out-of-band, not added to
+    the return value, on purpose: the returned dict is written straight into
+    ``suite_context.json``'s ``jump_diffusion`` key, which is schema-validated
+    and meant to stay small -- three float arrays per expiry do not belong in
+    a context file every other suite loads. The widget adapter passes a
+    capture dict to draw its chart; _run_core_analysis passes nothing and is
+    byte-for-byte unaffected.
     """
     from jump_diffusion.calibration import calibrate
     from jump_diffusion.models import ALL_MODELS, BatesModel, MertonModel
@@ -114,6 +126,13 @@ def _calibrate_default_jump_model(ticker: str, expiration: str, target_years: fl
         else:
             merton_result = calibrate(MertonModel, chain, spot, target_years)
             merton_sigma = merton_result.params["sigma"]
+
+        if capture is not None:
+            # Only the plotting caller asks for these; see the docstring.
+            capture["strikes"] = [float(k) for k in result.strikes]
+            capture["market_ivs"] = [float(v) for v in result.market_ivs]
+            capture["fitted_ivs"] = [float(v) for v in result.fitted_ivs]
+            capture["spot"] = float(spot)
 
         return {
             "model_name": result.model_name,

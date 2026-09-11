@@ -2,12 +2,20 @@
 {% block title %}Chart -- BlackHole Investments Dashboard{% endblock %}
 {% block body_class %}page-chart{% endblock %}
 
-{% block content %}
-<h1>Chart</h1>
-<p class="sub">Live native chart app at <code>{{ chart_app_url }}</code></p>
+{#
+  Chart tab: the native chart plus context that belongs beside a chart.
 
+  The sidebar used to be a generic "+ Add" catalog picker that could drop any
+  of the 51 registered modules next to the chart -- Dealer Flow, VaR copulas,
+  a Heston LSM pricer -- none of which have anything to do with what is on
+  screen, none of which were wired to the charted symbol, and each of which
+  arrived with its own ticker/expiry/basket inputs to fill in by hand. It is
+  now fixed status: your position in the symbol being charted, plus the
+  background-fed status panels. Tools live on the desk page, on one scope.
+#}
+
+{% block content %}
 <div class="chart-layout">
-  <!-- Main chart iframe (left, takes the stretch) -->
   <main class="chart-main">
     <iframe
       src="{{ chart_app_url }}"
@@ -16,41 +24,50 @@
     ></iframe>
   </main>
 
-  <!-- Side panel for quant-widget instances (bounded to <=4 widgets) -->
   <aside class="chart-side-panel">
     <header>
-      <h2>Chart widgets</h2>
-      <span class="note" id="chartWidgetCount">0 widgets</span>
-      <button type="button" id="chartAddWidget" class="chart-add-btn" title="Add a widget to the chart sidebar">+ Add</button>
+      <h2 id="sideTitle">Context</h2>
+      <span class="note" id="sideSymbol">—</span>
     </header>
-    <div class="chart-add-row" id="chartAddRow" hidden>
-      <select id="chartAddSelect"><option value="">loading catalog…</option></select>
-      <button type="button" id="chartAddConfirm">Add</button>
-      <button type="button" id="chartAddCancel">Cancel</button>
-    </div>
-    <div class="chart-grid" id="chartGrid">
-      <div class="empty-grid">Add IV Rank or VRP from +</div>
+
+    <div class="chart-side-body">
+
+      <!-- Your position in the charted symbol -->
+      <section class="side-card">
+        <div class="side-card-head">
+          <span>Your position</span>
+          <button type="button" class="side-refresh" id="posRefresh" title="Re-read the book">↻</button>
+        </div>
+        <div id="sidePositions" class="side-positions">
+          <div class="side-empty">loading…</div>
+        </div>
+      </section>
+
+      <!-- Background-fed status. No scope inputs, no Run: these render what a
+           background tick or agent push last wrote. -->
+      <section class="side-card side-card-flush">
+        <quant-widget slug="signals" mode="status"></quant-widget>
+      </section>
+      <section class="side-card side-card-flush">
+        <quant-widget slug="position_analysis" mode="status"></quant-widget>
+      </section>
+
+      <p class="side-foot muted">
+        Indicators are on the chart itself (top-left toggles).
+        Analysis tools live on the <a href="/">desk</a>, where they share one scope.
+      </p>
     </div>
   </aside>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<script type="module">
+import '/static/js/quant-widget.js?v={{ asset_v }}';
+</script>
+
 <script>
-(function() {
-  var PAGE = 'chart';
-  var MAX_WIDGETS = 4;
-  var instances = [];          // mirrors GET/PUT /api/layout/chart order
-  var grid = document.getElementById('chartGrid');
-  var countEl = document.getElementById('chartWidgetCount');
-  var addBtn = document.getElementById('chartAddWidget');
-  var addRow = document.getElementById('chartAddRow');
-  var addSelect = document.getElementById('chartAddSelect');
-
-  function genInstanceId() {
-    return 'wi_' + Math.random().toString(36).slice(2, 10);
-  }
-
+(function () {
   // ---- resize ping: the child ECharts canvas inits before the iframe has
   // its final box, so nudge it once the frame loads and whenever this tab
   // becomes visible again (chart_app listens for {type:'chart-resize'}).
@@ -59,169 +76,100 @@
     if (!frame || !frame.contentWindow) return;
     try {
       frame.contentWindow.postMessage({ type: 'chart-resize' }, '*');
-    } catch (e) {
-      /* cross-origin or not ready yet -- next ping covers it */
-    }
+    } catch (e) { /* cross-origin or not ready yet -- next ping covers it */ }
   }
   var chartFrame = document.getElementById('chartFrame');
   if (chartFrame) {
-    chartFrame.addEventListener('load', function() {
+    chartFrame.addEventListener('load', function () {
       pingChartResize();
       setTimeout(pingChartResize, 250);
     });
   }
-  document.addEventListener('visibilitychange', function() {
+  document.addEventListener('visibilitychange', function () {
     if (!document.hidden) pingChartResize();
   });
   window.addEventListener('resize', pingChartResize);
 
-  // ---- sidebar widget grid ------------------------------------------------
-  function renderGrid() {
-    grid.innerHTML = '';
-    if (!instances.length) {
-      grid.innerHTML = '<div class="empty-grid">Add IV Rank or VRP from +</div>';
-    } else {
-      instances.forEach(function(inst) {
-        var cell = document.createElement('div');
-        cell.className = 'chart-cell';
-        cell.dataset.instanceId = inst.widget_instance_id;
+  // ---- book, filtered to the charted symbol ------------------------------
+  var BOOK = [];
+  var SYMBOL = '';
 
-        var bar = document.createElement('div');
-        bar.className = 'chart-cell-bar';
-        var name = document.createElement('span');
-        name.className = 'chart-cell-slug';
-        name.textContent = inst.slug;
-        var kill = document.createElement('button');
-        kill.type = 'button';
-        kill.className = 'chart-cell-remove';
-        kill.title = 'Remove ' + inst.slug;
-        kill.textContent = '×';
-        kill.addEventListener('click', function() { removeInstance(inst.widget_instance_id); });
-        bar.appendChild(name);
-        bar.appendChild(kill);
-        cell.appendChild(bar);
-
-        var widget = document.createElement('quant-widget');
-        widget.setAttribute('slug', inst.slug);
-        widget.setAttribute('synced', inst.sync_enabled !== false ? 'true' : 'false');
-        if (inst.scope_override) {
-          widget.setAttribute('data-context', JSON.stringify(inst.scope_override));
-        }
-        widget.dataset.widgetInstanceId = inst.widget_instance_id;
-        cell.appendChild(widget);
-        grid.appendChild(cell);
-      });
-    }
-    countEl.textContent = instances.length + ' widget' + (instances.length === 1 ? '' : 's');
-    addBtn.disabled = instances.length >= MAX_WIDGETS;
-    addBtn.title = addBtn.disabled
-      ? 'Chart sidebar is capped at ' + MAX_WIDGETS + ' widgets'
-      : 'Add a widget to the chart sidebar';
+  function num(v, digits) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = Number(v);
+    if (!isFinite(n)) return '--';
+    return n.toLocaleString(undefined, {
+      minimumFractionDigits: digits === undefined ? 2 : digits,
+      maximumFractionDigits: digits === undefined ? 2 : digits
+    });
   }
 
-  function persist() {
-    return fetch('/api/layout/' + PAGE, {
-      method: 'PUT',
+  function renderPositions() {
+    var host = document.getElementById('sidePositions');
+    var rows = SYMBOL
+      ? BOOK.filter(function (p) { return String(p.ticker || '').toUpperCase() === SYMBOL; })
+      : BOOK;
+    if (!rows.length) {
+      host.innerHTML = '<div class="side-empty">' +
+        (SYMBOL ? 'No position in ' + SYMBOL + '.' : 'No positions in the book.') +
+        '</div>';
+      return;
+    }
+    var value = 0, pl = 0;
+    var html = '<table class="side-table"><tbody>';
+    rows.forEach(function (p) {
+      var v = Number(p.market_value); if (isFinite(v)) value += v;
+      var l = Number(p.unrealized_pl); if (isFinite(l)) pl += l;
+      var cls = !isFinite(l) ? '' : (l > 0 ? 'pos' : (l < 0 ? 'neg' : ''));
+      html += '<tr>' +
+        '<td>' + (p.account || '') + '</td>' +
+        '<td class="strong">' + (p.ticker || '') + '</td>' +
+        '<td class="muted">' + (p.instrument_type === 'option' ? 'opt' : 'eq') + '</td>' +
+        '<td class="r">' + num(p.qty, 2) + '</td>' +
+        '<td class="r ' + cls + '">' + num(p.unrealized_pl) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="side-tot">' +
+      '<span>value</span><b>' + num(value) + '</b>' +
+      '<span>P/L</span><b class="' + (pl >= 0 ? 'pos' : 'neg') + '">' + num(pl) + '</b>' +
+      '</div>';
+    host.innerHTML = html;
+  }
+
+  function loadBook() {
+    fetch('/api/widgets/positions/run', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        instances: instances.map(function(inst, idx) {
-          return {
-            widget_instance_id: inst.widget_instance_id,
-            slug: inst.slug,
-            position: idx,
-            scope_override: inst.scope_override || null,
-            sync_enabled: inst.sync_enabled !== false,
-            config_json: inst.config_json || null
-          };
-        })
+      body: JSON.stringify({ scope: {} })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (json) {
+        BOOK = (json && json.metrics && json.metrics.positions) || [];
+        renderPositions();
       })
-    }).catch(function(e) { console.error('chart layout save failed', e); });
-  }
-
-  function addInstance(slug) {
-    if (!slug || instances.length >= MAX_WIDGETS) return;
-    instances.push({
-      widget_instance_id: genInstanceId(),
-      slug: slug,
-      position: instances.length,
-      scope_override: null,
-      sync_enabled: true,
-      config_json: null
-    });
-    renderGrid();
-    persist();
-  }
-
-  function removeInstance(id) {
-    var idx = -1;
-    for (var i = 0; i < instances.length; i++) {
-      if (instances[i].widget_instance_id === id) { idx = i; break; }
-    }
-    if (idx === -1) return;
-    instances.splice(idx, 1);
-    renderGrid();
-    fetch('/api/layout/' + PAGE + '/' + encodeURIComponent(id), { method: 'DELETE' })
-      .catch(function(e) { console.error('chart layout delete failed', e); })
-      .then(function() { return persist(); });
-  }
-
-  // ---- catalog picker (same shape as Quant Console's fetch, kept local) ----
-  function loadCatalog() {
-    fetch('/api/widgets/catalog', { headers: { Accept: 'application/json' } })
-      .then(function(r) { return r.ok ? r.json() : []; })
-      .then(function(payload) {
-        var list = Array.isArray(payload) ? payload : (payload.widgets || payload.modules || []);
-        addSelect.innerHTML = '';
-        if (!list.length) {
-          addSelect.innerHTML = '<option value="">no modules registered</option>';
-          return;
-        }
-        list.forEach(function(w) {
-          if (!w || !w.slug) return;
-          var o = document.createElement('option');
-          o.value = w.slug;
-          o.textContent = (w.name || w.slug) + '  (' + w.slug + ')';
-          addSelect.appendChild(o);
-        });
-      })
-      .catch(function(e) {
-        console.error('catalog load failed', e);
-        addSelect.innerHTML = '<option value="">catalog unavailable</option>';
+      .catch(function () {
+        document.getElementById('sidePositions').innerHTML =
+          '<div class="side-empty">Could not read the book.</div>';
       });
   }
 
-  addBtn.addEventListener('click', function() {
-    if (instances.length >= MAX_WIDGETS) return;
-    addRow.hidden = !addRow.hidden;
-    if (!addRow.hidden && !addSelect.options.length) loadCatalog();
-  });
-  document.getElementById('chartAddConfirm').addEventListener('click', function() {
-    addInstance(addSelect.value);
-    addRow.hidden = true;
-  });
-  document.getElementById('chartAddCancel').addEventListener('click', function() {
-    addRow.hidden = true;
+  document.getElementById('posRefresh').addEventListener('click', loadBook);
+
+  // The chart app announces its symbol on every render (cross-origin iframe,
+  // so postMessage is the only channel).
+  window.addEventListener('message', function (e) {
+    if (!e.data || e.data.type !== 'chart-symbol') return;
+    var t = String(e.data.ticker || '').toUpperCase();
+    if (t === SYMBOL) return;
+    SYMBOL = t;
+    document.getElementById('sideSymbol').textContent = SYMBOL || '—';
+    document.getElementById('sideTitle').textContent = SYMBOL ? SYMBOL + ' context' : 'Context';
+    renderPositions();
   });
 
-  // Load persisted layout on page load
-  fetch('/api/layout/' + PAGE, { headers: { Accept: 'application/json' } })
-    .then(function(r) { return r.ok ? r.json() : []; })
-    .then(function(list) {
-      instances = (list || []).slice(0, MAX_WIDGETS);
-      renderGrid();
-    })
-    .catch(function(e) {
-      console.error('Failed to load chart layout:', e);
-      grid.innerHTML = '<div class="empty-grid">Could not load chart widgets.</div>';
-    });
-
-  loadCatalog();
+  loadBook();
 })();
-</script>
-
-<!-- Quant widget custom element (Phase 4) -->
-<script type="module">
-import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-renderers.js
 </script>
 
 <style>
@@ -230,7 +178,7 @@ import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-
    is allowed to shrink below its intrinsic width instead of overflowing. */
 .chart-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 0;
   align-items: stretch;
   padding: 0;
@@ -238,133 +186,73 @@ import '/static/js/quant-widget.js'; // registers <quant-widget> + pulls widget-
   width: 100%;
 }
 
+.chart-main { min-width: 0; min-height: 0; height: 100%; }
+.chart-main iframe { height: 100%; }
+
 .chart-side-panel {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  border-left: 1px solid var(--border);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-width: 280px;
+  min-width: 300px;
+  height: 100%;
 }
-
 .chart-side-panel header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  display: flex; align-items: baseline; gap: 10px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--panel-2);
 }
-
-.chart-side-panel header h2 {
-  font-size: 13px;
-}
-
+.chart-side-panel header h2 { font-size: 13px; margin: 0; }
 .chart-side-panel header .note {
-  color: var(--muted);
-  font-size: 11px;
-  margin-left: auto;
+  color: var(--accent); font-family: var(--mono); font-size: 12px; margin-left: auto;
 }
 
-.chart-add-btn, .chart-add-row button {
-  background: var(--panel);
-  color: var(--accent);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 9px;
-  font: 12px/1.3 inherit;
-  cursor: pointer;
+.chart-side-body {
+  padding: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
 }
-.chart-add-btn:hover:not(:disabled), .chart-add-row button:hover { border-color: var(--accent); }
-.chart-add-btn:disabled { opacity: .45; cursor: not-allowed; }
+.side-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); padding: 8px 10px;
+}
+.side-card-flush { padding: 0; border: 0; }
+.side-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin-bottom: 6px;
+}
+.side-refresh {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0 2px;
+}
+.side-refresh:hover { color: var(--accent); }
 
-.chart-add-row {
-  display: flex;
-  gap: 6px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-2);
+.side-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.side-table td {
+  padding: 3px 4px; border-bottom: 1px solid #1b2440;
+  font-variant-numeric: tabular-nums;
 }
-.chart-add-row select {
-  flex: 1;
-  min-width: 0;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 6px;
-  font: 12px/1.3 inherit;
+.side-table td.r { text-align: right; }
+.side-table td.strong { font-weight: 650; }
+.side-tot {
+  display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 4px 8px;
+  margin-top: 7px; font-size: 12px; align-items: baseline;
 }
+.side-tot span { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.side-tot b { font-variant-numeric: tabular-nums; }
+.pos { color: var(--ok); }
+.neg { color: var(--err); }
 
-.chart-grid {
-  padding: 12px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  overflow: auto;
-  max-height: calc(100vh - 180px);
+.side-empty {
+  color: var(--muted); font-size: 12px; text-align: center; padding: 14px 8px;
+  border: 1px dashed var(--border); border-radius: 8px;
 }
+.side-foot { font-size: 11px; margin: 4px 2px 0; line-height: 1.5; }
 
-.chart-cell {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--panel);
-}
-.chart-cell-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px;
-  background: var(--panel-2);
-  border-bottom: 1px solid var(--border);
-}
-.chart-cell-slug { color: var(--muted); font-family: var(--mono); font-size: 11px; }
-.chart-cell-remove {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
-  padding: 0 3px;
-}
-.chart-cell-remove:hover { color: var(--err); }
-
-.empty-grid {
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-  padding: 20px;
-}
-
-.chart-main {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-}
-.chart-main iframe {
-  height: 100%;
-}
-.chart-side-panel {
-  height: 100%;
-  border-radius: 0;
-  border-top: 0;
-  border-bottom: 0;
-  border-right: 0;
-}
-
-/* Responsive: stack layout on narrow screens */
 @media (max-width: 1100px) {
-  .chart-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .chart-side-panel {
-    max-height: 40vh;
-  }
+  .chart-layout { grid-template-columns: minmax(0, 1fr); }
+  .chart-side-panel { max-height: 42vh; border-left: 0; border-top: 1px solid var(--border); }
 }
 </style>
 {% endblock %}

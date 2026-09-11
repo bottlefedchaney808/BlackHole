@@ -33,52 +33,248 @@ def _context_store() -> Any:
     return ContextStore()
 
 
-def _resolve_vol(context: dict[str, Any], tickers: list[str]) -> np.ndarray:
-    """Resolve volatilities: context_store -> context['volatilities'] -> default 0.25."""
-    vols = context.get("volatilities") or context.get("vols")
-    if vols is not None:
-        return np.asarray(vols, dtype=float)
-    store = _context_store()
-    scope: dict[str, Any] = {}
-    if len(tickers) == 1:
-        scope["ticker"] = tickers[0]
-    else:
-        scope["basket"] = tickers
-    stored = store.get(scope, "garch_conditional_vol")
-    if isinstance(stored, (int, float)) and not isinstance(stored, bool) and stored > 0:
-        return np.full(len(tickers), float(stored), dtype=float)
-    return np.full(len(tickers), 0.25, dtype=float)
+# ---------------------------------------------------------------------------
+# Context resolution: vol, correlation, tickers, position sizes.
+#
+# Each of these has a documented fallback, and each fallback is a plausible-
+# looking number that is not a measurement: a flat 0.25 vol, an identity
+# correlation matrix, one unit of every name. Silently taking one turns a VaR
+# figure into a fabricated VaR figure, which is worse than no figure at all --
+# so every resolver here returns (value, source) and the caller puts `source`
+# on the ModuleResult's metrics. If a card reads `vol_source: fallback:0.25`,
+# the number on it is not a risk estimate. (Same convention as Options_Suite's
+# `sigma_source` -- see CLAUDE.md's fragile-surfaces section.)
+#
+# What actually fills these now: Vol_Suite's `correlation_matrix` module
+# writes `correlation_matrix` / `covariance_matrix` / `volatilities` /
+# `correlation_tickers` on its context_patch, and `garch` writes
+# `garch_conditional_vol`. Both land in the Context Store keyed by scope, and
+# the dashboard's run route seeds them back into context before a VaR run.
+# ---------------------------------------------------------------------------
 
 
-def _resolve_corr(context: dict[str, Any], tickers: list[str]) -> np.ndarray:
-    """Resolve correlation matrix: context['corr_matrix'] -> context_store -> identity."""
-    corr = context.get("corr_matrix") or context.get("correlation_matrix")
-    if corr is not None:
-        return np.asarray(corr, dtype=float)
+def _scope_for(tickers: list[str]) -> dict[str, Any]:
+    return {"basket": tickers} if len(tickers) > 1 else {"ticker": tickers[0]}
+
+
+def _align_to(
+    values: Any, stored_tickers: Any, tickers: list[str]
+) -> np.ndarray | None:
+    """Re-index a stored per-ticker vector onto `tickers`.
+
+    A stored vector is ordered by the basket that produced it. Applying it
+    positionally to a different (or differently-ordered) basket assigns AAPL's
+    vol to NVDA without any error -- so a stored vector is only usable when it
+    carries the ticker list it was computed over AND covers every name asked
+    for here.
+    """
+    if not isinstance(values, (list, tuple)) or not values:
+        return None
+    if not isinstance(stored_tickers, (list, tuple)):
+        # No labels: only safe when the lengths match exactly and the caller
+        # is asking for the same basket it stored.
+        return (
+            np.asarray(values, dtype=float) if len(values) == len(tickers) else None
+        )
+    index = {str(t).strip().upper(): i for i, t in enumerate(stored_tickers)}
+    try:
+        return np.asarray([float(values[index[t]]) for t in tickers], dtype=float)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _resolve_vol(
+    context: dict[str, Any], tickers: list[str]
+) -> tuple[np.ndarray, str]:
+    """Per-name annualized vol, with provenance.
+
+    Order: an explicit per-name vector -> the Context Store's per-name vector
+    (written by Vol_Suite's correlation_matrix) -> a single GARCH conditional
+    vol broadcast across the basket -> a flat 0.25.
+    """
+    n = len(tickers)
+    explicit = context.get("volatilities") or context.get("vols")
+    aligned = _align_to(explicit, context.get("correlation_tickers"), tickers)
+    if aligned is not None:
+        return aligned, "context:volatilities"
+
     store = _context_store()
-    scope: dict[str, Any] = {"basket": tickers} if len(tickers) > 1 else {"ticker": tickers[0]}
-    stored = store.get(scope, "correlation_matrix")
-    if stored is not None:
-        return np.asarray(stored, dtype=float)
-    return np.eye(len(tickers))
+    scope = _scope_for(tickers)
+    try:
+        stored_vols = store.get(scope, "volatilities")
+        stored_names = store.get(scope, "correlation_tickers")
+    except Exception:
+        stored_vols = stored_names = None
+    aligned = _align_to(stored_vols, stored_names, tickers)
+    if aligned is not None:
+        return aligned, "context_store:volatilities"
+
+    # One GARCH number broadcast across the basket is a real measurement of
+    # the focus name, not of each name -- say so rather than implying a
+    # per-name estimate.
+    for key in ("garch_conditional_vol", "garch_vol"):
+        value = context.get(key)
+        if value is None:
+            try:
+                value = store.get(scope, key)
+            except Exception:
+                value = None
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return np.full(n, float(value), dtype=float), f"garch:{key}(broadcast)"
+
+    return np.full(n, 0.25, dtype=float), "fallback:0.25"
+
+
+def _resolve_corr(
+    context: dict[str, Any], tickers: list[str]
+) -> tuple[np.ndarray, str]:
+    """Correlation matrix, with provenance. Falls back to identity."""
+    n = len(tickers)
+
+    def _usable(matrix: Any, labels: Any) -> np.ndarray | None:
+        if matrix is None:
+            return None
+        arr = np.asarray(matrix, dtype=float)
+        if arr.ndim != 2:
+            return None
+        if isinstance(labels, (list, tuple)) and len(labels) == arr.shape[0]:
+            index = {str(t).strip().upper(): i for i, t in enumerate(labels)}
+            try:
+                order = [index[t] for t in tickers]
+            except KeyError:
+                return None
+            return arr[np.ix_(order, order)]
+        return arr if arr.shape == (n, n) else None
+
+    explicit = context.get("corr_matrix") or context.get("correlation_matrix")
+    picked = _usable(explicit, context.get("correlation_tickers"))
+    if picked is not None:
+        return picked, "context:correlation_matrix"
+
+    store = _context_store()
+    scope = _scope_for(tickers)
+    try:
+        stored = store.get(scope, "correlation_matrix")
+        labels = store.get(scope, "correlation_tickers")
+    except Exception:
+        stored = labels = None
+    picked = _usable(stored, labels)
+    if picked is not None:
+        return picked, "context_store:correlation_matrix"
+
+    return np.eye(n), "fallback:identity"
 
 
 def _extract_tickers(context: dict[str, Any]) -> list[str]:
+    """Every name this VaR run should cover.
+
+    `basket` and `held_tickers` are new here and are the whole reason the
+    basket-dependent modules used to sit out a desk run: the desk publishes
+    the book under those two keys, and this function only looked at
+    `tickers`/`ticker`, so corr_sim on a five-name book saw one name (or
+    none) and raised "requires at least 2 tickers".
+    """
     focus = context.get("focus") or {}
-    tickers_raw = context.get("tickers") or focus.get("tickers") or context.get("ticker") or focus.get("ticker")
-    if isinstance(tickers_raw, str):
-        return [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
-    if isinstance(tickers_raw, list):
-        return [str(t).strip().upper() for t in tickers_raw if t]
+    for raw in (
+        context.get("tickers"),
+        focus.get("tickers"),
+        context.get("basket"),
+        context.get("held_tickers"),
+        context.get("ticker"),
+        focus.get("ticker"),
+    ):
+        if isinstance(raw, str):
+            out = [t.strip().upper() for t in raw.split(",") if t.strip()]
+        elif isinstance(raw, (list, tuple)):
+            out = [str(t).strip().upper() for t in raw if str(t).strip()]
+        else:
+            continue
+        if out:
+            return list(dict.fromkeys(out))
     return []
 
 
-def _extract_positions(context: dict[str, Any], n: int) -> np.ndarray:
+def _extract_positions(
+    context: dict[str, Any], tickers: list[str]
+) -> tuple[np.ndarray, str]:
+    """Position size per name, with provenance.
+
+    `np.ones(n)` -- the old unconditional default -- makes every VaR figure
+    the VaR of one notional unit of each name, which is not the VaR of your
+    book and does not say so. The position book (pushed to the Context Store
+    under `positions`) is used when present, summed to net market value per
+    ticker so multiple legs in one name aggregate.
+    """
+    n = len(tickers)
     focus = context.get("focus") or {}
-    positions = context.get("positions") or focus.get("positions")
-    if positions is not None:
-        return np.asarray(positions, dtype=float)
-    return np.ones(n, dtype=float)
+    explicit = context.get("position_vals") or focus.get("position_vals")
+    if isinstance(explicit, (list, tuple)) and len(explicit) >= n:
+        return np.asarray(explicit[:n], dtype=float), "context:position_vals"
+
+    book = context.get("positions") or focus.get("positions")
+    # `positions` is overloaded: a bare numeric vector from a scripted caller,
+    # or the desk's {"positions": [ {ticker, market_value, ...}, ... ]} book.
+    if isinstance(book, (list, tuple)) and book and not isinstance(book[0], dict):
+        return np.asarray(book[:n], dtype=float), "context:positions"
+    rows = book.get("positions") if isinstance(book, dict) else book
+    if isinstance(rows, list) and rows:
+        by_ticker: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            tkr = str(row.get("ticker") or "").strip().upper()
+            value = row.get("market_value")
+            if value in (None, ""):
+                continue
+            try:
+                by_ticker[tkr] = by_ticker.get(tkr, 0.0) + float(value)
+            except (TypeError, ValueError):
+                continue
+        vector = np.asarray([by_ticker.get(t, 0.0) for t in tickers], dtype=float)
+        if np.any(vector):
+            return vector, "book:market_value"
+
+    return np.ones(n, dtype=float), "fallback:unit_notional"
+
+
+def _risk_patch(
+    kind: str,
+    tickers: list[str],
+    context: dict[str, Any],
+    *,
+    var: Any,
+    cvar: Any = None,
+    sources: dict[str, str] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The simulated risk outlook, in the shape a downstream tool wants.
+
+    Keyed under `risk_outlook` so a consumer has one place to look, with the
+    producing module named inside it rather than one key per module. Carries
+    the horizon and confidence because a VaR number without them is
+    meaningless, and the provenance because a VaR computed off `fallback:0.25`
+    and `fallback:identity` should not be reused as though it were measured.
+
+    Scalars only -- the raw simulated paths stay out of the Context Store,
+    which every later run on this scope is seeded from.
+    """
+    payload: dict[str, Any] = {
+        "source": kind,
+        "tickers": list(tickers),
+        "var": None if var is None else float(var),
+        "horizon_days": float(context.get("horizon_days") or 10.0),
+        "confidence": float(context.get("confidence") or 0.99),
+    }
+    if cvar is not None:
+        payload["cvar"] = float(cvar)
+    if sources:
+        payload["inputs"] = dict(sources)
+        payload["measured"] = not any(
+            str(v).startswith("fallback:") for v in sources.values()
+        )
+    if extra:
+        payload.update(extra)
+    return {"risk_outlook": payload}
 
 
 def _run_corr_sim(context: dict[str, Any]) -> ModuleResult:
@@ -88,9 +284,9 @@ def _run_corr_sim(context: dict[str, Any]) -> ModuleResult:
         tickers = _extract_tickers(context)
         if len(tickers) < 2:
             raise ValueError("corr_sim requires at least 2 tickers")
-        positions = _extract_positions(context, len(tickers))
-        vols = _resolve_vol(context, tickers)
-        corr = _resolve_corr(context, tickers)
+        positions, pos_source = _extract_positions(context, tickers)
+        vols, vol_source = _resolve_vol(context, tickers)
+        corr, corr_source = _resolve_corr(context, tickers)
         res = corr_sim(
             CorrSimInputs(
                 current_prices=np.ones(len(tickers), dtype=float),
@@ -105,7 +301,7 @@ def _run_corr_sim(context: dict[str, Any]) -> ModuleResult:
                 asset_names=tickers,
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "tickers": tickers}, context_patch=None)
+        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "tickers": tickers, "vol_source": vol_source, "corr_source": corr_source, "position_source": pos_source}, context_patch=_risk_patch("corr_sim", tickers, context, var=res.var, cvar=res.cvar, sources={"vol": vol_source, "corr": corr_source, "positions": pos_source}))
     except Exception as exc:
         return _failed(exc)
 
@@ -117,9 +313,9 @@ def _run_mc_sim(context: dict[str, Any]) -> ModuleResult:
         tickers = _extract_tickers(context)
         if not tickers:
             raise ValueError("mc_sim requires context['tickers']")
-        positions = _extract_positions(context, len(tickers))
-        vols = _resolve_vol(context, tickers)
-        corr = _resolve_corr(context, tickers)
+        positions, pos_source = _extract_positions(context, tickers)
+        vols, vol_source = _resolve_vol(context, tickers)
+        corr, corr_source = _resolve_corr(context, tickers)
         res = mc_sim(
             MCSimInputs(
                 market_ids=tickers,
@@ -135,7 +331,7 @@ def _run_mc_sim(context: dict[str, Any]) -> ModuleResult:
                 positions=[Position(pos_type=1, market_id=t, quantity=float(positions[i])) for i, t in enumerate(tickers)],
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var_full, "cvar": res.cvar_full, "tickers": tickers}, context_patch=None)
+        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var_full, "cvar": res.cvar_full, "tickers": tickers, "vol_source": vol_source, "corr_source": corr_source, "position_source": pos_source}, context_patch=_risk_patch("mc_sim", tickers, context, var=res.var_full, cvar=res.cvar_full, sources={"vol": vol_source, "corr": corr_source, "positions": pos_source}))
     except Exception as exc:
         return _failed(exc)
 
@@ -146,7 +342,7 @@ def _run_hist_sim(context: dict[str, Any]) -> ModuleResult:
         tickers = _extract_tickers(context)
         if not tickers:
             raise ValueError("hist_sim requires context['tickers']")
-        positions = _extract_positions(context, len(tickers))
+        positions, pos_source = _extract_positions(context, tickers)
         res = hist_sim_run(
             HistSimInputs(
                 tickers=tickers,
@@ -158,7 +354,7 @@ def _run_hist_sim(context: dict[str, Any]) -> ModuleResult:
                 returns_dict=context.get("returns_dict"),
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "tickers": tickers, "method": res.method}, context_patch=None)
+        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "tickers": tickers, "method": res.method, "position_source": pos_source}, context_patch=_risk_patch("hist_sim", tickers, context, var=res.var, cvar=res.cvar, sources={"positions": pos_source}, extra={"method": res.method}))
     except Exception as exc:
         return _failed(exc)
 
@@ -171,9 +367,9 @@ def _run_copulas(context: dict[str, Any]) -> ModuleResult:
         if not tickers:
             raise ValueError("copulas requires context['tickers']")
         n = len(tickers)
-        positions = _extract_positions(context, n)
-        vols = _resolve_vol(context, tickers)
-        corr = _resolve_corr(context, tickers)
+        positions, pos_source = _extract_positions(context, tickers)
+        vols, vol_source = _resolve_vol(context, tickers)
+        corr, corr_source = _resolve_corr(context, tickers)
         res = copula_var(
             CopulaInputs(
                 tickers=tickers,
@@ -189,7 +385,7 @@ def _run_copulas(context: dict[str, Any]) -> ModuleResult:
                 spot_prices=np.ones(n, dtype=float),
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "copula_type": res.copula_type}, context_patch=None)
+        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "copula_type": res.copula_type, "tickers": tickers, "vol_source": vol_source, "corr_source": corr_source, "position_source": pos_source}, context_patch=_risk_patch("copulas", tickers, context, var=res.var, cvar=res.cvar, sources={"vol": vol_source, "corr": corr_source, "positions": pos_source}, extra={"copula_type": res.copula_type}))
     except Exception as exc:
         return _failed(exc)
 
@@ -202,9 +398,9 @@ def _run_forex_var(context: dict[str, Any]) -> ModuleResult:
         if not tickers:
             raise ValueError("forex_var requires context['tickers']")
         n = len(tickers)
-        positions = _extract_positions(context, n)
-        vols = _resolve_vol(context, tickers)
-        corr = _resolve_corr(context, tickers)
+        positions, pos_source = _extract_positions(context, tickers)
+        vols, vol_source = _resolve_vol(context, tickers)
+        corr, corr_source = _resolve_corr(context, tickers)
         is_fx = np.asarray(context.get("is_fx") or [False] * n, dtype=bool)
         res = forex_var(
             ForexVaRInputs(
@@ -218,7 +414,7 @@ def _run_forex_var(context: dict[str, Any]) -> ModuleResult:
                 confidence=float(context.get("confidence") or 0.99),
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"total_var": res.total_var, "equity_var": res.equity_var, "fx_var": res.fx_var, "pairs": tickers}, context_patch=None)
+        return ModuleResult(status="ok", artifacts=[], metrics={"total_var": res.total_var, "equity_var": res.equity_var, "fx_var": res.fx_var, "pairs": tickers, "vol_source": vol_source, "corr_source": corr_source, "position_source": pos_source}, context_patch=None)
     except Exception as exc:
         return _failed(exc)
 
@@ -315,9 +511,9 @@ def _run_hedge_optimizer(context: dict[str, Any]) -> ModuleResult:
         if not tickers:
             raise ValueError("hedge_optimizer requires context['tickers']")
         n = len(tickers)
-        positions = np.asarray(context.get("positions") or [1.0] * n, dtype=float)
-        vols = _resolve_vol(context, tickers)
-        corr = _resolve_corr(context, tickers)
+        positions, pos_source = _extract_positions(context, tickers)
+        vols, vol_source = _resolve_vol(context, tickers)
+        corr, corr_source = _resolve_corr(context, tickers)
         cov = np.diag(vols) @ corr @ np.diag(vols)
         instruments = [
             HedgeInstrument(
@@ -338,7 +534,7 @@ def _run_hedge_optimizer(context: dict[str, Any]) -> ModuleResult:
                 confidence=float(context.get("confidence") or 0.99),
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"optimal_weights": res.optimal_weights.tolist(), "base_var": res.base_var, "hedged_var": res.hedged_var}, context_patch=None)
+        return ModuleResult(status="ok", artifacts=[], metrics={"optimal_weights": res.optimal_weights.tolist(), "base_var": res.base_var, "hedged_var": res.hedged_var, "tickers": tickers, "vol_source": vol_source, "corr_source": corr_source, "position_source": pos_source}, context_patch=None)
     except Exception as exc:
         return _failed(exc)
 
