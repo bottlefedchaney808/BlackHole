@@ -320,3 +320,72 @@ class TestHedgeEdgeCases:
         out_95 = min_var_hedge(inp)
         assert out_95.base_var < out_99.base_var
         assert out_95.hedged_var < out_99.hedged_var
+
+class TestCorrelatedHedgeInstruments:
+    """`hedge_independent=False` used to be a silent no-op.
+
+    Both branches of _build_expanded_covariance built the identical diagonal
+    hedge covariance, so the flag changed nothing and two 97%-correlated
+    hedges (SPY and ES, say) were optimised as if orthogonal. The QP then
+    double-counted their variance reduction and sized the book to roughly
+    twice the hedge notional actually required.
+    """
+
+    @staticmethod
+    def _two_correlated_hedges(**kw):
+        return HedgeOptimizerInputs(
+            positions=np.array([500_000.0, 300_000.0]),
+            cov_matrix=np.array([[0.25**2, 0.02], [0.02, 0.30**2]]),
+            hedge_instruments=[
+                HedgeInstrument("SPY", 0.18, np.array([0.85, 0.80]), 1.0),
+                HedgeInstrument("ES", 0.18, np.array([0.84, 0.79]), 1.0),
+            ],
+            confidence=0.99,
+            **kw,
+        )
+
+    def test_correlated_hedges_need_less_notional_than_independent(self):
+        """The regression: the flag must actually change the answer."""
+        ind = min_var_hedge(self._two_correlated_hedges(hedge_independent=True))
+        cor = min_var_hedge(self._two_correlated_hedges(
+            hedge_independent=False,
+            hedge_corr_matrix=np.array([[1.0, 0.97], [0.97, 1.0]]),
+        ))
+        ind_notional = float(np.abs(ind.optimal_weights).sum())
+        cor_notional = float(np.abs(cor.optimal_weights).sum())
+        assert cor_notional < ind_notional * 0.75, (
+            "treating 97%-correlated hedges as independent must not produce "
+            f"the same sizing: independent={ind_notional:.3f} "
+            f"correlated={cor_notional:.3f}"
+        )
+
+    def test_refuses_instead_of_silently_going_diagonal(self):
+        """Asking for correlated hedges without correlations must fail loudly.
+
+        Quietly downgrading to the diagonal approximation is the original bug.
+        """
+        with pytest.raises(ValueError, match="hedge_corr_matrix"):
+            min_var_hedge(self._two_correlated_hedges(hedge_independent=False))
+
+    def test_rejects_wrong_shaped_correlation_matrix(self):
+        with pytest.raises(ValueError, match="must be"):
+            min_var_hedge(self._two_correlated_hedges(
+                hedge_independent=False,
+                hedge_corr_matrix=np.eye(3),
+            ))
+
+    def test_identity_correlation_reproduces_the_independent_case(self):
+        """Sanity anchor: uncorrelated hedges must agree with the diagonal path."""
+        ind = min_var_hedge(self._two_correlated_hedges(hedge_independent=True))
+        cor = min_var_hedge(self._two_correlated_hedges(
+            hedge_independent=False, hedge_corr_matrix=np.eye(2),
+        ))
+        np.testing.assert_allclose(
+            cor.optimal_weights, ind.optimal_weights, rtol=1e-6
+        )
+
+    def test_independent_default_is_unchanged(self):
+        """Default behaviour must not move -- this is the widely-used path."""
+        out = min_var_hedge(self._two_correlated_hedges())
+        assert out.optimal_weights.shape == (2,)
+        assert np.isfinite(out.optimal_weights).all()

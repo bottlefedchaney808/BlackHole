@@ -198,6 +198,14 @@ def estimate_garch_vol(ticker: str,
                             ticker, len(rets))
             return None
         g = _garch_fit(rets)
+        if not g.get("converged", False):
+            # Honour this function's own documented contract: a failed fit is
+            # not a legitimately-computed volatility, so callers must get None
+            # and take their declared fallback (with its provenance label)
+            # rather than a number that came from wherever the simplex stopped.
+            _LOGGER.warning("estimate_garch_vol(%s): GARCH fit did not converge (%s), skipping",
+                            ticker, g.get("opt_message", "no message"))
+            return None
         # current_vol is daily — annualize
         return float(g["current_vol"] * np.sqrt(trading_days))
     except Exception:

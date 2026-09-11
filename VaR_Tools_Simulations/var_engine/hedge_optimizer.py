@@ -7,6 +7,7 @@ single-instrument case.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 from scipy.optimize import minimize
@@ -33,6 +34,11 @@ class HedgeOptimizerInputs:
     confidence: float = 0.99
     # Optional diagonal approx — set True if hedges' mutual correlations are unknown
     hedge_independent: bool = True
+    # (n_hedge, n_hedge) correlations BETWEEN hedge instruments. Required when
+    # hedge_independent=False; ignored when True. Without this the flag had
+    # nothing to build a non-diagonal hedge covariance out of, which is why it
+    # used to be a silent no-op.
+    hedge_corr_matrix: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -81,6 +87,7 @@ def _build_expanded_covariance(
     cov_matrix: np.ndarray,
     instruments: list[HedgeInstrument],
     independent: bool,
+    hedge_corr: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build the cross-covariance and hedge-covariance sub-blocks.
 
@@ -96,14 +103,33 @@ def _build_expanded_covariance(
     for j, instr in enumerate(instruments):
         cross_cov[j, :] = pos_vols * instr.volatility * instr.correlation_to_positions
 
+    hedge_vols = np.array([h.volatility for h in instruments])
+
     if independent:
-        hedge_cov = np.diag(np.array([h.volatility**2 for h in instruments]))
+        hedge_cov = np.diag(hedge_vols**2)
     else:
-        # If correlations between hedges are provided (via correlation_to_positions
-        # on other hedges), a full matrix would be needed.  Here we default to
-        # identity — users can override hedge_independent=False and provide a
-        # custom hedge_cov via subclassing.  For now, diagonal is the default.
-        hedge_cov = np.diag(np.array([h.volatility**2 for h in instruments]))
+        # Both branches used to be the identical diagonal, so
+        # hedge_independent=False changed nothing at all -- two hedges that
+        # are 95% correlated (say SPY and ES) were optimised as if they were
+        # orthogonal, and the QP happily double-counted their variance
+        # reduction. It now builds the real D*C*D, and REFUSES rather than
+        # silently falling back to diagonal when the caller asked for
+        # correlated hedges without supplying the correlations: a quiet
+        # downgrade to the wrong model is what this finding was.
+        if hedge_corr is None:
+            raise ValueError(
+                "hedge_independent=False requires hedge_corr_matrix "
+                f"({n_hedge}x{n_hedge} correlations between hedge instruments). "
+                "Pass it, or set hedge_independent=True to accept the "
+                "diagonal approximation explicitly."
+            )
+        c = np.asarray(hedge_corr, dtype=float)
+        if c.shape != (n_hedge, n_hedge):
+            raise ValueError(
+                f"hedge_corr_matrix must be {(n_hedge, n_hedge)}, got {c.shape}"
+            )
+        d = np.diag(hedge_vols)
+        hedge_cov = d @ c @ d
 
     return cross_cov, hedge_cov, pos_vols
 
@@ -159,6 +185,7 @@ def min_var_hedge(inp: HedgeOptimizerInputs) -> HedgeOptimizerOutputs:
         inp.cov_matrix,
         inp.hedge_instruments,
         inp.hedge_independent,
+        inp.hedge_corr_matrix,
     )
 
     # ---------- optimise hedge weights ----------

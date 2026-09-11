@@ -18,7 +18,25 @@ from .data_loader import fetch_log_returns, default_date_range
 # ── GARCH(1,1) ────────────────────────────────────────────────────────────────
 
 def _garch_fit(returns: np.ndarray, max_iter: int = 200):
-    """Simple GARCH(1,1) via gradient-free MLE (Nelder-Mead via scipy)."""
+    """Simple GARCH(1,1) via gradient-free MLE (Nelder-Mead via scipy).
+
+    The returned dict carries `converged` (scipy's `res.success`) and
+    `opt_message`. This used to take `res.x` unconditionally: a Nelder-Mead
+    run that hit maxiter without settling -- not a remote risk at
+    max_iter=200 on a 3-parameter likelihood with a 1e12 penalty wall around
+    the stationarity region -- produced omega/alpha/beta that were simply
+    wherever the simplex stopped, and those propagated into a displayed VaR
+    with nothing marking them as unconverged.
+
+    This does NOT raise, deliberately. `run()` calls it once per ticker in a
+    loop, so raising would abort an entire multi-ticker VaR because one name
+    failed to fit. The repo has been burned by exactly that shape before (see
+    the dealer-exposure live-render vs backtest-loop note in CLAUDE.md), and
+    `data_loader.estimate_garch_vol` already documents the convention this
+    follows: report the failure, never pass a bad fit off as a good one.
+    Callers decide -- `run()` records it under `garch_convergence` on the
+    result, `estimate_garch_vol` returns None.
+    """
     from scipy.optimize import minimize
     var0 = float(returns.var())
 
@@ -39,6 +57,9 @@ def _garch_fit(returns: np.ndarray, max_iter: int = 200):
     res = minimize(neg_log_lik, x0, method="Nelder-Mead", bounds=bnd,
                    options={"maxiter": max_iter, "xatol": 1e-7, "fatol": 1e-7})
     omega, alpha, beta = res.x
+    # A fit that landed on the penalty wall never found a valid stationary
+    # parameter set at all, whatever scipy reports about the simplex.
+    converged = bool(res.success) and float(res.fun) < 1e11
     # compute conditional variance series
     T = len(returns)
     h = np.empty(T)
@@ -48,7 +69,10 @@ def _garch_fit(returns: np.ndarray, max_iter: int = 200):
     return {"omega": omega, "alpha": alpha, "beta": beta,
             "h": h, "sigma": np.sqrt(h),
             "long_run_vol": np.sqrt(omega / max(1 - alpha - beta, 1e-8)),
-            "current_vol": float(np.sqrt(h[-1]))}
+            "current_vol": float(np.sqrt(h[-1])),
+            "converged": converged,
+            "persistence": float(alpha + beta),
+            "opt_message": str(res.message)}
 
 
 def _garch_variance_series(returns: np.ndarray, omega, alpha, beta) -> np.ndarray:
@@ -85,6 +109,9 @@ class HistSimResults:
     pnl_distribution: np.ndarray
     garch_params:     Dict   # ticker → garch params (hw/fhs only)
     scenario_returns: np.ndarray   # (n_scenarios, n_tickers) scaled returns
+    # ticker → bool, hw/fhs only. Any False means that name's rescaling came
+    # from an unconverged GARCH fit and the VaR is not a measurement for it.
+    garch_convergence: Dict = field(default_factory=dict)
 
 
 def _load_returns(inp: HistSimInputs) -> Dict[str, np.ndarray]:
@@ -158,6 +185,8 @@ def run(inp: HistSimInputs) -> HistSimResults:
         pnl_distribution=pnl,
         garch_params=garch_params,
         scenario_returns=scenario_rets,
+        garch_convergence={tk: bool(g.get("converged", False))
+                           for tk, g in garch_params.items()},
     )
 
 

@@ -37,17 +37,64 @@ def _sample_student_t(n_sims, corr, df, rng):
 
 
 def _sample_clayton(n_sims, alpha, n, rng):
-    """Clayton copula — bivariate extended to n via conditional sampling.
-    Lower-tail dependent; alpha > 0.
+    """Clayton copula via Marshall-Olkin. Lower-tail dependent; alpha > 0.
+
+    Exchangeable by construction: ONE parameter governs every pair, so this
+    cannot represent a heterogeneous correlation matrix. That is a property
+    of the Archimedean family, not a shortcut -- see run()'s clayton branch,
+    which converts the caller's corr_matrix into the alpha that best matches
+    its average dependence rather than silently discarding it.
+
+    Marshall-Olkin for Clayton parameter alpha:
+        V   ~ Gamma(1/alpha, 1)
+        E_j ~ Exp(1), iid
+        U_j = phi(E_j / V),  phi(t) = (1 + t)^(-1/alpha)
+
+    The exponent is -1/alpha, NOT -alpha. This applied ^(-alpha) while its
+    own comment documented ^(-1/alpha), and the two agree only at alpha=1.
+    Because Kendall's tau is invariant under monotone marginal transforms,
+    the DEPENDENCE stayed correct (measured tau matched alpha/(alpha+2) at
+    every alpha) and only the marginals broke -- which is exactly why this
+    survived: every test of the copula's dependence structure passed.
+
+    Measured at the alpha=0.7 default: marginals came back with mean 0.672
+    instead of 0.5 (KS vs U(0,1): p = 0.0). Feeding that to norm.ppf in
+    _uniform_to_returns shifts every asset about +0.45 sigma, which thins the
+    loss tail: a 3-name $1M-each book at 25% vol over 10 days reported 99%
+    VaR of $160,897 against a true $312,749. The bug UNDERSTATED risk by 49%.
     """
-    # Use Laplace-Stieltjes representation (Marshall-Olkin algorithm)
-    # Generator: phi(t) = (1+t)^(-1/alpha)
-    # V ~ Gamma(1/alpha, 1)
-    theta = 1.0 / alpha
-    V     = rng.gamma(theta, 1.0, size=n_sims)
-    E     = rng.exponential(1.0, size=(n_sims, n))
-    U     = (1 + E / V[:, None]) ** (-alpha)
+    if alpha <= 0:
+        raise ValueError(f"clayton_alpha must be > 0, got {alpha}")
+    V = rng.gamma(1.0 / alpha, 1.0, size=n_sims)
+    E = rng.exponential(1.0, size=(n_sims, n))
+    U = (1 + E / V[:, None]) ** (-1.0 / alpha)
     return np.clip(U, 1e-8, 1 - 1e-8)
+
+
+def clayton_alpha_from_corr(corr: np.ndarray) -> float:
+    """Average pairwise dependence of `corr`, expressed as a Clayton alpha.
+
+    A Clayton copula has one dependence parameter, so a full matrix has to
+    collapse to a scalar somewhere. Doing it here, explicitly and by the
+    standard identities, beats ignoring the matrix and using a hardcoded
+    default that has no relationship to the book at all:
+
+        Gaussian:  tau = (2/pi) * arcsin(rho)     (rho -> Kendall tau)
+        Clayton:   tau = alpha / (alpha + 2)      (tau -> alpha)
+
+    Averaging is over tau, not rho, because tau is the quantity both
+    families actually share. Non-positive average dependence has no Clayton
+    representation (the family only models positive dependence), so it
+    clamps to a small positive alpha rather than producing a negative one.
+    """
+    c = np.asarray(corr, dtype=float)
+    iu = np.triu_indices_from(c, k=1)
+    if iu[0].size == 0:
+        return 0.7
+    rho = np.clip(c[iu], -1.0, 1.0)
+    tau = float(np.mean((2.0 / np.pi) * np.arcsin(rho)))
+    tau = min(max(tau, 1e-3), 0.95)
+    return 2.0 * tau / (1.0 - tau)
 
 
 def _nearest_pd(m: np.ndarray) -> np.ndarray:
@@ -93,6 +140,10 @@ class CopulaInputs:
     student_df:     float  = 5.0    # T copula df (joint)
     marginal_dfs:   Optional[np.ndarray] = None   # per-asset df; 0=normal
     clayton_alpha:  float  = 0.7
+    # Clayton cannot represent a full correlation matrix (one parameter, all
+    # pairs). Leave this False to derive alpha from corr_matrix; set True to
+    # pin clayton_alpha exactly as given.
+    clayton_alpha_explicit: bool = False
     var_days:       float  = 10.0
     trading_days:   float  = 252.0
     confidence:     float  = 0.99
@@ -123,7 +174,14 @@ def run(inp: CopulaInputs) -> CopulaResults:
     elif inp.copula_type == "student_t":
         U = _sample_student_t(inp.n_sims, inp.corr_matrix, inp.student_df, rng)
     elif inp.copula_type == "clayton":
-        U = _sample_clayton(inp.n_sims, inp.clayton_alpha, n, rng)
+        # Clayton is exchangeable -- one alpha for every pair -- so the
+        # caller's corr_matrix cannot be honoured elementwise. It used to be
+        # dropped on the floor, with a hardcoded clayton_alpha applied to a
+        # book whose real dependence it had no relationship to. Derive alpha
+        # from the matrix instead, unless the caller pinned one explicitly.
+        alpha = (inp.clayton_alpha if inp.clayton_alpha_explicit
+                 else clayton_alpha_from_corr(inp.corr_matrix))
+        U = _sample_clayton(inp.n_sims, alpha, n, rng)
     else:
         raise ValueError(f"Unknown copula: {inp.copula_type}")
 

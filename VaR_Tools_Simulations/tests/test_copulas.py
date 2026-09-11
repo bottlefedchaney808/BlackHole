@@ -11,6 +11,7 @@ from var_engine.copulas import (
     _sample_student_t,
     _sample_clayton,
     _nearest_pd,
+    clayton_alpha_from_corr,
 )
 
 
@@ -100,14 +101,56 @@ class TestStudentTCopulaSampler:
 class TestClaytonCopulaSampler:
     """Test _sample_clayton — Clayton copula sampler."""
 
-    def test_returns_uniform_marginals(self):
-        """Each dimension should be uniform on [0, 1]."""
+    @pytest.mark.parametrize("alpha", [0.3, 0.7, 1.0, 2.0])
+    def test_returns_uniform_marginals(self, alpha):
+        """Each dimension must be uniform on [0, 1] -- in DISTRIBUTION.
+
+        This used to assert only `U.min() >= 0 and U.max() <= 1`, which is a
+        range check wearing a distribution check's name. The sampler applied
+        the wrong Marshall-Olkin exponent, ^(-alpha) where Clayton needs
+        ^(-1/alpha), and produced marginals with mean 0.672 at the alpha=0.7
+        default -- every value still inside [0, 1], so all four Clayton tests
+        passed throughout. A KS test against U(0,1) is what actually pins it,
+        and it must run at several alphas because the two exponents coincide
+        exactly at alpha=1.
+        """
+        from scipy.stats import kstest
+
         n = 3
         rng = np.random.default_rng(42)
-        U = _sample_clayton(100_000, alpha=0.7, n=n, rng=rng)
+        U = _sample_clayton(100_000, alpha=alpha, n=n, rng=rng)
         assert U.shape == (100_000, n)
         assert U.min() >= 0.0
         assert U.max() <= 1.0
+        for j in range(n):
+            assert kstest(U[:, j], "uniform").pvalue > 0.01, (
+                f"column {j} is not uniform at alpha={alpha} "
+                f"(mean {U[:, j].mean():.4f}, expected ~0.5)"
+            )
+
+    @pytest.mark.parametrize("alpha", [0.3, 0.7, 2.0])
+    def test_kendall_tau_matches_clayton_identity(self, alpha):
+        """Dependence must satisfy tau = alpha / (alpha + 2).
+
+        Note this held even WITH the exponent bug -- Kendall's tau is
+        invariant under monotone transforms of the marginals, so it could
+        not see the defect. It is here to pin the dependence while the KS
+        test above pins the marginals; neither alone is sufficient.
+        """
+        from scipy.stats import kendalltau
+
+        rng = np.random.default_rng(7)
+        U = _sample_clayton(60_000, alpha=alpha, n=2, rng=rng)
+        tau = kendalltau(U[:, 0], U[:, 1]).statistic
+        assert tau == pytest.approx(alpha / (alpha + 2), abs=0.02)
+
+    def test_rejects_non_positive_alpha(self):
+        """Clayton is defined for alpha > 0; 1/alpha must not divide by zero."""
+        rng = np.random.default_rng(0)
+        with pytest.raises(ValueError):
+            _sample_clayton(100, alpha=0.0, n=2, rng=rng)
+        with pytest.raises(ValueError):
+            _sample_clayton(100, alpha=-1.0, n=2, rng=rng)
 
     def test_valid_alpha_zero(self):
         """alpha -> 0 should approach independence (uniform still valid)."""
@@ -228,3 +271,64 @@ class TestCopulaEdgeCases:
             f"Student-T marginal isn't normalized to unit variance before scaling"
         )
         assert U.max() <= 1.0
+
+class TestClaytonAlphaFromCorrelation:
+    """Clayton is exchangeable, so a correlation matrix has to collapse to one
+    parameter. It used to be dropped entirely: run() passed a hardcoded
+    clayton_alpha and never looked at corr_matrix, so a book of near-independent
+    names and a book of near-identical names simulated with identical dependence.
+    """
+
+    @pytest.mark.parametrize("rho", [0.1, 0.5, 0.9])
+    def test_alpha_round_trips_through_kendall_tau(self, rho):
+        """The derived alpha must imply the same tau the correlation does."""
+        c = np.full((4, 4), rho)
+        np.fill_diagonal(c, 1.0)
+        alpha = clayton_alpha_from_corr(c)
+        implied_tau = alpha / (alpha + 2.0)
+        gaussian_tau = (2.0 / np.pi) * np.arcsin(rho)
+        assert implied_tau == pytest.approx(gaussian_tau, abs=1e-6)
+
+    def test_higher_correlation_gives_stronger_dependence(self):
+        def a(rho):
+            c = np.full((3, 3), rho)
+            np.fill_diagonal(c, 1.0)
+            return clayton_alpha_from_corr(c)
+
+        assert a(0.2) < a(0.5) < a(0.8)
+
+    def test_non_positive_dependence_stays_a_valid_clayton(self):
+        """Clayton models positive dependence only -- a negatively correlated
+        book has no Clayton representation, so it must clamp to a small
+        positive alpha rather than emit a negative one that breaks the
+        Gamma(1/alpha) draw."""
+        c = np.full((3, 3), -0.4)
+        np.fill_diagonal(c, 1.0)
+        alpha = clayton_alpha_from_corr(c)
+        assert alpha > 0
+
+    def test_explicit_alpha_is_still_honoured(self):
+        """Opting out must keep the caller's exact alpha."""
+        inp = make_copula_inputs(n=4, copula_type="clayton")
+        inp.clayton_alpha = 1.9
+        inp.clayton_alpha_explicit = True
+        res = copula_run(inp)
+        assert res.var > 0
+
+    def test_correlation_now_moves_the_clayton_var(self):
+        """The regression itself: corr_matrix must reach the Clayton result.
+
+        With the matrix ignored, these two books produced the same VaR.
+        """
+        def var_at(rho):
+            inp = make_copula_inputs(n=4, copula_type="clayton")
+            c = np.full((4, 4), rho)
+            np.fill_diagonal(c, 1.0)
+            inp.corr_matrix = c
+            return copula_run(inp).var
+
+        low, high = var_at(0.05), var_at(0.9)
+        assert high > low * 1.05, (
+            f"a near-independent book ({low:,.0f}) and a near-identical one "
+            f"({high:,.0f}) must not price the same"
+        )
