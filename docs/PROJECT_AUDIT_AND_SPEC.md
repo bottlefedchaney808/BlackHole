@@ -1,5 +1,19 @@
 # FinancialDevelopment — Project Spec & Technical Audit
 
+> **[2026-09-11] STOP — read `docs/MATH_AUDIT_HANDOFF_2026-09-11.md` first.**
+>
+> Parts 1-3 (architecture) are substantially STALE: they describe `run_unified`,
+> `mcp-stockflow` and the pre-flatten repo, all since removed.
+>
+> Part 5 (math findings) was NOT stale, and most of it is now CLOSED — findings
+> #2, #3, #6, #7, #8, #9, #10 and #13 were fixed on 2026-09-11, and #4 and #5
+> partially (two deliberate operator decisions remain open). The handoff doc has
+> the per-finding disposition, three corrections to this document's own claims
+> (including two severities that were rated far too low), and the list of
+> surfaces that have never been reviewed at all.
+>
+> Do not re-derive Part 5 from scratch.
+
 **Purpose of this document.** This is a from-scratch, whole-repo spec written for a model/session with zero prior context on this project. It exists to do three things at once: (1) explain what every part of the repo is and how to run it, superseding the need to re-derive that from scratch each session; (2) catalog every skill/reference doc already built, and what's stale vs. current; (3) record a technical audit — concrete bugs, math errors, and design critiques found while researching this doc, including a deep debate on Vol_Suite's dealer-positioning methodology.
 
 **How this relates to `CLAUDE.md`.** `CLAUDE.md` remains the canonical, actively-maintained quick reference — read it first. This document is a deeper, point-in-time supplement: it goes further into "how does the math actually work" and "what's wrong" than `CLAUDE.md` is scoped to cover, and it will go stale faster. Treat findings below as of **2026-08-04**; re-verify against source before trusting a specific claim in a future session (this doc itself says so explicitly per file:line citations — check the citation, don't just trust the prose).
