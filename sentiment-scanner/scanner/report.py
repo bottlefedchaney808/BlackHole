@@ -371,7 +371,10 @@ class ScannerReport:
             stock_iv = disp.get("stock_iv_pct", 0)
             bmk_iv = disp.get("benchmark_iv_pct", 0)
             spread = disp.get("iv_spread_pts", 0)
-            z = disp.get("iv_spread_z", 0)
+            # `iv_spread_ratio` is the current name; `iv_spread_z` is the old
+            # one, kept in the lookup so previously-written packs still render.
+            # It was never a z-score -- see vol_dispersion_scanner's docstring.
+            z = disp.get("iv_spread_ratio", disp.get("iv_spread_z", 0))
             dsig = disp.get("dispersion_signal", "NEUTRAL")
             beta = disp.get("beta")
             bmk = disp.get("benchmark", "SPY")

@@ -119,9 +119,30 @@ class CorrelationEngine:
         self._earnings[ticker] = scan
 
     # ---- Composite signal generation ----
+    # The five original rules below all gate on a key of `oi_snapshot`, so an
+    # empty snapshot silently disables every one of them and the result looks
+    # identical to "these five rules evaluated and did not fire". Two of this
+    # method's four call sites (the report pass and the composite-signals
+    # summary in main.py) pass `{}` deliberately -- building a real snapshot
+    # there means live option-chain pulls on a reporting path, which are
+    # billed and which the repo's rate-limit discipline exists to avoid. The
+    # degradation is legitimate; it being INVISIBLE was the finding. The
+    # result now carries `oi_rules_evaluated` so a reader (and the report)
+    # can tell a quiet rule set from an unfired one.
+    _OI_RULE_KEYS = ("otm_oi_ratio", "convexity_premium", "oi_change_pct", "skew_vol_pts")
+
     def correlate_with_oi(self, ticker: str, oi_snapshot: Dict) -> Dict:
-        """Original single-signal method — enhanced to include scanner data."""
+        """Original single-signal method — enhanced to include scanner data.
+
+        `oi_snapshot` may be empty, which disables the five OI-dependent
+        rules. The returned dict reports that explicitly under
+        `oi_rules_evaluated` rather than presenting a partial rule set as a
+        complete one.
+        """
         trend = self.get_narrative_trend(ticker)
+        oi_rules_evaluated = bool(oi_snapshot) and any(
+            k in oi_snapshot for k in self._OI_RULE_KEYS
+        )
         signals: List[str] = []
         severities: List[str] = []
 
@@ -249,6 +270,9 @@ class CorrelationEngine:
             "ticker": ticker,
             "narrative_trend": trend,
             "oi_snapshot": oi_snapshot,
+            # False means the five OI-dependent rules did not run at all (no
+            # snapshot supplied) -- NOT that they ran and found nothing.
+            "oi_rules_evaluated": oi_rules_evaluated,
             "signals": signals,
             "severity": sev,
             "timestamp": datetime.now(timezone.utc).isoformat(),

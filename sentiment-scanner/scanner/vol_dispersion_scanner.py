@@ -8,7 +8,14 @@ is likely falling, creating a dispersion opportunity.
 Key outputs:
   - stock_iv_pct, benchmark_iv_pct
   - iv_spread_pts: stock IV - benchmark IV
-  - iv_spread_z: how many standard deviations above/below the mean spread
+  - iv_spread_ratio: iv_spread_pts divided by a HEURISTIC scale
+    (15% of the stock's own IV, floored at 2pp). This is NOT a z-score --
+    no history of the spread is stored anywhere, so there is no mean and no
+    standard deviation to measure against. It was called `iv_spread_z` and
+    documented here as "how many standard deviations above/below the mean
+    spread", which put a self-referential ratio next to a genuinely
+    estimated `beta` as if the two were comparable statistics. Kept
+    available under the old key for back-compat; read the new name.
   - beta: historical beta to benchmark
   - dispersion_signal: "DISPERSION_SETUP" (stock vol >> benchmark),
     "CONTRACTION" (stock vol << benchmark), or "NEUTRAL"
@@ -40,7 +47,8 @@ class VolDispersionScan:
     stock_iv_pct: float
     benchmark_iv_pct: float
     iv_spread_pts: float
-    iv_spread_z: float
+    # Self-referential scale, NOT a z-score -- see the module docstring.
+    iv_spread_ratio: float
     beta: Optional[float]
     stock_atm_iv_pct: float
     benchmark_atm_iv_pct: float
@@ -116,7 +124,7 @@ def scan_vol_dispersion(
         return VolDispersionScan(
             ticker=ticker, benchmark=benchmark, spot=0.0,
             stock_iv_pct=0.0, benchmark_iv_pct=0.0,
-            iv_spread_pts=0.0, iv_spread_z=0.0, beta=None,
+            iv_spread_pts=0.0, iv_spread_ratio=0.0, beta=None,
             stock_atm_iv_pct=0.0, benchmark_atm_iv_pct=0.0,
             dispersion_signal="UNKNOWN", timestamp=ts, error=str(e),
         )
@@ -141,9 +149,15 @@ def scan_vol_dispersion(
     # Beta estimate
     beta = _estimate_beta(ticker, benchmark)
 
-    # Z-score: use a rough estimate based on typical vol spread volatility
-    # (about 3-5 vol points for liquid names).  We'll estimate from the
-    # stock's own vol level.
+    # NOT a z-score, despite the name this used to carry. A z-score needs a
+    # mean and a standard deviation of the historical stock-minus-benchmark
+    # spread; no spread history is stored anywhere in this scanner, so there
+    # is nothing to standardize against. What this actually computes is the
+    # spread divided by a heuristic scale derived from the stock's OWN
+    # current IV -- so a high-IV name mechanically scores lower for the same
+    # spread, and the number moves when nothing about the dispersion has.
+    # Reported as a ratio under an honest name rather than dressed up as a
+    # statistic comparable to the beta beside it.
     spread_vol_est = max(stock_iv * 0.15, 2.0)  # 15% of stock vol, floor 2pp
     z = spread / spread_vol_est if spread_vol_est > 0 else 0.0
 
@@ -152,7 +166,7 @@ def scan_vol_dispersion(
         stock_iv_pct=round(stock_iv, 2),
         benchmark_iv_pct=round(benchmark_iv, 2),
         iv_spread_pts=round(spread, 2),
-        iv_spread_z=round(z, 2),
+        iv_spread_ratio=round(z, 2),
         beta=round(beta, 3) if beta is not None else None,
         stock_atm_iv_pct=round(stock_iv, 2),
         benchmark_atm_iv_pct=round(benchmark_iv, 2),
@@ -169,7 +183,7 @@ def format_dispersion(scan: VolDispersionScan) -> str:
     return (
         f"  {scan.ticker:6s} | Dispersion: IV {scan.stock_iv_pct:.1f}% vs "
         f"{scan.benchmark} {scan.benchmark_iv_pct:.1f}% "
-        f"(spread {scan.iv_spread_pts:+.1f}pp, z={scan.iv_spread_z:+.1f}){beta_str} | "
+        f"(spread {scan.iv_spread_pts:+.1f}pp, ratio={scan.iv_spread_ratio:+.1f}){beta_str} | "
         f"{scan.dispersion_signal}"
     )
 
