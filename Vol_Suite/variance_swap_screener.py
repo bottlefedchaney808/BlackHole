@@ -34,6 +34,29 @@ TRADING_DAYS = 252
 # unlike the flat 0.5F/2.0F band tail_mass uses, means the same thing on a
 # 15%-vol name as on a 100%-vol one.
 TAIL_Z_THRESHOLD = 2.0
+
+# tail_mass_z at which the tail term of the composite score reaches zero.
+# Below it the term scales linearly to its full 15 points at tail_mass_z = 0.
+#
+# Calibrated 2026-09-11 on synthetic chains. What actually drives tail_mass_z
+# is SMILE SKEW -- how much of the variance-swap fair value sits in the
+# far-OTM (mostly put) wing -- which is precisely what a short-vol screener
+# should penalise, since that is the part of the strip a short cannot hedge
+# cheaply. Measured at T=0.25 over a 0.4F-2.2F chain:
+#
+#     flat smile            tail_mass_z ~ 0.012   -> ~14.1 / 15 pts
+#     mild skew             ~ 0.03                -> ~12.8
+#     moderate skew         ~ 0.10                -> ~7.5
+#     steep skew            ~ 0.25 and above      -> 0
+#
+# Chain WIDTH barely moves it once the chain reaches 2 sigma (it saturates
+# around 0.014 on a flat smile), so this is a skew measure, not a truncation
+# measure -- truncation is replication_reference.range_truncation_score's job.
+#
+# CAVEAT: calibrated on synthetic smiles, not live chains. The ordering and
+# the spread are right; the exact cut is a judgement call. Re-check against
+# real chains before trusting the BUY/SELL boundary near this cut.
+TAIL_MASS_Z_SCORE_CAP = 0.20
 RISK_FREE_RATE = 0.05  # fallback only; live rate pulled from the yield curve
 
 
@@ -299,12 +322,24 @@ def screen_ticker(ticker: str, target_years: float, expiration: str = None) -> S
         skew_bias = result["skew_bias"]
         tail_mass = result["tail_mass"]
         tail_mass_z = result.get("tail_mass_z", float("nan"))
+        # The score reads tail_mass_z, NOT tail_mass. tail_mass uses a flat
+        # 0.5F/2.0F strike band, which is a different DISTANCE at every vol
+        # level: measured on an identical chain varying only vol it reads
+        # exactly 0.0000 below ~40% vol and 0.0432 at 100%, so its term
+        # handed a constant full 15/15 to most tickers and only ever
+        # penalised high-vol names. It was a disguised volatility penalty.
+        # tail_mass is still published for continuity and comparison.
+        insufficient_tail = math.isnan(tail_mass_z)
+        tail_mass_z_for_score = 0.0 if insufficient_tail else tail_mass_z
 
         # Same pattern as realized vol: if ATM IV is missing, it's not "0.0 convexity"
         # but rather "unknown convexity". Use a stand-in for scoring while keeping
         # the actual field as NaN so it can't masquerade as a real reading.
         insufficient_atm_iv = math.isnan(atm_iv_pct)
-        insufficient_data = insufficient_data or insufficient_atm_iv
+        # tail_mass_z is NaN exactly when ATM IV is, so this is belt-and-braces
+        # rather than a new failure mode -- but the score must never award the
+        # full tail term off a stand-in without the row being marked.
+        insufficient_data = insufficient_data or insufficient_atm_iv or insufficient_tail
         convexity_for_score = 0.0 if insufficient_atm_iv else convexity_pct
 
         # Composite score (0-100, higher = better for short vol)
@@ -312,7 +347,14 @@ def screen_ticker(ticker: str, target_years: float, expiration: str = None) -> S
         score += 30.0 * min(max((vrp_for_score - 2.0) / 8.0, 0.0), 1.0)  # VRP magnitude
         score += 20.0 * min(max((5.0 - convexity_for_score) / 5.0, 0.0), 1.0)  # Low convexity = good
         score += 15.0 * min(max((0.65 - skew_bias) / 0.35, 0.0), 1.0)  # Not too put-heavy
-        score += 15.0 * min(max((0.20 - tail_mass) / 0.20, 0.0), 1.0)  # Low tail mass = good
+        score += 15.0 * min(  # Low vol-normalized tail mass = good
+            max(
+                (TAIL_MASS_Z_SCORE_CAP - tail_mass_z_for_score)
+                / TAIL_MASS_Z_SCORE_CAP,
+                0.0,
+            ),
+            1.0,
+        )
         score += 10.0 * (1.0 if not math.isnan(rv_30) and not math.isnan(rv_60) and not math.isnan(rv_90) else 0.0)
         score = min(max(score, 0.0), 100.0)
 

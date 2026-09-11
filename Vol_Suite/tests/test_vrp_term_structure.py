@@ -30,7 +30,7 @@ def test_vrp_term_point_default_construction():
         T_years=0.0833,
         fair_vol_pct=30.0,
         atm_iv_pct=28.0,
-        vrp_pct=2.0,
+        convexity_pct=2.0,
         rv_30d_pct=25.0,
     )
     assert pt.expiry_label == "1mo"
@@ -38,7 +38,7 @@ def test_vrp_term_point_default_construction():
     assert pt.T_years == pytest.approx(0.0833)
     assert pt.fair_vol_pct == 30.0
     assert pt.atm_iv_pct == 28.0
-    assert pt.vrp_pct == 2.0
+    assert pt.convexity_pct == 2.0
     assert pt.rv_30d_pct == 25.0
 
 
@@ -51,7 +51,7 @@ def test_vrp_term_point_nan_values():
         T_years=float("nan"),
         fair_vol_pct=float("nan"),
         atm_iv_pct=float("nan"),
-        vrp_pct=float("nan"),
+        convexity_pct=float("nan"),
         rv_30d_pct=float("nan"),
     )
     assert math.isnan(pt.T_years)
@@ -96,14 +96,14 @@ def test_vrp_term_structure_result_default_chart_path():
 
 
 def _point(vrp: float) -> vts.VrpTermPoint:
-    """Helper: build a VrpTermPoint with only vrp_pct varying."""
+    """Helper: build a VrpTermPoint with only convexity_pct varying."""
     return vts.VrpTermPoint(
         expiry_label="x",
         expiry_date="20260717",
         T_years=0.25,
         fair_vol_pct=float("nan"),
         atm_iv_pct=float("nan"),
-        vrp_pct=vrp,
+        convexity_pct=vrp,
         rv_30d_pct=float("nan"),
     )
 
@@ -279,7 +279,7 @@ def test_compute_vrp_term_structure_with_fake_td():
         assert not math.isnan(pt.T_years)
         assert not math.isnan(pt.fair_vol_pct), f"{pt.expiry_label} fair_vol NaN"
         assert not math.isnan(pt.atm_iv_pct), f"{pt.expiry_label} atm_iv NaN"
-        assert not math.isnan(pt.vrp_pct), f"{pt.expiry_label} vrp NaN"
+        assert not math.isnan(pt.convexity_pct), f"{pt.expiry_label} vrp NaN"
         # Fair vol should be positive and reasonable (fits our ~20% skey)
         assert 5.0 < pt.fair_vol_pct < 100.0, (
             f"{pt.expiry_label} fair_vol={pt.fair_vol_pct}"
@@ -287,7 +287,7 @@ def test_compute_vrp_term_structure_with_fake_td():
         # ATM IV also
         assert 5.0 < pt.atm_iv_pct < 100.0, f"{pt.expiry_label} atm_iv={pt.atm_iv_pct}"
         # VRP should be the difference
-        assert pt.vrp_pct == pytest.approx(pt.fair_vol_pct - pt.atm_iv_pct)
+        assert pt.convexity_pct == pytest.approx(pt.fair_vol_pct - pt.atm_iv_pct)
         # RV should be computed (we gave it 300 data points)
         assert not math.isnan(pt.rv_30d_pct)
         assert 0.0 < pt.rv_30d_pct < 200.0
@@ -311,7 +311,7 @@ def test_compute_vrp_term_structure_no_price_history():
     for pt in result.points:
         assert not math.isnan(pt.fair_vol_pct)
         assert not math.isnan(pt.atm_iv_pct)
-        assert not math.isnan(pt.vrp_pct)
+        assert not math.isnan(pt.convexity_pct)
         assert math.isnan(pt.rv_30d_pct), f"{pt.expiry_label} rv_30d should be NaN"
 
 
@@ -436,3 +436,81 @@ def test_target_tenors_increasing_years():
     years = [ty for _, ty in vts.TARGET_TENORS]
     assert years == sorted(years)
     assert all(y > 0 for y in years)
+
+
+class TestConvexityVsVrpNaming:
+    """`VrpTermPoint.vrp_pct` was renamed to `convexity_pct` on 2026-09-11.
+
+    It computes fair_vol - ATM IV, both sides IMPLIED, which is the convexity
+    premium. variance_swap_screener.py and variance_swap_live.py publish that
+    same quantity as `convexity_premium_vol_pct`/`convexity_pct` and reserve
+    `vrp_pct` for fair-minus-REALIZED. So this module's "VRP" was the siblings'
+    "convexity", under a name they use for something else, and the two are read
+    side by side. PROJECT_AUDIT_AND_SPEC.md finding #4.
+    """
+
+    def test_the_old_ambiguous_name_is_gone(self):
+        import vrp_term_structure as vts
+
+        fields = set(vts.VrpTermPoint.__dataclass_fields__)
+        assert "vrp_pct" not in fields, (
+            "vrp_pct means fair-minus-REALIZED everywhere else in this repo; "
+            "this module must not reintroduce it for fair-minus-implied"
+        )
+        assert "convexity_pct" in fields
+        assert "vrp_vs_realized_pct" in fields
+
+    def test_convexity_is_fair_minus_atm_implied(self):
+        import vrp_term_structure as vts
+
+        p = vts.VrpTermPoint(
+            expiry_label="1mo", expiry_date="20261016", T_years=0.08,
+            fair_vol_pct=22.0, atm_iv_pct=19.5, convexity_pct=2.5,
+            rv_30d_pct=17.0, vrp_vs_realized_pct=5.0,
+        )
+        assert p.convexity_pct == pytest.approx(p.fair_vol_pct - p.atm_iv_pct)
+
+    def test_vrp_vs_realized_is_fair_minus_realized(self):
+        """The quantity this module never actually computed before."""
+        import vrp_term_structure as vts
+
+        p = vts.VrpTermPoint(
+            expiry_label="1mo", expiry_date="20261016", T_years=0.08,
+            fair_vol_pct=22.0, atm_iv_pct=19.5, convexity_pct=2.5,
+            rv_30d_pct=17.0, vrp_vs_realized_pct=5.0,
+        )
+        assert p.vrp_vs_realized_pct == pytest.approx(p.fair_vol_pct - p.rv_30d_pct)
+
+    def test_matches_the_screener_definition_of_each_name(self):
+        """Cross-module anchor: the same words must mean the same things.
+
+        If either module's definition drifts, this fails rather than letting
+        the collision quietly return.
+        """
+        import variance_swap_screener as vss
+        import vrp_term_structure as vts
+
+        screener_fields = set(vss.ScreenResult.__dataclass_fields__)
+        term_fields = set(vts.VrpTermPoint.__dataclass_fields__)
+        # Both publish a convexity premium, under the same name.
+        assert "convexity_pct" in screener_fields
+        assert "convexity_pct" in term_fields
+        # The screener's vrp_pct is fair-minus-realized; the term-structure
+        # module expresses that same idea as vrp_vs_realized_pct. Neither
+        # module may use `vrp_pct` for fair-minus-implied.
+        assert "vrp_pct" in screener_fields
+        assert "vrp_pct" not in term_fields
+
+    def test_shape_is_still_classified_on_the_convexity_series(self):
+        """Rename only -- the term-structure shape must not change meaning."""
+        import vrp_term_structure as vts
+
+        def pt(c):
+            return vts.VrpTermPoint(
+                expiry_label="x", expiry_date="20261016", T_years=0.08,
+                fair_vol_pct=20.0, atm_iv_pct=20.0 - c, convexity_pct=c,
+                rv_30d_pct=17.0,
+            )
+
+        assert vts._classify_term_structure([pt(1.0), pt(4.0), pt(9.0)]) == "upward"
+        assert vts._classify_term_structure([pt(9.0), pt(4.0), pt(1.0)]) == "downward"

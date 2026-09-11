@@ -22,8 +22,8 @@ its own findings during review, so none of it was trusted blind.
 | 1 | `var_agg._component_var` missing `positions[i]·` | Closed earlier (2026-08) |
 | 2 | NR American IV solved against BAW, not LR | **Closed** `096c85e` |
 | 3 | Clayton copula ignores `corr_matrix` | **Closed** `c1ba63e` — and see §2, it was worse |
-| 4 | `vrp_pct` names two different quantities | **Partially closed** `5604049` — see §3 |
-| 5 | `tail_mass` unnormalized | **Partially closed** `5604049` — see §3 |
+| 4 | `vrp_pct` names two different quantities | **Closed** `5604049` + rename |
+| 5 | `tail_mass` unnormalized | **Closed** `5604049` + score rewire |
 | 6 | GARCH persistence/ADF never gate the narrative | **Closed** `5604049` |
 | 7 | `hedge_independent=False` is a no-op | **Closed** `c1ba63e` |
 | 8 | `hist_sim` GARCH never checks `res.success` | **Closed** `c1ba63e` |
@@ -79,19 +79,43 @@ code will miss the same bugs again.** Pair it with property tests.
 
 ---
 
-## 3. Two deliberate non-fixes — operator decisions, not oversights
+## 3. The two deferred items — both now done (operator-approved 2026-09-11)
 
-**(a) `tail_mass` is still what feeds the screener score.** `tail_mass_z` (vol-normalized, the
-ranking-safe version) is computed and published, but the composite score still reads the old
-`tail_mass` against its hardcoded `0.20` threshold. Rewiring it re-calibrates a **live trading
-signal**, and re-tuning the threshold needs a pass over real chains — billed ThetaData pulls
-across many tickers. A test pins the current wiring so the migration is a conscious edit.
-*Decision needed: approve the recalibration pass.*
+**(a) The screener score now reads `tail_mass_z`.** Calibration was done on synthetic chains
+rather than billed live pulls, and it turned up the thing that actually matters: **what drives
+`tail_mass_z` is SMILE SKEW**, not chain width (it saturates near 0.014 once the chain reaches
+2 sigma on a flat smile). Skew is exactly what a short-vol screener should penalise — it is the
+part of the strip a short cannot hedge cheaply. Measured at T=0.25 over a 0.4F-2.2F chain, the
+tail term of the composite score:
 
-**(b) `vrp_pct` was not renamed.** `VrpTermPoint` gained `convexity_pct` (same value, correct
-name) and `vrp_vs_realized_pct` (the real VRP, which the module never had). The misleading
-`vrp_pct` remains because **54 files reference it** and two other agents were editing the tree.
-*Decision needed: approve a single cross-repo rename pass.*
+| smile skew | old `tail_mass` pts | new `tail_mass_z` pts |
+|---|---|---|
+| 0.00 (flat) | 15.0 | 14.1 |
+| 0.10 | 15.0 | 12.5 |
+| 0.20 | 14.4 | 6.8 |
+| 0.30 | 10.9 | 0.0 |
+| 0.45 | 1.5 | 0.0 |
+
+The old term was **pinned at 15.0 across the entire realistic range** and only moved at extreme
+skew — it contributed nothing to ranking. The threshold is now the named constant
+`TAIL_MASS_Z_SCORE_CAP = 0.20`, which happens to be well-calibrated for the new metric's range.
+**Caveat carried in the code:** calibrated on synthetic smiles. The ordering and spread are right;
+the exact cut is a judgement call, so re-check it against real chains before trusting a BUY/SELL
+boundary that lands near it. `tail_mass` is still published for comparison.
+
+**(b) `vrp_pct` renamed to `convexity_pct` on `VrpTermPoint`.** Scoped precisely: only the
+term-structure module and its consumers moved. Every other `vrp_pct` in the repo
+(`variance_swap_screener`, `variance_swap_live`, `iv_rank_scanner`, `dashboard/app.py`,
+`aggregate_unified.py`) means fair-minus-REALIZED and was left alone — that name is correct there.
+The chart axis and console table were relabelled too (they read "VRP"/"Variance Risk Premium"
+while plotting convexity), and the console now prints both premia side by side under their own
+names: `Conv%` and `VRPvRV%`. A cross-module test asserts the screener and the term-structure
+module agree on what each word means, so the collision cannot quietly return.
+
+**Still open, found during the rename:** `VrpTermPoint.model_implied_vrp_pct` is
+`model_iv_pct - atm_iv_pct` — the jump-diffusion model's fitted ATM IV minus the market's. That is
+a **calibration residual at ATM**, neither a VRP nor a convexity premium. Not renamed (out of
+scope for that pass); it wants a correct name.
 
 ---
 

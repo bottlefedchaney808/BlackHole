@@ -43,7 +43,7 @@ class _FakePoint:
         self.T_years = 0.08
         self.fair_vol_pct = 31.0
         self.atm_iv_pct = 29.0
-        self.vrp_pct = vrp
+        self.convexity_pct = vrp
         self.rv_30d_pct = 27.5
 
 
@@ -122,7 +122,7 @@ def test_run_returns_json_serializable_points_with_nan_scrubbed(monkeypatch):
             super().__init__(label="12mo")
             self.T_years = nan
             self.fair_vol_pct = nan
-            self.vrp_pct = nan
+            self.convexity_pct = nan
 
     _install(monkeypatch,
              lambda ticker, td, spot, r, q: _FakeResult(
@@ -132,8 +132,8 @@ def test_run_returns_json_serializable_points_with_nan_scrubbed(monkeypatch):
 
     assert len(result["points"]) == 2
     assert result["points"][0]["expiry_label"] == "1mo"
-    assert result["points"][0]["vrp_pct"] == pytest.approx(2.0)
-    assert result["points"][1]["vrp_pct"] is None
+    assert result["points"][0]["convexity_pct"] == pytest.approx(2.0)
+    assert result["points"][1]["convexity_pct"] is None
     assert result["points"][1]["fair_vol_pct"] is None
 
     raw = json.dumps(result)

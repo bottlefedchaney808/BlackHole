@@ -54,6 +54,12 @@ def _fake_fair_variance_result(**overrides):
         "convexity_premium_vol_pct": 2.0,
         "skew_bias": 0.5,
         "tail_mass": 0.05,
+        # The vol-normalized tail mass the composite score actually reads.
+        # Must be present: screen_ticker treats a missing/NaN tail_mass_z as
+        # insufficient data rather than awarding the full tail term off a
+        # stand-in, so a fixture that omits it silently forces every row to
+        # INSUFFICIENT DATA.
+        "tail_mass_z": 0.02,
         "num_strikes_used": 40,
     }
     base.update(overrides)
@@ -387,15 +393,65 @@ class TestTailMassVolNormalization:
         res = compute_fair_variance_strike(ch, 100.0, 0.25)
         assert math.isnan(res["tail_mass_z"])
 
-    def test_score_still_uses_the_unnormalized_metric(self):
-        """Deliberate: rewiring the score re-calibrates a live trading signal.
+    def test_score_uses_the_vol_normalized_metric(self):
+        """The score must read tail_mass_z, not the flat-band tail_mass.
 
-        Pinned so the migration is a conscious edit, not a drive-by.
+        tail_mass reads exactly 0.0000 for every name below ~40% vol, so its
+        term handed a constant full 15/15 to most tickers and only ever
+        penalised high-vol names -- a disguised volatility penalty. Pinned
+        because reverting it would be silent: the score still computes, the
+        signals still render, and every low-vol name just quietly gets its
+        points back.
         """
         import inspect
 
         import variance_swap_screener as vss
 
         src = inspect.getsource(vss.screen_ticker)
-        assert "(0.20 - tail_mass)" in src
-        assert "(0.20 - tail_mass_z)" not in src
+        assert "TAIL_MASS_Z_SCORE_CAP" in src
+        assert "tail_mass_z_for_score" in src
+        assert "(0.20 - tail_mass)" not in src
+
+    @pytest.mark.parametrize(
+        "skew,expect_pts",
+        [(0.00, 14.0), (0.10, 12.0), (0.20, 6.0), (0.45, 0.0)],
+    )
+    def test_tail_term_now_discriminates_on_skew(self, skew, expect_pts):
+        """What tail_mass_z actually measures is how much of the fair value
+        sits in the far-OTM wing -- i.e. smile skew -- which is the part of
+        the strip a short-vol seller cannot hedge cheaply. The old metric
+        could not see skew at all."""
+        import math
+
+        import numpy as np
+
+        from variance_swap_screener import (
+            TAIL_MASS_Z_SCORE_CAP,
+            ChainData,
+            compute_fair_variance_strike,
+        )
+        from scipy.stats import norm
+
+        S0, T, r, atm = 100.0, 0.25, 0.04, 0.25
+
+        def bs(S, K, T, r, sig, cp):
+            d1 = (math.log(S / K) + (r + sig * sig / 2) * T) / (sig * math.sqrt(T))
+            d2 = d1 - sig * math.sqrt(T)
+            if cp:
+                return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+            return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+        K = np.arange(40.0, 221.0, 2.5)
+        mny = np.log(K / S0) / (atm * math.sqrt(T))
+        iv = np.clip(atm * (1.0 - skew * mny), 0.02, 3.0)
+        chain = ChainData(
+            expiry="20261016", strikes=K,
+            call_mid=np.array([bs(S0, k, T, r, s, True) for k, s in zip(K, iv)]),
+            put_mid=np.array([bs(S0, k, T, r, s, False) for k, s in zip(K, iv)]),
+            call_iv=iv, put_iv=iv, r=r, q=0.0,
+        )
+        tmz = compute_fair_variance_strike(chain, S0, T)["tail_mass_z"]
+        pts = 15.0 * min(max((TAIL_MASS_Z_SCORE_CAP - tmz) / TAIL_MASS_Z_SCORE_CAP, 0.0), 1.0)
+        assert pts == pytest.approx(expect_pts, abs=1.5), (
+            f"skew={skew} gave tail_mass_z={tmz:.4f} -> {pts:.1f} pts"
+        )

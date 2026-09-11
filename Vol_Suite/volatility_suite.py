@@ -1691,7 +1691,7 @@ def _run_core_analysis(
                 print(
                     f"  {p.expiry_label:<6} {p.expiry_date:<10} "
                     f"{_fmt(p.fair_vol_pct):<10} {_fmt(p.atm_iv_pct):<10} "
-                    f"{_fmt(p.vrp_pct, '+.2f'):<10} {_fmt(p.rv_30d_pct):<10}"
+                    f"{_fmt(p.convexity_pct, '+.2f'):<10} {_fmt(p.rv_30d_pct):<10}"
                 )
             print(f"  Term structure shape: {vrp_result.shape}")
 
@@ -1706,7 +1706,7 @@ def _run_core_analysis(
                     "title": f"VRP Term Structure: {ticker} (shape={vrp_result.shape})",
                     "text": "\n".join(
                         f"{p.expiry_label}: fair={p.fair_vol_pct:.2f}% atm={p.atm_iv_pct:.2f}% "
-                        f"vrp={p.vrp_pct:+.2f}pp rv30={p.rv_30d_pct:.2f}%"
+                        f"conv={p.convexity_pct:+.2f}pp rv30={p.rv_30d_pct:.2f}%"
                         for p in vrp_result.points
                     ),
                     "images": [vrp_path],

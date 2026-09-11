@@ -58,30 +58,26 @@ class VrpTermPoint:
     T_years: float  # actual time-to-maturity in years
     fair_vol_pct: float  # fair variance swap strike vol (%)
     atm_iv_pct: float  # ATM implied volatility (%)
-    # NAME WARNING -- this field is NOT the same quantity as the `vrp_pct`
-    # that variance_swap_screener.py and variance_swap_live.py publish, and
-    # the two are routinely read side by side.
+    # fair_vol_pct - atm_iv_pct. BOTH SIDES IMPLIED, so this is the CONVEXITY
+    # premium, not the volatility risk premium.
     #
-    #   here:                    fair_vol_pct - atm_iv_pct   (both IMPLIED)
-    #   screener / live:         fair_vol_pct - realized     (the textbook VRP)
+    # This field was called `vrp_pct` until 2026-09-11, which collided with a
+    # genuinely different quantity of the same name elsewhere in this repo:
     #
-    # Fair-minus-ATM-implied is the CONVEXITY premium -- what the sibling
-    # modules publish under the name `convexity_premium_vol_pct` /
-    # `convexity_pct`. So this module's "vrp_pct" is the siblings'
-    # "convexity", and this module had no field for what they call VRP at
-    # all. Kept under the original name because 54 files reference it; read
-    # `convexity_pct` (identical value, correct name) in new code, and
-    # `vrp_vs_realized_pct` for the quantity the rest of the repo means by
-    # VRP. Renaming this outright is the real fix and needs one deliberate
-    # cross-repo pass -- see docs/PROJECT_AUDIT_AND_SPEC.md finding #4.
-    vrp_pct: float  # = convexity_pct. NOT fair-minus-realized. See above.
+    #   here (was vrp_pct):   fair_vol_pct - atm_iv_pct   (both implied)
+    #   screener / live:      fair_vol_pct - realized     (the textbook VRP)
+    #
+    # variance_swap_screener.py and variance_swap_live.py publish exactly this
+    # quantity under `convexity_premium_vol_pct` / `convexity_pct` and reserve
+    # "VRP" for fair-minus-realized -- so this module's "VRP" was the siblings'
+    # "convexity", and the two are routinely read side by side. Renamed to match
+    # the rest of the repo. See PROJECT_AUDIT_AND_SPEC.md finding #4.
+    convexity_pct: float
     rv_30d_pct: float  # trailing 30-day realized vol (%), annualized
-    # Same value as vrp_pct, under the name the rest of the repo uses for it.
-    convexity_pct: float = float("nan")
-    # The textbook VRP: fair_vol_pct - rv_30d_pct. Matches what
-    # variance_swap_screener.vrp_pct and variance_swap_live's `vrp` mean.
-    # NaN when realized vol is unavailable -- never 0.0, which would read as
-    # a measured "fair vol equals realized vol".
+    # The textbook VRP: fair_vol_pct - rv_30d_pct, which is what the rest of
+    # this repo means by VRP and what this module never actually computed.
+    # NaN when realized vol is unavailable -- never 0.0, which would read as a
+    # measured "fair vol equals realized vol".
     vrp_vs_realized_pct: float = float("nan")
     model_implied_vrp_pct: float | None = (
         None  # cross-check against fair_vol_pct via a jump-diffusion model
@@ -114,11 +110,14 @@ def _classify_term_structure(points: list[VrpTermPoint]) -> str:
       - If strictly decreasing (each next VRP <= previous) → 'downward'
       - Otherwise → 'humped'
     """
-    valid = [p for p in points if not (math.isnan(p.vrp_pct) or math.isinf(p.vrp_pct))]
+    valid = [
+        p for p in points
+        if not (math.isnan(p.convexity_pct) or math.isinf(p.convexity_pct))
+    ]
     if len(valid) < 3:
         return "flat"
 
-    vrps = [p.vrp_pct for p in valid]
+    vrps = [p.convexity_pct for p in valid]
 
     if max(vrps) - min(vrps) < 2.0:
         return "flat"
@@ -232,9 +231,8 @@ def compute_vrp_term_structure(
                     T_years=actual_T,
                     fair_vol_pct=fair_vol_pct,
                     atm_iv_pct=atm_iv_pct,
-                    vrp_pct=vrp,
-                    rv_30d_pct=rv_val_pct,
                     convexity_pct=vrp,
+                    rv_30d_pct=rv_val_pct,
                     vrp_vs_realized_pct=(
                         float("nan")
                         if math.isnan(rv_val_pct)
@@ -254,7 +252,7 @@ def compute_vrp_term_structure(
                     T_years=float("nan"),
                     fair_vol_pct=float("nan"),
                     atm_iv_pct=float("nan"),
-                    vrp_pct=float("nan"),
+                    convexity_pct=float("nan"),
                     rv_30d_pct=float("nan"),
                 )
             )
@@ -282,7 +280,7 @@ def plot_vrp_term_structure(result: VrpTermStructureResult, path: str) -> str:
     labels = [p.expiry_label for p in result.points]
     fair_vols = [p.fair_vol_pct for p in result.points]
     atm_ivs = [p.atm_iv_pct for p in result.points]
-    vrps = [p.vrp_pct for p in result.points]
+    vrps = [p.convexity_pct for p in result.points]
     rvs = [p.rv_30d_pct for p in result.points]
 
     x = np.arange(len(labels))
@@ -345,15 +343,19 @@ def plot_vrp_term_structure(result: VrpTermStructureResult, path: str) -> str:
                 color="#1B5E20",
             )
 
-    # --- Bottom panel: VRP bar chart ---
+    # --- Bottom panel: convexity-premium bar chart ---
+    # Labelled "Convexity", not "VRP". The series is fair_vol - ATM IV, both
+    # implied; the rest of the repo calls fair-minus-REALIZED the VRP. Axis
+    # and title used to read "VRP"/"Variance Risk Premium", which put the
+    # wrong name on the number a reader takes off the chart.
     colors = []
     for v in vrps:
         if math.isnan(v):
             colors.append("#CCCCCC")
         elif v > 0:
-            colors.append("#e74c3c")  # positive VRP = fair > IV = short vol pays
+            colors.append("#e74c3c")  # fair > IV = short vol pays
         else:
-            colors.append("#2ecc71")  # negative VRP = fair < IV = long vol pays
+            colors.append("#2ecc71")  # fair < IV = long vol pays
 
     bars = ax2.bar(
         x, vrps, width * 2.5, color=colors, alpha=0.8, edgecolor="#333", linewidth=0.5
@@ -361,11 +363,11 @@ def plot_vrp_term_structure(result: VrpTermStructureResult, path: str) -> str:
     ax2.axhline(y=0, color="gray", linestyle="-", linewidth=0.8)
     ax2.set_xticks(x)
     ax2.set_xticklabels(labels)
-    ax2.set_ylabel("VRP (vol pts)")
-    ax2.set_title("Variance Risk Premium (Fair Vol − ATM IV)")
+    ax2.set_ylabel("Convexity (vol pts)")
+    ax2.set_title("Convexity Premium (Fair Vol − ATM IV)")
     ax2.grid(axis="y", alpha=0.3)
 
-    # Annotate VRP values
+    # Annotate convexity values
     for i, (bar, v) in enumerate(zip(bars, vrps)):
         if not math.isnan(v):
             y_pos = bar.get_height() + (0.3 if v >= 0 else -0.3)
@@ -422,17 +424,26 @@ def main() -> None:
         td.close()
 
     print(
-        f"\n{'Tenor':<6} {'Expiry':<10} {'T(yr)':<8} {'FairVol%':<10} {'ATM IV%':<10} {'VRP%':<10} {'RV30%':<10}"
+        f"\n{'Tenor':<6} {'Expiry':<10} {'T(yr)':<8} {'FairVol%':<10} {'ATM IV%':<10} {'Conv%':<10} {'RV30%':<10} {'VRPvRV%':<10}"
     )
-    print("-" * 64)
+    print("-" * 76)
     for p in result.points:
         fv = f"{p.fair_vol_pct:.2f}" if not math.isnan(p.fair_vol_pct) else "N/A"
         av = f"{p.atm_iv_pct:.2f}" if not math.isnan(p.atm_iv_pct) else "N/A"
-        vp = f"{p.vrp_pct:+.2f}" if not math.isnan(p.vrp_pct) else "N/A"
+        vp = f"{p.convexity_pct:+.2f}" if not math.isnan(p.convexity_pct) else "N/A"
         rv = f"{p.rv_30d_pct:.2f}" if not math.isnan(p.rv_30d_pct) else "N/A"
         ty = f"{p.T_years:.4f}" if not math.isnan(p.T_years) else "N/A"
+        # Both premia side by side, each under its own name: Conv% is
+        # fair-minus-ATM-implied, VRPvRV% is the textbook fair-minus-realized
+        # this module previously reported for neither.
+        vr = (
+            f"{p.vrp_vs_realized_pct:+.2f}"
+            if not math.isnan(p.vrp_vs_realized_pct)
+            else "N/A"
+        )
         print(
-            f"{p.expiry_label:<6} {p.expiry_date:<10} {ty:<8} {fv:<10} {av:<10} {vp:<10} {rv:<10}"
+            f"{p.expiry_label:<6} {p.expiry_date:<10} {ty:<8} {fv:<10} "
+            f"{av:<10} {vp:<10} {rv:<10} {vr:<10}"
         )
     print(f"\nTerm Structure Shape: {result.shape}")
 
