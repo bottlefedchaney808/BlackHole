@@ -286,7 +286,20 @@ def _run_newton_raphson_iv(context: dict[str, Any]) -> ModuleResult:
         sigma, converged = implied_volatility_nr_american(
             market_price, S, K, T, r, is_call, q=q, seed=seed
         )
-        sigma_source = "newton_raphson_iv (solved from the market price)"
+        # Provenance must tell the truth about an unidentifiable solve. When
+        # a deep-ITM American option is priced at intrinsic, every sigma below
+        # the early-exercise boundary reproduces that price, so the number is
+        # an upper bound, not a measurement -- same discipline as
+        # _resolve_sigma's "fallback:" prefix: if the source does not say
+        # "solved", do not trade the number as an implied vol.
+        sigma_source = (
+            "newton_raphson_iv (solved from the market price)"
+            if converged
+            else (
+                "newton_raphson_iv UPPER BOUND -- price is at intrinsic, so "
+                "IV is not identifiable (every lower vol reprices the same)"
+            )
+        )
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
         greeks = lr_all_greeks(S, K, T, r, sigma, q, is_call)
         return ModuleResult(

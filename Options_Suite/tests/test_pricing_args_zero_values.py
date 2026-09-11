@@ -207,41 +207,36 @@ class TestNewtonRaphsonClosedLoopStress:
 
 
 class TestAmericanPutIVConditioning:
-    """Documents a REAL, pre-existing defect in the American-put IV solve.
+    """Deep-ITM American put IV: unidentifiable, and now reported as such.
 
-    Away from the money the put solve degrades badly while still reporting
-    `converged=True`: a deep-ITM put priced at sigma=0.12 comes back as
-    sigma~0.156 -- a 30% vol error presented as a converged solution. Vega
-    collapses near the early-exercise boundary, so the price carries almost
-    no vol information; the solver should say so instead of returning a
-    confident number.
+    Found by the stress grid above, and FIXED in NewtonRaphsonIV.py. The
+    option sits on the early-exercise boundary, so its price is exactly
+    intrinsic for every sigma below ~0.156 -- Leisen-Reimer and
+    Barone-Adesi-Whaley both return 55.00000 at 0.10, 0.12 and 0.15. There is
+    no unique IV to find. The solver used to answer 0.1559 with
+    converged=True (a 30% error on a 0.12 input, presented as solved); it now
+    reports converged=False and the returned number is an upper bound.
 
-    `NewtonRaphsonIV.py` is untouched by the 2026-09-11 widget work -- this
-    predates it and was found by the stress grid, not caused by it.
-
-    Unblocking condition: make the NR solver report `converged=False` (or a
-    `vega_floor` / `iv_quality` marker) when vega at the solution is below a
-    usable threshold. Delete the xfail when that lands.
+    The mechanism-level tests live next to the solver in
+    tests/test_iv_solvers.py::TestAmericanIVIdentifiability. These two check
+    the behaviour survives all the way out through the widget adapter.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Deep-ITM American put IV is ill-conditioned; solver still "
-               "reports converged=True with ~30% vol error. Unblocks when the "
-               "NR solver gates on vega / reports iv_quality.",
-    )
-    def test_deep_itm_put_either_recovers_vol_or_admits_failure(self, spy):
-        _, result = TestNewtonRaphsonClosedLoopStress._solve(
-            550.0, 605.0, 0.25, 0.05, 0.12, 0.0, False
-        )
-        if result.metrics.get("converged"):
-            assert result.metrics["sigma"] == pytest.approx(0.12, rel=1e-2)
-
-    def test_deep_itm_put_error_has_not_silently_grown(self, spy):
-        """Characterisation lock: pins TODAY's error so it cannot worsen unnoticed."""
+    def test_deep_itm_put_is_reported_as_unconverged(self, spy):
         _, result = TestNewtonRaphsonClosedLoopStress._solve(
             550.0, 605.0, 0.25, 0.05, 0.12, 0.0, False
         )
         assert result.status == "ok"
-        rel_err = abs(result.metrics["sigma"] - 0.12) / 0.12
-        assert rel_err < 0.35, f"deep-ITM put IV error grew to {rel_err:.1%}"
+        assert result.metrics["converged"] is False, (
+            "a price pinned at intrinsic carries no vol information -- the "
+            "module must not report it as a converged solve"
+        )
+
+    def test_identifiable_put_still_reports_converged(self, spy):
+        """The guard must not make every put look unsolvable."""
+        _, result = TestNewtonRaphsonClosedLoopStress._solve(
+            550.0, 550.0, 0.25, 0.05, 0.25, 0.0, False
+        )
+        assert result.status == "ok"
+        assert result.metrics["converged"] is True
+        assert result.metrics["sigma"] == pytest.approx(0.25, rel=5e-3)

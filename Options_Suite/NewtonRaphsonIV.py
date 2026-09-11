@@ -5,6 +5,13 @@ try:
 except ImportError:
     from barone_adesi_whaley import baw_american_price
 
+# One volatility point (1%), the unit the identifiability guard in
+# implied_volatility_nr_american measures price sensitivity over. If a full
+# point of vol does not move the price by more than the solver's own price
+# tolerance, the "solved" vol is not determined by the price.
+VOL_POINT = 0.01
+
+
 def black_scholes_func(S, K, T, r, sigma, cp, q=0.0):
     """
     Black-Scholes option pricing formula (continuous dividend yield q).
@@ -160,6 +167,58 @@ def implied_volatility_nr_american(C, S, K, T, r, cp, q=0.0, pricer=None, tol=0.
                 else:
                     sigma = 0.5 * (lo + hi)
         except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Identifiability: matching the price is NOT the same as solving for vol
+    # ------------------------------------------------------------------
+    # A deep-ITM American option can sit exactly ON the early-exercise
+    # boundary. Early exercise is optimal, time value is zero, and the price
+    # is EXACTLY intrinsic for EVERY sigma below some boundary value -- so
+    # vega is identically zero across a whole interval and no unique implied
+    # vol exists. Both loops above happily "converge" there, because
+    # |price - C| < tol is satisfied by the entire interval; the bisection
+    # simply lands on its top edge.
+    #
+    # Measured live (S=550, K=605, T=0.25, r=0.05, q=0, put): Leisen-Reimer
+    # and Barone-Adesi-Whaley BOTH return exactly 55.00000 -- intrinsic -- at
+    # sigma = 0.10, 0.12 and 0.15, and this function answered 0.15590 with
+    # converged=True for all three. A 30% error on a 0.12 input, reported as
+    # a solved number.
+    #
+    # The test is one vol point DOWN, not up, and that direction is the whole
+    # point: price is monotone non-decreasing in sigma, so the degenerate
+    # region is a FLOOR. At the top edge of that floor the price still
+    # responds to raising sigma (measured 0.109) while lowering it changes
+    # nothing (measured 0.000057) -- an upward probe detects nothing.
+    #
+    # Threshold is `tol` itself, which makes the criterion self-consistent
+    # rather than a magic number: if a whole vol point of movement shifts the
+    # price by less than the tolerance this solver already treats as "equal",
+    # then two vols a full point apart are indistinguishable to it and the
+    # answer is arbitrary within that band. Measured separation is wide --
+    # degenerate cases land at 5.7e-5 / 8.5e-5, every solvable case at 0.13
+    # or above, i.e. >1000x clear -- so this is not a knife-edge. It is also
+    # deliberately conservative: it can only under-flag a marginal case,
+    # never reject a solvable one, which matters because
+    # vol_manager.py RAISES on converged=False.
+    #
+    # `sigma` is still returned, and is still useful: it is the TOP of the
+    # flat interval, so the market price is consistent with any vol at or
+    # below it -- a genuine upper bound rather than a guess. Callers that
+    # check `converged` (vol_manager) now fail loudly instead of pricing off
+    # a fabricated vol; callers that report it (module_registry) surface
+    # converged=False alongside the number.
+    if converged:
+        try:
+            vol_point_down = max(sigma - VOL_POINT, 1e-6)
+            price_at = pricer(S, K, T, r, sigma, q, cp, steps)
+            price_down = pricer(S, K, T, r, vol_point_down, q, cp, steps)
+            if abs(price_at - price_down) <= tol:
+                converged = False
+        except Exception:
+            # A pricer that blows up on the probe tells us nothing about
+            # identifiability; leave the solve's own verdict alone.
             pass
 
     return max(sigma, 0.001), converged
