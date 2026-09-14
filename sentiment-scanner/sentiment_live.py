@@ -12,7 +12,7 @@ A standalone stdlib-only (no third-party deps) HTTP server on port 8099
     may not reach the browser, prints the URL for manual navigation.
 
 Child env strips inherited PYTHONPATH, PYTHONHOME, and VIRTUAL_ENV so the
-sentiment-scanner's own .venv numpy loads correctly — never re-adds them.
+shared root .venv's numpy loads correctly — never re-adds them.
 
 Usage:
     python sentiment_live.py [TICKER]
@@ -50,7 +50,8 @@ PORT = 8099
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MAIN_PY = SCRIPT_DIR / "main.py"
-SCANNER_VENV_PYTHON = SCRIPT_DIR / ".venv" / "Scripts" / "python.exe"
+# Shared root .venv (all suites share it as of 2026-09-14).
+SCANNER_VENV_PYTHON = SCRIPT_DIR.parent / ".venv" / "Scripts" / "python.exe"
 
 # Max log lines to keep in memory for the SSE replay buffer.
 MAX_BUFFER_LINES = 2000

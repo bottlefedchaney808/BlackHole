@@ -33,9 +33,12 @@ import sys
 import threading
 from typing import Dict, List, Optional
 
-import win32api
-import win32con
-import win32job
+try:
+    import win32api
+    import win32con
+    import win32job
+except ImportError:  # non-Windows (e.g. the Linux Docker image): no pywin32
+    win32api = win32con = win32job = None  # _create_job_and_assign raises -> fallback
 
 # Per-action timeout in seconds (plan Task 10 / spec Phase 2): interpret and
 # explain are short, single-pass reads; investigate is a longer, code-
@@ -123,6 +126,9 @@ class JobObjectProcess:
                   f'for pid={self.pid} -- Job Object was unavailable for '
                   f'this worker, so descendant processes may survive',
                   file=sys.stderr)
+            if sys.platform != 'win32':
+                self._popen.kill()
+                return
             subprocess.run(
                 ['taskkill', '/F', '/T', '/PID', str(self.pid)],
                 capture_output=True, text=True,

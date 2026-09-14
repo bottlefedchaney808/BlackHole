@@ -851,8 +851,8 @@ _JUMP_MODELS = ("none", "Bates", "Merton", "Kou", "VarianceGamma", "Heston")
 #
 # It cannot simply be registered as a module, for two reasons that are
 # properties of the scanner, not of the registry:
-#   * it has its OWN project-local venv (sentiment-scanner/.venv) and installs
-#     its deps there, so it cannot be imported into the dashboard's process;
+#   * it runs as a subprocess of the shared root .venv (its old project-local
+#     venv was retired 2026-09-14), not imported into the dashboard's process;
 #   * its default mode LOOPS on config.SCAN_INTERVAL_MINUTES and prompts on
 #     stdin, neither of which a request/response card can host.
 #
@@ -866,16 +866,17 @@ SENTIMENT_SCANNER_DIR = os.path.join(ROOT, "sentiment-scanner")
 
 
 def _sentiment_scanner_python() -> str | None:
-    """The scanner's OWN interpreter -- never the dashboard's.
+    """The shared root .venv interpreter (all suites share it as of 2026-09-14).
 
-    sentiment-scanner is the one suite that does not share the root .venv, so
-    running it with our python would import a different dependency set.
+    Still a subprocess, not an import: the scanner loops and prompts on stdin.
     """
-    exe = os.path.join(SENTIMENT_SCANNER_DIR, ".venv", "Scripts", "python.exe")
-    if os.path.isfile(exe):
-        return exe
-    exe = os.path.join(SENTIMENT_SCANNER_DIR, ".venv", "bin", "python")
-    return exe if os.path.isfile(exe) else None
+    for exe in (
+        os.path.join(ROOT, ".venv", "Scripts", "python.exe"),
+        os.path.join(ROOT, ".venv", "bin", "python"),
+    ):
+        if os.path.isfile(exe):
+            return exe
+    return None
 
 
 def _latest_directional_scan():
@@ -971,9 +972,8 @@ def sentiment_scanner_panel(context: dict[str, Any]) -> dict[str, Any]:
             exe = _sentiment_scanner_python()
             if exe is None:
                 raise RuntimeError(
-                    "sentiment-scanner/.venv not found -- run its sentiment "
-                    "launcher once to create it. This suite does NOT share "
-                    "the root .venv."
+                    "root .venv not found -- create it and pip install -r "
+                    "requirements.txt (sentiment-scanner shares the root .venv)."
                 )
             universe = context.get("basket") or context.get("ticker") or ""
             if isinstance(universe, (list, tuple)):

@@ -1,6 +1,6 @@
 ---
 name: sentiment-scanner
-description: Use when launching, debugging, or scripting sentiment-scanner (StockTwits/Reddit/YouTube contested-narrative detection + 7 options scanners + correlation engine) — covers its own project-local .venv, real headless flags, and what actually happens when the bgutil PO-token server is unreachable.
+description: Use when launching, debugging, or scripting sentiment-scanner (StockTwits/Reddit/YouTube contested-narrative detection + 7 options scanners + correlation engine) — covers its shared root .venv launch, real headless flags, and what actually happens when the bgutil PO-token server is unreachable.
 ---
 
 ## Overview
@@ -11,7 +11,7 @@ For venv/port/PATH conventions shared across all four suites, see `.claude/skill
 
 ## Launch
 
-Interactive: `sentiment-scanner\sentiment.bat` (from that directory) — handles the project-local `.venv`, dependency install, and PO-token server auto-start described in the shared reference.
+Interactive: `sentiment-scanner\sentiment.bat` (from that directory) — uses the shared root `.venv`, dependency install, and PO-token server auto-start described in the shared reference.
 
 Headless flags (verified against `main.py`'s actual `argparse` setup — source-read, since `--help` couldn't run in this sandbox due to a missing `httpx` dependency unrelated to the flags themselves):
 
@@ -37,7 +37,7 @@ Recurring bug classes (added 2026-08-17, from a fix-hotspot audit — the YouTub
 - **Never call `.close()` on the shared, session-cached `ThetaDataController`.** `get_td()`'s own docstring says callers must not close it — `gex_scanner.py` closed it after the first ticker's scan, which silently broke every subsequent ticker in the same run with "Cannot send a request, as the client has been closed" (fixed `3b6b9b3`).
 - **`run_directional_scan` must copy `max_pain_strike` and `build_oi_snapshot` real OI into the directional-scan JSON.** `--universe` is the producer of `outputs/directional_scan` — omitting those fields is a regression, not a thin-data case.
 
-`requirements.txt` has no dev/test split (unlike Vol_Suite) — one file, no `requirements-dev.txt`. `tests/` exists (pytest-based, `test_main.py`, `test_correlation_engine.py`, etc.) with no `pytest.ini`/`pyproject.toml`, so run with plain `pytest tests/` from `sentiment-scanner/` using its own `.venv` interpreter — not the shared root `.venv`, which won't have this project's deps (yt-dlp, curl_cffi, bgutil-ytdlp-pot-provider).
+`requirements.txt` has no dev/test split (unlike Vol_Suite) — one file, no `requirements-dev.txt`. `tests/` exists (pytest-based, `test_main.py`, `test_correlation_engine.py`, etc.) with no `pytest.ini`/`pyproject.toml`, so run with plain `pytest tests/` from `sentiment-scanner/` using the shared root `.venv` interpreter (`..\.venv\Scripts\python.exe`), which carries this project's deps (yt-dlp, curl_cffi, bgutil-ytdlp-pot-provider) since 2026-09-14.
 
 ## Quick Reference
 
@@ -45,8 +45,8 @@ Recurring bug classes (added 2026-08-17, from a fix-hotspot audit — the YouTub
 |---|---|
 | Entry point | `sentiment-scanner/main.py` |
 | Interactive launch | `sentiment-scanner\sentiment.bat` |
-| venv | project-local `sentiment-scanner\.venv` (auto pip-installs each launch) |
+| venv | shared root `.venv` (sentiment.bat pip-installs root requirements each launch) |
 | Producer/consumer | producer only — `--export-context <path>`, no `--context` |
 | Single-pass mode | `--no-loop` |
 | PO-token server | `http://127.0.0.1:4416/ping` — degrades gracefully, no launch failure |
-| Tests | `pytest tests/` from `sentiment-scanner/`, project venv, no config file |
+| Tests | `pytest tests/` from `sentiment-scanner/`, root venv, no config file |

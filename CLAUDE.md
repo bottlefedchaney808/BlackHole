@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A quant-finance development monorepo: four independent analysis suites (options pricing, volatility,
 VaR, sentiment) plus a DTCC equity-swaps ingestion pipeline, tied together by an orchestrator and a
-local web dashboard. Everything shares one root `.venv` (Python 3.12) except `sentiment-scanner`,
-which keeps its own project-local venv. There is no cloud deployment path in active use — this is
+local web dashboard. Everything — all four suites, including `sentiment-scanner` since 2026-09-14 — shares one root
+`.venv` (Python 3.12). `potatohedge` is not on PyPI: `requirements.txt` finds it in `vendor/`, so run
+`pip install -r requirements.txt` from the repo root. There is no cloud deployment path in active use — this is
 a single-machine, localhost-only setup (see `docs/guides/START_HERE.md` for the human-facing quick-start).
 
 **Git structure (flattened 2026-08-12)**: the repo is a single flat git repo. `Options_Suite/` and
@@ -259,8 +260,8 @@ summary.
   cross-referenced with options flow (7 scanners: GEX, Unusual OI, IV Rank, Skew, Max Pain, Vol
   Dispersion, Earnings-Vol Premium) and CME swap-data-repository activity, combined by
   `correlation/engine.py`. Long-running by default (loops on `config.SCAN_INTERVAL_MINUTES`; pass
-  `--no-loop` for one shot). Has its own project-local `.venv` (auto-installs deps on every launch,
-  unlike the other three suites' shared venv) and depends on a separate local `bgutil-ytdlp-pot-provider`
+  `--no-loop` for one shot). Runs on the shared root `.venv` (`sentiment.bat` auto-installs root
+  `requirements.txt` on every launch; its old project-local venv was retired 2026-09-14) and depends on a separate local `bgutil-ytdlp-pot-provider`
   server on port 4416 for YouTube caption PO-tokens — if that server isn't running, YouTube captions
   are silently skipped rather than erroring, which shows up later as thin sentiment data.
   `verify_pot_token.py` is a standalone diagnostic for that token pipeline, unrelated to Reddit.

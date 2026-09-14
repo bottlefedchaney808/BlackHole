@@ -2,8 +2,8 @@
 setlocal enabledelayedexpansion
 REM Sentiment Scanner launcher — clean, scanner-loop-only.
 REM
-REM Starts sentiment-scanner/main.py in its natural loop mode using this
-REM project's own .venv (NOT the repo-root shared .venv).  Strips inherited
+REM Starts sentiment-scanner/main.py in its natural loop mode using the
+REM repo-root shared .venv (shared across all suites).  Strips inherited
 REM PYTHONPATH / PYTHONHOME / VIRTUAL_ENV so the scanner's numpy loads.
 REM
 REM Keeps the PO-token server start (needed for YouTube caption transcripts)
@@ -21,15 +21,16 @@ echo ============================================================
 echo  Sentiment Scanner
 echo ============================================================
 
-if not exist ".venv\Scripts\python.exe" (
-    echo sentiment-scanner\.venv not found -- run:
-    echo   python -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
+set "PY=%~dp0..\.venv\Scripts\python.exe"
+if not exist "%PY%" (
+    echo Root .venv not found -- from the repo root run:
+    echo   py -3.12 -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
     pause
     exit /b 1
 )
 
 REM --- 1. Quiet dependency check (no-op when already satisfied) ---
-.venv\Scripts\python.exe -m pip install -q -r requirements.txt 2>nul
+pushd .. & "%PY%" -m pip install -q -r requirements.txt 2>nul & popd
 if errorlevel 1 (
     echo WARNING: pip install reported an error; continuing anyway.
 )
@@ -69,7 +70,7 @@ if "!POT_UP!"=="1" (
 echo.
 echo Launching scanner...
 echo.
-.venv\Scripts\python.exe main.py --skip-sector-prompt --skip-report-prompt %*
+"%PY%" main.py --skip-sector-prompt --skip-report-prompt %*
 if %ERRORLEVEL% neq 0 (
     echo.
     echo Scanner exited with an error ^(see above^).

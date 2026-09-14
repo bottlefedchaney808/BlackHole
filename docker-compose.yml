@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# docker-compose.yml -- local development stack for FinancialDevelopment
+# docker-compose.yml -- local development stack for BlackHole
 #
 #   docker-compose up -d --build
 #   docker-compose logs -f
@@ -14,10 +14,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.scheduler
-    container_name: financialdevelopment-scheduler
+    container_name: blackhole-scheduler
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       SWAPS_DB_PATH: /app/data/swaps.db
       SCHEDULER_HEARTBEAT_FILE: /app/data/.scheduler_heartbeat
@@ -36,10 +37,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
-    container_name: financialdevelopment-dashboard
+    container_name: blackhole-dashboard
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       SWAPS_DB_PATH: /app/data/swaps.db
     volumes:

@@ -56,8 +56,13 @@ APScheduler==3.11.3
 filelock==3.32.2
 
 # --- Sentiment / social (sentiment-scanner/scanner/youtube.py) ---
-# Pinned to the version installed in sentiment-scanner's venv on this machine.
+# sentiment-scanner shares this root .venv (its project-local venv was retired
+# 2026-09-14); these are the deps it needed that the root file lacked.
 yt-dlp==2026.7.4
+bgutil-ytdlp-pot-provider  # yt-dlp PO-token provider plugin (YouTube captions)
+--find-links vendor        # potatohedge is not on PyPI; run pip from the repo root
+potatohedge==2.0.1         # shared/thetadata.py facade over potatohedge.client_v2
+pyyaml>=6.0                # potatohedge transitive dependency
 
 # --- MCP server (mcp-stockflow) ---
 mcp>=1.0
@@ -83,4 +88,4 @@ slowapi==0.1.9  # Rate limiting for FastAPI
 # Windows-only; if this shared venv is ever built on Linux/Mac, this pin will
 # fail to install and needs an OS-conditional marker at that point -- not
 # addressed here since this repo is Windows-only today (see CLAUDE.md).
-pywin32==312
+pywin32==312; sys_platform == "win32"

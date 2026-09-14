@@ -44,7 +44,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import timezone as UTC, datetime
 from pathlib import Path
 from typing import Any
 
