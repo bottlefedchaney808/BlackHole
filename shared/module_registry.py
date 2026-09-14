@@ -164,6 +164,12 @@ class ModuleSpec:
     output_kind:      "metrics" | "chart" | "table" -- how the dashboard
                       should render this module's metrics
     sample:           example context dict for testing/documentation
+    runnable:         False if run() raises because the slug is only a
+                      selection marker inside a larger pipeline
+    superseded_by:    slug of the module a UI should offer instead of this
+                      one (this one runs, but is not a useful card alone)
+    provides:         context keys this module's context_patch writes, so a
+                      dependency already satisfied in context can be skipped
     """
 
     name: str
@@ -187,6 +193,30 @@ class ModuleSpec:
     #: offered as an addable tool card, since clicking Run can only ever
     #: produce a NotImplementedError.
     runnable: bool = True
+    #: Slug of a registered module that does this one's job properly on its
+    #: own. Set it when a module RUNS fine but is not a useful card by itself
+    #: -- the four `surface_*` modules compute a grid and never draw it, and
+    #: the picture only exists in the `surface-explorer` tool that wraps
+    #: them. A card picker hides these and offers the replacement instead, so
+    #: nothing on the desk is a dead end you have to run to discover.
+    superseded_by: str = ""
+    #: Context keys this module's `context_patch` writes. Declared so an
+    #: auto-added `requires` dependency can be SKIPPED when the context
+    #: already carries everything it would produce (the dashboard seeds
+    #: prior results from the Context Store before every run). Without this,
+    #: declaring a real dependency would mean re-running a billed 2-year
+    #: pull on every click of the dependent card.
+    provides: tuple[str, ...] = ()
+
+    def is_pickable(self) -> bool:
+        """Can this slug be offered as a standalone card?
+
+        The rule the desk enforces: everything you can pick, runs. A module
+        is not pickable if running it on its own raises (`runnable=False`) or
+        if a different registered slug is the one that actually does the job
+        (`superseded_by`).
+        """
+        return self.runnable and not self.superseded_by
 
 
 # Suites whose module_registry.py::MODULES lists get aggregated by
@@ -240,7 +270,9 @@ def _suite_modules() -> list[ModuleSpec]:
             logger.warning(
                 "module registry: suite %s failed to import (%s: %s); "
                 "its modules are MISSING from the catalog",
-                dotted_name, type(exc).__name__, exc,
+                dotted_name,
+                type(exc).__name__,
+                exc,
             )
             continue
         else:
@@ -249,6 +281,94 @@ def _suite_modules() -> list[ModuleSpec]:
         if suite_modules:
             modules.extend(suite_modules)
     return modules
+
+
+# ---------------------------------------------------------------------------
+# Tools/ payload -> ModuleResult adaptation
+# ---------------------------------------------------------------------------
+# A Tools/tools/*.py run() returns a bare dict, and the chart it drew is a
+# filesystem PATH buried in one of that dict's fields. Nothing renders a
+# metrics field as an image, so a tool adapted onto a widget card reported
+# `artifacts=[]` while its PNG sat on disk in the run's own output_dir --
+# which is exactly the "the surface does not render" symptom (confirmed live:
+# outputs/<run_id>/SPCX_gamma_surface_*.png written, card showed a number
+# grid). dashboard/panels.py already lifted the path for the panel tabs; this
+# is that same lift, moved to the one place BOTH paths go through, so the
+# desk-card path cannot drift away from the panel path again.
+TOOL_CHART_KEYS: tuple[str, ...] = ("chart_path", "chart_paths", "charts")
+
+# Dense numeric payload keys that must never reach a metrics table -- each is
+# an array the chart already draws, and dumping one into a tile buries the
+# handful of fields on the card that actually say something.
+TOOL_GRID_KEYS: tuple[str, ...] = (
+    "grid",
+    "strikes",
+    "dtes",
+    "tenors_years",
+    "strike_edges",
+    "time_labels",
+    "expiries",
+    "skipped",
+    "curves",
+    "market_iv",
+    "moneyness",
+    "raw_points",
+)
+
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".webp")
+
+
+def _chart_kind(path: str) -> str:
+    lowered = str(path).lower()
+    for suffix in _IMAGE_SUFFIXES:
+        if lowered.endswith(suffix):
+            return "png" if suffix in (".png", ".jpg", ".jpeg", ".webp") else "svg"
+    return "png"
+
+
+def tool_payload_to_result(
+    payload: dict[str, Any] | None,
+    *,
+    chart_keys: tuple[str, ...] = TOOL_CHART_KEYS,
+    drop: tuple[str, ...] = TOOL_GRID_KEYS,
+) -> ModuleResult:
+    """Adapt a `Tools/tools/*` run() dict into a ModuleResult.
+
+    Chart paths are lifted out of the payload into `artifacts` (where every
+    renderer looks); `drop` keys are removed from `metrics`. A chart key that
+    is present but None means the tool's plot step failed while its data is
+    still good -- the card is told so explicitly rather than being left to
+    look complete.
+    """
+    metrics: dict[str, Any] = {}
+    artifacts: list[ArtifactRef] = []
+    chart_key_seen = False
+    chart_missing = False
+    for key, value in (payload or {}).items():
+        if key in chart_keys:
+            chart_key_seen = True
+            values = value if isinstance(value, (list, tuple)) else [value]
+            found = False
+            for item in values:
+                if item:
+                    artifacts.append(
+                        ArtifactRef(path=str(item), kind=_chart_kind(str(item)))
+                    )
+                    found = True
+            if not found:
+                chart_missing = True
+            continue
+        if key in drop:
+            continue
+        metrics[key] = value
+    if chart_key_seen and chart_missing and not artifacts:
+        metrics.setdefault(
+            "chart", "not rendered (the tool's plot step failed; data below is real)"
+        )
+    status = "ok" if artifacts or metrics else "skipped"
+    return ModuleResult(
+        status=status, artifacts=artifacts, metrics=metrics, context_patch=None
+    )
 
 
 def from_tool_spec(tool_spec: ToolSpec) -> ModuleSpec:
@@ -261,10 +381,21 @@ def from_tool_spec(tool_spec: ToolSpec) -> ModuleSpec:
     """
 
     def _run(context: dict[str, Any]) -> ModuleResult:
-        result = tool_spec.run(context)
-        return ModuleResult(
-            status="ok", artifacts=[], metrics=result, context_patch=None
-        )
+        # Every surface this adapter feeds is the dark dashboard; a tool that
+        # honours the flag would otherwise draw a white-background chart onto
+        # a dark card. Tools that don't read it ignore it.
+        ctx = dict(context)
+        ctx.setdefault("dark_theme", True)
+        # A declared param default is a promise the card makes; honour it
+        # when the caller omits the key (an older saved layout, the agent, a
+        # curl). Without this a tool whose run() dispatches on e.g. `mode`
+        # raised "requires context['mode']" despite declaring a default.
+        for param in getattr(tool_spec, "params", ()) or ():
+            default = getattr(param, "default", None)
+            if default is not None and ctx.get(param.name) in (None, ""):
+                ctx[param.name] = default
+        result = tool_spec.run(ctx)
+        return tool_payload_to_result(result)
 
     return ModuleSpec(
         name=tool_spec.name,

@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from shared.module_registry import TOOL_GRID_KEYS, tool_payload_to_result
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Where panels that render their own PNGs write them. Under artifacts/ so
@@ -230,52 +232,27 @@ def _tool_result(
 ) -> dict[str, Any]:
     """Adapt a `Tools/tools/*` run() dict into the ModuleResult shape.
 
-    The chart path a tool returns is the whole reason these panels exist, so
-    it is lifted into `artifacts` where the renderer looks for it -- a tool's
-    own dict buries it in a field nothing renders. Grid payloads (thousands
-    of floats) are dropped from `metrics`: they are what the PNG already
-    shows, and dumping them into a table produces an unreadable card.
+    Thin wrapper over `shared.module_registry.tool_payload_to_result`, which
+    is the single implementation the desk's widget-card path
+    (`from_tool_spec`) also goes through -- when the lift lived only here,
+    the same tool rendered its chart on a panel tab and dropped it on a desk
+    card.
     """
-    metrics: dict[str, Any] = {}
-    artifacts: list[dict[str, str]] = []
-    for key, value in (payload or {}).items():
-        if key in chart_keys:
-            if value:
-                artifacts.append({"path": str(value), "kind": "png"})
-            continue
-        if key in drop:
-            continue
-        metrics[key] = value
-    status = "ok" if artifacts or metrics else "skipped"
-    if not artifacts and any(payload.get(k) is None for k in chart_keys):
-        # A tool whose chart render failed still has a usable grid/table; say
-        # the chart is missing rather than letting the card look complete.
-        metrics.setdefault(
-            "chart", "not rendered (the tool's plot step failed; data below is real)"
-        )
-    return {"status": status, "artifacts": artifacts, "metrics": metrics, "ran": []}
+    result = tool_payload_to_result(
+        payload, chart_keys=tuple(chart_keys), drop=tuple(drop)
+    )
+    return {
+        "status": result.status,
+        "artifacts": _artifact_dicts(result.artifacts),
+        "metrics": result.metrics,
+        "ran": [],
+    }
 
 
 # Grid payload keys that must never reach a metrics table -- each is a dense
-# numeric array the chart already draws.
-_GRID_KEYS = (
-    "grid",
-    "strikes",
-    "dtes",
-    "tenors_years",
-    "strike_edges",
-    "time_labels",
-    "expiries",
-    "skipped",
-    "curves",
-    "market_iv",
-    "moneyness",
-    # Every individual vendor quote the surface was fitted from -- confirmed
-    # live on SPY at ~2900 rows. The chart is the readable form of this; a
-    # table of it is a screenful of noise that buries the five fields on the
-    # card that actually say something.
-    "raw_points",
-)
+# numeric array the chart already draws. Defined in shared/module_registry.py
+# so the desk-card path drops exactly the same keys these panels do.
+_GRID_KEYS = TOOL_GRID_KEYS
 
 
 def surface_panel(

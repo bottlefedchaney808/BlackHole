@@ -29,7 +29,7 @@ The historical `sentiment-scanner` subprocess is hard-skipped by default. Its op
 - Reuses Vol_Suite's GARCH fit instead of re-fitting.
 - Runs option-chain scanners: `iv_rank`, `max_pain`, `skew`, `unusual_oi`.
 - Runs 1-year-out simulations via VaR engine builders.
-- Runs the `Direction` 5-tool signal suite.
+- Runs the Direction 5-tool signal suite.
 - Writes `sentiment_result.json` and `suite_context_sentiment.json`.
 
 ### Phase 3 — Options + VaR

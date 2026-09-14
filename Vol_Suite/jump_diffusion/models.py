@@ -7,6 +7,7 @@ is identical for every model. See the "Reference: characteristic functions"
 section of the design spec for the exact formulas and their derivation.
 """
 
+import math
 from dataclasses import astuple, dataclass
 from typing import ClassVar
 
@@ -156,14 +157,22 @@ class BatesModel:
     def jump_variance_share(self, T: float) -> float:
         """Fraction of total T-year variance attributable to the jump
         component: Var(jump leg) / (Var(jump leg) + Var(diffusive leg)).
-        Diffusive leg variance over [0,T] is approximated by v0*T (Heston's
-        instantaneous variance held at its current level -- a reasonable
-        short-horizon approximation, not a full integrated-variance model).
-        Jump leg variance is lam*T*(sigma_j**2 + mu_j**2) (variance of a
-        compound Poisson process with lognormal jump sizes).
+
+        Diffusive leg is the Heston integrated expected variance
+        ∫E[v_s]ds = θT + (v0-θ)(1-e^{-κT})/κ (κ→0 limit: v0·T).
+        Jump leg is lam*T*(sigma_j**2 + mu_j**2) (compound-Poisson
+        lognormal jump variance).
         """
         jump_var = self.lam * T * (self.sigma_j**2 + self.mu_j**2)
-        diffusive_var = self.v0 * T
+        if self.kappa > 1e-12:
+            diffusive_var = (
+                self.theta * T
+                + (self.v0 - self.theta)
+                * (1.0 - math.exp(-self.kappa * T))
+                / self.kappa
+            )
+        else:
+            diffusive_var = self.v0 * T
         total = jump_var + diffusive_var
         return jump_var / total if total > 0 else 0.0
 

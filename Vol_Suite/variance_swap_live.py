@@ -254,6 +254,7 @@ def generate_plots(
     rv_match,
     match_lookback,
     interpretation: str = None,
+    out_dir: str = None,
 ) -> str:
     t = result["strike_table"]
     K = t["strikes"]
@@ -386,7 +387,13 @@ def generate_plots(
         except Exception:
             pass
 
-    out_dir = os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
+    # An explicit out_dir beats the env var, and the caller always passes
+    # one. VS_OUTPUT_DIR is process-global while the dashboard runs modules
+    # concurrently in a threadpool, so two cards running at once used to
+    # write into each other's run directory -- confirmed live: this PNG
+    # landed in one run's outputs/<run_id>/ while the same call's CSVs
+    # (which already took an explicit out_dir) went to another's.
+    out_dir = out_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{ticker}_variance_swap_plots_{timestamp}.png")
     plt.savefig(filename, dpi=150, bbox_inches="tight")
@@ -741,7 +748,9 @@ def run_variance_swap_live(
 
     # plots
     try:
-        # generate_plots uses VS_OUTPUT_DIR env var; ensure it is set
+        # generate_plots now takes out_dir directly (below). The env var is
+        # still set for any other Vol_Suite helper that reads it downstream,
+        # but nothing in THIS call depends on it any more.
         os.environ["VS_OUTPUT_DIR"] = out_dir
         interp = (
             f"Fair vol: {result.get('fair_variance_swap_strike_vol_pct', 'N/A'):.2f}% | "
@@ -761,6 +770,7 @@ def run_variance_swap_live(
             rv_match,
             match_lookback,
             interpretation=interp,
+            out_dir=out_dir,
         )
         files.append(plot_file)
     except Exception as e:

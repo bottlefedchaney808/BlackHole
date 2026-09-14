@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "findev-tui": {
+      "command": "python3",
+      "args": ["C:/Users/bottl/FinancialDevelopment/tui/findev_tui_mcp.py"]
+    }
+  }
+}

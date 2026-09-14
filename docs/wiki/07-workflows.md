@@ -94,7 +94,7 @@ orchestrator.bat --list-modules
 ```
 
 **Good means**:
-- Every slug resolves via `shared/module_registry.resolve_modules`.
+- Every slug resolves via `shared.module_registry.resolve_modules`.
 - Dependencies declared in `ModuleSpec.requires` are respected by the runner.
 
 ## Archive / rerun

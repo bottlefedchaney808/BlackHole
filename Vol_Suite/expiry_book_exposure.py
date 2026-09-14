@@ -71,9 +71,22 @@ GREEKS = ("delta", "gamma", "vega", "vanna", "charm", "volga")
 def vannacharm_row(r, spot, greek: str, oi=None) -> float:
     """VannaCharm stock exposure for one contract (not SVI).
     GEX = γ*OI*100*S²*0.01 with γ already call+/put−.
-    VEX = call+|ν|*S*σ − put+|ν|*S*σ.
+    VEX = right_sign * textbook_vanna * OI*100*S*σ  (call+/put−, like GEX).
     CEX = χ*OI*100*S/365 with χ already per-right.
     Pass oi=net_contracts for dGEX/dVEX/dCEX (bought−sold).
+
+    VEX FIXED 2026-09-12. It was ``right_sign * |vanna|``: the abs() threw
+    away vanna's moneyness sign, so an ITM call plotted positive vanna when
+    its vanna is negative (and an ITM put negative when it is positive).
+    Verified against Leisen-Reimer at K=740/790 on a 762 spot: textbook vanna
+    is -1.04 for BOTH the 740 put and the 740 call, +1.22/+1.45 at 790, and
+    charm is the opposite sign at every strike. With the sign kept, VEX and
+    CEX agree for OTM puts / ITM puts and are inverse for OTM calls / ITM
+    calls -- "similar but inverted depending on moneyness" -- instead of
+    one being a mirror image of the other everywhere.
+
+    ``greeks["vanna"]`` holds ``bs_vanna``, which is -1 x textbook vanna
+    (see bs_vanna / dealer_frame_vanna), hence the negation below.
     """
     if oi is None:
         oi = float(getattr(r, "oi", 0.0) or 0.0)
@@ -93,7 +106,7 @@ def vannacharm_row(r, spot, greek: str, oi=None) -> float:
     if greek == "vanna":
         return (
             rs
-            * abs(float(greeks.get("vanna", 0.0) or 0.0))
+            * -float(greeks.get("vanna", 0.0) or 0.0)  # textbook sign, NOT abs()
             * oi
             * CONTRACT_MULTIPLIER
             * spot

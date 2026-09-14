@@ -120,6 +120,81 @@ def test_from_tool_spec_run_wraps_dict_result_as_module_result():
     assert result.context_patch is None
 
 
+def test_from_tool_spec_lifts_chart_path_into_artifacts(tmp_path):
+    """A tool's PNG must reach `artifacts`, or the card never shows it.
+
+    Regression: `from_tool_spec` hardcoded `artifacts=[]` and dumped the whole
+    tool payload into `metrics`, so every Tools/ widget card rendered its
+    chart path as a text tile and its dense grid as a wall of floats --
+    confirmed live on the Surface Explorer card, whose PNG was sitting in
+    outputs/<run_id>/ the whole time. dashboard/panels.py did the lift for the
+    panel tabs only; both paths now share one implementation.
+    """
+    from shared.module_registry import from_tool_spec
+    from Tools.registry import ToolSpec
+
+    png = tmp_path / "SPY_gamma_surface.png"
+    png.write_bytes(b"")
+
+    def tool_run(context: dict) -> dict:
+        return {
+            "ticker": "SPY",
+            "greek": "gamma",
+            "grid": [[1.0, 2.0], [3.0, 4.0]],
+            "strikes": [500, 510],
+            "dtes": [6, 13],
+            "units": "gamma*OI*100",
+            "chart_path": str(png),
+        }
+
+    module_spec = from_tool_spec(
+        ToolSpec(name="Surface", slug="surface-x", description="", run=tool_run)
+    )
+    result = module_spec.run({})
+
+    assert result.artifacts == [ArtifactRef(path=str(png), kind="png")]
+    # Dense arrays the chart already draws never reach the metrics table.
+    assert set(result.metrics) == {"ticker", "greek", "units"}
+
+
+def test_from_tool_spec_flags_a_chart_that_failed_to_render():
+    """chart_path=None means the plot step failed but the data is real."""
+    from shared.module_registry import from_tool_spec
+    from Tools.registry import ToolSpec
+
+    module_spec = from_tool_spec(
+        ToolSpec(
+            name="Surface",
+            slug="surface-y",
+            description="",
+            run=lambda context: {"fair_vol": 0.21, "chart_path": None},
+        )
+    )
+    result = module_spec.run({})
+
+    assert result.artifacts == []
+    assert result.metrics["fair_vol"] == 0.21
+    assert "not rendered" in result.metrics["chart"]
+
+
+def test_from_tool_spec_asks_tools_for_the_dark_theme():
+    """Every surface this adapter feeds is the dark dashboard."""
+    from shared.module_registry import from_tool_spec
+    from Tools.registry import ToolSpec
+
+    seen: dict = {}
+
+    def tool_run(context: dict) -> dict:
+        seen.update(context)
+        return {"ok": True}
+
+    from_tool_spec(ToolSpec(name="T", slug="t", description="", run=tool_run)).run(
+        {"ticker": "SPY"}
+    )
+
+    assert seen["dark_theme"] is True
+
+
 @pytest.mark.skip(
     reason=(
         "Cycle detection over the requires graph belongs to a later phase "

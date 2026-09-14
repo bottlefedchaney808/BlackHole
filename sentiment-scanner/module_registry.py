@@ -363,7 +363,11 @@ def _run_highlight_packs(context: dict[str, Any]) -> ModuleResult:
         "headline": (
             f"{len(rows)} pack{'' if len(rows) == 1 else 's'} · "
             f"{len(basket)} tradable ticker{'' if len(basket) == 1 else 's'}"
-            + (f" · updated {manifest.get('updated_at', '')[:16]}" if manifest.get("updated_at") else "")
+            + (
+                f" · updated {manifest.get('updated_at', '')[:16]}"
+                if manifest.get("updated_at")
+                else ""
+            )
         ),
         "packs": rows,
         "tickers": basket,
@@ -373,9 +377,12 @@ def _run_highlight_packs(context: dict[str, Any]) -> ModuleResult:
         status="ok" if rows else "skipped",
         artifacts=[],
         metrics=metrics,
-        # `held_tickers` is deliberately the same key the position book
-        # publishes: whichever ran most recently is what the tools pick up.
-        context_patch={"held_tickers": basket} if basket else None,
+        # NOT `held_tickers`. This used to publish under the position book's
+        # own key, so whichever ran last silently replaced your book as the
+        # basket every tool was seeded with -- a pack scan turned "my book"
+        # into sixteen scanner names. Packs now reach the book only when you
+        # add them to the console book (the card's add buttons).
+        context_patch={"pack_tickers": basket} if basket else None,
     )
 
 
@@ -532,4 +539,3 @@ def resolve_modules(slugs: list[str]) -> list[ModuleSpec]:
     """Local resolver for this suite's slugs (Phase 4)."""
     by_slug = {m.slug: m for m in MODULES}
     return [by_slug[s] for s in slugs if s in by_slug]
-

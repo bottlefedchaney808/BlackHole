@@ -936,9 +936,9 @@ def _run_variance_swap(context: dict[str, Any]) -> ModuleResult:
             jump_block: dict[str, Any] = {
                 "model_name": calib.model_name,
                 "params": calib.params,
-                # Scoped to the calibration mask (MAX_CALIB_STRIKES), not the
-                # full smile -- see CLAUDE.md's jump-diffusion note.
+                # rmse_iv = calib_mask; rmse_iv_full = all valid strikes.
                 "rmse_iv": calib.rmse_iv,
+                "rmse_iv_full": calib.rmse_iv_full,
             }
             if calib.model_name == _JUMP_SHARE_MODEL:
                 fitted = model_cls.from_array(
@@ -950,9 +950,7 @@ def _run_variance_swap(context: dict[str, Any]) -> ModuleResult:
                     # Split the replication fair VARIANCE (not vol) by the
                     # model's jump share, then re-express each leg as a vol.
                     fair_var = (fair_vol / 100.0) ** 2
-                    jump_block["jump_leg_vol_pct"] = (
-                        100.0 * (fair_var * share) ** 0.5
-                    )
+                    jump_block["jump_leg_vol_pct"] = 100.0 * (fair_var * share) ** 0.5
                     jump_block["diffusive_leg_vol_pct"] = (
                         100.0 * (fair_var * (1.0 - share)) ** 0.5
                     )
@@ -1128,7 +1126,10 @@ def _plot_smile_fit(
         try:
             if spot and float(spot) > 0:
                 ax.axvline(
-                    float(spot), ls="--", lw=1, color="#718096",
+                    float(spot),
+                    ls="--",
+                    lw=1,
+                    color="#718096",
                     label=f"spot {float(spot):.2f}",
                 )
         except (TypeError, ValueError):
@@ -1165,13 +1166,29 @@ def _run_jump_diffusion(context: dict[str, Any]) -> ModuleResult:
         target_years = float(context.get("target_years") or 0.25)
         expiration = _resolved_expiration(context, ticker, target_years)
 
-        from volatility_suite import _calibrate_default_jump_model
+        from volatility_suite import (
+            _calibrate_default_jump_model,
+            resolve_jump_model_default,
+        )
+
+        choice = str(context.get("model") or "default").strip()
+        saved_default = None
+        if _as_bool(context.get("save_as_default")) and choice != "default":
+            from shared.desk_settings import set_setting
+
+            set_setting("jump_model_default", choice)
+            saved_default = choice
+        default_model = resolve_jump_model_default()
 
         # capture= asks for the smile arrays so the card can draw the fit;
         # they stay out of the returned dict (and so out of suite_context).
         smile: dict[str, Any] = {}
         result = _calibrate_default_jump_model(
-            ticker, expiration, target_years, capture=smile
+            ticker,
+            expiration,
+            target_years,
+            capture=smile,
+            model_name=None if choice == "default" else choice,
         )
     except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
         return _failed(exc)
@@ -1189,10 +1206,16 @@ def _run_jump_diffusion(context: dict[str, Any]) -> ModuleResult:
 
     params = result.get("params") or {}
     rmse = result.get("rmse_iv")
+    rmse_full = result.get("rmse_iv_full")
+    n_atm = 15  # MAX_CALIB_STRIKES; headline must not imply full-smile RMSE
     metrics: dict[str, Any] = {
         "headline": (
             f"{ticker} {result.get('model_name', 'jump model')} calibrated"
-            + (f" · RMSE(IV) {rmse:.4f}" if isinstance(rmse, (int, float)) else "")
+            + (
+                f" · RMSE(IV, {n_atm} ATM) {rmse:.4f}"
+                if isinstance(rmse, (int, float))
+                else ""
+            )
             + (
                 f" · jump share {result['jump_variance_share']:.1%}"
                 if isinstance(result.get("jump_variance_share"), (int, float))
@@ -1202,13 +1225,19 @@ def _run_jump_diffusion(context: dict[str, Any]) -> ModuleResult:
         "ticker": ticker,
         "expiry": expiration,
         "model_name": result.get("model_name"),
-        # rmse_iv is scoped to the calibration mask (MAX_CALIB_STRIKES), not
-        # the full smile -- see CLAUDE.md's jump-diffusion note.
         "rmse_iv": rmse,
+        "rmse_iv_full": rmse_full,
         "jump_variance_share": result.get("jump_variance_share"),
         "merton_sigma": result.get("merton_sigma"),
         "params": params,
+        "model_choice": choice,
+        "default_model": default_model,
     }
+    if saved_default:
+        metrics["saved_default"] = saved_default
+    if result.get("zoo_rmse_iv"):
+        metrics["headline"] += " · best of zoo"
+        metrics["zoo_rmse_iv"] = result["zoo_rmse_iv"]
     artifacts: list[ArtifactRef] = []
     chart = _plot_smile_fit(
         ticker,
@@ -1451,35 +1480,52 @@ def _resolve_basket(context: dict[str, Any]) -> list[str]:
     return [str(focus).strip().upper()] if focus else []
 
 
-def _resolve_weights(
-    context: dict[str, Any], tickers: list[str]
-) -> list[float] | None:
+def _resolve_weights(context: dict[str, Any], tickers: list[str]) -> list[float] | None:
     """Market-value weights from the position book when it is in context.
 
     Equal-weighting a book you are not equally weighted in reports a basket
     vol you do not have. Falls back to None (equal weight, the engine's own
     default) when no book is present or none of it overlaps the basket.
+    An unlabeled `weights` list is refused (raises) unless a book is also
+    present to replace it -- silently equal-weighting after discarding a
+    provided vector is a hidden swap.
     """
     explicit = context.get("weights")
-    if isinstance(explicit, (list, tuple)) and len(explicit) == len(tickers):
-        return [float(w) for w in explicit]
+    labels = context.get("weight_tickers") or context.get("correlation_tickers")
+    unlabeled_explicit = False
+    if isinstance(explicit, (list, tuple)) and explicit:
+        # Refuse unlabeled lists — positional apply silently swaps names.
+        if isinstance(labels, (list, tuple)) and len(labels) == len(explicit):
+            index = {str(t).strip().upper(): i for i, t in enumerate(labels)}
+            try:
+                return [float(explicit[index[t]]) for t in tickers]
+            except (KeyError, IndexError, TypeError, ValueError):
+                unlabeled_explicit = True
+        else:
+            unlabeled_explicit = True
     book = context.get("positions")
     rows = book.get("positions") if isinstance(book, dict) else book
-    if not isinstance(rows, list) or not rows:
-        return None
-    by_ticker: dict[str, float] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        tkr = str(row.get("ticker") or "").strip().upper()
-        try:
-            value = abs(float(row.get("market_value")))
-        except (TypeError, ValueError):
-            continue
-        if tkr and value:
-            by_ticker[tkr] = by_ticker.get(tkr, 0.0) + value
-    weights = [by_ticker.get(t, 0.0) for t in tickers]
-    return weights if sum(weights) > 0 else None
+    if isinstance(rows, list) and rows:
+        by_ticker: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            tkr = str(row.get("ticker") or "").strip().upper()
+            try:
+                value = abs(float(row.get("market_value")))
+            except (TypeError, ValueError):
+                continue
+            if tkr and value:
+                by_ticker[tkr] = by_ticker.get(tkr, 0.0) + value
+        weights = [by_ticker.get(t, 0.0) for t in tickers]
+        if sum(weights) > 0:
+            return weights
+    if unlabeled_explicit:
+        raise ValueError(
+            "weights require weight_tickers or correlation_tickers; "
+            "unlabeled lists are refused"
+        )
+    return None
 
 
 def _run_correlation_matrix(context: dict[str, Any]) -> ModuleResult:
@@ -1508,7 +1554,9 @@ def _run_correlation_matrix(context: dict[str, Any]) -> ModuleResult:
             market_ticker=market,
             period=period,
         )
-        files, interp = ce.run_correlation_engine(
+        # Returns (files, interp, stats) -- its annotation still says a
+        # 2-tuple, which is how this unpack silently broke the whole module.
+        files, interp, _stats = ce.run_correlation_engine(
             tickers, market=market, period=period, output_dir=output_dir
         )
     except Exception as exc:  # noqa: BLE001 -- fail-loud, matches dealer_exposure
@@ -1625,6 +1673,7 @@ MODULES: list[ModuleSpec] = [
         cli_entry="Vol_Suite/dealer_exposure_module.py",
         default_selected=False,
         requires=[],
+        provides=("dealer_exposure_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(
@@ -1647,6 +1696,7 @@ MODULES: list[ModuleSpec] = [
         cli_entry="Vol_Suite/dealer_position_book.py",
         default_selected=False,
         requires=[],
+        provides=("position_book_result",),
         archive=ArchiveHint(key_shape="ticker_only"),
     ),
     ModuleSpec(
@@ -1658,6 +1708,7 @@ MODULES: list[ModuleSpec] = [
         cli_entry="Vol_Suite/dual_book.py",
         default_selected=False,
         requires=[],
+        provides=("dual_book_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(
@@ -1677,6 +1728,7 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        provides=("chain_scanner_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(
@@ -1699,6 +1751,13 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        # Computes the grid and never draws it -- the picture lives in
+        # Tools/tools/surface_explorer_tool.py, which calls this same
+        # function and adds the matplotlib render. As a standalone card
+        # this is five tiles and no surface, so the picker offers the
+        # tool instead; this stays registered as the data provider.
+        superseded_by="surface-explorer",
+        provides=("surface_greek_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(
@@ -1710,6 +1769,13 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        # Computes the grid and never draws it -- the picture lives in
+        # Tools/tools/surface_explorer_tool.py, which calls this same
+        # function and adds the matplotlib render. As a standalone card
+        # this is five tiles and no surface, so the picker offers the
+        # tool instead; this stays registered as the data provider.
+        superseded_by="surface-explorer",
+        provides=("surface_market_iv_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(
@@ -1721,6 +1787,13 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        # Computes the grid and never draws it -- the picture lives in
+        # Tools/tools/surface_explorer_tool.py, which calls this same
+        # function and adds the matplotlib render. As a standalone card
+        # this is five tiles and no surface, so the picker offers the
+        # tool instead; this stays registered as the data provider.
+        superseded_by="surface-explorer",
+        provides=("surface_flow_strike_time_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     ModuleSpec(
@@ -1732,6 +1805,13 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        # Computes the grid and never draws it -- the picture lives in
+        # Tools/tools/surface_explorer_tool.py, which calls this same
+        # function and adds the matplotlib render. As a standalone card
+        # this is five tiles and no surface, so the picker offers the
+        # tool instead; this stays registered as the data provider.
+        superseded_by="surface-explorer",
+        provides=("surface_flow_strike_expiry_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
     ),
     # Task 6 (Modularization Overhaul, Phase 3): selection-only markers for
@@ -1799,6 +1879,7 @@ MODULES: list[ModuleSpec] = [
         cli_entry="Vol_Suite/variance_swap_live.py",
         default_selected=False,
         requires=[],
+        provides=("variance_swap_result",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
         description=(
             "Variance-swap replication (Carr-Madan/Demeterfi): fair variance "
@@ -1831,14 +1912,45 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        provides=("jump_diffusion",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
         description=(
-            "Calibrate the default jump model (Bates/Merton) in IV space; "
-            "feeds dealer positioning, VRP and the strategy recommender."
+            "Calibrate a jump model in IV space -- your saved default, a named "
+            "model, or the best fit of the whole zoo; feeds dealer "
+            "positioning, VRP and the strategy recommender."
         ),
         inputs=InputSpec(ticker="required", expiry="optional"),
         output_kind="metrics",
         sample={"ticker": "SPY"},
+        params=(
+            ParamSpec(
+                name="model",
+                label="Model",
+                kind="choice",
+                default="default",
+                choices=(
+                    "default",
+                    "best_fit",
+                    "Bates",
+                    "Merton",
+                    "Heston",
+                    "Kou",
+                    "VarianceGamma",
+                ),
+                help=(
+                    "'default' uses your saved default (Bates until you change "
+                    "it); 'best_fit' calibrates the whole zoo and keeps the "
+                    "lowest IV RMSE."
+                ),
+            ),
+            ParamSpec(
+                name="save_as_default",
+                label="Make this my default",
+                kind="bool",
+                default=False,
+                help="Save the chosen model as the default for every future run.",
+            ),
+        ),
     ),
     ModuleSpec(
         name="Jump Model Comparison",
@@ -1849,6 +1961,7 @@ MODULES: list[ModuleSpec] = [
         cli_entry=None,
         default_selected=False,
         requires=[],
+        provides=("jump_model_comparison",),
         archive=ArchiveHint(key_shape="ticker_expiry"),
         description=(
             "Calibrate the whole model zoo (VG, Heston, Bates, Kou, Merton) "
@@ -1867,6 +1980,10 @@ MODULES: list[ModuleSpec] = [
         cli_entry="Vol_Suite/garch_analysis.py",
         default_selected=False,
         requires=[],
+        provides=(
+            "garch_vol",
+            "garch_conditional_vol",
+        ),
         archive=ArchiveHint(key_shape="ticker"),
         description=(
             "GARCH(1,1) conditional volatility; the vol VaR reads back from "
@@ -1918,6 +2035,12 @@ MODULES: list[ModuleSpec] = [
         cli_entry="Vol_Suite/correlation_engine.py",
         default_selected=False,
         requires=[],
+        provides=(
+            "correlation_matrix",
+            "covariance_matrix",
+            "volatilities",
+            "correlation_tickers",
+        ),
         archive=ArchiveHint(key_shape="global"),
         description=(
             "Correlation + covariance matrix, per-name vol/beta and basket "

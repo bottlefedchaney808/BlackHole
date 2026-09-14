@@ -29,12 +29,13 @@ Two modes, selected via context["mode"]:
 Either mode returns format_strategies_artifact()'s dict verbatim, so a
 caller does not need to know which mode produced it.
 """
+
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 _TOOLS_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _TOOLS_DIR.parent
@@ -43,13 +44,12 @@ _VOL_SUITE_ROOT = _REPO_ROOT / "Vol_Suite"
 if str(_VOL_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_VOL_SUITE_ROOT))
 
-from Tools.spec import ToolSpec  # noqa: E402
-
+from Tools.spec import ToolSpec
 
 CHAIN_STRATEGIES_FILENAME = "chain_strategies.json"
 
 
-def _resolve_output_dir(context: Dict[str, Any]) -> Path:
+def _resolve_output_dir(context: dict[str, Any]) -> Path:
     """Prefer an explicit override (useful when the context's own
     output_dir was recorded on a different machine/OS than the one this
     tool is running on -- see context_loader's docstring on that same
@@ -65,7 +65,7 @@ def _resolve_output_dir(context: Dict[str, Any]) -> Path:
     return Path(raw)
 
 
-def _run_cached(context: Dict[str, Any]) -> Dict[str, Any]:
+def _run_cached(context: dict[str, Any]) -> dict[str, Any]:
     output_dir = _resolve_output_dir(context)
     artifact_path = output_dir / CHAIN_STRATEGIES_FILENAME
     if not artifact_path.is_file():
@@ -79,17 +79,23 @@ def _run_cached(context: Dict[str, Any]) -> Dict[str, Any]:
         return json.load(f)
 
 
-def _run_live(context: Dict[str, Any]) -> Dict[str, Any]:
+def _run_live(context: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily -- pulls in ThetaDataController and friends, which
     # only need to exist/succeed when this mode is actually used.
     import options_chain_scanner as ocs
 
     focus = context.get("focus") or {}
-    ticker = focus.get("ticker")
+    # The desk sends a flat scope (ticker / expiry); a suite_context carries
+    # focus.ticker / focus.expiration_date. Accept both.
+    ticker = focus.get("ticker") or context.get("ticker")
     if not ticker:
-        raise ValueError("context.focus.ticker is required for mode='live'")
-    expiration_date = focus.get("expiration_date")  # ISO YYYY-MM-DD, per suite_context schema
-    target_years = float(focus.get("target_years", 0.25))
+        raise ValueError(
+            "a ticker is required for a live strategy scan (set one in the scope bar)"
+        )
+    expiration_date = focus.get("expiration_date") or context.get("expiry")
+    if str(expiration_date or "").strip().lower() in ("", "auto"):
+        expiration_date = None
+    target_years = float(focus.get("target_years", context.get("target_years") or 0.25))
     output_dir = _resolve_output_dir(context)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -103,10 +109,14 @@ def _run_live(context: Dict[str, Any]) -> Dict[str, Any]:
     # returns byte-for-byte what's now sitting on disk.
     artifact_path = output_dir / CHAIN_STRATEGIES_FILENAME
     with artifact_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    # The artifact names an expiry but not the underlying; a strategy can't be
+    # added to the console book as option legs without knowing which one.
+    data.setdefault("ticker", str(ticker).upper())
+    return data
 
 
-def run(context: Dict[str, Any]) -> Dict[str, Any]:
+def run(context: dict[str, Any]) -> dict[str, Any]:
     """context: a validated suite_context.json dict (see
     context_loader.load_context), optionally carrying:
       - "mode": "cached" (default) or "live"
@@ -118,9 +128,21 @@ def run(context: Dict[str, Any]) -> Dict[str, Any]:
     chain_verdict, vol_regime, current_price, expiration_date, strategies
     (list of strategy dicts), summary.
     """
-    mode = context.get("mode", "cached")
+    mode = context.get("mode")
+    if not mode:
+        # "cached" was the unconditional default, but a desk run mints a fresh
+        # output_dir that never holds a prior chain_strategies.json -- so every
+        # card run failed with FileNotFoundError. Read the cache only when
+        # there IS one; otherwise scan live.
+        raw = context.get("_output_dir_override") or context.get("output_dir")
+        has_cache = bool(raw) and (Path(raw) / CHAIN_STRATEGIES_FILENAME).is_file()
+        mode = "cached" if has_cache else "live"
     if mode == "cached":
-        return _run_cached(context)
+        data = _run_cached(context)
+        ticker = (context.get("focus") or {}).get("ticker") or context.get("ticker")
+        if ticker and isinstance(data, dict):
+            data.setdefault("ticker", str(ticker).upper())
+        return data
     elif mode == "live":
         return _run_live(context)
     else:

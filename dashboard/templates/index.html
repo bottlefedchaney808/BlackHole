@@ -90,6 +90,29 @@
         </div>
         <div id="bookAccounts" class="accounts"></div>
         <div id="bookWarn" class="warn-note" hidden></div>
+
+        <div class="console-book">
+          <div class="cb-head">
+            <h3>Console book</h3>
+            <span class="note">names &amp; positions you add — joins your book as the basket, always tagged, never counted as holdings</span>
+          </div>
+          <form id="cbForm" class="cb-form" autocomplete="off">
+            <select id="cbKind" title="What to add">
+              <option value="ticker">Ticker</option>
+              <option value="equity">Equity</option>
+              <option value="option">Option</option>
+            </select>
+            <input id="cbTicker" placeholder="TICKER" spellcheck="false" required>
+            <input id="cbQty" class="cb-pos" placeholder="qty (− = short)" inputmode="decimal">
+            <input id="cbAvg" class="cb-pos" placeholder="avg price" inputmode="decimal">
+            <input id="cbExpiry" class="cb-opt" placeholder="YYYY-MM-DD">
+            <input id="cbStrike" class="cb-opt" placeholder="strike" inputmode="decimal">
+            <select id="cbRight" class="cb-opt"><option value="C">Call</option><option value="P">Put</option></select>
+            <button type="submit" class="ghost sm">Add</button>
+          </form>
+          <div id="cbMsg" class="small muted"></div>
+          <div id="cbTable"></div>
+        </div>
       </div>
     </section>
 
@@ -188,12 +211,48 @@ function renderBasket(basket) {
   });
 }
 
-syncBus.subscribe(function (scope) {
+syncBus.subscribe(function (scope, changed) {
   if (elTicker.value !== scope.ticker) elTicker.value = scope.ticker;
   if (elExpiry.value !== scope.expiry) elExpiry.value = scope.expiry;
   renderBasket(scope.basket);
   highlightBookRows(scope.ticker);
+  if (changed && changed.indexOf('ticker') !== -1) publishFocus(scope.ticker);
+  renderFocusNote(scope.ticker);
 });
+
+/* The scope ticker is persisted server-side so background panels (surfaces)
+   follow what you are looking at instead of choosing a name themselves. */
+let focusTimer = null;
+function publishFocus(ticker) {
+  clearTimeout(focusTimer);
+  focusTimer = setTimeout(function () {
+    fetch('/api/desk/focus', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ ticker: ticker || '' })
+    }).catch(function () { /* convenience only */ });
+  }, 600);
+}
+
+/* The scope ticker persists across tabs, so it can be a name from the chart
+   that is in neither book. Say so, with a one-click fix, instead of letting
+   every tool quietly run on it. */
+function renderFocusNote(ticker) {
+  const t = String(ticker || '').trim().toUpperCase();
+  if (!t) return;
+  const held = new Set(bookTickers());
+  if (!BOOK.loaded || held.has(t)) {
+    elNote.textContent = 'Every tool card below runs on this scope. Click a position to focus it.';
+    return;
+  }
+  elNote.textContent = t + ' is not in your book or console book. ';
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'ghost sm';
+  add.textContent = '+ add ' + t + ' to console book';
+  add.addEventListener('click', function () { addConsole([{ ticker: t, source: 'desk scope' }]); });
+  elNote.appendChild(add);
+}
 
 elTicker.addEventListener('input', function () { syncBus.setScope({ ticker: elTicker.value }); });
 elExpiry.addEventListener('input', function () { syncBus.setScope({ expiry: elExpiry.value }); });
@@ -208,7 +267,109 @@ document.getElementById('scClear').addEventListener('click', function () {
 // writes held_tickers into the Context Store, which is what every tool run is
 // then seeded with.
 // ---------------------------------------------------------------------------
-let BOOK = { positions: [], accounts: [] };
+let BOOK = { positions: [], console: [], accounts: [], loaded: false };
+
+function bookTickers() {
+  return Array.from(new Set((BOOK.positions || []).concat(BOOK.console || [])
+    .map(function (p) { return String(p.ticker || '').toUpperCase(); })
+    .filter(Boolean))).sort();
+}
+
+// ---------------------------------------------------------------------------
+// Console book: add form, list, remove.
+// ---------------------------------------------------------------------------
+const cbKind = document.getElementById('cbKind');
+const cbMsg = document.getElementById('cbMsg');
+function syncCbFields() {
+  const kind = cbKind.value;
+  document.querySelectorAll('.cb-pos').forEach(function (el) { el.hidden = kind === 'ticker'; });
+  document.querySelectorAll('.cb-opt').forEach(function (el) { el.hidden = kind !== 'option'; });
+}
+cbKind.addEventListener('change', syncCbFields);
+syncCbFields();
+
+async function addConsole(entries) {
+  cbMsg.textContent = 'adding…';
+  try {
+    const res = await fetch('/api/console-book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ entries: entries })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.detail || ('HTTP ' + res.status));
+    const n = (json.added || []).length;
+    cbMsg.textContent = n ? ('added ' + n) : 'already in the console book';
+    await loadBook({ publishBasket: false });
+    return json;
+  } catch (err) {
+    cbMsg.textContent = 'not added: ' + (err && err.message ? err.message : err);
+  }
+}
+
+document.getElementById('cbForm').addEventListener('submit', function (ev) {
+  ev.preventDefault();
+  const val = function (id) { return document.getElementById(id).value.trim(); };
+  const entry = { kind: cbKind.value, ticker: val('cbTicker'), source: 'manual' };
+  if (entry.kind !== 'ticker') { entry.qty = val('cbQty'); entry.avg_price = val('cbAvg'); }
+  if (entry.kind === 'option') {
+    entry.expiry = val('cbExpiry'); entry.strike = val('cbStrike'); entry.right = val('cbRight');
+  }
+  addConsole([entry]).then(function (json) {
+    if (json) ['cbTicker', 'cbQty', 'cbAvg', 'cbStrike'].forEach(function (id) {
+      document.getElementById(id).value = '';
+    });
+  });
+});
+
+function renderConsole() {
+  const host = document.getElementById('cbTable');
+  const rows = BOOK.console || [];
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Empty. Add a name above, or use the + buttons on highlight packs, screener tickers and strategies.</div>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'booktable';
+  table.innerHTML = '<thead><tr><th>Position</th><th>Type</th><th class="r">Qty</th>' +
+    '<th class="r">Avg</th><th>Source</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  rows.forEach(function (p) {
+    const tr = document.createElement('tr');
+    tr.className = 'bookrow';
+    tr.dataset.ticker = String(p.ticker || '').toUpperCase();
+    tr.title = (p.note ? p.note + '\n' : '') + 'Click to focus ' + p.ticker;
+    tr.innerHTML =
+      '<td class="strong">' + positionLabel(p) + '</td>' +
+      '<td class="muted">' + (p.instrument_type || '') + '</td>' +
+      '<td class="r">' + (p.qty == null ? '' : num(p.qty, 2)) + '</td>' +
+      '<td class="r">' + (p.avg_price == null ? '' : num(p.avg_price)) + '</td>' +
+      '<td class="muted small"></td><td class="r"></td>';
+    tr.children[4].textContent = p.source || '';
+    tr.addEventListener('click', function () {
+      const patch = { ticker: tr.dataset.ticker };
+      if (p.expiry) patch.expiry = String(p.expiry);
+      syncBus.setScope(patch);
+    });
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'ghost sm';
+    rm.textContent = '×';
+    rm.title = 'Remove from the console book';
+    rm.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      fetch('/api/console-book/' + encodeURIComponent(p.console_id), { method: 'DELETE' })
+        .then(function () { return loadBook({ publishBasket: false }); });
+    });
+    tr.children[5].appendChild(rm);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  host.innerHTML = '';
+  host.appendChild(table);
+}
+
+window.addEventListener('console-book-changed', function () { loadBook({ publishBasket: false }); });
 
 const num = function (v, digits) {
   if (v === null || v === undefined || v === '') return '--';
@@ -237,7 +398,7 @@ function renderBook() {
   const host = document.getElementById('bookTable');
   const positions = BOOK.positions || [];
   if (!positions.length) {
-    host.innerHTML = '<div class="empty">No positions in the cache. An agent pushes these via POST /api/widgets/positions.</div>';
+    host.innerHTML = '<div class="empty">No broker positions yet. Press Refresh to read them live from Robinhood.</div>';
     document.getElementById('bookTotals').innerHTML = '';
     return;
   }
@@ -357,10 +518,20 @@ async function loadBook(opts) {
     });
     const json = await res.json();
     const m = (json && json.metrics) || {};
-    BOOK = { positions: m.positions || [], accounts: m.accounts || [] };
+    // `positions` is now the COMBINED book; the real and console halves come
+    // separately so neither table ever shows the other's rows.
+    BOOK = {
+      positions: m.real_positions || m.positions || [],
+      console: m.console_positions || [],
+      combined: m.positions || [],
+      accounts: m.accounts || [],
+      loaded: true
+    };
     renderStamp(stamp, m.computed_at);
     renderBook();
+    renderConsole();
     highlightBookRows(syncBus.getScope().ticker);
+    renderFocusNote(syncBus.getScope().ticker);
 
     // Publish the book: basket + Context Store, so a tool run is fed the book
     // whether or not anyone remembered to press a button.
@@ -374,7 +545,7 @@ async function loadBook(opts) {
       fetch('/api/context/inject-positions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ positions: BOOK.positions })
+        body: JSON.stringify({ positions: BOOK.combined })
       }).catch(function () { /* best effort; the run route already wrote it */ });
     }
   } catch (err) {
@@ -384,13 +555,42 @@ async function loadBook(opts) {
   }
 }
 
-document.getElementById('bookRefresh').addEventListener('click', function () { loadBook(); });
+/* Refresh = a live Robinhood read. The dashboard can't call the broker MCP
+   itself, so the server launches a headless Claude restricted to Robinhood
+   read tools; this polls until it lands, then re-reads the book. */
+const refreshBtn = document.getElementById('bookRefresh');
+async function refreshFromBroker() {
+  const stamp = document.getElementById('bookStamp');
+  const warn = document.getElementById('bookWarn');
+  refreshBtn.disabled = true;
+  stamp.classList.remove('stale', 'ok');
+  stamp.textContent = 'reading Robinhood…';
+  try {
+    let state = await (await fetch('/api/book/refresh', { method: 'POST' })).json();
+    const t0 = Date.now();
+    while (state.status === 'running' && Date.now() - t0 < 9 * 60 * 1000) {
+      await new Promise(function (r) { setTimeout(r, 3000); });
+      state = await (await fetch('/api/book/refresh')).json();
+      stamp.textContent = 'reading Robinhood… ' + Math.round((Date.now() - t0) / 1000) + 's';
+    }
+    if (state.status !== 'ok') {
+      warn.hidden = false;
+      warn.textContent = 'Live refresh failed: ' + (state.error || state.status) + ' — showing the last pushed book.';
+    }
+  } catch (err) {
+    warn.hidden = false;
+    warn.textContent = 'Live refresh failed: ' + (err && err.message ? err.message : err);
+  } finally {
+    refreshBtn.disabled = false;
+    await loadBook();
+  }
+}
+refreshBtn.title = 'Read your positions live from Robinhood (30-90s)';
+refreshBtn.addEventListener('click', refreshFromBroker);
 document.getElementById('scFromBook').addEventListener('click', function () {
-  const held = Array.from(new Set((BOOK.positions || [])
-    .map(function (p) { return String(p.ticker || '').toUpperCase(); })
-    .filter(Boolean))).sort();
+  const held = bookTickers();
   syncBus.setScope({ basket: held });
-  elNote.textContent = 'Basket set to your ' + held.length + ' held tickers.';
+  elNote.textContent = 'Basket set to ' + held.length + ' tickers from your book + console book.';
 });
 
 // ---------------------------------------------------------------------------
@@ -481,6 +681,12 @@ fetch('/api/widgets/catalog', { headers: { Accept: 'application/json' } })
     const bySuite = {};
     CATALOG.forEach(function (e) {
       if (e.category === 'cache') return;  // status panels, not tools
+      // Everything you can pick, runs and shows you something. A slug the
+      // registry marks unpickable is either a selection-only pipeline step
+      // whose run() raises, or a data provider whose picture is drawn by a
+      // different slug (`superseded_by`). Offering either one means adding a
+      // card and clicking Run to find out it was never going to work.
+      if (e.pickable === false) return;
       (bySuite[e.suite] = bySuite[e.suite] || []).push(e);
     });
     Object.keys(bySuite).sort().forEach(function (suite) {
@@ -490,7 +696,15 @@ fetch('/api/widgets/catalog', { headers: { Accept: 'application/json' } })
         .forEach(function (e) {
           const opt = document.createElement('option');
           opt.value = e.slug;
-          opt.textContent = e.name + (e.requires && e.requires.length ? '  (pulls in ' + e.requires.join(', ') + ')' : '');
+          // Say what a card drags in with it, by display name rather than
+          // slug: adding VaR Aggregation also runs Correlation / Covariance,
+          // and you should be able to see that before you click, not work it
+          // out from a `fallback:` provenance string afterwards.
+          const deps = (e.requires || []).map(function (slug) {
+            const dep = CATALOG.find(function (c) { return c.slug === slug; });
+            return dep ? dep.name : slug;
+          });
+          opt.textContent = e.name + (deps.length ? '  (also runs ' + deps.join(', ') + ')' : '');
           og.appendChild(opt);
         });
       picker.appendChild(og);
@@ -499,10 +713,19 @@ fetch('/api/widgets/catalog', { headers: { Accept: 'application/json' } })
   })
   .then(function (r) { return r && r.ok ? r.json() : []; })
   .then(function (instances) {
-    (instances || []).forEach(function (inst) {
+    // A layout saved before a slug became unpickable would restore a card
+    // that can only ever error. Drop those and re-save, once, silently.
+    const byslug = {};
+    CATALOG.forEach(function (e) { byslug[e.slug] = e; });
+    const kept = (instances || []).filter(function (inst) {
+      const entry = byslug[inst.slug];
+      return !entry || entry.pickable !== false;
+    });
+    kept.forEach(function (inst) {
       addTool(inst.slug, inst.widget_instance_id, false);
     });
     refreshEmpty();
+    if (kept.length !== (instances || []).length) saveLayout();
   })
   .catch(function () { refreshEmpty(); });
 
@@ -617,6 +840,19 @@ loadBook();
   padding: 20px; text-align: center; color: var(--muted, #94a3b8); font-size: 12px;
   border: 1px dashed var(--border, #24304f); border-radius: 8px;
 }
+
+/* ---- console book ---- */
+.console-book { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border, #24304f); }
+.cb-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.cb-head h3 { margin: 0; font-size: 14px; }
+.cb-head .note { color: var(--muted, #94a3b8); font-size: 12px; }
+.cb-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+.cb-form input, .cb-form select {
+  font: inherit; font-size: 12px; color: var(--text, #f8fafc); background: var(--panel, #0c1122);
+  border: 1px solid var(--border, #24304f); border-radius: 7px; padding: 5px 8px; width: 110px;
+}
+.cb-form #cbTicker { width: 90px; text-transform: uppercase; }
+#cbMsg { min-height: 16px; margin-bottom: 4px; }
 
 /* ---- status panels ---- */
 .status-grid { display: flex; flex-direction: column; gap: 10px; }

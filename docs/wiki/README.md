@@ -6,6 +6,7 @@ This wiki is organized like a method book: the idea first, the standing conventi
 
 ## Contents
 
+0. [Tree Status](./00-tree-status.md) — what the uncommitted 5351 is, keep/cut marks, audit disposition
 1. [The Idea](./01-the-idea.md) — what FinDev is trying to see
 2. [Standing Conventions](./02-standing-conventions.md) — locked decisions and their consequences
 3. [Objects and Hygiene](./03-objects-and-hygiene.md) — the named measurements and what not to fuse

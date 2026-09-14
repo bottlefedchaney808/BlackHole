@@ -166,7 +166,35 @@ import '/static/js/quant-widget.js?v={{ asset_v }}';
     document.getElementById('sideSymbol').textContent = SYMBOL || '—';
     document.getElementById('sideTitle').textContent = SYMBOL ? SYMBOL + ' context' : 'Context';
     renderPositions();
+    scheduleSignals(SYMBOL);
   });
+
+  // ---- signals = your book + console book + the charted symbol ------------
+  // The server screens both books; the charted symbol is added only when it
+  // is in neither, so flipping between names you hold costs no pulls.
+  var signalsTimer = null;
+  var signalsSymbol = null;
+  function scheduleSignals(sym) {
+    if (!sym || sym === signalsSymbol) return;
+    var held = BOOK.some(function (p) { return String(p.ticker || '').toUpperCase() === sym; });
+    if (held) return;
+    clearTimeout(signalsTimer);
+    signalsTimer = setTimeout(function () {
+      signalsSymbol = sym;
+      fetch('/api/widgets/signals/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ chart_focus: sym })
+      }).then(function () {
+        var old = document.querySelector('quant-widget[slug="signals"]');
+        if (!old) return;
+        var fresh = document.createElement('quant-widget');
+        fresh.setAttribute('slug', 'signals');
+        fresh.setAttribute('mode', 'status');
+        old.replaceWith(fresh);
+      }).catch(function () { /* next symbol change retries */ });
+    }, 2500);
+  }
 
   loadBook();
 })();

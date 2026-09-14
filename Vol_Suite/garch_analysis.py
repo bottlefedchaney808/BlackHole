@@ -549,6 +549,31 @@ def run_garch_module(
     """
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
+
+    def _charts_in(directory: str) -> set[str]:
+        try:
+            return {
+                fn
+                for fn in os.listdir(directory)
+                if fn.startswith(f"{ticker}_garch_")
+                and (fn.lower().endswith(".png") or fn.lower().endswith(".pdf"))
+            }
+        except OSError:
+            return set()
+
+    # What was already there before this fit ran. This module reports its
+    # charts by LISTING out_dir and matching a filename prefix rather than
+    # tracking what it wrote, so anything a previous run left behind used to
+    # come back as this run's output -- confirmed live on SPY: six artifacts,
+    # three of them from a run 11 seconds earlier. The dashboard runs modules
+    # concurrently in a threadpool, so a shared directory is not hypothetical.
+    pre_existing = _charts_in(out_dir)
+
+    # VS_OUTPUT_DIR is how run_garch_analysis's plotting finds the directory,
+    # but it is process-global and every other Vol_Suite chart writer reads it
+    # as a fallback -- leaving it set leaked this run's directory into every
+    # later module in the process. Restore whatever it was.
+    previous_env = os.environ.get("VS_OUTPUT_DIR")
     os.environ["VS_OUTPUT_DIR"] = out_dir
     try:
         kwargs = {} if merton_sigma is None else {"merton_sigma": merton_sigma}
@@ -558,14 +583,17 @@ def run_garch_module(
         return GarchModuleResult(
             [], f"Ticker: {ticker} - GARCH analysis failed: {e}", None, error=e
         )
+    finally:
+        if previous_env is None:
+            os.environ.pop("VS_OUTPUT_DIR", None)
+        else:
+            os.environ["VS_OUTPUT_DIR"] = previous_env
 
-    # Collect files generated for this ticker in out_dir
-    files = []
-    for fn in os.listdir(out_dir):
-        if fn.startswith(f"{ticker}_garch_") and (
-            fn.lower().endswith(".png") or fn.lower().endswith(".pdf")
-        ):
-            files.append(os.path.join(out_dir, fn))
+    # Only what THIS fit wrote.
+    files = [
+        os.path.join(out_dir, fn)
+        for fn in sorted(_charts_in(out_dir) - pre_existing)
+    ]
 
     # res.conditional_volatility is daily and on the *percent* scale, because
     # run_garch_analysis fits the model on log returns scaled by 100.

@@ -561,6 +561,9 @@ export function renderResult(result, outputKind, opts) {
     return host;
   }
 
+  const bookActions = renderConsoleBookActions(res.metrics);
+  if (bookActions) host.appendChild(bookActions);
+
   const kind = String(outputKind || 'metrics').toLowerCase();
   let body = null;
 
@@ -617,6 +620,126 @@ export function renderResult(result, outputKind, opts) {
   }
 
   return host;
+}
+
+/* ---------------------------------------------------------------------------
+ * Console-book actions. A result that surfaces names to act on (highlight
+ * packs, screener focus tickers) gets a chip per ticker and a button per pack;
+ * clicking adds them to the console book, which joins your real book as the
+ * desk's basket. Fires `console-book-changed` on window so the desk re-reads.
+ * ------------------------------------------------------------------------- */
+export async function addToConsoleBook(entries) {
+  const res = await fetch('/api/console-book', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ entries: entries })
+  });
+  const json = await res.json().catch(function () { return {}; });
+  if (!res.ok) throw new Error((json && json.detail) || ('HTTP ' + res.status));
+  window.dispatchEvent(new CustomEvent('console-book-changed', { detail: json }));
+  return json;
+}
+
+function splitTickers(v) {
+  const list = Array.isArray(v) ? v : String(v || '').split(',');
+  return list.map(function (t) { return String(t).trim().toUpperCase(); })
+    .filter(function (t) { return t && t.indexOf('.') === -1; });
+}
+
+function actionButton(label, title, entries) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'pill plain qw-book-add';
+  b.textContent = label;
+  b.title = title;
+  b.style.cursor = 'pointer';
+  b.style.margin = '2px';
+  b.addEventListener('click', function () {
+    b.disabled = true;
+    addToConsoleBook(entries).then(function (json) {
+      const n = (json && json.added && json.added.length) || 0;
+      b.textContent = label + (n ? ' ✓' : ' (already in)');
+    }).catch(function (err) {
+      b.disabled = false;
+      b.textContent = label + ' ✗';
+      b.title = String(err && err.message || err);
+    });
+  });
+  return b;
+}
+
+/* One strategy's legs as console-book entries: call/put legs become option
+   positions on the artifact's expiry, a stock leg becomes an equity position. */
+function strategyEntries(strategy, ticker, expiry) {
+  const source = 'strategy:' + String(strategy.strategy_type || 'strategy');
+  const out = [];
+  (strategy.legs || []).forEach(function (leg) {
+    const t = String(leg.instrument_type || '').toLowerCase();
+    const qty = Number(leg.quantity);
+    if (!isFinite(qty) || qty === 0) return;
+    if (t.indexOf('call') !== -1 || t === 'c' || t.indexOf('put') !== -1 || t === 'p') {
+      out.push({
+        kind: 'option', ticker: ticker, expiry: expiry, strike: leg.strike, qty: qty,
+        right: (t.indexOf('put') !== -1 || t === 'p') ? 'P' : 'C', source: source
+      });
+    } else if (t.indexOf('stock') !== -1 || t.indexOf('equity') !== -1 || t.indexOf('share') !== -1) {
+      out.push({ kind: 'equity', ticker: ticker, qty: qty, source: source });
+    }
+  });
+  return out;
+}
+
+export function renderConsoleBookActions(metrics) {
+  if (!isPlainObject(metrics)) return null;
+  const packs = Array.isArray(metrics.packs) ? metrics.packs : null;
+  const strategies = Array.isArray(metrics.strategies) ? metrics.strategies : null;
+  const tickers = splitTickers(metrics.focus_tickers || (packs ? metrics.tickers : null));
+  if (!tickers.length && !(packs && packs.length) && !(strategies && strategies.length)) return null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'qw-book-actions small';
+  const lead = document.createElement('div');
+  lead.className = 'muted';
+  lead.textContent = 'Add to console book:';
+  wrap.appendChild(lead);
+
+  (packs || []).forEach(function (p) {
+    const names = splitTickers(p.tickers);
+    if (!names.length) return;
+    const source = 'pack:' + String(p.group || 'pack');
+    wrap.appendChild(actionButton(
+      '+ ' + (p.group || 'pack') + ' (' + names.length + ')',
+      'Add every ticker in this pack: ' + names.join(', '),
+      names.map(function (t) { return { ticker: t, source: source, note: p.thesis || null }; })
+    ));
+  });
+  if (strategies && strategies.length) {
+    const stratTicker = String(metrics.ticker || '').toUpperCase();
+    const expiry = String(metrics.expiration_date || '');
+    strategies.forEach(function (s, i) {
+      const entries = stratTicker && expiry ? strategyEntries(s, stratTicker, expiry) : [];
+      const label = '+ ' + String(s.strategy_type || ('strategy ' + (i + 1))).replace(/_/g, ' ') +
+        ' (' + entries.length + ' leg' + (entries.length === 1 ? '' : 's') + ')';
+      if (!entries.length) {
+        const why = document.createElement('span');
+        why.className = 'muted';
+        why.textContent = label + ' — no ticker/expiry on this result';
+        wrap.appendChild(why);
+        return;
+      }
+      wrap.appendChild(actionButton(label, entries.map(function (e) {
+        return (e.qty > 0 ? '+' : '') + e.qty + ' ' + e.ticker +
+          (e.kind === 'option' ? ' ' + e.expiry + ' ' + e.strike + e.right : ' sh');
+      }).join('\n'), entries));
+    });
+  }
+  const chips = document.createElement('div');
+  tickers.forEach(function (t) {
+    chips.appendChild(actionButton('+ ' + t, 'Add ' + t + ' to the console book',
+      [{ ticker: t, source: packs ? 'highlight_packs' : 'screener' }]));
+  });
+  wrap.appendChild(chips);
+  return wrap;
 }
 
 function statusPillClass(status) {

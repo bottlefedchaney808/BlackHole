@@ -2,7 +2,7 @@
 import asyncio, json, time, os, sys
 
 HOME = r"C:/Users/bottl"
-TOK = os.path.join(HOME, "AppData/Local/hermes/mcp-tokens")
+TOK = os.path.join(HOME, ".hermes/mcp-tokens")
 
 def load(path):
     with open(path) as f:

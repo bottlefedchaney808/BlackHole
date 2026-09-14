@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinDev · Tree Status — the uncommitted 5351</title>
+<style>
+  :root{
+    --fg: var(--foreground, #e8e8ea);
+    --fg-muted: var(--muted-foreground, #9a9aa2);
+    --acc: var(--accent, #7c6cf0);
+    --bd: var(--border, #2c2c34);
+    --card: var(--card, #17171c);
+    --ok: #4fbf7a;
+    --warn: #e0a83a;
+    --cut: #e06060;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    color:var(--fg);
+    background:transparent;
+    font:14px/1.5 var(--hermes-app-font, -apple-system, "Segoe UI", Roboto, sans-serif);
+    padding:20px 22px 32px;
+  }
+  h1{ font-size:19px; margin:0 0 2px; letter-spacing:.2px; }
+  .sub{ color:var(--fg-muted); font-size:12.5px; margin-bottom:16px; }
+  .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+  .chip{
+    border:1px solid var(--bd); border-radius:999px; padding:3px 12px;
+    font-size:12px; color:var(--fg-muted); cursor:pointer; user-select:none;
+    background:transparent; font-family:inherit;
+  }
+  .chip:hover{ border-color:var(--acc); color:var(--fg); }
+  .chip.on{ background:var(--acc); border-color:var(--acc); color:#fff; }
+  .chip b{ font-weight:600; }
+  .search{
+    margin-left:auto; background:transparent; border:1px solid var(--bd);
+    border-radius:8px; color:var(--fg); padding:4px 10px; font-size:12.5px;
+    width:220px; font-family:inherit; outline:none;
+  }
+  .search:focus{ border-color:var(--acc); }
+  .tiles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin-bottom:16px; }
+  .tile{ border:1px solid var(--bd); border-radius:10px; background:var(--card); padding:10px 14px; }
+  .tile .k{ font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--fg-muted); }
+  .tile .v{ font-size:20px; margin-top:2px; font-family:var(--mono); }
+  .tile .v small{ font-size:12px; color:var(--fg-muted); }
+  .tile.ok .v{ color:var(--ok); } .tile.cut .v{ color:var(--cut); } .tile.acc .v{ color:var(--acc); }
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  th{
+    text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--fg-muted); padding:6px 8px; border-bottom:1px solid var(--bd); position:sticky; top:0;
+    background:var(--card); z-index:2;
+  }
+  td{ padding:5px 8px; border-bottom:1px solid var(--bd); vertical-align:top; }
+  tr.row{ cursor:pointer; }
+  tr.row:hover td{ background:color-mix(in srgb, var(--acc) 8%, transparent); }
+  tr.open td{ background:color-mix(in srgb, var(--acc) 12%, transparent); }
+  td.path{ font-family:var(--mono); font-size:11.5px; white-space:nowrap; }
+  td.num{ font-family:var(--mono); text-align:right; white-space:nowrap; color:var(--fg-muted); }
+  td.num .plus{ color:var(--ok); } td.num .minus{ color:var(--cut); }
+  .badge{ display:inline-block; padding:1px 8px; border-radius:999px; font-size:10.5px; font-weight:600; letter-spacing:.4px; }
+  .b-keep{ background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok); }
+  .b-cut{ background:color-mix(in srgb, var(--cut) 18%, transparent); color:var(--cut); }
+  .b-fmt{ background:color-mix(in srgb, var(--fg-muted) 18%, transparent); color:var(--fg-muted); }
+  tr.detail td{ padding:0 8px 10px 26px; color:var(--fg-muted); font-size:12px; display:none; }
+  tr.open + tr.detail td{ display:block; }
+  .grp{ color:var(--acc); font-size:11px; }
+  .sect{ margin-top:26px; }
+  .sect h2{ font-size:14px; margin:0 0 8px; }
+  .sect .why{ color:var(--fg-muted); font-size:12px; margin:0 0 10px; }
+  .audit td:first-child{ font-family:var(--mono); font-size:11.5px; white-space:nowrap; }
+  .st-fix{ color:var(--ok); font-weight:600; } .st-open{ color:var(--warn); font-weight:600; }
+  .st-vc{ color:var(--fg-muted); }
+  .actions li{ margin:4px 0; }
+  .actions{ padding-left:20px; margin:6px 0 0; }
+  .foot{ margin-top:22px; color:var(--fg-muted); font-size:11.5px; }
+  .foot code{ font-family:var(--mono); color:var(--fg); background:var(--card); padding:1px 6px; border-radius:6px; border:1px solid var(--bd); }
+  .legend{ color:var(--fg-muted); font-size:11px; margin:8px 2px 0; }
+</style>
+</head>
+<body>
+  <h1>Tree Status — the uncommitted 5351, triaged</h1>
+  <div class="sub">FinDev <code style="font-family:var(--mono)">master @ 68bdf78</code> · ahead 9 of origin · working tree +5351 −553 · 19 untracked · written 2026-09-13</div>
+
+  <div class="tiles">
+    <div class="tile acc"><div class="k">Verdict</div><div class="v">not dirt</div></div>
+    <div class="tile ok"><div class="k">Keep (files)</div><div class="v">58 <small>commit as 3 logical commits</small></div></div>
+    <div class="tile cut"><div class="k">Cut</div><div class="v">4 <small>2 delete · 2 gitignore</small></div></div>
+    <div class="tile ok"><div class="k">Math audit</div><div class="v">14 fixed <small>· 5 verified-correct · 2 open</small></div></div>
+    <div class="tile"><div class="k">Tests</div><div class="v">41✓ <small>pinned block · 3014 collected</small></div></div>
+  </div>
+
+  <div class="sub" style="margin-top:-8px">Suite note: first <code style="font-family:var(--mono)">-x</code> run hit <code style="font-family:var(--mono)">test_sparse_gap_strike_skipped</code> — a stale test at HEAD (commit <code style="font-family:var(--mono)">1018a70</code> changed skip → last-observed-OI carry-forward, test still asserted skip). Re-pinned as <code style="font-family:var(--mono)">test_sparse_gap_strike_solved</code>; file 14/14. Not a working-tree regression.</div>
+
+  <div class="chips" id="chips">
+    <button class="chip on" data-f="all">All <b id="c-all"></b></button>
+    <button class="chip" data-f="keep">Keep <b id="c-keep"></b></button>
+    <button class="chip" data-f="cut">Cut <b id="c-cut"></b></button>
+    <span style="border-left:1px solid var(--bd);height:18px;margin:0 4px"></span>
+    <button class="chip" data-f="g:audit">Audit fixes</button>
+    <button class="chip" data-f="g:picker">Picker contract</button>
+    <button class="chip" data-f="g:desk">Desk book</button>
+    <button class="chip" data-f="g:data">Data guard</button>
+    <button class="chip" data-f="g:docs">Docs · infra</button>
+    <input class="search" id="q" type="search" placeholder="filter paths…">
+  </div>
+
+  <table id="t">
+    <thead><tr>
+      <th style="width:38%">File</th><th style="width:9%">Group</th>
+      <th style="width:8%;text-align:right">+/-</th><th style="width:11%">Verdict</th><th>Note</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="legend">Click a row to expand its note. Filters + search combine.</div>
+
+  <div class="sect">
+    <h2>Math audit disposition (2026-09-11 CARL pass, re-verified 09-13)</h2>
+    <p class="why">Yes — it auto-fixed. The patches were applied to this same working tree and never committed; that is the bulk of the 5351. Evidence read from source this pass; full detail in <code style="font-family:var(--mono)">docs/audits/2026-09-13-math-audit-verification.md</code>.</p>
+    <table class="audit"><tbody id="audit-rows"></tbody></table>
+  </div>
+
+  <div class="sect">
+    <h2>Next actions</h2>
+    <ul class="actions">
+      <li>Commit everything marked <b>Keep</b> — three logical commits: <i>math-audit fixes</i>, <i>picker/requires contract</i>, <i>desk book + data guard</i>.</li>
+      <li>Delete <code style="font-family:var(--mono)">NOK_20261218_chain_scan_*.{csv,png}</code> and <code style="font-family:var(--mono)">chain_strategies.json</code> — output of the stub-quote bug that is now guarded in <code style="font-family:var(--mono)">shared/thetadata.py</code>.</li>
+      <li>Add <code style="font-family:var(--mono)">.cursor/</code> to <code style="font-family:var(--mono)">.gitignore</code>.</li>
+      <li>Grok EventTrading worktree: gitignore <code style="font-family:var(--mono)">data/</code> + <code style="font-family:var(--mono)">.superpowers/</code>; commits already in <code style="font-family:var(--mono)">main</code>.</li>
+      <li>Open items left on purpose: F3 (needs a calibration runner) and R2-F6 (unlabeled <code style="font-family:var(--mono)">position_vals</code> positional).</li>
+    </ul>
+  </div>
+
+  <div class="foot">Sources: <code>git diff --numstat</code>, source reads of every flagged audit site, pinned-test run <code>41 passed / 1 skipped</code> (2026-09-13). Companion pages: <code>docs/wiki/00-tree-status.md</code>, <code>docs/audits/2026-09-13-math-audit-verification.md</code>. Board id: <code>findev/tree-status</code>.</div>
+
+<script>
+const FILES = [
+  // [path, group, plus, minus, verdict, note]
+  ["CLAUDE.md","picker",28,4,"keep","Selection contract + requires auto-pull documented."],
+  ["Options_Suite/module_registry.py","audit",81,14,"keep","NR-IV falls back to the listed contract's chain price — card runs no longer die on missing market_price."],
+  ["Tools/tools/backtesting_tool.py","fmt",266,123,"fmt","Mostly black reformat; ride along, don't cherry-pick."],
+  ["Tools/tools/options_strategy_tool.py","picker",36,14,"keep","Tool-surface params aligned with the picker contract."],
+  ["Tools/tools/surface_explorer_tool.py","picker",50,0,"keep","mode/greek/min_dte/option_type params — one card reaches all five surfaces."],
+  ["VaR_Tools_Simulations/main.py","audit",9,2,"keep","long_run_vol print honest (NaN when boundary-pinned)."],
+  ["VaR_Tools_Simulations/module_registry.py","audit",157,27,"keep","F4 unlabeled corr/vol refused → fallback provenance; F6 widget surfaces garch_convergence; R2 resolvers."],
+  ["VaR_Tools_Simulations/tests/test_context_pull_from_vol.py","audit",108,0,"keep","Pins context-pull behavior."],
+  ["VaR_Tools_Simulations/tests/test_hist_sim.py","audit",21,0,"keep","Pins F8/F9 fixes."],
+  ["VaR_Tools_Simulations/tests/test_var_agg.py","audit",22,0,"keep","Pins F12 group-P&L aggregation."],
+  ["VaR_Tools_Simulations/var_engine/hist_sim.py","audit",18,7,"keep","F8 boundary_pinned → not converged, long_run_vol=NaN. F9 net-notional divide gone."],
+  ["VaR_Tools_Simulations/var_engine/var_agg.py","audit",16,13,"keep","F12 aggregated_var from group dollar P&L."],
+  ["Vol_Suite/backtest_stage3.py","audit",15,6,"keep","F15 net=0 → unclassified regime, not short."],
+  ["Vol_Suite/dealer_positioning.py","fmt",282,107,"fmt","Black reformat + dual-book provenance labels (real but small)."],
+  ["Vol_Suite/expiry_book_exposure.py","audit",15,2,"keep","F14 vanna pass-through confirmed; labels."],
+  ["Vol_Suite/expiry_selector.py","audit",71,43,"keep","Audit-collision cleanup in selector."],
+  ["Vol_Suite/garch_analysis.py","audit",35,7,"keep","GARCH usage aligned with boundary honesty."],
+  ["Vol_Suite/jump_diffusion/calibration.py","audit",9,10,"keep","F2 rmse scoped to 15-ATM mask + rmse_iv_full."],
+  ["Vol_Suite/jump_diffusion/models.py","audit",15,6,"keep","F1 jump share uses integrated variance ∫E[v]ds."],
+  ["Vol_Suite/module_registry.py","audit",157,34,"keep","F5 _resolve_weights refuses unlabeled lists; picker metadata."],
+  ["Vol_Suite/tests/test_backtest_stage3.py","audit",18,0,"keep","Pins F15."],
+  ["Vol_Suite/tests/test_jump_diffusion_models.py","audit",18,0,"keep","Pins F1."],
+  ["Vol_Suite/tests/test_module_registry_vol_context.py","audit",41,3,"keep","Pins resolver provenance."],
+  ["Vol_Suite/variance_swap_live.py","audit",12,2,"keep","Minor audit-aligned fix."],
+  ["Vol_Suite/volatility_suite.py","audit",69,9,"keep","Audit-aligned wiring."],
+  ["dashboard/app.py","desk",472,12,"keep","409-on-unpickable run route + console-book API."],
+  ["dashboard/cache_widgets.py","desk",27,22,"keep","Widget cache for the desk book."],
+  ["dashboard/panels.py","desk",19,42,"keep","Panel routing to renderers instead of bare grids."],
+  ["dashboard/static/js/widget-renderers.js","desk",123,0,"keep","Renderers for the new card kinds."],
+  ["dashboard/templates/chart.html","desk",28,0,"keep","Chart card for console book."],
+  ["dashboard/templates/dealer_book.html","desk",87,0,"keep","Dealer-book panel."],
+  ["dashboard/templates/index.html","picker",248,12,"keep","Picker hides unpickable, prunes saved layouts."],
+  ["dashboard/tests/test_panel_tabs.py","desk",24,4,"keep","Panel test updates."],
+  ["dashboard/tests/test_widget_generic_api.py","desk",83,0,"keep","Pins 409 + generic API."],
+  ["dashboard/tests/test_widget_jobs.py","desk",63,7,"keep","Widget job tests."],
+  ["docs/wiki/04-the-engine.md","docs",1,1,"fmt","Backtick ghost."],
+  ["docs/wiki/07-workflows.md","docs",1,1,"fmt","Backtick ghost."],
+  ["rh_exports/rh_tech_read.py","docs",1,1,"keep","Real 1-line fix: MCP token path → .hermes."],
+  ["sentiment-scanner/module_registry.py","desk",11,5,"keep","held_tickers → pack_tickers: a pack scan no longer replaces your book."],
+  ["shared/module_execution.py","picker",32,2,"keep","requires auto-pull + skip-when-satisfied."],
+  ["shared/module_registry.py","picker",136,5,"keep","is_pickable(), superseded_by, provides/declared deps."],
+  ["shared/thetadata.py","data",76,6,"keep","Stub-quote spot guard — killed the NOK false EDGE DETECTED."],
+  ["tests/test_module_registry.py","picker",75,0,"keep","Registry tests for the contract."],
+  // untracked
+  ["tests/test_module_pickability.py","picker",91,0,"keep","UNTRACKED — pins the picker verdict."],
+  ["tests/test_module_requires_expansion.py","picker",77,0,"keep","UNTRACKED — pins dep expansion/skip."],
+  ["tests/test_thetadata_eod_gaps.py","data",95,0,"keep","UNTRACKED — pins loud EOD gaps."],
+  ["tests/test_desk_book_fixes.py","desk",159,0,"keep","UNTRACKED — pins desk-book fixes."],
+  ["Vol_Suite/tests/test_output_dir_isolation.py","audit",77,0,"keep","UNTRACKED — output-dir isolation."],
+  ["dashboard/console_book.py","desk",239,0,"keep","UNTRACKED — the desk's second book."],
+  ["shared/desk_settings.py","desk",62,0,"keep","UNTRACKED — operator preferences, env-var-free."],
+  ["tui/findev_tui_mcp.py","docs",103,0,"keep","UNTRACKED — FastMCP server for the TUI (+ mcp_config_example.json)."],
+  ["docs/audits/2026-09-11-*","docs",0,0,"keep","UNTRACKED — audit findings, repo audit, executable checker. Commit: evidence."],
+  ["docs/audits/_math_audit_checks_20260911.py","docs",0,0,"keep","UNTRACKED — runnable synthetic checker."],
+  ["Vol_Suite/docs/{PLAN,THEORY}_dealer_flows_book_20260825.md","docs",0,0,"keep","UNTRACKED — dealer-flows book design, DRAFT."],
+  ["docs/superpowers/{plans,specs}/2026-08-31-party-taxonomy-*","docs",0,0,"keep","UNTRACKED — classifier plan + spec."],
+  ["artifact-boards/","docs",0,0,"keep","UNTRACKED — this board's root."],
+  [".cursor/","docs",0,0,"cut","Editor skill — gitignore, don't commit."],
+  ["NOK_20261218_chain_scan_20260909_*.{csv,png}","data",0,0,"cut","Output of the stub-quote bug (false EDGE DETECTED). Delete."],
+  ["chain_strategies.json","data",0,0,"cut","Same bug's verdict file (vol_regime CHEAP from a stub bid). Delete."],
+  ["(grok wt) data/ + .superpowers/","docs",0,0,"cut","EventTrading worktree scratch — gitignore there; desk commits already in main."]
+];
+
+const AUDIT = [
+  ["F1","jump share used v0·T not ∫E[v]ds","High","fix"],
+  ["F2","rmse_iv is 15-ATM mask, sold as full smile","Med","fix"],
+  ["F3","Merton jump-param recovery unpinned","Med","open"],
+  ["F4","unlabeled n×n corr applied positionally","High","fix"],
+  ["F5","_resolve_weights positional apply","Med","fix"],
+  ["F6","widget dropped garch_convergence","High","fix"],
+  ["F7","_resolve_sigma fallback","—","ok"],
+  ["F8","boundary-pinned GARCH → fake long_run_vol","High","fix"],
+  ["F9","hist_sim divides by net notional","Med","fix"],
+  ["F10","Euler allocation","—","ok"],
+  ["F11","PCA-with-resid == total_var","Low","debt"],
+  ["F12","sub-portfolio netted equity group","High","fix"],
+  ["F13","Gaussian CVaR","—","ok"],
+  ["F14","dealer_frame_vanna sign","—","ok"],
+  ["F15","zero net-gamma labeled short","High","fix"],
+  ["F16","fail-loud in per-day loop","—","ok"],
+  ["R2-F1..5","seed perm · measured · weights · resolvers","—","fix"],
+  ["R2-F6","unlabeled position_vals positional","Med","open"]
+];
+
+const ST = { fix:["st-fix","FIXED"], open:["st-open","OPEN"], ok:["st-vc","VERIFIED CORRECT"], debt:["st-open","minor debt"] };
+
+const rows = document.getElementById("rows");
+const GROUPS = { audit:"audit", picker:"picker", desk:"desk", data:"data", docs:"docs", fmt:"fmt" };
+let filter="all", q="";
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+
+function render(){
+  const list = FILES.filter(f =>
+    (filter==="all" || (filter.startsWith("g:") ? f[1]===filter.slice(2) : f[4]===filter))
+    && (!q || f[0].toLowerCase().includes(q))
+  );
+  rows.innerHTML = list.map(f=>{
+    const [p,g,plus,minus,v,note] = f;
+    const num = (plus||minus) ? `<span class="plus">+${plus}</span> <span class="minus">−${minus}</span>` : `<span style="color:var(--fg-muted)">—</span>`;
+    const badge = v==="keep" ? '<span class="badge b-keep">KEEP</span>' : v==="cut" ? '<span class="badge b-cut">CUT</span>' : '<span class="badge b-fmt">FMT</span>';
+    const grp = GROUPS[g]||g;
+    return `<tr class="row" data-p="${esc(p)}">
+      <td class="path">${esc(p)}</td><td class="grp">${grp}</td><td class="num">${num}</td>
+      <td>${badge}</td><td style="color:var(--fg-muted)">${esc(note)}</td></tr>
+    <tr class="detail"><td colspan="5">${esc(note)} — group <b>${grp}</b>, verdict <b>${v.toUpperCase()}</b>.</td></tr>`;
+  }).join("") || `<tr><td colspan="5" style="color:var(--fg-muted)">no rows match</td></tr>`;
+  document.querySelectorAll("#t tr.row").forEach(tr=>tr.addEventListener("click",()=>tr.classList.toggle("open")));
+}
+
+function renderAudit(){
+  document.getElementById("audit-rows").innerHTML = AUDIT.map(a=>{
+    const [cls,txt] = ST[a[3]];
+    return `<tr><td>${a[0]}</td><td>${a[1]}</td><td style="color:var(--fg-muted)">${a[2]}</td><td class="${cls}">${txt}</td></tr>`;
+  }).join("");
+}
+
+function counts(){
+  document.getElementById("c-all").textContent = FILES.length;
+  document.getElementById("c-keep").textContent = FILES.filter(f=>f[4]==="keep").length;
+  document.getElementById("c-cut").textContent = FILES.filter(f=>f[4]==="cut").length;
+}
+
+document.querySelectorAll(".chip[data-f]").forEach(c=>c.addEventListener("click",()=>{
+  document.querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on"); filter=c.dataset.f; render();
+}));
+document.getElementById("q").addEventListener("input",e=>{ q=e.target.value.toLowerCase(); render(); });
+
+counts(); render(); renderAudit();
+</script>
+</body>
+</html>

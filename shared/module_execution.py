@@ -50,7 +50,32 @@ def _resolve_modules(slugs: list[str]) -> list[Any]:
     return resolve_modules(slugs)
 
 
-def _expand_module_requires(selected: list[Any]) -> list[Any]:
+def _dependency_already_satisfied(module: Any, context: dict[str, Any] | None) -> bool:
+    """Is every key this dependency would write already in `context`?
+
+    Only consulted for a dependency the caller did NOT ask for -- an
+    explicitly selected module always runs, however much is already known.
+
+    This is what makes a declared `requires` affordable. The dashboard seeds
+    each run's context from the Context Store first, so a VaR card that
+    requires `correlation_matrix` would otherwise re-run a 2-year, whole-
+    basket EOD pull on every single click, having already been handed the
+    matrix it needs. Skipping is safe precisely because the dependent module
+    reports where its inputs came from (`corr_source`,
+    `vol_source`) -- a skipped dependency shows up as
+    `context_store:correlation_matrix`, never as a measurement it isn't.
+
+    A module that declares no `provides` can never be skipped.
+    """
+    provides = tuple(getattr(module, "provides", ()) or ())
+    if not provides or not context:
+        return False
+    return all(context.get(key) is not None for key in provides)
+
+
+def _expand_module_requires(
+    selected: list[Any], context: dict[str, Any] | None = None
+) -> list[Any]:
     """Transitively add every `requires` dependency not already selected.
 
     `selected` are the explicitly-resolved ModuleSpecs; a dependency named in
@@ -58,6 +83,9 @@ def _expand_module_requires(selected: list[Any]) -> list[Any]:
     and that dependency's own `.requires` are expanded in turn. Raises
     ValueError naming the module/slug pair if a `requires` slug isn't
     registered anywhere in `shared.module_registry.all_modules()`.
+
+    With a `context`, an auto-added dependency whose `provides` keys are all
+    already present is skipped -- see `_dependency_already_satisfied`.
     """
     index = {module.slug: module for module in _all_modules()}
     included: dict[str, Any] = {module.slug: module for module in selected}
@@ -79,6 +107,8 @@ def _expand_module_requires(selected: list[Any]) -> list[Any]:
                 raise ValueError(
                     f"Module {module.slug!r} requires unknown slug {req_slug!r}"
                 ) from None
+            if _dependency_already_satisfied(req_module, context):
+                continue
             included[req_slug] = req_module
             pending.append(req_module)
     return list(included.values())
@@ -362,7 +392,7 @@ def run_selected_modules(slugs: list[str], context: dict[str, Any]) -> dict[str,
     else:
         selected = [module for module in _all_modules() if module.default_selected]
 
-    expanded = _expand_module_requires(selected)
+    expanded = _expand_module_requires(selected, context)
     ordered = _topo_sort_modules(expanded)
 
     # Phase 7 relocation: the archiver hook stays in orchestrator.py (it tags

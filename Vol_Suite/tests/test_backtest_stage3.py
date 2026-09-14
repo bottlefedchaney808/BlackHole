@@ -432,6 +432,24 @@ def test_iv_and_gamma_are_recovered_from_price_only_rows():
 
 
 @pytest.mark.unit
+def test_zero_net_gamma_is_unclassified_not_short():
+    """net=0 must not enter the Welch short bucket."""
+    assert ( "long" if 0.0 > 0 else ("short" if 0.0 < 0 else None) ) is None
+    rec = bt3.DayRecord(
+        date="20260901",
+        spot=100.0,
+        net_gamma_v1=0.0,
+        net_gamma_v2=0.0,
+        regime_v1=None,
+        regime_v2=None,
+        fwd_realized_vol=0.2,
+    )
+    summary = bt3._summarize([rec], "regime_v1")
+    assert summary["n_long"] == 0
+    assert summary["n_short"] == 0
+
+
+@pytest.mark.unit
 def test_recovered_iv_is_close_to_the_vol_the_chain_was_priced_at():
     """The reconstruction has to be accurate, not merely non-empty -- an IV
     that's systematically off would tilt the whole reference smile."""

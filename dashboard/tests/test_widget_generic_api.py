@@ -26,6 +26,89 @@ def _db_paths(monkeypatch, tmp_path, name="widgets.db"):
 
 
 # --------------------------------------------------------------------------
+# Context-store seeding (order-dependent keys)
+# --------------------------------------------------------------------------
+
+
+class _FakeScopeStore:
+    """Minimal store.load stand-in. `by_scope` keys are Scope.to_db_key()."""
+
+    def __init__(self, by_scope: dict):
+        self.by_scope = by_scope
+
+    def load(self, scope):
+        return dict(self.by_scope.get(scope.to_db_key(), {}))
+
+
+def test_seed_skips_unlabeled_ordered_keys(monkeypatch):
+    """Sorted basket keys mean [A,B,C] and [C,A,B] share a store row.
+    Seeding an unlabeled matrix into context would hit VaR's same-context
+    positional branch and permute names while looking measured."""
+    from shared.context_store import Scope
+
+    key = Scope.from_dict({"basket": ["C", "A", "B"]}).to_db_key()
+    store = _FakeScopeStore(
+        {
+            key: {
+                "correlation_matrix": [
+                    [1.0, 0.10, 0.20],
+                    [0.10, 1.0, 0.30],
+                    [0.20, 0.30, 1.0],
+                ],
+                "volatilities": [0.11, 0.22, 0.33],
+            }
+        }
+    )
+    monkeypatch.setattr(dashboard_app, "_context_store", lambda: store)
+    ctx = {"basket": ["C", "A", "B"]}
+    dashboard_app._seed_context_from_store(ctx)
+    assert "correlation_matrix" not in ctx
+    assert "volatilities" not in ctx
+
+
+def test_seed_copies_labeled_ordered_keys(monkeypatch):
+    from shared.context_store import Scope
+
+    key = Scope.from_dict({"basket": ["SPY", "QQQ"]}).to_db_key()
+    store = _FakeScopeStore(
+        {
+            key: {
+                "correlation_matrix": [[1.0, 0.55], [0.55, 1.0]],
+                "volatilities": [0.12, 0.40],
+                "correlation_tickers": ["QQQ", "SPY"],
+            }
+        }
+    )
+    monkeypatch.setattr(dashboard_app, "_context_store", lambda: store)
+    ctx = {"basket": ["SPY", "QQQ"]}
+    dashboard_app._seed_context_from_store(ctx)
+    assert ctx["correlation_tickers"] == ["QQQ", "SPY"]
+    assert ctx["volatilities"] == [0.12, 0.40]
+    assert ctx["correlation_matrix"][0][1] == pytest.approx(0.55)
+
+
+def test_seed_does_not_pair_vector_with_foreign_labels(monkeypatch):
+    """Request already has labels for a different order; do not drop a
+    store vector next to them (that is the labeled-mismatch swap)."""
+    from shared.context_store import Scope
+
+    key = Scope.from_dict({"basket": ["SPY", "QQQ"]}).to_db_key()
+    store = _FakeScopeStore(
+        {
+            key: {
+                "volatilities": [0.12, 0.40],
+                "correlation_tickers": ["QQQ", "SPY"],
+            }
+        }
+    )
+    monkeypatch.setattr(dashboard_app, "_context_store", lambda: store)
+    ctx = {"basket": ["SPY", "QQQ"], "correlation_tickers": ["SPY", "QQQ"]}
+    dashboard_app._seed_context_from_store(ctx)
+    assert "volatilities" not in ctx
+    assert ctx["correlation_tickers"] == ["SPY", "QQQ"]
+
+
+# --------------------------------------------------------------------------
 # Catalog
 # --------------------------------------------------------------------------
 

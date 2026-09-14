@@ -16,7 +16,7 @@ rather than picking one:
   does v2's convention track that better than v1's?" -- not tied to any
   particular strategy.
 
-  mode="strategy_pnl" -- wraps run_strategy_backtest() / 
+  mode="strategy_pnl" -- wraps run_strategy_backtest() /
   format_strategy_backtest_report(): simulates a specific multi-leg
   strategy's P&L from an entry date to an exit date (default: hold to
   expiration, settled at intrinsic value). Takes a strategy dict shaped
@@ -35,16 +35,16 @@ expected:
                -> StrategyBacktestResult
 No signature drift to flag.
 """
+
 from __future__ import annotations
 
 import dataclasses
 import json
-import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
 import math
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 _TOOLS_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _TOOLS_DIR.parent
@@ -56,13 +56,12 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from shared.module_registry import ParamSpec
-
-from Tools.spec import ToolSpec  # noqa: E402
+from Tools.spec import ToolSpec
 
 _CHAIN_STRATEGIES_FILENAME = "chain_strategies.json"
 
 
-def _resolve_strategies(context: Dict[str, Any]) -> list:
+def _resolve_strategies(context: dict[str, Any]) -> list:
     """Resolve the strategy list to backtest.
 
     The chain scanner writes its recommended strategies to
@@ -86,7 +85,7 @@ def _resolve_strategies(context: Dict[str, Any]) -> list:
     return []
 
 
-def _iso_to_compact(date_str: Optional[str]) -> Optional[str]:
+def _iso_to_compact(date_str: str | None) -> str | None:
     """suite_context.json stores expiration_date as ISO 'YYYY-MM-DD'
     (suite_context._normalize_expiration always stores ISO); backtest_stage3
     and expiry_selector both work in compact 'YYYYMMDD'. Convert once here
@@ -100,7 +99,7 @@ def _iso_to_compact(date_str: Optional[str]) -> Optional[str]:
     return date_str
 
 
-def _row_date(row: Dict[str, Any]) -> Optional[str]:
+def _row_date(row: dict[str, Any]) -> str | None:
     """Extract a compact 'YYYYMMDD' trading date from an EOD history row.
 
     ThetaData history endpoints label the date field inconsistently: some
@@ -123,25 +122,36 @@ def _row_date(row: Dict[str, Any]) -> Optional[str]:
 
 _DEALER_MODEL_ALIASES = {
     # -> 'live'  : the merged live dealer-frame engine (expiry_book GEX) runs.
-    'live': 'live', 'dealer_exposure': 'live', 'dealer': 'live', 'all': 'live',
+    "live": "live",
+    "dealer_exposure": "live",
+    "dealer": "live",
+    "all": "live",
     # -> 'legacy': live engine OFF -- the old sign conventions only (v1/v2_live).
-    'legacy': 'legacy', 'v1': 'legacy', 'v2_live': 'legacy',
+    "legacy": "legacy",
+    "v1": "legacy",
+    "v2_live": "legacy",
 }
 
 
-def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_dealer_gamma_study(context: dict[str, Any]) -> dict[str, Any]:
     import backtest_stage3 as bs3
 
     focus = context.get("focus") or {}
     ticker = context.get("ticker") or focus.get("ticker")
     if not ticker:
-        raise ValueError("mode='dealer_gamma_study' requires a ticker "
-                          "(context['ticker'] or context.focus.ticker)")
+        raise ValueError(
+            "mode='dealer_gamma_study' requires a ticker "
+            "(context['ticker'] or context.focus.ticker)"
+        )
 
-    expiration = context.get("expiration") or _iso_to_compact(focus.get("expiration_date"))
+    expiration = context.get("expiration") or _iso_to_compact(
+        focus.get("expiration_date")
+    )
     target_years = float(context.get("target_years", focus.get("target_years", 0.25)))
     lookback_days = int(context.get("lookback_days", bs3.DEFAULT_LOOKBACK_DAYS))
-    forward_window_days = int(context.get("forward_window_days", bs3.DEFAULT_FORWARD_WINDOW_DAYS))
+    forward_window_days = int(
+        context.get("forward_window_days", bs3.DEFAULT_FORWARD_WINDOW_DAYS)
+    )
 
     # The MODEL selector picks whether the LIVE dealer-frame engine (the merged
     # expiry_book GEX model) runs. 'live' (default) turns it on; 'legacy' turns
@@ -153,9 +163,10 @@ def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
     if raw_model not in _DEALER_MODEL_ALIASES:
         raise ValueError(
             f"mode='dealer_gamma_study' sign_model must be one of "
-            f"{sorted(_DEALER_MODEL_ALIASES)}; got {raw_model!r}")
+            f"{sorted(_DEALER_MODEL_ALIASES)}; got {raw_model!r}"
+        )
     model = _DEALER_MODEL_ALIASES[raw_model]
-    sign_model = 'live' if model == 'live' else 'legacy'
+    sign_model = "live" if model == "live" else "legacy"
 
     result = bs3.run_backtest(
         ticker,
@@ -174,14 +185,16 @@ def run_dealer_gamma_study(context: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_strategy_pnl(context: dict[str, Any]) -> dict[str, Any]:
     import backtest_stage3 as bs3
 
     focus = context.get("focus") or {}
     ticker = context.get("ticker") or focus.get("ticker")
     if not ticker:
-        raise ValueError("mode='strategy_pnl' requires a ticker "
-                          "(context['ticker'] or context.focus.ticker)")
+        raise ValueError(
+            "mode='strategy_pnl' requires a ticker "
+            "(context['ticker'] or context.focus.ticker)"
+        )
 
     strategy = context.get("strategy")
     if strategy is None:
@@ -202,8 +215,10 @@ def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
 
     expiry = context.get("expiry") or _iso_to_compact(focus.get("expiration_date"))
     if not expiry:
-        raise ValueError("mode='strategy_pnl' requires 'expiry' (or "
-                          "context.focus.expiration_date) in YYYYMMDD/ISO form")
+        raise ValueError(
+            "mode='strategy_pnl' requires 'expiry' (or "
+            "context.focus.expiration_date) in YYYYMMDD/ISO form"
+        )
 
     entry_date = context.get("entry_date")
     if not entry_date:
@@ -214,8 +229,12 @@ def run_strategy_pnl(context: Dict[str, Any]) -> Dict[str, Any]:
     contract_multiplier = float(context.get("contract_multiplier", 100.0))
 
     result = bs3.run_strategy_backtest(
-        strategy, ticker, expiry, entry_date,
-        exit_date=exit_date, contract_multiplier=contract_multiplier,
+        strategy,
+        ticker,
+        expiry,
+        entry_date,
+        exit_date=exit_date,
+        contract_multiplier=contract_multiplier,
     )
     return {
         "mode": "strategy_pnl",
@@ -250,15 +269,22 @@ _OPTION_MULT = 100.0
 _STOCK_SHARES = 100.0  # one option contract controls 100 shares
 
 
-def _stock_daily_metrics(dates: List[str], equity: List[float],
-                         rf_annual: float = 0.0) -> Dict[str, Any]:
+def _stock_daily_metrics(
+    dates: list[str], equity: list[float], rf_annual: float = 0.0
+) -> dict[str, Any]:
     """Pure metrics over a daily equity curve. `equity`[i] is the account
     value at close of `dates`[i], starting from equity[0]. Returns the
     standard risk/return stats computed off the *simple* daily returns."""
     if len(equity) < 2:
-        return {"total_return_pct": 0.0, "annualized_return_pct": 0.0,
-                "max_drawdown_pct": 0.0, "annualized_vol_pct": 0.0,
-                "sharpe": None, "daily_win_rate": None, "num_days": len(equity)}
+        return {
+            "total_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "annualized_vol_pct": 0.0,
+            "sharpe": None,
+            "daily_win_rate": None,
+            "num_days": len(equity),
+        }
     returns = [(equity[i] / equity[i - 1] - 1.0) for i in range(1, len(equity))]
     total_return = equity[-1] / equity[0] - 1.0
     n = len(returns)
@@ -271,11 +297,9 @@ def _stock_daily_metrics(dates: List[str], equity: List[float],
     peak = equity[0]
     max_dd = 0.0
     for v in equity:
-        if v > peak:
-            peak = v
+        peak = max(peak, v)
         dd = (v - peak) / peak if peak > 0 else 0.0
-        if dd < max_dd:
-            max_dd = dd
+        max_dd = min(max_dd, dd)
     mean_r = sum(returns) / n
     if n > 1:
         var = sum((r - mean_r) ** 2 for r in returns) / (n - 1)
@@ -298,20 +322,20 @@ def _stock_daily_metrics(dates: List[str], equity: List[float],
     }
 
 
-def _sma_cross_positions(closes: List[float], fast: int, slow: int) -> List[int]:
+def _sma_cross_positions(closes: list[float], fast: int, slow: int) -> list[int]:
     """1 (long) when the fast SMA is above the slow SMA, else 0 (flat).
     Positions are decided on the close of the current bar and applied to the
     NEXT bar's return (no lookahead): position[i] multiplies return[i+1]."""
     n = len(closes)
     pos = [0] * n
     for i in range(slow, n):
-        fast_sma = sum(closes[i - fast + 1:i + 1]) / fast
-        slow_sma = sum(closes[i - slow + 1:i + 1]) / slow
+        fast_sma = sum(closes[i - fast + 1 : i + 1]) / fast
+        slow_sma = sum(closes[i - slow + 1 : i + 1]) / slow
         pos[i] = 1 if fast_sma > slow_sma else 0
     return pos
 
 
-def _momentum_positions(closes: List[float], lookback: int) -> List[int]:
+def _momentum_positions(closes: list[float], lookback: int) -> list[int]:
     """1 (long) when the trailing `lookback`-day return is positive, else 0.
     Same no-lookahead convention as _sma_cross_positions."""
     n = len(closes)
@@ -321,8 +345,9 @@ def _momentum_positions(closes: List[float], lookback: int) -> List[int]:
     return pos
 
 
-def _apply_positions(closes: List[float], positions: List[int],
-                     initial: float = 100.0) -> List[float]:
+def _apply_positions(
+    closes: list[float], positions: list[int], initial: float = 100.0
+) -> list[float]:
     """Equity curve from a position series. position[i] is decided on bar i's
     close and earns bar i+1's return (no lookahead). equity[0]=initial."""
     equity = [initial]
@@ -332,12 +357,15 @@ def _apply_positions(closes: List[float], positions: List[int],
     return equity
 
 
-def _count_entries(positions: List[int]) -> int:
-    return sum(1 for i in range(1, len(positions))
-               if positions[i] == 1 and positions[i - 1] == 0)
+def _count_entries(positions: list[int]) -> int:
+    return sum(
+        1
+        for i in range(1, len(positions))
+        if positions[i] == 1 and positions[i - 1] == 0
+    )
 
 
-def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_stock_strategy_backtest(context: dict[str, Any]) -> dict[str, Any]:
     from shared.thetadata import ThetaDataController
 
     ticker = context.get("ticker")
@@ -347,7 +375,8 @@ def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
     if strategy not in ("buy_hold", "sma_cross", "momentum"):
         raise ValueError(
             f"mode='stock_strategy_backtest' strategy must be one of "
-            f"[buy_hold, sma_cross, momentum]; got {strategy!r}")
+            f"[buy_hold, sma_cross, momentum]; got {strategy!r}"
+        )
     fast = int(context.get("fast_window", 20))
     slow = int(context.get("slow_window", 50))
     momentum_lookback = int(context.get("momentum_lookback", 20))
@@ -370,11 +399,11 @@ def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         td.close()
 
-    closes: Dict[str, float] = {}
+    closes: dict[str, float] = {}
     for row in rows:
         d = _row_date(row)
         try:
-            c = float(row.get('close', 0) or 0)
+            c = float(row.get("close", 0) or 0)
         except (TypeError, ValueError):
             continue
         if d and c > 0:
@@ -384,7 +413,8 @@ def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(
             f"stock_strategy_backtest: only {len(dates)} trading days of closes "
             f"for {ticker}; need at least {max(slow, momentum_lookback, 5)}. "
-            f"Widen the window.")
+            f"Widen the window."
+        )
     close_series = [closes[d] for d in dates]
 
     if strategy == "buy_hold":
@@ -399,8 +429,7 @@ def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
 
     strat_metrics = _stock_daily_metrics(dates, strat_equity, rf_annual)
     bh_metrics = _stock_daily_metrics(dates, bh_equity, rf_annual)
-    alpha = (strat_metrics["total_return_pct"]
-             - bh_metrics["total_return_pct"])
+    alpha = strat_metrics["total_return_pct"] - bh_metrics["total_return_pct"]
 
     lines = [
         f"STOCK BACKTEST  {ticker}  [{start_date}..{end_date}]  strategy={strategy}",
@@ -418,8 +447,10 @@ def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
     ]
     if strategy in ("sma_cross", "momentum"):
         lines.append(f"  entries (flat->long flips): {_count_entries(positions)}")
-        lines.append(f"  time in market: "
-                     f"{sum(1 for p in positions if p) / len(positions) * 100:.1f}%")
+        lines.append(
+            f"  time in market: "
+            f"{sum(1 for p in positions if p) / len(positions) * 100:.1f}%"
+        )
 
     return {
         "mode": "stock_strategy_backtest",
@@ -441,8 +472,9 @@ def run_stock_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _pick_strike(strikes: List[float], target: float,
-                 at_least: bool = False, at_most: bool = False) -> Optional[float]:
+def _pick_strike(
+    strikes: list[float], target: float, at_least: bool = False, at_most: bool = False
+) -> float | None:
     """Nearest available strike to `target` (or >= / <= when requested)."""
     if not strikes:
         return None
@@ -455,10 +487,13 @@ def _pick_strike(strikes: List[float], target: float,
     return min(strikes, key=lambda s: abs(s - target))
 
 
-def _build_option_strategy_legs(strategy_type: str, entry_spot: float,
-                                strikes: List[float],
-                                strike: Optional[float],
-                                otm: Optional[float]) -> List[Dict[str, Any]]:
+def _build_option_strategy_legs(
+    strategy_type: str,
+    entry_spot: float,
+    strikes: list[float],
+    strike: float | None,
+    otm: float | None,
+) -> list[dict[str, Any]]:
     """Build the legs of a standard options strategy as a list of
     {kind, strike, right, quantity, multiplier}. `kind` is 'stock', 'call',
     or 'put'. Stock legs carry quantity=_STOCK_SHARES, multiplier=1 (they are
@@ -470,64 +505,145 @@ def _build_option_strategy_legs(strategy_type: str, entry_spot: float,
     def k(v: float, at_least=False, at_most=False) -> float:
         return _pick_strike(strikes, v, at_least=at_least, at_most=at_most)
 
-    legs: List[Dict[str, Any]] = []
+    legs: list[dict[str, Any]] = []
     if strategy_type == "long_call":
-        legs.append({"kind": "call", "strike": k(atm), "right": "C",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
+        legs.append(
+            {
+                "kind": "call",
+                "strike": k(atm),
+                "right": "C",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
     elif strategy_type == "long_put":
-        legs.append({"kind": "put", "strike": k(atm), "right": "P",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
+        legs.append(
+            {
+                "kind": "put",
+                "strike": k(atm),
+                "right": "P",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
     elif strategy_type == "covered_call":
-        legs.append({"kind": "stock", "strike": None, "right": None,
-                     "quantity": _STOCK_SHARES, "multiplier": 1.0})
-        legs.append({"kind": "call", "strike": k(atm), "right": "C",
-                     "quantity": -1, "multiplier": _OPTION_MULT})
+        legs.append(
+            {
+                "kind": "stock",
+                "strike": None,
+                "right": None,
+                "quantity": _STOCK_SHARES,
+                "multiplier": 1.0,
+            }
+        )
+        legs.append(
+            {
+                "kind": "call",
+                "strike": k(atm),
+                "right": "C",
+                "quantity": -1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
     elif strategy_type == "protective_put":
-        legs.append({"kind": "stock", "strike": None, "right": None,
-                     "quantity": _STOCK_SHARES, "multiplier": 1.0})
-        legs.append({"kind": "put", "strike": k(atm), "right": "P",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
+        legs.append(
+            {
+                "kind": "stock",
+                "strike": None,
+                "right": None,
+                "quantity": _STOCK_SHARES,
+                "multiplier": 1.0,
+            }
+        )
+        legs.append(
+            {
+                "kind": "put",
+                "strike": k(atm),
+                "right": "P",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
     elif strategy_type == "long_straddle":
         kk = k(atm)
-        legs.append({"kind": "call", "strike": kk, "right": "C",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
-        legs.append({"kind": "put", "strike": kk, "right": "P",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
+        legs.append(
+            {
+                "kind": "call",
+                "strike": kk,
+                "right": "C",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
+        legs.append(
+            {
+                "kind": "put",
+                "strike": kk,
+                "right": "P",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
     elif strategy_type == "long_strangle":
         width = otm if otm is not None else max(1.0, 0.05 * entry_spot)
         kc = k(entry_spot + width, at_least=True)
         kp = k(entry_spot - width, at_most=True)
-        legs.append({"kind": "call", "strike": kc, "right": "C",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
-        legs.append({"kind": "put", "strike": kp, "right": "P",
-                     "quantity": 1, "multiplier": _OPTION_MULT})
+        legs.append(
+            {
+                "kind": "call",
+                "strike": kc,
+                "right": "C",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
+        legs.append(
+            {
+                "kind": "put",
+                "strike": kp,
+                "right": "P",
+                "quantity": 1,
+                "multiplier": _OPTION_MULT,
+            }
+        )
     else:
         raise ValueError(f"unknown option strategy {strategy_type!r}")
     return legs
 
 
-def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_option_strategy_backtest(context: dict[str, Any]) -> dict[str, Any]:
+    import implied_vol as implied_vol_mod  # mid_price lives in implied_vol
+
     from shared.thetadata import ThetaDataController
     from Vol_Suite.backtest_stage3 import strike_to_theta
-    import implied_vol as implied_vol_mod  # mid_price lives in implied_vol
+
     mid_price = implied_vol_mod.mid_price
 
     ticker = context.get("ticker")
     if not ticker:
         raise ValueError("mode='option_strategy_backtest' requires a ticker")
     strategy_type = str(context.get("strategy_type", "long_call")).strip().lower()
-    valid = ("long_call", "long_put", "covered_call", "protective_put",
-             "long_straddle", "long_strangle")
+    valid = (
+        "long_call",
+        "long_put",
+        "covered_call",
+        "protective_put",
+        "long_straddle",
+        "long_strangle",
+    )
     if strategy_type not in valid:
         raise ValueError(
             f"mode='option_strategy_backtest' strategy_type must be one of "
-            f"{list(valid)}; got {strategy_type!r}")
+            f"{list(valid)}; got {strategy_type!r}"
+        )
 
-    expiry = _iso_to_compact(context.get("expiry")
-                             or (context.get("focus") or {}).get("expiration_date"))
+    expiry = _iso_to_compact(
+        context.get("expiry") or (context.get("focus") or {}).get("expiration_date")
+    )
     if not expiry:
-        raise ValueError("mode='option_strategy_backtest' requires 'expiry' "
-                          "(YYYYMMDD or ISO)")
+        raise ValueError(
+            "mode='option_strategy_backtest' requires 'expiry' (YYYYMMDD or ISO)"
+        )
     entry_date = _iso_to_compact(context.get("entry_date"))
     if not entry_date:
         raise ValueError("mode='option_strategy_backtest' requires 'entry_date'")
@@ -543,15 +659,16 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
         # Underlying closes over the whole window (for spot-at-entry, the
         # stock leg, and intrinsic settlement at/past expiry).
         start_dt = datetime.strptime(entry_date, "%Y%m%d") - timedelta(days=7)
-        end_anchor = min(datetime.strptime(exit_date, "%Y%m%d"),
-                         datetime.strptime(expiry, "%Y%m%d"))
+        end_anchor = min(
+            datetime.strptime(exit_date, "%Y%m%d"), datetime.strptime(expiry, "%Y%m%d")
+        )
         end_dt = end_anchor + timedelta(days=7)
         start_str, end_str = start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
-        spot_by_date: Dict[str, float] = {}
+        spot_by_date: dict[str, float] = {}
         for row in td.hist_stock_eod(ticker, start_str, end_str):
             d = _row_date(row)
             try:
-                c = float(row.get('close', 0) or 0)
+                c = float(row.get("close", 0) or 0)
             except (TypeError, ValueError):
                 continue
             if d and c > 0:
@@ -565,20 +682,22 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
         entry_spot = spot_by_date[prior[-1]]
 
         strikes = td.list_strikes(ticker, expiry)
-        legs = _build_option_strategy_legs(strategy_type, entry_spot, strikes,
-                                           strike, otm)
+        legs = _build_option_strategy_legs(
+            strategy_type, entry_spot, strikes, strike, otm
+        )
 
         # Fetch each option leg's EOD price history (mid price per date).
-        option_price: Dict[Tuple[float, str], Dict[str, float]] = {}
+        option_price: dict[tuple[float, str], dict[str, float]] = {}
         for leg in legs:
             if leg["kind"] == "stock":
                 continue
             k_theta = strike_to_theta(float(leg["strike"]))
-            by_date: Dict[str, float] = {}
+            by_date: dict[str, float] = {}
             for row in td.option_hist_eod_single(
-                    ticker, expiry, k_theta, leg["right"], start_str, end_str):
+                ticker, expiry, k_theta, leg["right"], start_str, end_str
+            ):
                 d = _row_date(row)
-                px = mid_price(row.get('bid'), row.get('ask'), row.get('close'))
+                px = mid_price(row.get("bid"), row.get("ask"), row.get("close"))
                 if d and px is not None:
                     by_date[d] = px
             option_price[(float(leg["strike"]), leg["kind"])] = by_date
@@ -586,7 +705,9 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
         def leg_entry_px(leg):
             if leg["kind"] == "stock":
                 return spot_by_date.get(prior[-1])
-            return option_price.get((float(leg["strike"]), leg["kind"]), {}).get(entry_date)
+            return option_price.get((float(leg["strike"]), leg["kind"]), {}).get(
+                entry_date
+            )
 
         def leg_exit_px(leg):
             if leg["kind"] == "stock":
@@ -600,9 +721,14 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
                 if spot_exit is None:
                     return None
                 k = float(leg["strike"])
-                return max(spot_exit - k, 0.0) if leg["kind"] == "call" \
+                return (
+                    max(spot_exit - k, 0.0)
+                    if leg["kind"] == "call"
                     else max(k - spot_exit, 0.0)
-            return option_price.get((float(leg["strike"]), leg["kind"]), {}).get(exit_date)
+                )
+            return option_price.get((float(leg["strike"]), leg["kind"]), {}).get(
+                exit_date
+            )
 
         entry_cost = 0.0
         exit_value = 0.0
@@ -613,7 +739,10 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
             ep = leg_entry_px(leg)
             xp = leg_exit_px(leg)
             if ep is None or xp is None:
-                missing.append(leg["kind"] + (f" {leg['strike']}" if leg["kind"] != "stock" else ""))
+                missing.append(
+                    leg["kind"]
+                    + (f" {leg['strike']}" if leg["kind"] != "stock" else "")
+                )
                 continue
             entry_cost += q * ep * m
             exit_value += q * xp * m
@@ -621,7 +750,8 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(
                 f"could not price leg(s) {missing} for {strategy_type} "
                 f"(entry {entry_date} / exit {exit_date}). Check the ticker, "
-                f"expiry {expiry}, and that the contracts traded.")
+                f"expiry {expiry}, and that the contracts traded."
+            )
         pnl = exit_value - entry_cost
         pnl_pct = (pnl / abs(entry_cost) * 100.0) if entry_cost != 0 else float("nan")
     finally:
@@ -632,42 +762,50 @@ def run_option_strategy_backtest(context: Dict[str, Any]) -> Dict[str, Any]:
         lbl = leg["kind"] + (f" K={leg['strike']:g}" if leg["kind"] != "stock" else "")
         sign = "+" if leg["quantity"] > 0 else "-"
         leg_lines.append(f"    {sign} {abs(leg['quantity']):g} {lbl}")
-    report = "\n".join([
-        f"OPTION STRATEGY BACKTEST  {ticker}  {strategy_type}",
-        f"  expiry={expiry}  entry={entry_date}  exit={exit_date} "
-        f"(settle intrinsic={exit_date >= expiry})",
-        f"  entry spot={entry_spot:.2f}",
-        "  legs:",
-        *leg_lines,
-        f"  entry cost = {entry_cost:+,.2f}",
-        f"  exit value = {exit_value:+,.2f}",
-        f"  P&L = {pnl:+,.2f}  ({pnl_pct:+.2f}% of cost)",
-    ])
+    report = "\n".join(
+        [
+            f"OPTION STRATEGY BACKTEST  {ticker}  {strategy_type}",
+            f"  expiry={expiry}  entry={entry_date}  exit={exit_date} "
+            f"(settle intrinsic={exit_date >= expiry})",
+            f"  entry spot={entry_spot:.2f}",
+            "  legs:",
+            *leg_lines,
+            f"  entry cost = {entry_cost:+,.2f}",
+            f"  exit value = {exit_value:+,.2f}",
+            f"  P&L = {pnl:+,.2f}  ({pnl_pct:+.2f}% of cost)",
+        ]
+    )
     return {
         "mode": "option_strategy_backtest",
         "ticker": ticker,
         "strategy_type": strategy_type,
         "report": report,
         "result": {
-            "ticker": ticker, "strategy_type": strategy_type, "expiry": expiry,
-            "entry_date": entry_date, "exit_date": exit_date,
+            "ticker": ticker,
+            "strategy_type": strategy_type,
+            "expiry": expiry,
+            "entry_date": entry_date,
+            "exit_date": exit_date,
             "entry_spot": entry_spot,
             "legs": legs,
-            "entry_cost": entry_cost, "exit_value": exit_value,
-            "pnl": pnl, "pnl_pct": pnl_pct,
+            "entry_cost": entry_cost,
+            "exit_value": exit_value,
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
         },
     }
 
 
-def run_broker_book_accuracy(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_broker_book_accuracy(context: dict[str, Any]) -> dict[str, Any]:
     """Aggregate the chain-scan corpus into a convention-free broker-book control
     and backtest its predictive content against forward returns (pooled + cross-
     sectional arms). See broker_book.py for the convention rules and design."""
     from Tools.tools import broker_book
+
     return broker_book.run_backtest(context)
 
 
-def run(context: Dict[str, Any]) -> Dict[str, Any]:
+def run(context: dict[str, Any]) -> dict[str, Any]:
     """context: a validated suite_context.json dict (see
     context_loader.load_context), plus a required "mode" key selecting
     which of the independent backtests to run:
@@ -746,11 +884,16 @@ TOOL_SPEC = ToolSpec(
             name="mode",
             label="Backtest",
             kind="choice",
-            default="dealer_gamma_study",
+            # The fast one first: dealer_gamma_study replays a whole lookback
+            # of option chains and timed out on the desk ("API request timed
+            # out"), which read as "backtesting doesn't work" before you had
+            # picked anything.
+            default="stock_strategy_backtest",
             choices=(
+                "stock_strategy_backtest",
+                "option_strategy_backtest",
                 "dealer_gamma_study",
                 "strategy_pnl",
-                "stock_strategy_backtest",
                 "option_strategy_backtest",
                 "broker_book_accuracy",
             ),

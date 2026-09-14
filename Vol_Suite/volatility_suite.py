@@ -54,7 +54,6 @@ from pathlib import Path
 from typing import Any
 
 import index_membership as idxmem
-from shared.artifact_paths import resolve_stored
 from suite_context import (
     DEFAULT_OPTIONS_SUITE_ROOT,
     DEFAULT_SENTIMENT_SUITE_ROOT,
@@ -65,11 +64,39 @@ from suite_context import (
 )
 from vs_utils import collect_files, compose_pdf_report, timestamped_output_dir
 
+from shared.artifact_paths import resolve_stored
+
 JUMP_MODEL_DEFAULT = os.getenv("JUMP_MODEL_DEFAULT", "Bates")
+
+# Selects the lowest-IV-RMSE model of the whole zoo instead of one named model.
+JUMP_MODEL_BEST_FIT = "best_fit"
+
+
+def resolve_jump_model_default() -> str:
+    """The operator's default jump model.
+
+    An explicit JUMP_MODEL_DEFAULT (env var, or a test patching the constant)
+    wins; otherwise the choice saved from the dashboard
+    (shared/desk_settings.py, key ``jump_model_default``); otherwise Bates.
+    Before this the only way to change the default was restarting with a
+    different environment.
+    """
+    if "JUMP_MODEL_DEFAULT" in os.environ or JUMP_MODEL_DEFAULT != "Bates":
+        return JUMP_MODEL_DEFAULT
+    try:
+        from shared.desk_settings import get_setting
+
+        return str(get_setting("jump_model_default", JUMP_MODEL_DEFAULT))
+    except Exception:  # noqa: BLE001 -- a settings problem must not fail a run
+        return JUMP_MODEL_DEFAULT
 
 
 def _calibrate_default_jump_model(
-    ticker: str, expiration: str, target_years: float, capture: dict | None = None
+    ticker: str,
+    expiration: str,
+    target_years: float,
+    capture: dict | None = None,
+    model_name: str | None = None,
 ):
     """Calibrate JUMP_MODEL_DEFAULT against the focus ticker's chain at
     *expiration*, plus a cheap Merton fit for the GARCH jump-day filter
@@ -102,16 +129,40 @@ def _calibrate_default_jump_model(
     from thetadata_client import ThetaDataController
     from variance_swap_live import fetch_chain_thetadata
 
-    model_cls = next(
-        (m for m in ALL_MODELS if m.name == JUMP_MODEL_DEFAULT), BatesModel
-    )
+    requested = (model_name or resolve_jump_model_default()).strip()
     try:
+        zoo_rmse: dict[str, float | None] | None = None
+        if requested != JUMP_MODEL_BEST_FIT:
+            model_cls = next((m for m in ALL_MODELS if m.name == requested), None)
+            if model_cls is None:
+                raise ValueError(
+                    f"unknown jump model {requested!r}; choose one of "
+                    + ", ".join([JUMP_MODEL_BEST_FIT, *(m.name for m in ALL_MODELS)])
+                )
         td = ThetaDataController()
         spot = float(td.fetch_spot_price(ticker))
         r = float(td.fetch_risk_free_rate(target_years))
         q = float(td.fetch_dividend_yield(ticker, spot))
         chain = fetch_chain_thetadata(td, ticker, expiration, r, q)
-        result = calibrate(model_cls, chain, spot, target_years)
+        if requested == JUMP_MODEL_BEST_FIT:
+            # Run the zoo and keep the model that actually fits this smile,
+            # rather than forcing one model onto every name and expiry.
+            zoo_rmse = {}
+            fits = {}
+            for cls in ALL_MODELS:
+                try:
+                    fits[cls] = calibrate(cls, chain, spot, target_years)
+                    zoo_rmse[cls.name] = float(fits[cls].rmse_iv)
+                except Exception as exc:  # noqa: BLE001 -- one model failing is data
+                    zoo_rmse[cls.name] = None
+                    print(f"  [jump_diffusion] zoo: {cls.name} failed: {exc}")
+            usable = {c: f for c, f in fits.items() if f.rmse_iv == f.rmse_iv}
+            if not usable:
+                raise RuntimeError("no model in the zoo calibrated")
+            model_cls = min(usable, key=lambda c: usable[c].rmse_iv)
+            result = usable[model_cls]
+        else:
+            result = calibrate(model_cls, chain, spot, target_years)
 
         jump_variance_share = None
         if model_cls is BatesModel:
@@ -134,16 +185,23 @@ def _calibrate_default_jump_model(
             capture["fitted_ivs"] = [float(v) for v in result.fitted_ivs]
             capture["spot"] = float(spot)
 
-        return {
+        out = {
             "model_name": result.model_name,
             "params": result.params,
             "rmse_iv": result.rmse_iv,
+            "rmse_iv_full": result.rmse_iv_full,
             "jump_variance_share": jump_variance_share,
             "merton_sigma": merton_sigma,
         }
+        if zoo_rmse is not None:
+            # Only present for a best-fit run, so a named-model run's
+            # suite_context block stays byte-for-byte what it was.
+            out["selected_by"] = JUMP_MODEL_BEST_FIT
+            out["zoo_rmse_iv"] = zoo_rmse
+        return out
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
-        print(f"  [jump_diffusion] {JUMP_MODEL_DEFAULT} calibration failed: {reason}")
+        print(f"  [jump_diffusion] {requested} calibration failed: {reason}")
         return {"status": "error", "error": reason}
 
 
@@ -237,7 +295,7 @@ def _default_pack_manifest_path() -> str:
 
 def _load_json_file(path: str) -> dict | None:
     """Load a JSON file, resolving the path through resolve_stored().
-    
+
     This handles legacy Windows-style paths by converting them to the
     local host's absolute path if they point to an existing file.
     """
@@ -2456,6 +2514,7 @@ def run_context_mode(context_path: str, context_out: str | None = None) -> int:
     # context was created.
     import datetime as dt
     import secrets
+
     if "run_id" not in context or "output_dir" not in context:
         now = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
         ran = secrets.token_hex(2)
@@ -2466,6 +2525,7 @@ def run_context_mode(context_path: str, context_out: str | None = None) -> int:
 
         # Use the same output directory logic as run_selected_modules
         from shared.artifact_paths import repo_root
+
         out_dir = repo_root() / "outputs" / run_id
         out_dir.mkdir(parents=True, exist_ok=True)
         context["output_dir"] = str(out_dir)

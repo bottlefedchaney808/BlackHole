@@ -61,6 +61,7 @@ if str(_OPTIONS_SUITE_ROOT) not in sys.path:
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from shared.module_registry import ParamSpec
 from Tools.spec import ToolSpec
 
 GREEK_SURFACE_MODES = {"greek_surface", "greek-surface", "greeks"}
@@ -512,4 +513,53 @@ TOOL_SPEC = ToolSpec(
         "'option_type', 'include_mc', 'include_heston')."
     ),
     run=run,
+    # Five genuinely different surfaces behind one tool. Without these the
+    # card could only ever run the `greek_surface` default at `gamma`, so
+    # four of the five modes were unreachable from the dashboard and the
+    # four `surface_*` slugs looked like the only way to get at them --
+    # except those draw no picture. Declaring the knobs is what lets this
+    # one card replace all four.
+    params=(
+        ParamSpec(
+            name="mode",
+            label="Surface",
+            kind="choice",
+            default="greek_surface",
+            choices=(
+                "greek_surface",
+                "iv_surface_market",
+                "flow_strike_time",
+                "flow_strike_expiry",
+                "iv_smile_by_model",
+            ),
+            help="Which surface to build. These are different views, not settings of one view.",
+        ),
+        ParamSpec(
+            name="greek",
+            label="Greek",
+            kind="choice",
+            default=DEFAULT_GREEK,
+            choices=("delta", "gamma", "vega", "vanna", "charm", "volga"),
+            help="greek_surface only -- which dealer-frame exposure to plot.",
+        ),
+        ParamSpec(
+            name="min_dte",
+            label="Min DTE",
+            kind="number",
+            default=0,
+            help=(
+                "iv_surface_market only -- drop expiries inside this many "
+                "days. 14 gives a term-structure view instead of the "
+                "front-week-inclusive default."
+            ),
+        ),
+        ParamSpec(
+            name="option_type",
+            label="Option type",
+            kind="choice",
+            default="call",
+            choices=("call", "put"),
+            help="iv_smile_by_model only.",
+        ),
+    ),
 )

@@ -1620,12 +1620,20 @@ def plot_greek_exposure_comparison(
     # Dual-book provenance (Phase 8b): the legacy engine renders TODAY'S OI
     # snapshot by default; only DEALER_ACCUMULATION=1 swaps in the 150-day
     # assumed position. The title previously hid that distinction.
-    book_label = ("assumed accumulated position (DEALER_ACCUMULATION)"
-                  if getattr(result, "accumulate", False)
-                  else "assumed today's-OI position (snapshot)")
-    fig.text(0.5, 0.96,
-              f"{result.ticker} Dealer Greek Exposure Comparison ({days_label}) — {sign_model_label} — {book_label}",
-              color=TEXT_COLOR, fontsize=18, fontweight='bold', ha='center')
+    book_label = (
+        "assumed accumulated position (DEALER_ACCUMULATION)"
+        if getattr(result, "accumulate", False)
+        else "assumed today's-OI position (snapshot)"
+    )
+    fig.text(
+        0.5,
+        0.96,
+        f"{result.ticker} Dealer Greek Exposure Comparison ({days_label}) — {sign_model_label} — {book_label}",
+        color=TEXT_COLOR,
+        fontsize=18,
+        fontweight="bold",
+        ha="center",
+    )
 
     K = result.strike_grid
     spot = result.spot
@@ -1729,23 +1737,35 @@ def plot_expiry_book_greek_exposure(result, output_dir: str | None = None) -> st
         return np.asarray([agg.get(k, 0.0) for k in strikes], dtype=float)
 
     fig = plt.figure(figsize=(16, 11), facecolor=DARK_BG)
-    gs = fig.add_gridspec(2, 2, hspace=0.45, wspace=0.28,
-                          left=0.07, right=0.96, top=0.90, bottom=0.07)
+    gs = fig.add_gridspec(
+        2, 2, hspace=0.45, wspace=0.28, left=0.07, right=0.96, top=0.90, bottom=0.07
+    )
     # Dual-book provenance (Phase 8b): say WHICH book this is and whether the
     # intraday flow layer actually ran. Under the EXPOSURE_BOOK_FLOW=0 default
     # the book is a pure snapshot — the old hardcoded "prior close + intraday
     # flow" suffix was false there.
     flow_on = getattr(result, "flow_layer", "snapshot_only") == "legacy_flow"
-    book_suffix = ("exposure snapshot + intraday flow" if flow_on
-                   else "exposure snapshot (no intraday flow)")
-    fig.text(0.5, 0.96,
-              f"{result.ticker} Dealer Greek Exposure Comparison (expiry {result.expiry}) "
-              f"— {book_suffix}",
-              color=TEXT_COLOR, fontsize=18, fontweight='bold', ha='center')
+    book_suffix = (
+        "exposure snapshot + intraday flow"
+        if flow_on
+        else "exposure snapshot (no intraday flow)"
+    )
+    fig.text(
+        0.5,
+        0.96,
+        # Renamed 2026-09-12: this chart and plot_expiry_book_heatmap were both
+        # labelled "dealer positioning" on the Dealer Book tab.
+        f"{result.ticker} Chain Greek Exposure — 4-panel (expiry {result.expiry}) "
+        f"— {book_suffix}",
+        color=TEXT_COLOR,
+        fontsize=18,
+        fontweight="bold",
+        ha="center",
+    )
 
     have_data = len(K) > 0
-    gamma_ylabel = ('GEX prior+dGEX ($ / 1%)' if flow_on else 'GEX ($ / 1%)')
-    vanna_ylabel = ('VEX prior+dVEX' if flow_on else 'VEX (shares / 1pp IV)')
+    gamma_ylabel = "GEX prior+dGEX ($ / 1%)" if flow_on else "GEX ($ / 1%)"
+    vanna_ylabel = "VEX prior+dVEX" if flow_on else "VEX (shares / 1pp IV)"
     ax1 = fig.add_subplot(gs[0, 0])
     _greek_panel(
         ax1, K, _by_strike("gamma"), "Gamma Exposure", gamma_ylabel, spot, have_data
@@ -1759,14 +1779,21 @@ def plot_expiry_book_greek_exposure(result, output_dir: str | None = None) -> st
         ax3, K, _by_strike("vanna"), "Vanna Exposure", vanna_ylabel, spot, have_data
     )
     ax4 = fig.add_subplot(gs[1, 1])
-    _greek_panel(ax4, K, _by_strike('charm'), 'Charm Exposure',
-                 ('CEX prior+dCEX / day' if flow_on else 'CEX ($ / day)'), spot, have_data)
+    _greek_panel(
+        ax4,
+        K,
+        _by_strike("charm"),
+        "Charm Exposure",
+        ("CEX prior+dCEX / day" if flow_on else "CEX ($ / day)"),
+        spot,
+        have_data,
+    )
 
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(
-        out_dir, f"{result.ticker}_greek_exposure_comparison_{timestamp}.png"
+        out_dir, f"{result.ticker}_chain_greek_exposure_4panel_{timestamp}.png"
     )
     plt.savefig(
         filename, dpi=200, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none"
@@ -1818,7 +1845,9 @@ def _expiry_book_gamma_surface(
     return spot_pct, iv_pct_axis, surface
 
 
-def plot_expiry_book_single_greek(result, greek: str, output_dir: str | None = None) -> str:
+def plot_expiry_book_single_greek(
+    result, greek: str, output_dir: str | None = None
+) -> str:
     """One LARGE single-greek exposure-by-strike chart (gamma / delta /
     vanna / charm) for a ProductionDealerExposure. Same per-strike
     aggregation as plot_expiry_book_greek_exposure (NetExposure.rows ->
@@ -1853,8 +1882,11 @@ def plot_expiry_book_single_greek(result, greek: str, output_dir: str | None = N
     }
     title, ylabel = titles[greek]
     flow_on = getattr(result, "flow_layer", "snapshot_only") == "legacy_flow"
-    book_suffix = ("exposure snapshot + intraday flow" if flow_on
-                   else "exposure snapshot (no intraday flow)")
+    book_suffix = (
+        "exposure snapshot + intraday flow"
+        if flow_on
+        else "exposure snapshot (no intraday flow)"
+    )
 
     fig = plt.figure(figsize=(16, 9), facecolor=DARK_BG)
     ax = fig.add_axes([0.06, 0.07, 0.90, 0.86])
@@ -1865,38 +1897,68 @@ def plot_expiry_book_single_greek(result, greek: str, output_dir: str | None = N
     colors = [pos_color if v >= 0 else neg_color for v in vals]
     bar_width = (
         (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5) * 0.7)
-        if len(K) else np.array([])
+        if len(K)
+        else np.array([])
     )
-    ax.bar(K, vals, width=bar_width, color=colors, alpha=1.0,
-           edgecolor=colors, linewidth=0.6)
+    ax.bar(
+        K,
+        vals,
+        width=bar_width,
+        color=colors,
+        alpha=1.0,
+        edgecolor=colors,
+        linewidth=0.6,
+    )
     ax.axhline(y=0, color=TEXT_COLOR, linewidth=1.0, alpha=0.85)
-    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2,
-               alpha=0.95, zorder=5)
-    flip = getattr(getattr(result, "execution_locus", None), "local_gamma_boundary",
-                   None)
+    ax.axvline(
+        x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2, alpha=0.95, zorder=5
+    )
+    flip = getattr(
+        getattr(result, "execution_locus", None), "local_gamma_boundary", None
+    )
     if flip:
-        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.2,
-                   alpha=0.95, zorder=5)
+        ax.axvline(
+            x=flip,
+            color=ACCENT_GOLD,
+            linestyle=":",
+            linewidth=2.2,
+            alpha=0.95,
+            zorder=5,
+        )
     from matplotlib.patches import Patch
+
     ax.legend(
-        handles=[Patch(facecolor=pos_color, label="Positive"),
-                 Patch(facecolor=neg_color, label="Negative")],
-        loc="upper right", fontsize=10, facecolor=PANEL_BG,
-        edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, framealpha=0.85,
+        handles=[
+            Patch(facecolor=pos_color, label="Positive"),
+            Patch(facecolor=neg_color, label="Negative"),
+        ],
+        loc="upper right",
+        fontsize=10,
+        facecolor=PANEL_BG,
+        edgecolor=GRID_COLOR,
+        labelcolor=TEXT_COLOR,
+        framealpha=0.85,
     )
 
-    fig.text(0.5, 0.965,
-             f"{result.ticker} Chain Exposure — {greek.upper()} — expiry "
-             f"{result.expiry} · {book_suffix}",
-             color=TEXT_COLOR, fontsize=16, fontweight="bold", ha="center")
+    fig.text(
+        0.5,
+        0.965,
+        f"{result.ticker} Chain Exposure — {greek.upper()} — expiry "
+        f"{result.expiry} · {book_suffix}",
+        color=TEXT_COLOR,
+        fontsize=16,
+        fontweight="bold",
+        ha="center",
+    )
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(
         out_dir, f"{result.ticker}_dealer_book_{greek}_{timestamp}.png"
     )
-    plt.savefig(filename, dpi=150, bbox_inches="tight", facecolor=DARK_BG,
-                edgecolor="none")
+    plt.savefig(
+        filename, dpi=150, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none"
+    )
     plt.close(fig)
     return filename
 
@@ -1937,14 +1999,14 @@ def plot_flow_book_single_greek(
             )
         if greek == "delta":
             return (
-                float(greeks.get("delta", 0.0) or 0.0)
-                * pos
-                * ebe.CONTRACT_MULTIPLIER
+                float(greeks.get("delta", 0.0) or 0.0) * pos * ebe.CONTRACT_MULTIPLIER
             )
         if greek == "vanna":
+            # Signed like vannacharm_row (fixed 2026-09-12): textbook vanna
+            # keeps its moneyness sign; greeks["vanna"] is -1 x textbook.
             return (
                 rs
-                * abs(float(greeks.get("vanna", 0.0) or 0.0))
+                * -float(greeks.get("vanna", 0.0) or 0.0)
                 * pos
                 * ebe.CONTRACT_MULTIPLIER
                 * spot
@@ -1965,9 +2027,12 @@ def plot_flow_book_single_greek(
     # contribute nothing -- exactly as A's own chart shows only this chain.
     agg: dict[float, float] = defaultdict(float)
     for r in result.snapshot.rows:
-        pos = float(position_by_strike.get(
-            (float(r.strike), str(getattr(r, "right", "C")).upper()[:1]), 0.0
-        ) or 0.0)
+        pos = float(
+            position_by_strike.get(
+                (float(r.strike), str(getattr(r, "right", "C")).upper()[:1]), 0.0
+            )
+            or 0.0
+        )
         if pos == 0.0:
             continue
         agg[float(r.strike)] += _book_value(r, pos, greek)
@@ -1976,9 +2041,7 @@ def plot_flow_book_single_greek(
     K = np.asarray(strikes, dtype=float)
     vals = np.asarray([agg[k] for k in strikes], dtype=float)
     if not len(K):
-        raise ValueError(
-            f"flow book has no positions on today's chains for {greek}"
-        )
+        raise ValueError(f"flow book has no positions on today's chains for {greek}")
 
     titles = {
         "gamma": ("GAMMA EXPOSURE BY STRIKE", "GEX ($ / 1%)"),
@@ -1996,35 +2059,65 @@ def plot_flow_book_single_greek(
     colors = [pos_color if v >= 0 else neg_color for v in vals]
     bar_width = (
         (np.diff(K, append=K[-1] + (K[-1] - K[-2] if len(K) > 1 else 1.0) * 0.5) * 0.7)
-        if len(K) else np.array([])
+        if len(K)
+        else np.array([])
     )
-    ax.bar(K, vals, width=bar_width, color=colors, alpha=1.0,
-           edgecolor=colors, linewidth=0.6)
+    ax.bar(
+        K,
+        vals,
+        width=bar_width,
+        color=colors,
+        alpha=1.0,
+        edgecolor=colors,
+        linewidth=0.6,
+    )
     ax.axhline(y=0, color=TEXT_COLOR, linewidth=1.0, alpha=0.85)
-    ax.axvline(x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2,
-               alpha=0.95, zorder=5)
-    flip = getattr(getattr(result, "execution_locus", None), "local_gamma_boundary",
-                   None)
+    ax.axvline(
+        x=spot, color=ACCENT_BLUE, linestyle="--", linewidth=2.2, alpha=0.95, zorder=5
+    )
+    flip = getattr(
+        getattr(result, "execution_locus", None), "local_gamma_boundary", None
+    )
     if flip:
-        ax.axvline(x=flip, color=ACCENT_GOLD, linestyle=":", linewidth=2.2,
-                   alpha=0.95, zorder=5)
-        _add_annotation_box(ax, flip, ax.get_ylim()[1] * 0.85,
-                            f"Γ-Flip ${flip:.2f}", ACCENT_GOLD, ha="center")
-    _add_annotation_box(ax, spot, ax.get_ylim()[1] * 0.97,
-                        f"Spot ${spot:.2f}", ACCENT_BLUE, ha="center")
+        ax.axvline(
+            x=flip,
+            color=ACCENT_GOLD,
+            linestyle=":",
+            linewidth=2.2,
+            alpha=0.95,
+            zorder=5,
+        )
+        _add_annotation_box(
+            ax,
+            flip,
+            ax.get_ylim()[1] * 0.85,
+            f"Γ-Flip ${flip:.2f}",
+            ACCENT_GOLD,
+            ha="center",
+        )
+    _add_annotation_box(
+        ax, spot, ax.get_ylim()[1] * 0.97, f"Spot ${spot:.2f}", ACCENT_BLUE, ha="center"
+    )
 
-    fig.text(0.5, 0.965,
-             f"{result.ticker} Dealer Book (flow-built, 150d ΔIV-signed) — "
-             f"{greek.upper()} — {len(agg)} strikes priced",
-             color=TEXT_COLOR, fontsize=15, fontweight="bold", ha="center")
+    fig.text(
+        0.5,
+        0.965,
+        f"{result.ticker} Dealer Book (flow-built, 150d ΔIV-signed) — "
+        f"{greek.upper()} — {len(agg)} strikes priced",
+        color=TEXT_COLOR,
+        fontsize=15,
+        fontweight="bold",
+        ha="center",
+    )
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(
         out_dir, f"{result.ticker}_dealer_book_flow_{greek}_{timestamp}.png"
     )
-    plt.savefig(filename, dpi=150, bbox_inches="tight", facecolor=DARK_BG,
-                edgecolor="none")
+    plt.savefig(
+        filename, dpi=150, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none"
+    )
     plt.close(fig)
     return filename
 
@@ -2064,26 +2157,70 @@ def plot_expiry_book_heatmap(result, output_dir: str | None = None) -> str:
     gamma_tag = "AMPLIFYING" if total_net_dollar_gamma < 0 else "DAMPENING"
     gamma_color = ACCENT_RED if total_net_dollar_gamma < 0 else ACCENT_GREEN
 
-    fig.text(0.08, 0.965, f"{result.ticker}  DEALER POSITIONING",
-             fontsize=22, fontweight='bold', color=TEXT_COLOR, va='center')
-    fig.text(0.08, 0.935,
-             "sign model: expiry-book engine — exposure snapshot "
-             f"({getattr(result, 'flow_layer', 'snapshot_only')})",
-             fontsize=12, fontweight='bold', color='#8b949e', va='center')
-    fig.text(0.36, 0.90, f"Spot: ${spot:.2f}",
-             fontsize=14, color=ACCENT_BLUE, va='center',
-             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
-    fig.text(0.48, 0.90, f"Flip: ${flip_level:.2f}",
-             fontsize=14, color=ACCENT_TEAL, va='center',
-             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
-    fig.text(0.60, 0.90, f"Hedge: {abs(total_net_dollar_gamma * 0.01):,.0f} sh/1%",
-             fontsize=14, color=ACCENT_GOLD, va='center',
-             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
-    fig.text(0.76, 0.90, f"Gamma: {gamma_tag}",
-             fontsize=14, color=gamma_color, va='center', fontweight='bold',
-             path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)])
-    fig.text(0.90, 0.90, f"expiry {result.expiry} · {len(rows)} rec",
-             fontsize=10, color='#8b949e', va='center')
+    fig.text(
+        0.08,
+        0.965,
+        f"{result.ticker}  CHAIN HEDGING MAP",
+        fontsize=22,
+        fontweight="bold",
+        color=TEXT_COLOR,
+        va="center",
+    )
+    fig.text(
+        0.08,
+        0.935,
+        "sign model: expiry-book engine — exposure snapshot "
+        f"({getattr(result, 'flow_layer', 'snapshot_only')})",
+        fontsize=12,
+        fontweight="bold",
+        color="#8b949e",
+        va="center",
+    )
+    fig.text(
+        0.36,
+        0.90,
+        f"Spot: ${spot:.2f}",
+        fontsize=14,
+        color=ACCENT_BLUE,
+        va="center",
+        path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)],
+    )
+    fig.text(
+        0.48,
+        0.90,
+        f"Flip: ${flip_level:.2f}",
+        fontsize=14,
+        color=ACCENT_TEAL,
+        va="center",
+        path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)],
+    )
+    fig.text(
+        0.60,
+        0.90,
+        f"Hedge: {abs(total_net_dollar_gamma * 0.01):,.0f} sh/1%",
+        fontsize=14,
+        color=ACCENT_GOLD,
+        va="center",
+        path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)],
+    )
+    fig.text(
+        0.76,
+        0.90,
+        f"Gamma: {gamma_tag}",
+        fontsize=14,
+        color=gamma_color,
+        va="center",
+        fontweight="bold",
+        path_effects=[pe.withStroke(linewidth=1, foreground=DARK_BG)],
+    )
+    fig.text(
+        0.90,
+        0.90,
+        f"expiry {result.expiry} · {len(rows)} rec",
+        fontsize=10,
+        color="#8b949e",
+        va="center",
+    )
 
     # ====== PLOT 1: Gamma by Strike (top-left) ======
     ax1 = fig.add_subplot(gs[0, 0])
@@ -2386,7 +2523,9 @@ def plot_expiry_book_heatmap(result, output_dir: str | None = None) -> str:
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(out_dir, f"{result.ticker}_hedging_heatmap_{timestamp}.png")
+    filename = os.path.join(
+        out_dir, f"{result.ticker}_chain_hedging_map_{timestamp}.png"
+    )
     plt.savefig(
         filename, dpi=200, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none"
     )
@@ -2674,9 +2813,17 @@ def plot_position_book(result, output_dir: str | None = None) -> str:
     pos = getattr(result, "position_by_strike", {}) or {}
     strikes = sorted({k for (k, r) in pos.keys()}) if pos else []
     K = np.asarray(strikes, dtype=float) if strikes else np.array([])
-    net = np.array([pos.get((k, "C"), 0.0) + pos.get((k, "P"), 0.0) for k in strikes]) if strikes else np.array([])
-    calls = np.array([pos.get((k, "C"), 0.0) for k in strikes]) if strikes else np.array([])
-    puts = np.array([pos.get((k, "P"), 0.0) for k in strikes]) if strikes else np.array([])
+    net = (
+        np.array([pos.get((k, "C"), 0.0) + pos.get((k, "P"), 0.0) for k in strikes])
+        if strikes
+        else np.array([])
+    )
+    calls = (
+        np.array([pos.get((k, "C"), 0.0) for k in strikes]) if strikes else np.array([])
+    )
+    puts = (
+        np.array([pos.get((k, "P"), 0.0) for k in strikes]) if strikes else np.array([])
+    )
     absv = np.abs(net) if len(net) > 0 else np.array([])
 
     spot = float(getattr(result, "spot", 0.0) or 0.0)
@@ -2685,15 +2832,24 @@ def plot_position_book(result, output_dir: str | None = None) -> str:
     lookback = getattr(result, "lookback", 150)
 
     fig = plt.figure(figsize=(16, 11), facecolor=DARK_BG)
-    gs = fig.add_gridspec(2, 2, hspace=0.45, wspace=0.28,
-                          left=0.07, right=0.96, top=0.90, bottom=0.07)
-    fig.text(0.5, 0.96,
-             f"{ticker} Dealer Position Book (accumulated {lookback}d, arm={arm})",
-             color=TEXT_COLOR, fontsize=18, fontweight="bold", ha="center")
+    gs = fig.add_gridspec(
+        2, 2, hspace=0.45, wspace=0.28, left=0.07, right=0.96, top=0.90, bottom=0.07
+    )
+    fig.text(
+        0.5,
+        0.96,
+        f"{ticker} Dealer Position Book (accumulated {lookback}d, arm={arm})",
+        color=TEXT_COLOR,
+        fontsize=18,
+        fontweight="bold",
+        ha="center",
+    )
 
     have_data = len(K) > 0
     ax1 = fig.add_subplot(gs[0, 0])
-    _greek_panel(ax1, K, net, "Net Position (C+P)", "vanna-wt signed delta OI", spot, have_data)
+    _greek_panel(
+        ax1, K, net, "Net Position (C+P)", "vanna-wt signed delta OI", spot, have_data
+    )
     ax2 = fig.add_subplot(gs[0, 1])
     _greek_panel(ax2, K, calls, "Calls Position", "vanna-wt C", spot, have_data)
     ax3 = fig.add_subplot(gs[1, 0])
@@ -2705,7 +2861,9 @@ def plot_position_book(result, output_dir: str | None = None) -> str:
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(out_dir, f"{ticker}_position_book_4panel_{timestamp}.png")
-    plt.savefig(filename, dpi=200, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none")
+    plt.savefig(
+        filename, dpi=200, bbox_inches="tight", facecolor=DARK_BG, edgecolor="none"
+    )
     plt.close(fig)
     return filename
 
@@ -2717,7 +2875,11 @@ def plot_position_book_heatmap(result, output_dir: str | None = None) -> str:
     pos = getattr(result, "position_by_strike", {}) or {}
     strikes = sorted({k for (k, r) in pos.keys()}) if pos else []
     K = np.asarray(strikes, dtype=float) if strikes else np.array([])
-    net = np.array([pos.get((k, "C"), 0.0) + pos.get((k, "P"), 0.0) for k in strikes]) if strikes else np.array([])
+    net = (
+        np.array([pos.get((k, "C"), 0.0) + pos.get((k, "P"), 0.0) for k in strikes])
+        if strikes
+        else np.array([])
+    )
     cum = np.cumsum(net) if len(net) > 0 else np.array([])
 
     spot = float(getattr(result, "spot", 0.0) or 0.0)
@@ -2725,9 +2887,18 @@ def plot_position_book_heatmap(result, output_dir: str | None = None) -> str:
     arm = getattr(result, "arm", "div_signed")
 
     fig = plt.figure(figsize=(16, 8), facecolor=DARK_BG)
-    gs = fig.add_gridspec(1, 2, hspace=0.3, wspace=0.3, left=0.08, right=0.92, top=0.88, bottom=0.12)
+    gs = fig.add_gridspec(
+        1, 2, hspace=0.3, wspace=0.3, left=0.08, right=0.92, top=0.88, bottom=0.12
+    )
 
-    fig.text(0.08, 0.94, f"{ticker} POSITION BOOK HEATMAP (arm={arm})", fontsize=16, fontweight="bold", color=TEXT_COLOR)
+    fig.text(
+        0.08,
+        0.94,
+        f"{ticker} POSITION BOOK HEATMAP (arm={arm})",
+        fontsize=16,
+        fontweight="bold",
+        color=TEXT_COLOR,
+    )
     fig.text(0.08, 0.90, f"Spot: ${spot:.2f}", fontsize=12, color=ACCENT_GOLD)
 
     ax1 = fig.add_subplot(gs[0, 0])
@@ -2735,7 +2906,9 @@ def plot_position_book_heatmap(result, output_dir: str | None = None) -> str:
 
     ax2 = fig.add_subplot(gs[0, 1])
     ax2.set_facecolor(PANEL_BG)
-    ax2.set_title("Cumulative Position Profile", color=TEXT_COLOR, fontsize=12, fontweight="bold")
+    ax2.set_title(
+        "Cumulative Position Profile", color=TEXT_COLOR, fontsize=12, fontweight="bold"
+    )
     ax2.set_xlabel("Strike", color=TEXT_COLOR)
     ax2.set_ylabel("Cumulative", color=TEXT_COLOR)
     ax2.tick_params(colors=TEXT_COLOR)
@@ -2747,7 +2920,9 @@ def plot_position_book_heatmap(result, output_dir: str | None = None) -> str:
         ax2.axhline(y=0, color="#8b949e", linewidth=0.8, alpha=0.5)
         ax2.axvline(x=spot, color=ACCENT_GOLD, linestyle="--", linewidth=2, alpha=0.9)
     else:
-        ax2.text(0.5, 0.5, "No data", color="#8b949e", ha="center", transform=ax2.transAxes)
+        ax2.text(
+            0.5, 0.5, "No data", color="#8b949e", ha="center", transform=ax2.transAxes
+        )
 
     out_dir = output_dir or os.getenv("VS_OUTPUT_DIR") or timestamped_output_dir()
     os.makedirs(out_dir, exist_ok=True)

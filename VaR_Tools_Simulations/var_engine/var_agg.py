@@ -169,21 +169,24 @@ def run(inp: VaRAggInputs) -> VaRAggResults:
         sub_vols[name]      = np.sqrt(max(float(pos_sub @ cov_h @ pos_sub), 0))
         sub_pos_total[name] = float(pos_sub.sum())
 
-    # aggregate: build 2x2 correlation from sub-portfolio return series
-    sub_rets = {}
+    # Aggregate from group dollar-P&L series. Netting positions first
+    # (pos[mask].sum()) drops all risk from a market-neutral group.
+    sub_pnl = {}
     for g in groups:
         mask = inp.group_mask == g
-        if mask.sum() == 0: continue
-        w    = pos[mask] / max(pos[mask].sum(), 1.0)
-        sub_rets[g] = R[:, mask] @ w
+        if mask.sum() == 0:
+            continue
+        sub_pnl[g] = R[:, mask] @ pos[mask]
 
-    if len(sub_rets) >= 2:
-        keys   = sorted(sub_rets.keys())
-        sub_R  = np.column_stack([sub_rets[k] for k in keys])
-        sub_cov= ewma_covariance(sub_R, inp.ewma_lambda)
-        sub_pos= np.array([pos[inp.group_mask == k].sum() for k in keys])
-        agg_var, _ = _var_cvar_analytical(sub_pos, sub_cov,
-                                           inp.confidence, inp.var_days, inp.trading_days)
+    if len(sub_pnl) >= 2:
+        keys = sorted(sub_pnl.keys())
+        sub_R = np.column_stack([sub_pnl[k] for k in keys])
+        sub_cov = ewma_covariance(sub_R, inp.ewma_lambda)
+        # P&L columns are already in dollars — unit notionals.
+        sub_pos = np.ones(len(keys), dtype=float)
+        agg_var, _ = _var_cvar_analytical(
+            sub_pos, sub_cov, inp.confidence, inp.var_days, inp.trading_days
+        )
     else:
         agg_var = total_var
 

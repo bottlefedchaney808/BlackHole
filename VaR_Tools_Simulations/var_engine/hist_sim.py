@@ -12,7 +12,7 @@ Data comes from data_loader (ThetaData, cached).  No yfinance.
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Literal
-from .data_loader import fetch_log_returns, default_date_range
+from var_engine.data_loader import fetch_log_returns, default_date_range
 
 
 # ── GARCH(1,1) ────────────────────────────────────────────────────────────────
@@ -57,21 +57,31 @@ def _garch_fit(returns: np.ndarray, max_iter: int = 200):
     res = minimize(neg_log_lik, x0, method="Nelder-Mead", bounds=bnd,
                    options={"maxiter": max_iter, "xatol": 1e-7, "fatol": 1e-7})
     omega, alpha, beta = res.x
-    # A fit that landed on the penalty wall never found a valid stationary
-    # parameter set at all, whatever scipy reports about the simplex.
-    converged = bool(res.success) and float(res.fun) < 1e11
+    persistence = float(alpha + beta)
+    # Bound is 0.999 per-param; iid series pin alpha+beta against that wall.
+    # Scipy reports success at the boundary, but long_run_vol = sqrt(ω/(1-p))
+    # is then meaningless. Treat boundary-pinned fits as not converged.
+    boundary_pinned = persistence >= (0.999 - 1e-6)
+    converged = (
+        bool(res.success) and float(res.fun) < 1e11 and not boundary_pinned
+    )
     # compute conditional variance series
     T = len(returns)
     h = np.empty(T)
     h[0] = var0
     for t in range(1, T):
         h[t] = omega + alpha * returns[t-1]**2 + beta * h[t-1]
+    if converged and (1.0 - persistence) > 1e-6:
+        long_run_vol = float(np.sqrt(omega / (1.0 - persistence)))
+    else:
+        long_run_vol = float("nan")
     return {"omega": omega, "alpha": alpha, "beta": beta,
             "h": h, "sigma": np.sqrt(h),
-            "long_run_vol": np.sqrt(omega / max(1 - alpha - beta, 1e-8)),
+            "long_run_vol": long_run_vol,
             "current_vol": float(np.sqrt(h[-1])),
             "converged": converged,
-            "persistence": float(alpha + beta),
+            "boundary_pinned": boundary_pinned,
+            "persistence": persistence,
             "opt_message": str(res.message)}
 
 
@@ -132,7 +142,8 @@ def run(inp: HistSimInputs) -> HistSimResults:
     min_len = min(len(v) for v in rets.values())
     R = np.column_stack([rets[tk][-min_len:] for tk in inp.tickers])  # (T, n)
     T, n = R.shape
-    weights = inp.position_vals / inp.position_vals.sum()
+    # Dollar P&L path uses position_vals directly; do not divide by net
+    # notional (a 1:1 hedge sums to 0 and used to ZeroDivisionError here).
     scale   = np.sqrt(inp.var_days)  # scale to var horizon
 
     garch_params = {}

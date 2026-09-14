@@ -64,46 +64,51 @@ def _b64_artifacts(payload: Any) -> list[ArtifactRef]:
 
 
 def _run_positions(context: dict[str, Any]) -> ModuleResult:
-    """Read positions from widget_cache.positions."""
+    """The combined book: broker positions (widget_cache.positions) plus the
+    console book. Every row carries ``book: real|console``."""
+    from dashboard.console_book import ConsoleBook, combine_books
     from dashboard.widget_cache import WidgetCache
 
-    cache = WidgetCache(_get_widget_cache_path())
-    row = cache.get("positions")
-    if row is None:
+    path = _get_widget_cache_path()
+    row = WidgetCache(path).get("positions")
+    payload = (row or {}).get("payload") or {}
+    accounts = payload.get("accounts") or []
+    try:
+        console_entries = ConsoleBook(path).list()
+    except Exception:  # noqa: BLE001 -- a console-book fault must not hide the real book
+        console_entries = []
+    book = combine_books(payload.get("positions") or [], console_entries)
+    if row is None and not console_entries:
         return ModuleResult(
             status="idle",
             artifacts=[],
-            metrics={"message": "no positions pushed yet"},
+            metrics={
+                "message": "no positions pushed yet and the console book is empty"
+            },
             context_patch=None,
         )
-    payload = row.get("payload") or {}
-    positions = payload.get("positions") or []
-    accounts = payload.get("accounts") or []
-    held = sorted(
-        {
-            str(p.get("ticker")).upper()
-            for p in positions
-            if isinstance(p, dict) and p.get("ticker")
-        }
-    )
+    held = book["held_tickers"]
     # held_tickers rides out on context_patch as well as metrics: the book is
     # the scope source for every other tool, so a positions read should seed
     # the basket without anyone clicking an "inject" button first.
     return ModuleResult(
-        status=row.get("status") or "ok",
+        status=(row or {}).get("status") or "ok",
         artifacts=[],
         metrics={
             "headline": (
-                f"{len(positions)} positions across {len(accounts)} accounts "
+                f"{len(book['real_positions'])} positions across {len(accounts)} "
+                f"accounts + {len(book['console_positions'])} console entries "
                 f"· {', '.join(held) if held else 'no tickers'}"
             ),
-            "positions": positions,
+            **book,
             "accounts": accounts,
-            "held_tickers": held,
-            "computed_at": row.get("computed_at"),
+            "computed_at": (row or {}).get("computed_at"),
         },
-        context_patch={"positions": {"positions": positions}, "held_tickers": held}
-        if positions
+        context_patch={
+            "positions": {"positions": book["positions"]},
+            "held_tickers": held,
+        }
+        if held
         else None,
     )
 

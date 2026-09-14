@@ -280,9 +280,31 @@ def _run_newton_raphson_iv(context: dict[str, Any]) -> ModuleResult:
 
         ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
         market_price = float(context.get("market_price") or context.get("price") or 0.0)
+        price_source = "context"
+        chain_iv = None
         if market_price <= 0:
-            raise ValueError("Newton-Raphson IV requires context['market_price'] > 0")
-        seed = float(context.get("seed") or 0.2)
+            # A card knows a ticker and an expiry, never a contract's price, so
+            # this used to fail every desk run. Solve against the listed
+            # contract's own market price, as VolManager's NewtonRaphson
+            # branch does.
+            from datetime import datetime, timedelta
+
+            from vol_manager import fetch_market_iv_from_chain
+
+            expiry_date = (datetime.now() + timedelta(days=int(T * 365))).strftime(
+                "%Y-%m-%d"
+            )
+            chain_iv, chain_price, expiry_used, _ts = fetch_market_iv_from_chain(
+                ticker, K, expiry_date, option_type, T=T
+            )
+            if not chain_price or chain_price <= 0:
+                raise ValueError(
+                    f"No listed market price for {ticker} {K:g} {option_type} "
+                    f"near T={T:.4f}y -- nothing to solve an implied vol from."
+                )
+            market_price = float(chain_price)
+            price_source = f"chain mid ({expiry_used})"
+        seed = float(context.get("seed") or chain_iv or 0.2)
         sigma, converged = implied_volatility_nr_american(
             market_price, S, K, T, r, is_call, q=q, seed=seed
         )
@@ -313,6 +335,9 @@ def _run_newton_raphson_iv(context: dict[str, Any]) -> ModuleResult:
                 "sigma": sigma,
                 "sigma_source": sigma_source,
                 "converged": converged,
+                "market_price": market_price,
+                "price_source": price_source,
+                "strike": K,
             },
             context_patch=None,
         )
@@ -406,15 +431,6 @@ def _run_sabr(context: dict[str, Any]) -> ModuleResult:
 
         ticker, S, K, T, r, q, is_call, option_type = _extract_pricing_args(context)
         calibration = context.get("sabr_calibration") or context.get("calibration")
-        if not calibration:
-            raise ValueError(
-                "SABR module requires context['sabr_calibration'] with alpha/beta/rho/nu"
-            )
-        alpha = float(calibration["alpha"])
-        beta = float(calibration["beta"])
-        rho = float(calibration["rho"])
-        nu = float(calibration["nu"])
-        model = SABRModel(alpha=alpha, beta=beta, rho=rho, nu=nu)
         # Plain math.exp on a scalar. This was a `np.exp(...) if "numpy" in
         # globals() else __import__("numpy").exp(...)` ternary whose first
         # branch could never run -- the module imports numpy as `np`, so the
@@ -422,8 +438,34 @@ def _run_sabr(context: dict[str, Any]) -> ModuleResult:
         # NameError on `np` the moment anyone added a module-level
         # `import numpy`. F is one float here; there is nothing to vectorize.
         F = S * math.exp((r - q) * T)
+        if calibration:
+            sigma_source = "sabr (calibration supplied in context)"
+        else:
+            # Nothing on the desk ever supplies a calibration, so this module
+            # failed on every card run with "requires context['sabr_calibration']".
+            # Calibrate against this expiry's live smile the way main.py does,
+            # through VolManager's SABR branch, and price off THAT fit.
+            from vol_manager import VolManager
+
+            vm = VolManager()
+            vm.get_sigma(ticker, K, T, method="SABR", option_type=option_type)
+            cached = vm.last_sabr_calibration or {}
+            calib = cached.get("calib")
+            if not calib:
+                raise RuntimeError(f"SABR calibration returned nothing for {ticker}")
+            calibration = {
+                k: float(calib[k]) for k in ("alpha", "beta", "rho", "nu", "rmse")
+            }
+            F = float(getattr(cached.get("calibrator"), "forward", F) or F)
+            sigma_source = (
+                f"sabr (calibrated to the live smile, RMSE {calibration['rmse']:.4f})"
+            )
+        alpha = float(calibration["alpha"])
+        beta = float(calibration["beta"])
+        rho = float(calibration["rho"])
+        nu = float(calibration["nu"])
+        model = SABRModel(alpha=alpha, beta=beta, rho=rho, nu=nu)
         sigma = model.get_vol(F, K, T)
-        sigma_source = "sabr (calibrated smile)"
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
         greeks = sabr_all_greeks(S, K, T, r, q, is_call, calibration)
         return ModuleResult(
@@ -453,10 +495,35 @@ def _run_vanna_volga(context: dict[str, Any]) -> ModuleResult:
         atm_vol = float(context.get("atm_vol") or context.get("sigma") or 0.0)
         rr25 = float(context.get("rr25") or 0.0)
         bf25 = float(context.get("bf25") or 0.0)
+        sigma_source = "vanna_volga (atm_vol/rr25/bf25 supplied in context)"
         if atm_vol <= 0:
-            raise ValueError("Vanna-Volga requires context['atm_vol'] > 0")
+            # Same fix as SABR: a card never supplies the 3-pillar smile, so
+            # read it off the live chain the way main.py does. get_auto_rr_bf
+            # returns vol points; atm is converted to decimal, rr/bf are passed
+            # through in main.py's own units.
+            from datetime import datetime, timedelta
+
+            from VannaVolga import get_auto_rr_bf
+
+            expiry_date = (datetime.now() + timedelta(days=int(T * 365))).strftime(
+                "%Y-%m-%d"
+            )
+            auto_rr, auto_bf, auto_atm = get_auto_rr_bf(ticker, expiry_date)
+            if not auto_atm:
+                raise ValueError(
+                    f"No live smile for {ticker} near {expiry_date} -- Vanna-Volga "
+                    "needs an ATM vol and 25-delta wings to build its smile."
+                )
+            atm_vol, rr25, bf25 = (
+                float(auto_atm) / 100.0,
+                float(auto_rr),
+                float(auto_bf),
+            )
+            sigma_source = (
+                f"vanna_volga (live 25d smile: ATM {auto_atm:.2f}, RR {auto_rr:+.2f}, "
+                f"BF {auto_bf:.2f} vol pts)"
+            )
         sigma = get_vol(S, K, T, r, q, atm_vol, rr25, bf25)
-        sigma_source = "vanna_volga (from atm_vol/rr25/bf25)"
         price = float(leisen_reimer_american_price(S, K, T, r, sigma, q, is_call))
         greeks = vv_all_greeks(
             S, K, T, r, q, is_call, atm_vol=atm_vol, rr25=rr25, bf25=bf25

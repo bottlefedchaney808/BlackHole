@@ -168,6 +168,28 @@ class TestFullPortfolioRun:
         res = var_agg_run(inp)
         assert res.aggregated_var == pytest.approx(res.total_var, rel=0.10)
 
+    def test_aggregated_var_does_not_drop_market_neutral_group(self):
+        """Net-zero equities must still contribute to aggregated_var.
+        Netting pos[mask].sum() used to zero that group out."""
+        rng = np.random.default_rng(0)
+        T = 400
+        R = rng.normal(0, 0.01, (T, 3))
+        R[:, 0] += rng.normal(0, 0.02, T)  # extra equity risk
+        inp = VaRAggInputs(
+            asset_names=["L", "S", "FX"],
+            positions=np.array([1_000_000.0, -1_000_000.0, 50_000.0]),
+            group_mask=np.array([0, 0, 1]),
+            returns=R,
+            var_days=5,
+            confidence=0.95,
+            n_pca_components=2,
+        )
+        res = var_agg_run(inp)
+        fx_only = res.subport_var["FX"]
+        # If aggregation netted equities to 0, aggregated ≈ FX-only.
+        assert res.aggregated_var > fx_only * 1.5
+        assert res.total_var > fx_only * 1.5
+
     def test_pca_var_with_resid_greater_than_without(self):
         """PCA VaR with residuals should be >= PCA VaR without residuals
         (adding residual variance increases risk)."""

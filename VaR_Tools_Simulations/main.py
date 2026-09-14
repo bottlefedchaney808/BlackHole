@@ -1152,10 +1152,17 @@ def run_hist_sim():
         section("GARCH Parameters")
         rows = []
         for tk, g in r.garch_params.items():
+            lr = g.get("long_run_vol")
+            lr_s = f"{lr:.4f}" if isinstance(lr, (int, float)) and lr == lr else "n/a"
+            conv = g.get("converged")
             rows.append([tk, f"{g['omega']:.2e}", f"{g['alpha']:.4f}",
                          f"{g['beta']:.4f}", f"{g['current_vol']:.4f}",
-                         f"{g['long_run_vol']:.4f}"])
-        result_table(["Ticker","Omega","Alpha","Beta","σ_now","σ_LR"], rows, "GARCH(1,1)")
+                         lr_s, "Y" if conv else "N"])
+        result_table(
+            ["Ticker","Omega","Alpha","Beta","σ_now","σ_LR","OK"],
+            rows,
+            "GARCH(1,1)",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

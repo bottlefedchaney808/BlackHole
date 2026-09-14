@@ -1,0 +1,17 @@
+INFO:httpx:HTTP Request: GET https://api.potatohedge.com/api/theta/bulk_snapshot/stock/quote/NO_SUCH_TICKER_XYZ "HTTP/1.1 400 Bad Request"
+INFO:httpx:HTTP Request: GET https://api.potatohedge.com/api/theta/snapshot/stock/trade/NO_SUCH_TICKER_XYZ "HTTP/1.1 400 Bad Request"
+INFO:httpx:HTTP Request: GET https://api.potatohedge.com/api/theta/hist/stock/eod/NO_SUCH_TICKER_XYZ?start_date=20260904&end_date=20260911 "HTTP/1.1 400 Bad Request"
+INFO:shared.connection_pool:ConnectionPool initialized: path=C:\Users\bottl\FinancialDevelopment\artifacts\widget_cache.db, size=2, max=5
+Traceback (most recent call last):
+  File "C:\Users\bottl\FinancialDevelopment\docs\audits\_math_audit_checks_20260911.py", line 335, in <module>
+    main()
+  File "C:\Users\bottl\FinancialDevelopment\docs\audits\_math_audit_checks_20260911.py", line 215, in main
+    garch_fit = load_hist_sim_garch()
+                ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bottl\FinancialDevelopment\docs\audits\_math_audit_checks_20260911.py", line 29, in load_hist_sim_garch
+    spec.loader.exec_module(mod)
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\Users\bottl\FinancialDevelopment\VaR_Tools_Simulations\var_engine\hist_sim.py", line 15, in <module>
+    from .data_loader import fetch_log_returns, default_date_range
+ImportError: attempted relative import with no known parent package

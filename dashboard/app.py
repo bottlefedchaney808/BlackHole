@@ -417,14 +417,18 @@ def _widget_signals_tick() -> None:
     # time, below) has already fixed the expiry_selector name collision this
     # module's own bare import would otherwise hit.
 
+    universe = _signals_universe()
     rows: list[dict[str, Any]] = []
-    for ticker in OVERVIEW_WATCHLIST:
+    for i, (ticker, book) in enumerate(universe):
+        if i:
+            time.sleep(0.4)  # sequential, rate-limited ThetaData pulls -- never fan out
         try:
             result = screen_ticker(ticker, 0.25)
         except Exception as exc:
             rows.append(
                 {
                     "ticker": ticker,
+                    "book": book,
                     "signal": "ERROR",
                     "score": None,
                     "vrp_pct": None,
@@ -436,6 +440,7 @@ def _widget_signals_tick() -> None:
             rows.append(
                 {
                     "ticker": ticker,
+                    "book": book,
                     "signal": "NO DATA",
                     "score": None,
                     "vrp_pct": None,
@@ -446,13 +451,57 @@ def _widget_signals_tick() -> None:
         rows.append(
             {
                 "ticker": ticker,
+                "book": book,
                 "signal": result.signal,
                 "score": result.score,
                 "vrp_pct": result.vrp_pct,
                 "data_quality": result.data_quality,
             }
         )
-    _widget_cache().set("signals", {"tickers": rows}, status="ok")
+    status = "ok" if universe else "idle"
+    payload: dict[str, Any] = {"tickers": rows}
+    if not universe:
+        payload["message"] = (
+            "nothing to screen -- your book and console book are empty and no "
+            "chart symbol is focused"
+        )
+    _widget_cache().set("signals", payload, status=status)
+
+
+def _combined_book() -> dict[str, Any]:
+    """Real (broker-pushed) positions + the console book, tagged per row."""
+    from dashboard.console_book import ConsoleBook, combine_books
+
+    cached = _widget_cache().get("positions")
+    real = (cached.get("payload") or {}).get("positions") or [] if cached else []
+    try:
+        console = ConsoleBook(WIDGET_CACHE_PATH).list()
+    except Exception:
+        logging.getLogger(__name__).exception("console book unreadable")
+        console = []
+    return combine_books(real, console)
+
+
+def _signals_universe() -> list[tuple[str, str]]:
+    """What the signals panel screens: your book, then the console book, then
+    the chart's focused symbol if it is in neither -- each tagged with where it
+    came from. Replaces the hardcoded OVERVIEW_WATCHLIST (SPY/SPXW/NDAQ), which
+    screened three names you may not hold and none you do."""
+    from shared.desk_settings import get_setting
+
+    book = _combined_book()
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for ticker, source in [(t, "real") for t in book["real_tickers"]] + [
+        (t, "console") for t in book["console_tickers"]
+    ]:
+        if ticker not in seen:
+            out.append((ticker, source))
+            seen.add(ticker)
+    chart = str(get_setting("chart_focus_ticker", "") or "").strip().upper()
+    if chart and chart not in seen:
+        out.append((chart, "chart"))
+    return out
 
 
 def _hedge_position_payload(
@@ -541,15 +590,15 @@ def _widget_position_analysis_tick() -> None:
     from shared.summary import _bundle_distribution
     from Tools.tools import hedge_optimizer_tool, price_dist_tool
 
-    cached = _widget_cache().get("positions")
-    positions = (cached.get("payload") or {}).get("positions") or [] if cached else []
+    book = _combined_book()
+    positions = book["positions"]
     if not positions:
         _widget_cache().set(
             "position_analysis", {"positions": []}, status="no_positions"
         )
         return
 
-    tickers = sorted({p.get("ticker") for p in positions if p.get("ticker")})
+    tickers = book["held_tickers"]
     rows: list[dict[str, Any]] = []
     for ticker in tickers:
         entry: dict[str, Any] = {"ticker": ticker}
@@ -632,8 +681,20 @@ def _surfaces_subject() -> tuple[str, str, list[dict[str, Any]]]:
             [],
         )
 
-    cached = _widget_cache().get("positions")
-    positions = (cached.get("payload") or {}).get("positions") or [] if cached else []
+    from shared.desk_settings import get_setting
+
+    book = _combined_book()
+    positions = book["real_positions"]
+
+    # The desk's scope ticker wins: you are looking at it. This panel used to
+    # pick the largest position of a weeks-old cache row (or SPXW), so it sat
+    # on a name unrelated to whatever you were working on.
+    focus = str(get_setting("desk_focus_ticker", "") or "").strip().upper()
+    if focus:
+        where = (
+            "in your book" if focus in book["held_tickers"] else "not in either book"
+        )
+        return focus, f"the desk's scope ticker ({where})", []
 
     by_ticker: dict[str, float] = {}
     for row in positions:
@@ -649,9 +710,16 @@ def _surfaces_subject() -> tuple[str, str, list[dict[str, Any]]]:
             continue
 
     if not by_ticker:
+        if book["console_tickers"]:
+            first = book["console_tickers"][0]
+            return (
+                first,
+                "first name in the console book (no priced real positions)",
+                [],
+            )
         return (
-            SURFACES_FALLBACK_TICKER,
-            "no priced positions in the book -- showing the index",
+            None,
+            "no scope ticker and nothing in either book -- set a ticker on the desk",
             [],
         )
 
@@ -670,8 +738,7 @@ def _surfaces_subject() -> tuple[str, str, list[dict[str, Any]]]:
     top = rows[0]
     return (
         top["ticker"],
-        f"largest position ({top['weight_pct']:.1f}% of a "
-        f"{len(rows)}-name book)",
+        f"largest position ({top['weight_pct']:.1f}% of a {len(rows)}-name book)",
         rows,
     )
 
@@ -690,6 +757,13 @@ def _widget_surfaces_tick() -> None:
     from Tools.tools import surface_explorer_tool
 
     ticker, reason, portfolio = _surfaces_subject()
+    if not ticker:
+        _widget_cache().set(
+            "surfaces",
+            {"ticker": None, "reason": reason, "portfolio": portfolio, "surfaces": {}},
+            status="idle",
+        )
+        return
     specs = (
         ("iv", {"mode": "iv_surface_market"}),
         ("vanna", {"mode": "greek_surface", "greek": "vanna"}),
@@ -1028,6 +1102,94 @@ def sentiment_tab(request: Request):
     return _panel_page(request, "sentiment", "sentiment.html")
 
 
+def _dealer_hedge_paths(
+    prod: Any, position_by_strike: dict, ticker: str
+) -> dict[str, Any]:
+    """Hedging paths for the flow-built dealer book (Side B).
+
+    Each book position on this expiry's chain becomes an option leg priced
+    with today's BS delta/vega/price at the chain's own spot/IV/T -- the same
+    snapshot Side B's charts are drawn from -- and hedge_optimizer_tool solves
+    the delta+vega-neutral hedges with the live ATM call/put. Those are the
+    trades a dealer carrying this book would need to flatten it.
+
+    Book quantities are vanna-weighted delta-OI contracts, not literal
+    contracts, so the recipes' direction and call/put/stock mix are the read;
+    their absolute size scales with the book's units.
+    """
+    import expiry_book_exposure as ebe
+
+    from Tools.tools import hedge_optimizer_tool
+
+    spot = float(prod.spot)
+    legs: list[dict[str, Any]] = []
+    for r in prod.snapshot.rows:
+        right = str(getattr(r, "right", "C")).upper()[:1]
+        pos = float(position_by_strike.get((float(r.strike), right), 0.0) or 0.0)
+        iv, T = float(r.iv or 0.0), float(r.T or 0.0)
+        if pos == 0.0 or not (iv > 0 and T > 0):
+            continue
+        delta = ebe.bs_delta(spot, r.strike, T, iv, right=right)
+        vega = ebe.bs_vega(spot, r.strike, T, iv)
+        price = ebe.bs_price(spot, r.strike, T, iv, right=right)
+        if any(v != v for v in (delta, vega, price)):
+            continue
+        legs.append(
+            {
+                "strike": float(r.strike),
+                "right": right,
+                "contracts": abs(pos),
+                "side": 1.0 if pos > 0 else -1.0,
+                "delta": delta,
+                "vega": vega,
+                "price": price,
+            }
+        )
+    if not legs:
+        return {
+            "status": "skipped",
+            "reason": f"the dealer book has no positions on the {prod.expiry} chain",
+        }
+
+    res = hedge_optimizer_tool.run(
+        {
+            "mode": "options_hedge",
+            "ticker": ticker,
+            "expiry": str(prod.expiry),
+            "position": {"stocks": [], "options": legs},
+        }
+    )
+    position = res.get("position") or {}
+
+    def _contract(c: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(c, dict):
+            return None
+        return {
+            k: c.get(k) for k in ("strike", "right", "delta", "vega", "iv", "price")
+        }
+
+    out = {
+        "status": "ok",
+        "headline": _hedge_headline(res),
+        "expiry": res.get("expiry"),
+        "spot": res.get("spot"),
+        "n_legs": len(legs),
+        "net_delta": position.get("net_delta"),
+        "net_vega": position.get("net_vega"),
+        "recipes": res.get("recipes"),
+        "atm_call": _contract(res.get("atm_call")),
+        "atm_put": _contract(res.get("atm_put")),
+        "units": res.get("units"),
+        "book_units": "vanna_weighted_oi_delta_contracts",
+    }
+    # numpy scalars -> plain floats so JSONResponse can serialize the block.
+    return json.loads(
+        json.dumps(
+            out, default=lambda o: float(o) if hasattr(o, "__float__") else str(o)
+        )
+    )
+
+
 @app.post("/dealer-book/load")
 async def dealer_book_load(request: Request):
     body = await _parse_body(request)
@@ -1107,6 +1269,16 @@ async def dealer_book_load(request: Request):
                     "flow-book %s chart failed", g, exc_info=True
                 )
 
+        # Hedging paths for Side B's dealer book. Its own failure is reported
+        # in its own block -- it must not blank the charts above it.
+        try:
+            hedge = _dealer_hedge_paths(prod, book.position_by_strike, ticker)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "dealer hedge paths failed", exc_info=True
+            )
+            hedge = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
         b_metrics = res_b.metrics or {}
         side_a = {
             "artifacts": a_result.artifacts,
@@ -1151,6 +1323,7 @@ async def dealer_book_load(request: Request):
                     "artifacts": _arts(side_b),
                     "interp": side_b.get("interp", ""),
                 },
+                "hedge": hedge,
             }
         )
     except Exception as exc:
@@ -1989,6 +2162,16 @@ def widgets_catalog():
                     for prm in getattr(m, "params", ())
                 ],
                 "runnable": getattr(m, "runnable", True),
+                # The slug a picker should offer instead of this one, and the
+                # single verdict a picker acts on. Everything a UI lists must
+                # be something that runs and shows you something -- a module
+                # you have to add and click to discover is a dead end is the
+                # clunkiness this replaces.
+                "superseded_by": getattr(m, "superseded_by", ""),
+                "pickable": m.is_pickable()
+                if hasattr(m, "is_pickable")
+                else getattr(m, "runnable", True),
+                "provides": list(getattr(m, "provides", ()) or ()),
             }
         )
     return {"widgets": entries}
@@ -2034,14 +2217,41 @@ def _seed_context_from_store(context: dict[str, Any]) -> list[str]:
             if context.get("expiry"):
                 candidates.append({"ticker": ticker, "expiry": context["expiry"]})
 
+        # Order-dependent vectors/matrices are only usable with the ticker
+        # list they were computed over. Scope keys sort the basket, so a
+        # store row written for [A,B,C] is loaded for [C,A,B]. Seeding an
+        # unlabeled vector into context would then hit VaR's same-context
+        # positional branch and swap names while reporting a measured
+        # source. Skip those keys unless THIS scope's entries carry labels,
+        # and skip them if context already has a *different* label list.
+        _ordered = {
+            "volatilities",
+            "vols",
+            "correlation_matrix",
+            "corr_matrix",
+            "covariance_matrix",
+            "weights",
+        }
         for scope_dict in candidates:
             try:
                 entries = store.load(Scope.from_dict(scope_dict))
             except Exception:
                 continue  # unusable scope (e.g. empty basket); try the next
+            scope_labels = entries.get("correlation_tickers") or entries.get(
+                "weight_tickers"
+            )
+            has_labels = isinstance(scope_labels, (list, tuple))
             for key, value in entries.items():
                 if key in context:
                     continue  # an explicit request-body value always wins
+                if key in _ordered:
+                    if not has_labels:
+                        continue
+                    existing = context.get("correlation_tickers") or context.get(
+                        "weight_tickers"
+                    )
+                    if existing is not None and list(existing) != list(scope_labels):
+                        continue
                 context[key] = value
                 if key not in seeded:
                     seeded.append(key)
@@ -2079,11 +2289,30 @@ async def run_widget(slug: str, request: Request):
 
     body = await _parse_body(request)
     try:
-        resolve_modules([slug])
+        spec = resolve_modules([slug])[0]
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except IndexError:
         raise HTTPException(status_code=404, detail=f"unknown widget slug {slug!r}")
+
+    # A slug that cannot stand alone is refused HERE, with the runnable
+    # alternative named, rather than being run so its own run() can raise a
+    # paragraph of prose at you. The picker already hides these; this covers
+    # a saved layout, a bookmark or a curl that predates the hiding.
+    if hasattr(spec, "is_pickable") and not spec.is_pickable():
+        replacement = getattr(spec, "superseded_by", "")
+        if replacement:
+            detail = (
+                f"{slug!r} computes data for {replacement!r} and draws nothing "
+                f"on its own -- run {replacement!r} instead."
+            )
+        else:
+            detail = (
+                f"{slug!r} is a selection-only step inside a larger pipeline "
+                "and has no standalone implementation. It runs as part of "
+                "Vol_Suite's context-mode pipeline, not as a card."
+            )
+        raise HTTPException(status_code=409, detail=detail)
 
     # Wire-shape adapter: accept BOTH the design-spec shape
     # {scope: {ticker, ...}, params?: {...}} — what dashboard/static/js/
@@ -2379,6 +2608,237 @@ async def post_widget_positions(request: Request):
     payload = {"positions": positions, "accounts": accounts or []}
     _widget_cache().set("positions", payload, status="ok")
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# Console book: the second book (tickers + equity/option positions you add),
+# combined with the real book everywhere a tool asks "what is in my book".
+# --------------------------------------------------------------------------
+
+
+def _console_book():
+    from dashboard.console_book import ConsoleBook
+
+    return ConsoleBook(WIDGET_CACHE_PATH)
+
+
+@app.get("/api/console-book")
+def get_console_book():
+    return {"entries": _console_book().list(), **_combined_book()}
+
+
+@app.post("/api/console-book")
+async def post_console_book(request: Request):
+    """Add one entry ({ticker, kind?, qty?, avg_price?, expiry?, strike?,
+    right?, source?, note?}) or many ({entries: [...]}). All are validated
+    before any is written; a bare ticker already watched is not duplicated."""
+    from dashboard.console_book import ConsoleBookError
+
+    body = await _parse_body(request)
+    entries = body.get("entries") if isinstance(body.get("entries"), list) else [body]
+    try:
+        added = _console_book().add(entries)
+    except ConsoleBookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"added": added, **_combined_book()}
+
+
+@app.delete("/api/console-book/{entry_id}")
+def delete_console_book_entry(entry_id: int):
+    if not _console_book().remove(entry_id):
+        raise HTTPException(status_code=404, detail=f"no console-book entry {entry_id}")
+    return {"removed": entry_id, **_combined_book()}
+
+
+@app.post("/api/desk/focus")
+async def post_desk_focus(request: Request):
+    """The desk's scope ticker, persisted so background panels (surfaces)
+    follow what you are looking at instead of picking a name themselves."""
+    from shared.desk_settings import set_setting
+
+    body = await _parse_body(request)
+    ticker = str(body.get("ticker") or "").strip().upper()
+    set_setting("desk_focus_ticker", ticker)
+    return {"desk_focus_ticker": ticker}
+
+
+@app.post("/api/widgets/signals/refresh")
+async def refresh_signals(request: Request):
+    """Re-screen book + console book (+ the chart's symbol, if sent) now."""
+    from starlette.concurrency import run_in_threadpool
+
+    from shared.desk_settings import set_setting
+
+    body = await _parse_body(request)
+    if "chart_focus" in body:
+        set_setting(
+            "chart_focus_ticker", str(body.get("chart_focus") or "").strip().upper()
+        )
+    await run_in_threadpool(_widget_signals_tick)
+    return _widget_cache().get("signals") or {}
+
+
+@app.post("/api/widgets/surfaces/refresh")
+async def refresh_surfaces(request: Request):
+    """Render the surfaces panel now, for the given ticker when one is sent."""
+    from starlette.concurrency import run_in_threadpool
+
+    from shared.desk_settings import set_setting
+
+    body = await _parse_body(request)
+    if body.get("ticker"):
+        set_setting("desk_focus_ticker", str(body["ticker"]).strip().upper())
+    await run_in_threadpool(_widget_surfaces_tick)
+    row = _widget_cache().get("surfaces") or {}
+    payload = row.get("payload") or {}
+    return {
+        "status": row.get("status"),
+        "ticker": payload.get("ticker"),
+        "reason": payload.get("reason"),
+    }
+
+
+# --------------------------------------------------------------------------
+# Book refresh: the dashboard cannot reach the Robinhood MCP itself -- only a
+# Claude session can -- so Refresh launches a headless `claude -p` restricted
+# to Robinhood READ tools, which returns the positions as JSON, and this
+# process writes them into the positions cache row. Before this the Refresh
+# button only re-read that row, which had last been pushed on 2026-08-28.
+# --------------------------------------------------------------------------
+
+BOOK_REFRESH_TIMEOUT_SEC = float(os.environ.get("BOOK_REFRESH_TIMEOUT_SEC", "480"))
+_BOOK_REFRESH_TOOLS = (
+    "mcp__robinhood__get_accounts",
+    "mcp__robinhood__get_portfolio",
+    "mcp__robinhood__get_equity_positions",
+    "mcp__robinhood__get_option_positions",
+    "mcp__robinhood__get_option_instruments",
+    "mcp__robinhood__get_equity_quotes",
+    "mcp__robinhood__get_option_quotes",
+)
+_BOOK_REFRESH_PROMPT = """You are refreshing a local trading dashboard's position book.
+Use ONLY the Robinhood MCP read tools you have been given. Do not place, cancel or modify anything.
+
+1. Call get_accounts. For EVERY account: get_portfolio, get_equity_positions, and
+   get_option_positions (open/nonzero only).
+2. For each option leg make sure you know its underlying symbol, expiration date, strike and
+   call/put type (use get_option_instruments if the position does not carry them), and whether
+   it is long or short.
+
+Reply with ONLY one JSON object -- no prose, no code fences -- exactly this shape:
+{"accounts": [{"account": "<last 4 digits>", "total_value": <number>, "cash": <number>}],
+ "positions": [{"account": "<last 4 digits>", "ticker": "<underlying symbol>",
+   "instrument_type": "equity" or "option", "qty": <number, negative when short>,
+   "avg_price": <number: per share, or per-share option premium>,
+   "current_price": <number or null>, "market_value": <number or null>,
+   "unrealized_pl": <number or null>,
+   "expiry": "YYYY-MM-DD" (options only), "strike": <number> (options only),
+   "right": "C" or "P" (options only)}]}
+Include every open position in every account."""
+
+_BOOK_REFRESH_STATE: dict[str, Any] = {"status": "idle"}
+_BOOK_REFRESH_LOCK = threading.Lock()
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError(f"no JSON object in the agent's reply: {text[:300]!r}")
+    data = json.loads(text[start : end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("agent reply is not a JSON object")
+    return data
+
+
+def _run_book_refresh() -> int:
+    import shutil
+    import subprocess
+
+    exe = shutil.which("claude")
+    if not exe:
+        raise RuntimeError("the `claude` CLI is not on PATH for the dashboard process")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+    proc = subprocess.run(
+        [
+            exe,
+            "-p",
+            _BOOK_REFRESH_PROMPT,
+            "--output-format",
+            "json",
+            "--allowedTools",
+            ",".join(_BOOK_REFRESH_TOOLS),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=BOOK_REFRESH_TIMEOUT_SEC,
+        env=env,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"claude exited {proc.returncode}: {(proc.stderr or proc.stdout)[-600:]}"
+        )
+    envelope = json.loads(proc.stdout)
+    if envelope.get("is_error"):
+        raise RuntimeError(f"agent error: {str(envelope.get('result'))[:600]}")
+    data = _extract_json_object(str(envelope.get("result") or ""))
+    positions = data.get("positions")
+    if not isinstance(positions, list):
+        raise ValueError("agent reply has no positions list")
+    bad = [p for p in positions if not isinstance(p, dict) or not p.get("ticker")]
+    if bad:
+        raise ValueError(f"{len(bad)} position rows have no ticker: {bad[:2]}")
+    accounts = data.get("accounts") if isinstance(data.get("accounts"), list) else []
+    _widget_cache().set(
+        "positions",
+        {
+            "positions": positions,
+            "accounts": accounts,
+            "source": "robinhood (headless claude)",
+        },
+        status="ok",
+    )
+    return len(positions)
+
+
+def _book_refresh_worker() -> None:
+    started = datetime.now(UTC).isoformat()
+    try:
+        n = _run_book_refresh()
+        state = {"status": "ok", "positions": n}
+    except Exception as exc:
+        logging.getLogger(__name__).exception("book refresh failed")
+        state = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+    state.update(started_at=started, finished_at=datetime.now(UTC).isoformat())
+    with _BOOK_REFRESH_LOCK:
+        _BOOK_REFRESH_STATE.clear()
+        _BOOK_REFRESH_STATE.update(state)
+
+
+@app.post("/api/book/refresh")
+def start_book_refresh():
+    """Start a live Robinhood read (30-90s). Poll GET for the outcome."""
+    import threading
+
+    with _BOOK_REFRESH_LOCK:
+        if _BOOK_REFRESH_STATE.get("status") == "running":
+            return dict(_BOOK_REFRESH_STATE)
+        _BOOK_REFRESH_STATE.clear()
+        _BOOK_REFRESH_STATE.update(
+            status="running", started_at=datetime.now(UTC).isoformat()
+        )
+    threading.Thread(
+        target=_book_refresh_worker, daemon=True, name="book-refresh"
+    ).start()
+    return dict(_BOOK_REFRESH_STATE)
+
+
+@app.get("/api/book/refresh")
+def book_refresh_status():
+    with _BOOK_REFRESH_LOCK:
+        return dict(_BOOK_REFRESH_STATE)
 
 
 @app.get("/quant")

@@ -276,7 +276,17 @@ def test_portfolio_surface_interpolation_never_extrapolates():
 # ---------------------------------------------------------------------------
 
 
-def test_surfaces_subject_falls_back_to_the_index_with_no_book(monkeypatch):
+@pytest.fixture
+def _isolated_desk(monkeypatch, tmp_path):
+    """Keep the real console book and saved desk focus out of these tests."""
+    monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
+    monkeypatch.setenv("DESK_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    return tmp_path
+
+
+def test_surfaces_subject_has_no_subject_with_no_book(monkeypatch, _isolated_desk):
+    """No SPXW fallback any more: an index surface next to a book that holds
+    none of it was the 'random ticker' this panel kept showing."""
     monkeypatch.setattr(dashboard_app, "SURFACES_TICKER_OVERRIDE", "")
 
     class _EmptyCache:
@@ -285,12 +295,22 @@ def test_surfaces_subject_falls_back_to_the_index_with_no_book(monkeypatch):
 
     monkeypatch.setattr(dashboard_app, "_widget_cache", lambda: _EmptyCache())
     ticker, reason, portfolio = dashboard_app._surfaces_subject()
-    assert ticker == dashboard_app.SURFACES_FALLBACK_TICKER
-    assert "no priced positions" in reason
+    assert ticker is None
+    assert "set a ticker" in reason
     assert portfolio == []
 
 
-def test_surfaces_subject_picks_the_largest_holding(monkeypatch):
+def test_surfaces_subject_follows_the_desk_scope_ticker(monkeypatch, _isolated_desk):
+    from shared.desk_settings import set_setting
+
+    monkeypatch.setattr(dashboard_app, "SURFACES_TICKER_OVERRIDE", "")
+    set_setting("desk_focus_ticker", "AMD")
+    ticker, reason, _ = dashboard_app._surfaces_subject()
+    assert ticker == "AMD"
+    assert "scope ticker" in reason
+
+
+def test_surfaces_subject_picks_the_largest_holding(monkeypatch, _isolated_desk):
     monkeypatch.setattr(dashboard_app, "SURFACES_TICKER_OVERRIDE", "")
 
     class _Cache:

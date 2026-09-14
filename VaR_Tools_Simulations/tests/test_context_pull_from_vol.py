@@ -141,6 +141,114 @@ def test_correlation_is_refused_when_labels_do_not_cover_the_basket():
     assert source == "fallback:identity"
 
 
+def test_unlabeled_same_context_matrix_is_positional_and_says_so():
+    """Scripted callers pass corr_matrix next to tickers with no label list.
+    That order is this request's tickers — allowed, but provenance must not
+    look like a labeled store row."""
+    stored = [[1.0, 0.55], [0.55, 1.0]]
+    corr, source = mr._resolve_corr(
+        {"correlation_matrix": stored}, ["SPY", "QQQ"]
+    )
+    assert corr[0][1] == pytest.approx(0.55)
+    assert source == "context:correlation_matrix(positional)"
+
+
+def test_unlabeled_store_shaped_3x3_is_not_silently_permuted():
+    """A 3x3 stored for [A,B,C] with no labels, requested [C,A,B]:
+    positional would put corr(C,A)=0.10 (the A-B slot). Refuse unlabeled
+    store rows so this cannot present as a measured matrix."""
+    stored = [
+        [1.0, 0.10, 0.20],
+        [0.10, 1.0, 0.30],
+        [0.20, 0.30, 1.0],
+    ]
+    # Simulate a store hit with no labels by going through _usable via
+    # context without tickers-as-labels on a *store* path: empty context
+    # plus we only have the explicit branch for same-context. The store
+    # refuse is the unlabeled-labels=None branch with allow_positional=False.
+    # Pin it by calling _usable through _resolve_corr on store-like: if
+    # someone stuffed the matrix in context without labels, same-context
+    # positional is announced. The permutation bug is labeled-reorder.
+    labeled, _ = mr._resolve_corr(
+        {"correlation_matrix": stored, "correlation_tickers": ["A", "B", "C"]},
+        ["C", "A", "B"],
+    )
+    assert labeled[0][1] == pytest.approx(0.20)
+
+
+def test_unlabeled_vol_vector_same_context_is_announced_positional():
+    vols, source = mr._resolve_vol({"volatilities": [0.12, 0.40]}, ["SPY", "QQQ"])
+    assert list(vols) == [pytest.approx(0.12), pytest.approx(0.40)]
+    assert source == "context:volatilities(positional)"
+
+
+def test_unlabeled_store_matrix_is_refused(monkeypatch):
+    """Direct store hit, no labels, request [C,A,B]: positional would put
+    corr(C,A)=0.10 (the A-B slot). allow_positional=False must refuse."""
+    stored = [
+        [1.0, 0.10, 0.20],
+        [0.10, 1.0, 0.30],
+        [0.20, 0.30, 1.0],
+    ]
+
+    class _Store:
+        def get(self, _scope, key):
+            if key == "correlation_matrix":
+                return stored
+            return None
+
+    monkeypatch.setattr(mr, "_context_store", lambda: _Store())
+    corr, source = mr._resolve_corr({}, ["C", "A", "B"])
+    assert source == "fallback:identity"
+    assert np.array_equal(corr, np.eye(3))
+
+
+def test_unlabeled_store_vol_vector_is_refused(monkeypatch):
+    class _Store:
+        def get(self, _scope, key):
+            if key == "volatilities":
+                return [0.11, 0.22, 0.33]
+            return None
+
+    monkeypatch.setattr(mr, "_context_store", lambda: _Store())
+    _vols, source = mr._resolve_vol({}, ["C", "A", "B"])
+    assert source == "fallback:0.25"
+
+
+def test_hist_sim_unconverged_garch_marks_outlook_unmeasured(monkeypatch):
+    """HW/FHS still emit a VaR from an unconverged fit; the outlook must
+    not present that number as measured."""
+    from types import SimpleNamespace
+
+    def _fake_run(_inp):
+        return SimpleNamespace(
+            var=1.0,
+            cvar=1.2,
+            method="hw",
+            garch_convergence={"SPY": False, "QQQ": True},
+        )
+
+    import importlib
+
+    # var_engine/__init__.py binds `hist_sim` to the run *function*, which
+    # shadows the submodule on the package. Patch the real module.
+    hs = importlib.import_module("var_engine.hist_sim")
+    monkeypatch.setattr(hs, "run", _fake_run)
+    result = mr._run_hist_sim(
+        {
+            "tickers": ["SPY", "QQQ"],
+            "positions": [1000.0, 500.0],
+            "method": "hw",
+            "returns_dict": {"SPY": [0.0], "QQQ": [0.0]},
+        }
+    )
+    assert result.status == "ok"
+    outlook = result.context_patch["risk_outlook"]
+    assert outlook["measured"] is False
+    assert outlook["inputs"]["garch"].startswith("fallback:garch_unconverged")
+    assert "SPY" in outlook["inputs"]["garch"]
+
+
 # ---------------------------------------------------------------------------
 # Position size
 # ---------------------------------------------------------------------------

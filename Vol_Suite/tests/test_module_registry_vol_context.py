@@ -35,7 +35,7 @@ if str(_REPO_ROOT) not in sys.path:
 # back VaR's registry, and every assertion here fails with a baffling
 # AttributeError. Same fragile surface CLAUDE.md documents, and the same
 # form the sibling test_module_registry_* files already use.
-import Vol_Suite.module_registry as vmr  # noqa: E402
+import Vol_Suite.module_registry as vmr
 
 pytestmark = pytest.mark.unit
 
@@ -145,6 +145,40 @@ def test_weights_fall_back_to_equal_weight_without_a_book():
     assert vmr._resolve_weights({"positions": {"positions": []}}, ["SPY"]) is None
 
 
+def test_unlabeled_weights_are_refused():
+    with pytest.raises(ValueError, match="unlabeled"):
+        vmr._resolve_weights({"weights": [0.80, 0.20]}, ["SPY", "QQQ"])
+
+
+def test_unlabeled_weights_yield_to_the_book():
+    book = {
+        "positions": [
+            {"ticker": "SPY", "market_value": 600},
+            {"ticker": "QQQ", "market_value": 400},
+        ]
+    }
+    weights = vmr._resolve_weights(
+        {"weights": [0.80, 0.20], "positions": book}, ["SPY", "QQQ"]
+    )
+    assert weights == [600.0, 400.0]
+
+
+def test_labeled_weights_cover_a_permuted_basket():
+    weights = vmr._resolve_weights(
+        {"weights": [0.80, 0.20], "weight_tickers": ["QQQ", "SPY"]},
+        ["SPY", "QQQ"],
+    )
+    assert weights == [0.20, 0.80]
+
+
+def test_incomplete_weight_labels_raise_without_a_book():
+    with pytest.raises(ValueError, match="unlabeled"):
+        vmr._resolve_weights(
+            {"weights": [0.80, 0.20], "weight_tickers": ["QQQ", "IWM"]},
+            ["SPY", "QQQ"],
+        )
+
+
 def test_correlation_matrix_refuses_a_single_name():
     """A 1x1 matrix of 1.0 is not a correlation measurement."""
     result = vmr._run_correlation_matrix({"ticker": "SPY"})
@@ -184,7 +218,7 @@ def test_correlation_matrix_publishes_what_var_reads(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ce, "compute_basket_stats", lambda *a, **kw: _Stats())
     monkeypatch.setattr(
-        ce, "run_correlation_engine", lambda *a, **kw: ([], "stub interp")
+        ce, "run_correlation_engine", lambda *a, **kw: ([], "stub interp", _Stats())
     )
 
     result = vmr._run_correlation_matrix(
@@ -219,7 +253,11 @@ def test_correlation_matrix_renders_the_matrix_as_rows(monkeypatch, tmp_path):
         dropped_tickers = []
 
     monkeypatch.setattr(ce, "compute_basket_stats", lambda *a, **kw: _Stats())
-    monkeypatch.setattr(ce, "run_correlation_engine", lambda *a, **kw: ([], ""))
+    # run_correlation_engine returns (files, interp, stats); a 2-tuple stub
+    # is exactly the stale contract that broke the live module.
+    monkeypatch.setattr(
+        ce, "run_correlation_engine", lambda *a, **kw: ([], "", _Stats())
+    )
     result = vmr._run_correlation_matrix(
         {"basket": ["SPY", "QQQ"], "output_dir": str(tmp_path)}
     )

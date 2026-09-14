@@ -21,6 +21,7 @@ Dashboard{% endblock %} {% block content %}
 <!-- Full-width: hedging heatmap (Side A overview) -->
 <div id="side-a" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 12px;">
   <h3>Side A — Pure chain exposure, selected expiry (as it sits)</h3>
+  <p class="small muted" style="margin-top:-6px;">Chain Greek Exposure (4-panel: gamma / delta / vanna / charm by strike) and Chain Hedging Map (gamma by strike, OI, spot×IV gamma surface, gamma profile).</p>
   <div id="side-a-content" class="db-side">—</div>
 </div>
 
@@ -46,6 +47,19 @@ Dashboard{% endblock %} {% block content %}
     <div class="greek-cell"><h4 style="margin:4px 0;">Vanna $-exposure (same book)</h4><div id="greekb-vanna" class="db-side">—</div></div>
     <div class="greek-cell"><h4 style="margin:4px 0;">Charm $-exposure (same book)</h4><div id="greekb-charm" class="db-side">—</div></div>
   </div>
+</div>
+
+<!-- Hedging paths: Side B's dealer book run through the hedge optimizer -->
+<div id="db-hedge" style="border: 1px solid var(--border); padding: 8px; border-radius: 8px; margin-top: 16px;">
+  <h3>Hedging paths for the dealer book</h3>
+  <p class="small muted">
+    Side B's flow-built dealer position, priced with today's chain greeks, solved for
+    delta+vega-neutral hedges with the live ATM call and put (hedge optimizer). These are
+    the trades a dealer carrying this book would need to flatten it. Book quantities are
+    vanna-weighted ΔOI contracts, so read the direction and the call/put/stock mix, not the
+    absolute size.
+  </p>
+  <div id="hedge-content" class="small">—</div>
 </div>
 
 <div id="db-history" style="margin-top: 20px;">
@@ -289,10 +303,75 @@ Dashboard{% endblock %} {% block content %}
       }
       // Side B below
       renderSide("side-b-content", data.side_b || {});
+      renderHedge(data.hedge);
       status.textContent = "ok";
     } catch (err) {
       status.textContent = "error: " + err;
     }
+  }
+
+  function fmtNum(v) {
+    const n = Number(v);
+    if (v === null || v === undefined || !isFinite(n)) return "--";
+    return Math.abs(n) >= 100 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n.toFixed(3);
+  }
+
+  function renderHedge(h) {
+    const el = document.getElementById("hedge-content");
+    el.innerHTML = "";
+    if (!h) { el.textContent = "—"; return; }
+    if (h.status !== "ok") {
+      el.textContent = (h.status || "unavailable") + ": " + (h.error || h.reason || "");
+      return;
+    }
+    const head = document.createElement("p");
+    head.innerHTML = "<b></b>";
+    head.firstChild.textContent = h.headline || "dealer book hedge";
+    el.appendChild(head);
+    const summary = document.createElement("p");
+    summary.textContent =
+      "Dealer book: net delta " + fmtNum(h.net_delta) + " · net vega " + fmtNum(h.net_vega) +
+      " · " + h.n_legs + " legs on " + h.expiry + " · spot " + fmtNum(h.spot);
+    el.appendChild(summary);
+    const atm = [h.atm_call, h.atm_put].filter(Boolean).map(function (c) {
+      return c.right + " " + fmtNum(c.strike) + " (Δ " + fmtNum(c.delta) + ", vega " + fmtNum(c.vega) + ")";
+    });
+    if (atm.length) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "Hedge instruments: " + atm.join(" · ");
+      el.appendChild(p);
+    }
+    const labels = {
+      stock_atm_call: "Path 1 — stock + ATM call",
+      atm_call_put: "Path 2 — ATM call + ATM put (options only)"
+    };
+    Object.keys(h.recipes || {}).forEach(function (key) {
+      const recipe = h.recipes[key];
+      const box = document.createElement("div");
+      box.style.marginTop = "8px";
+      const title = document.createElement("div");
+      title.innerHTML = "<b></b>";
+      title.firstChild.textContent = labels[key] || key;
+      box.appendChild(title);
+      if (!recipe) {
+        const none = document.createElement("div");
+        none.className = "muted";
+        none.textContent = "no unique solution for this strike pair";
+        box.appendChild(none);
+      } else {
+        const table = document.createElement("table");
+        Object.keys(recipe).forEach(function (k) {
+          const tr = document.createElement("tr");
+          const a = document.createElement("td"); a.textContent = k;
+          const b = document.createElement("td");
+          b.textContent = typeof recipe[k] === "number" ? fmtNum(recipe[k]) : String(recipe[k]);
+          tr.appendChild(a); tr.appendChild(b); table.appendChild(tr);
+        });
+        box.appendChild(table);
+      }
+      el.appendChild(box);
+    });
   }
 
   async function loadHistory() {
@@ -338,5 +417,13 @@ Dashboard{% endblock %} {% block content %}
   document.addEventListener("DOMContentLoaded", function () {
     // optional auto load SPY
   });
+</script>
+<script type="module">
+  // Scope is entered once: default the tab to the desk's ticker/expiry rather
+  // than a hardcoded SPY.
+  import { syncBus } from "/static/js/sync-bus.js?v={{ asset_v }}";
+  const scope = syncBus.getScope();
+  if (scope.ticker) document.getElementById("db-ticker").value = scope.ticker;
+  if (scope.expiry) document.getElementById("db-expiry").value = scope.expiry.replace(/-/g, "");
 </script>
 {% endblock %}

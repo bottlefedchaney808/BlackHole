@@ -197,19 +197,25 @@ def test_fixed_sign_no_surface_falls_back_flat_minus_one(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_sparse_gap_strike_skipped():
-    """Strike in today but not prev day -> skipped (no accumulation)."""
+def test_sparse_gap_strike_solved():
+    """Strike in today but not prev day -> solved, not skipped.
+
+    NEW-STRIKE RESOLUTION (dealer_position_book.py, commit 1018a70): absence
+    in prev day is ambiguous (brand-new listing vs vendor dropped it), so the
+    strike's last observed OI is carried forward as the baseline and the whole
+    observed change is attributed as flow. Never-observed -> baseline 0.
+    """
     rows1 = [make_row(100.0, "P", 1000, 0.80, 1.0)]
     rows2 = [
         make_row(100.0, "P", 1100, 0.78, 1.0),
-        make_row(105.0, "P", 400, 0.79, 1.0),  # new today: sparse gap -> skip
+        make_row(105.0, "P", 400, 0.79, 1.0),  # new today: baseline 0 -> delta = full OI
     ]
     days = [
         make_day("20260101", 100.0, one_expiry(rows1)),
         make_day("20260102", 100.0, one_expiry(rows2)),
     ]
     res = dpb.accumulate_position_book(days, lookback=150)
-    assert (105.0, "P") not in res.position_by_strike
+    assert res.position_by_strike[(105.0, "P")] == pytest.approx(400.0)
     assert res.position_by_strike[(100.0, "P")] == pytest.approx(100.0)
     assert res.daily_trace[-1]["n_new_strikes"] == 1
 

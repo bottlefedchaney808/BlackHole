@@ -14,10 +14,11 @@ from jump_diffusion.pricer import lewis_price
 class CalibrationResult:
     model_name: str
     params: dict
-    rmse_iv: float
+    rmse_iv: float  # scoped to calib_mask (MAX_CALIB_STRIKES ATM)
     fitted_ivs: np.ndarray
     market_ivs: np.ndarray
     strikes: np.ndarray
+    rmse_iv_full: float | None = None  # all valid strikes; None if identical
 
 
 # Default seeds -- rough equity-index-option starting points from the
@@ -67,9 +68,8 @@ def calibrate(
     # minutes on a real SPY board (observed live during Task 14 smoke
     # testing). Fit on the MAX_CALIB_STRIKES strikes nearest the money
     # (where most of the smile's curvature and liquidity live) to bound
-    # per-iteration cost regardless of chain size; report rmse_iv/fitted_ivs
-    # over the FULL valid strike set below (computed once, not per-iteration,
-    # so it isn't the bottleneck).
+    # per-iteration cost regardless of chain size. fitted_ivs still cover
+    # the full valid set; rmse_iv is mask-scoped, rmse_iv_full is full-smile.
     if len(strikes) > MAX_CALIB_STRIKES:
         nearest = np.sort(np.argsort(np.abs(strikes - spot))[:MAX_CALIB_STRIKES])
         calib_mask = np.zeros(len(strikes), dtype=bool)
@@ -128,15 +128,13 @@ def calibrate(
         )
     fitted_ivs = np.array(fitted_ivs)
 
-    # rmse_iv reflects fit quality over the strikes Nelder-Mead actually saw
-    # (calib_mask), not the full reported smile -- on a wide live chain the
-    # wings well outside MAX_CALIB_STRIKES are extrapolation, not fit, and
-    # folding their (often much larger) error into rmse_iv would understate
-    # how good the near-the-money fit itself is. fitted_ivs/market_ivs/
-    # strikes below still cover the full valid smile for plotting/reporting.
+    # rmse_iv = fit quality on the strikes Nelder-Mead saw (calib_mask).
+    # rmse_iv_full = same metric over the full valid smile (wings are
+    # extrapolation). fitted_ivs/market_ivs/strikes still cover the full set.
     rmse = float(
         np.sqrt(np.nanmean((fitted_ivs[calib_mask] - market_ivs[calib_mask]) ** 2))
     )
+    rmse_full = float(np.sqrt(np.nanmean((fitted_ivs - market_ivs) ** 2)))
 
     return CalibrationResult(
         model_name=model_cls.name,
@@ -145,4 +143,5 @@ def calibrate(
         fitted_ivs=fitted_ivs,
         market_ivs=market_ivs,
         strikes=strikes,
+        rmse_iv_full=rmse_full,
     )

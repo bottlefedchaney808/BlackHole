@@ -70,12 +70,12 @@ def _align_to(
     """
     if not isinstance(values, (list, tuple)) or not values:
         return None
+    # Unlabeled vectors applied positionally silently swap names when the
+    # stored basket order differs from the request. Refuse unlabeled
+    # store rows. Same-context explicit lists are handled by the caller
+    # passing tickers as stored_tickers.
     if not isinstance(stored_tickers, (list, tuple)):
-        # No labels: only safe when the lengths match exactly and the caller
-        # is asking for the same basket it stored.
-        return (
-            np.asarray(values, dtype=float) if len(values) == len(tickers) else None
-        )
+        return None
     index = {str(t).strip().upper(): i for i, t in enumerate(stored_tickers)}
     try:
         return np.asarray([float(values[index[t]]) for t in tickers], dtype=float)
@@ -94,9 +94,20 @@ def _resolve_vol(
     """
     n = len(tickers)
     explicit = context.get("volatilities") or context.get("vols")
-    aligned = _align_to(explicit, context.get("correlation_tickers"), tickers)
-    if aligned is not None:
-        return aligned, "context:volatilities"
+    labels = context.get("correlation_tickers")
+    if labels:
+        aligned = _align_to(explicit, labels, tickers)
+        if aligned is not None:
+            return aligned, "context:volatilities"
+    elif (
+        isinstance(explicit, (list, tuple))
+        and len(explicit) == n
+    ):
+        # Same-context list: order is this request's tickers. Announced so
+        # a store-shaped unlabeled vector cannot hide behind this branch.
+        # Dashboard seeding must not copy unlabeled store rows into
+        # context (sorted basket keys would re-open [A,B,C]→[C,A,B]).
+        return np.asarray(explicit, dtype=float), "context:volatilities(positional)"
 
     store = _context_store()
     scope = _scope_for(tickers)
@@ -131,7 +142,7 @@ def _resolve_corr(
     """Correlation matrix, with provenance. Falls back to identity."""
     n = len(tickers)
 
-    def _usable(matrix: Any, labels: Any) -> np.ndarray | None:
+    def _usable(matrix: Any, labels: Any, *, allow_positional: bool) -> np.ndarray | None:
         if matrix is None:
             return None
         arr = np.asarray(matrix, dtype=float)
@@ -144,12 +155,20 @@ def _resolve_corr(
             except KeyError:
                 return None
             return arr[np.ix_(order, order)]
-        return arr if arr.shape == (n, n) else None
+        if allow_positional and arr.shape == (n, n):
+            return arr
+        return None
 
     explicit = context.get("corr_matrix") or context.get("correlation_matrix")
-    picked = _usable(explicit, context.get("correlation_tickers"))
+    labels = context.get("correlation_tickers")
+    picked = _usable(explicit, labels, allow_positional=True)
     if picked is not None:
-        return picked, "context:correlation_matrix"
+        src = (
+            "context:correlation_matrix"
+            if isinstance(labels, (list, tuple))
+            else "context:correlation_matrix(positional)"
+        )
+        return picked, src
 
     store = _context_store()
     scope = _scope_for(tickers)
@@ -158,7 +177,7 @@ def _resolve_corr(
         labels = store.get(scope, "correlation_tickers")
     except Exception:
         stored = labels = None
-    picked = _usable(stored, labels)
+    picked = _usable(stored, labels, allow_positional=False)
     if picked is not None:
         return picked, "context_store:correlation_matrix"
 
@@ -354,7 +373,36 @@ def _run_hist_sim(context: dict[str, Any]) -> ModuleResult:
                 returns_dict=context.get("returns_dict"),
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.var, "cvar": res.cvar, "tickers": tickers, "method": res.method, "position_source": pos_source}, context_patch=_risk_patch("hist_sim", tickers, context, var=res.var, cvar=res.cvar, sources={"positions": pos_source}, extra={"method": res.method}))
+        metrics = {
+            "var": res.var,
+            "cvar": res.cvar,
+            "tickers": tickers,
+            "method": res.method,
+            "position_source": pos_source,
+            "garch_convergence": res.garch_convergence,
+        }
+        sources = {"positions": pos_source}
+        if res.garch_convergence:
+            failed = [t for t, ok in res.garch_convergence.items() if not ok]
+            sources["garch"] = (
+                f"fallback:garch_unconverged:{','.join(failed)}"
+                if failed
+                else "garch:converged"
+            )
+        return ModuleResult(
+            status="ok",
+            artifacts=[],
+            metrics=metrics,
+            context_patch=_risk_patch(
+                "hist_sim",
+                tickers,
+                context,
+                var=res.var,
+                cvar=res.cvar,
+                sources=sources,
+                extra={"method": res.method},
+            ),
+        )
     except Exception as exc:
         return _failed(exc)
 
@@ -482,23 +530,65 @@ def _build_synthetic_returns(n: int, vols: np.ndarray | None = None, corr: np.nd
 def _run_var_agg(context: dict[str, Any]) -> ModuleResult:
     try:
         from var_engine.var_agg import VaRAggInputs, run as var_agg_run
-        positions = np.asarray(context.get("positions") or [1.0], dtype=float)
-        n = len(positions)
-        vols = np.asarray(context.get("volatilities") or [0.2] * n, dtype=float)
-        corr = np.asarray(context.get("corr_matrix") or np.eye(n), dtype=float)
+        tickers = _extract_tickers(context)
+        if not tickers:
+            raw = context.get("positions")
+            n_guess = (
+                len(raw)
+                if isinstance(raw, (list, tuple))
+                and raw
+                and not isinstance(raw[0], dict)
+                else 1
+            )
+            tickers = [f"Asset{i}" for i in range(n_guess)]
+        n = len(tickers)
+        positions, pos_source = _extract_positions(context, tickers)
+        vols, vol_source = _resolve_vol(context, tickers)
+        corr, corr_source = _resolve_corr(context, tickers)
         group_mask = np.asarray(context.get("group_mask") or [0] * n, dtype=int)
+        if len(group_mask) != n:
+            group_mask = np.zeros(n, dtype=int)
+        returns_src = "context:returns"
+        rets = context.get("returns")
+        if rets is None:
+            rets = _build_synthetic_returns(n, vols, corr)
+            returns_src = "fallback:synthetic_returns"
         res = var_agg_run(
             VaRAggInputs(
-                asset_names=[f"Asset{i}" for i in range(n)],
-                positions=positions,
+                asset_names=tickers,
+                positions=positions[:n],
                 group_mask=group_mask,
-                returns=_build_synthetic_returns(n, vols, corr),
+                returns=np.asarray(rets, dtype=float),
                 var_days=float(context.get("horizon_days") or 10.0),
                 trading_days=252.0,
                 confidence=float(context.get("confidence") or 0.99),
             )
         )
-        return ModuleResult(status="ok", artifacts=[], metrics={"var": res.total_var, "cvar": res.total_cvar}, context_patch=None)
+        return ModuleResult(
+            status="ok",
+            artifacts=[],
+            metrics={
+                "var": res.total_var,
+                "cvar": res.total_cvar,
+                "vol_source": vol_source,
+                "corr_source": corr_source,
+                "position_source": pos_source,
+                "returns_source": returns_src,
+            },
+            context_patch=_risk_patch(
+                "var_agg",
+                tickers,
+                context,
+                var=res.total_var,
+                cvar=res.total_cvar,
+                sources={
+                    "vol": vol_source,
+                    "corr": corr_source,
+                    "positions": pos_source,
+                    "returns": returns_src,
+                },
+            ),
+        )
     except Exception as exc:
         return _failed(exc)
 
@@ -578,7 +668,15 @@ MODULES: list[ModuleSpec] = [
         run=_run_mc_sim,
         cli_entry=None,
         default_selected=False,
-        requires=[],
+        # Locked to its inputs, not left to a fallback. Both
+        # `_resolve_vol` and `_resolve_corr` read the four keys
+        # `correlation_matrix` writes; without them this module
+        # silently simulated a flat 0.25 vol and a zero-correlation
+        # basket and reported the answer as a risk number. Adding this
+        # card now pulls the matrix once; a later run reuses the stored
+        # one (see _dependency_already_satisfied), so the dependency
+        # costs one 2-year EOD pull per scope, not one per click.
+        requires=["correlation_matrix"],
         archive=ArchiveHint(key_shape="ticker_only"),
         description="Parametric Monte Carlo VaR/CVaR with EWMA volatilities.",
         inputs=InputSpec(ticker="required"),
@@ -593,7 +691,15 @@ MODULES: list[ModuleSpec] = [
         run=_run_corr_sim,
         cli_entry=None,
         default_selected=False,
-        requires=[],
+        # Locked to its inputs, not left to a fallback. Both
+        # `_resolve_vol` and `_resolve_corr` read the four keys
+        # `correlation_matrix` writes; without them this module
+        # silently simulated a flat 0.25 vol and a zero-correlation
+        # basket and reported the answer as a risk number. Adding this
+        # card now pulls the matrix once; a later run reuses the stored
+        # one (see _dependency_already_satisfied), so the dependency
+        # costs one 2-year EOD pull per scope, not one per click.
+        requires=["correlation_matrix"],
         archive=ArchiveHint(key_shape="ticker_only"),
         description="Multi-factor correlation model VaR for equity baskets.",
         inputs=InputSpec(ticker="required"),
@@ -608,7 +714,15 @@ MODULES: list[ModuleSpec] = [
         run=_run_copulas,
         cli_entry=None,
         default_selected=False,
-        requires=[],
+        # Locked to its inputs, not left to a fallback. Both
+        # `_resolve_vol` and `_resolve_corr` read the four keys
+        # `correlation_matrix` writes; without them this module
+        # silently simulated a flat 0.25 vol and a zero-correlation
+        # basket and reported the answer as a risk number. Adding this
+        # card now pulls the matrix once; a later run reuses the stored
+        # one (see _dependency_already_satisfied), so the dependency
+        # costs one 2-year EOD pull per scope, not one per click.
+        requires=["correlation_matrix"],
         archive=ArchiveHint(key_shape="ticker_only"),
         description="Gaussian, Student-T and Clayton copula VaR with fat-tailed marginals.",
         inputs=InputSpec(ticker="required"),
@@ -668,7 +782,15 @@ MODULES: list[ModuleSpec] = [
         run=_run_var_agg,
         cli_entry=None,
         default_selected=False,
-        requires=[],
+        # Locked to its inputs, not left to a fallback. Both
+        # `_resolve_vol` and `_resolve_corr` read the four keys
+        # `correlation_matrix` writes; without them this module
+        # silently simulated a flat 0.25 vol and a zero-correlation
+        # basket and reported the answer as a risk number. Adding this
+        # card now pulls the matrix once; a later run reuses the stored
+        # one (see _dependency_already_satisfied), so the dependency
+        # costs one 2-year EOD pull per scope, not one per click.
+        requires=["correlation_matrix"],
         archive=ArchiveHint(key_shape="ticker_only"),
         description="Parametric portfolio VaR/CVaR aggregation from positions, vols and correlations.",
         inputs=InputSpec(ticker="required"),
@@ -683,7 +805,15 @@ MODULES: list[ModuleSpec] = [
         run=_run_hedge_optimizer,
         cli_entry=None,
         default_selected=False,
-        requires=[],
+        # Locked to its inputs, not left to a fallback. Both
+        # `_resolve_vol` and `_resolve_corr` read the four keys
+        # `correlation_matrix` writes; without them this module
+        # silently simulated a flat 0.25 vol and a zero-correlation
+        # basket and reported the answer as a risk number. Adding this
+        # card now pulls the matrix once; a later run reuses the stored
+        # one (see _dependency_already_satisfied), so the dependency
+        # costs one 2-year EOD pull per scope, not one per click.
+        requires=["correlation_matrix"],
         archive=ArchiveHint(key_shape="ticker_only"),
         description="Minimum-variance hedge ratios for a basket of exposures.",
         inputs=InputSpec(ticker="required"),

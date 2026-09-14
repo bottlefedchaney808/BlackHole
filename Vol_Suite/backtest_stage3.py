@@ -100,13 +100,13 @@ class DayRecord:
     spot: float
     net_gamma_v1: float
     net_gamma_v2: float
-    regime_v1: str  # 'long' or 'short'
-    regime_v2: str
+    regime_v1: str | None  # 'long'/'short'/None (None = zero-net, unclassified)
+    regime_v2: str | None
     fwd_realized_vol: (
         float | None
     )  # annualized, None if too close to the end of the sample
     net_gamma_dealer: float = 0.0  # dealer_exposure_model net gex (dealer frame)
-    regime_dealer_exposure: str | None = None  # 'long'/'short' when the engine ran
+    regime_dealer_exposure: str | None = None  # 'long'/'short'/None
 
 
 @dataclass
@@ -633,7 +633,10 @@ def _build_day_records(
                     dealer_rows, spot, ticker, expiry, T=T
                 )
                 net_dealer = float(ne.gex())
-                regime_dealer = "long" if net_dealer > 0 else "short"
+                # Zero net is unclassified (matches empty-rows → None), not short.
+                regime_dealer = (
+                    "long" if net_dealer > 0 else ("short" if net_dealer < 0 else None)
+                )
 
         # Forward realized vol uses ANY available future close (not just the
         # dates that happen to have a full option chain snapshot), since
@@ -651,8 +654,14 @@ def _build_day_records(
                 spot=spot,
                 net_gamma_v1=net_v1,
                 net_gamma_v2=net_v2,
-                regime_v1="long" if net_v1 > 0 else "short",
-                regime_v2="long" if net_v2 > 0 else "short",
+                # Zero net (empty/thin chain) is unclassified, not short —
+                # otherwise Welch t-tests absorb zero-signal days into short.
+                regime_v1=(
+                    "long" if net_v1 > 0 else ("short" if net_v1 < 0 else None)
+                ),
+                regime_v2=(
+                    "long" if net_v2 > 0 else ("short" if net_v2 < 0 else None)
+                ),
                 fwd_realized_vol=fwd_vol,
                 net_gamma_dealer=net_dealer,
                 regime_dealer_exposure=regime_dealer,

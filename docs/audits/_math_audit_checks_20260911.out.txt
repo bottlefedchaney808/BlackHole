@@ -1,0 +1,33 @@
+
+========================================================================
+T1 jump-diffusion
+========================================================================
+Merton lam=0 Lewis=4.735864 BS=4.735864 abs=7.815970e-13
+Merton recovery vs true {'sigma': 0.1957389807964655, 'lam': 1.05727003981047, 'mu_j': -0.06812551669677899, 'sigma_j': 0.11217194066638882} true {'sigma': 0.2, 'lam': 0.8, 'mu_j': -0.08, 'sigma_j': 0.12}
+reported rmse_iv 4.9249742809696235e-05
+wide n=40 MAX_CALIB=15 reported=0.000073 mask=0.000073 full=0.001045 full/reported=14.403
+Bates jump_share approx=0.3421 true_integrated=0.2332 rel_err=46.7% jump_var=0.0208 v0T=0.0400 integ=0.0684
+GARCH forecast 0.20 -> approx-adj=0.2171 true-adj=0.2117
+
+========================================================================
+T2 context-store reindex
+========================================================================
+labeled source context:correlation_matrix corr(C,A) 0.2 want 0.20
+unlabeled source context:correlation_matrix corr(C,A) 0.1 positional would be 0.10
+vol labeled SPY,QQQ [np.float64(0.4), np.float64(0.12)] context:volatilities want [0.40, 0.12]
+vol unlabeled SPY,QQQ [np.float64(0.12), np.float64(0.4)] context:volatilities positional [0.12, 0.40] WRONG
+
+========================================================================
+T3 resolvers
+========================================================================
+Vol weights explicit positional for [SPY,QQQ] stored as QQQ-heavy: [0.8, 0.2]
+[MC] Using CPU (numpy) for Monte Carlo pricing -- no usable CUDA/cupy detected (or OPTIONS_SUITE_FORCE_CPU set). Set OPTIONS_SUITE_FORCE_CPU=1 to force this explicitly; unset it and ensure `pip install cupy-cudaXX` matches your CUDA version to enable GPU.
+  [fetch_spot_price] NO_SUCH_TICKER_XYZ: snapshot request failed (PHAPIError: API request failed) -- trying last trade print.
+  [fetch_spot_price] NO_SUCH_TICKER_XYZ: trade snapshot request failed (PHAPIError: API request failed) -- falling back to last daily close.
+  [fetch_spot_price] NO_SUCH_TICKER_XYZ: daily-close fallback also failed (PHAPIError: API request failed).
+Options sigma no data: 0.25 fallback:0.25 (ValueError: Could not fetch spot for 'NO_SUCH_TICKER_XYZ' from Po
+garch broadcast [np.float64(0.12), np.float64(0.12), np.float64(0.12)] garch:garch_conditional_vol(broadcast)
+
+========================================================================
+T4 hist_sim _garch_fit iid
+========================================================================

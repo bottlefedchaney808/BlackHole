@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from jump_diffusion.models import MertonModel
 
 
@@ -25,6 +26,23 @@ def test_heston_phi_zero_is_one():
     h = HestonModel(kappa=2.0, theta=0.04, xi=0.5, rho=-0.6, v0=0.04)
     val = h.phi(np.array([0.0 + 0j]), T=0.5)
     assert np.isclose(val[0].real, 1.0, atol=1e-8)
+
+
+def test_bates_jump_variance_share_uses_integrated_variance():
+    """Hold params fixed; the named share must track ∫E[v], not v0·T."""
+    b = BatesModel(
+        kappa=2.0, theta=0.09, xi=0.5, rho=-0.6, v0=0.04,
+        lam=1.0, mu_j=-0.08, sigma_j=0.12,
+    )
+    T = 1.0
+    jump_var = b.lam * T * (b.sigma_j**2 + b.mu_j**2)
+    integ = b.theta * T + (b.v0 - b.theta) * (1 - np.exp(-b.kappa * T)) / b.kappa
+    want = jump_var / (jump_var + integ)
+    got = b.jump_variance_share(T)
+    assert got == pytest.approx(want, rel=1e-12)
+    # The v0·T approximation is the bug: 0.342 vs 0.233 on this point.
+    approx = jump_var / (jump_var + b.v0 * T)
+    assert abs(got - approx) > 0.05
 
 
 def test_bates_reduces_to_heston_when_no_jumps():

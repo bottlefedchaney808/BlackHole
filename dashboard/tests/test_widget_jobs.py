@@ -27,9 +27,16 @@ class _FakeScreenResult:
         self.data_quality = data_quality
 
 
-def test_widget_signals_tick_writes_one_row_per_watchlist_ticker(monkeypatch, tmp_path):
+def test_widget_signals_tick_writes_one_row_per_book_ticker(monkeypatch, tmp_path):
+    """Signals screen the book (real + console + chart focus), not a
+    hardcoded watchlist; each row says which book it came from."""
     monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
-    monkeypatch.setattr(dashboard_app, "OVERVIEW_WATCHLIST", ["SPX", "NDAQ"])
+    monkeypatch.setattr(
+        dashboard_app,
+        "_signals_universe",
+        lambda: [("SPX", "real"), ("NDAQ", "console")],
+    )
+    monkeypatch.setattr(dashboard_app.time, "sleep", lambda _s: None)
 
     import variance_swap_screener
 
@@ -46,11 +53,31 @@ def test_widget_signals_tick_writes_one_row_per_watchlist_ticker(monkeypatch, tm
     assert set(tickers) == {"SPX", "NDAQ"}
     assert tickers["SPX"]["signal"] == "BUY VOL"
     assert tickers["SPX"]["score"] == 3.5
+    assert tickers["NDAQ"]["book"] == "console"
+
+
+def test_signals_universe_is_real_then_console_then_chart(monkeypatch, tmp_path):
+    from dashboard.console_book import ConsoleBook
+    from dashboard.widget_cache import WidgetCache
+    from shared.desk_settings import set_setting
+
+    db = str(tmp_path / "w.db")
+    monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", db)
+    monkeypatch.setenv("DESK_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    WidgetCache(db).set("positions", {"positions": [{"ticker": "NVDA"}]}, status="ok")
+    ConsoleBook(db).add([{"ticker": "PLTR"}, {"ticker": "NVDA"}])
+    set_setting("chart_focus_ticker", "TSLA")
+
+    assert dashboard_app._signals_universe() == [
+        ("NVDA", "real"),
+        ("PLTR", "console"),
+        ("TSLA", "chart"),
+    ]
 
 
 def test_widget_signals_tick_handles_none_result(monkeypatch, tmp_path):
     monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
-    monkeypatch.setattr(dashboard_app, "OVERVIEW_WATCHLIST", ["SPX"])
+    monkeypatch.setattr(dashboard_app, "_signals_universe", lambda: [("SPX", "real")])
 
     import variance_swap_screener
 
@@ -64,7 +91,7 @@ def test_widget_signals_tick_handles_none_result(monkeypatch, tmp_path):
 
 def test_widget_signals_tick_handles_exception(monkeypatch, tmp_path):
     monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
-    monkeypatch.setattr(dashboard_app, "OVERVIEW_WATCHLIST", ["SPX"])
+    monkeypatch.setattr(dashboard_app, "_signals_universe", lambda: [("SPX", "real")])
 
     import variance_swap_screener
 
@@ -323,6 +350,7 @@ def test_surfaces_tick_encodes_chart_png_as_base64(monkeypatch, tmp_path):
     monkeypatch.setattr(
         dashboard_app, "WIDGET_SURFACES_OUTPUT_DIR", str(tmp_path / "surf")
     )
+    _focus_desk_on(monkeypatch, tmp_path, "NVDA")
 
     from Tools.tools import surface_explorer_tool
 
@@ -341,9 +369,8 @@ def test_surfaces_tick_encodes_chart_png_as_base64(monkeypatch, tmp_path):
 
     row = dashboard_app._widget_cache().get("surfaces")
     assert row["status"] == "ok"
-    # SPXW, not SPX -- see _widget_surfaces_tick's docstring: SPX's actual
-    # listed options chain on this ThetaData feed is rooted under SPXW.
-    assert row["payload"]["ticker"] == "SPXW"
+    # The desk's scope ticker, not a hardcoded SPXW fallback.
+    assert row["payload"]["ticker"] == "NVDA"
     surfaces = row["payload"]["surfaces"]
     assert set(surfaces) == {"iv", "vanna", "charm"}
     for key in ("iv", "vanna", "charm"):
@@ -351,11 +378,39 @@ def test_surfaces_tick_encodes_chart_png_as_base64(monkeypatch, tmp_path):
         assert base64.b64decode(surfaces[key]["image_b64"]) == png_bytes
 
 
+def _focus_desk_on(monkeypatch, tmp_path, ticker):
+    from shared.desk_settings import set_setting
+
+    monkeypatch.setenv("DESK_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    set_setting("desk_focus_ticker", ticker)
+
+
+def test_surfaces_tick_goes_idle_with_no_subject(monkeypatch, tmp_path):
+    """Empty book, no scope ticker: say so, instead of rendering an index."""
+    monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
+    monkeypatch.setenv("DESK_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(dashboard_app, "SURFACES_TICKER_OVERRIDE", "")
+
+    from Tools.tools import surface_explorer_tool
+
+    def must_not_run(context):
+        raise AssertionError("rendered a surface with no subject")
+
+    monkeypatch.setattr(surface_explorer_tool, "run", must_not_run)
+    dashboard_app._widget_surfaces_tick()
+
+    row = dashboard_app._widget_cache().get("surfaces")
+    assert row["status"] == "idle"
+    assert row["payload"]["ticker"] is None
+    assert "set a ticker" in row["payload"]["reason"]
+
+
 def test_surfaces_tick_handles_missing_chart(monkeypatch, tmp_path):
     monkeypatch.setattr(dashboard_app, "WIDGET_CACHE_PATH", str(tmp_path / "w.db"))
     monkeypatch.setattr(
         dashboard_app, "WIDGET_SURFACES_OUTPUT_DIR", str(tmp_path / "surf")
     )
+    _focus_desk_on(monkeypatch, tmp_path, "NVDA")
 
     from Tools.tools import surface_explorer_tool
 
@@ -376,6 +431,7 @@ def test_surfaces_tick_handles_exception(monkeypatch, tmp_path):
     monkeypatch.setattr(
         dashboard_app, "WIDGET_SURFACES_OUTPUT_DIR", str(tmp_path / "surf")
     )
+    _focus_desk_on(monkeypatch, tmp_path, "NVDA")
 
     from Tools.tools import surface_explorer_tool
 

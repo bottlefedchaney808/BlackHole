@@ -287,7 +287,9 @@ They exist because several modules render nothing on a generic card — the four
 return `artifacts=[]` (grid on `context_patch`, no PNG ever drawn), and `vrp_term_structure` in
 Vol_Suite is a `runnable=False` marker whose `run()` raises. Panels route those to
 `Tools/tools/surface_explorer_tool.py` and `Tools/tools/vrp_term_structure_tool.py`, which do
-render. No quant logic lives in `panels.py`; every panel delegates to `run_selected_modules` or a
+render. Those same four `surface_*` slugs now carry `superseded_by="surface-explorer"` so the desk
+picker offers the renderer instead of the bare grid (see the selection contract below).
+No quant logic lives in `panels.py`; every panel delegates to `run_selected_modules` or a
 `Tools/` entry point. `dashboard/static/js/panel-tab.js` is the shared scope-bar + card + runner
 engine; scope now persists across tabs via `localStorage` in `sync-bus.js`. **Panel batches run
 sequentially with a 400ms gap** — every panel is a billed ThetaData pull and the repo rule is never
@@ -303,9 +305,31 @@ bar, and normally comes from the position book, not typed** — tool cards rende
 positions/signals/position_analysis/surfaces) render as status panels with a Refresh and no scope
 inputs, because their `run()` ignores context by design. `ModuleSpec.params` (a tuple of
 `ParamSpec`) declares module-specific knobs, which the card renders as controls and the caller
-sends under the run body's `params`; `ModuleSpec.runnable=False` marks a slug that exists only to
-be *selected* as part of a larger pipeline (its `run()` raises) so the UI does not offer it as an
-addable tool.
+sends under the run body's `params`.
+
+**The selection contract (2026-09-12): everything the picker offers, runs and shows you
+something.** `ModuleSpec.is_pickable()` is the single verdict — false when either
+`runnable=False` (a selection-only pipeline step whose `run()` raises: `group_screener`,
+`vol_surface_2d`, `vrp_term_structure`, `sentiment_backtest`) or `superseded_by` names another
+registered slug that does the job properly (the four `surface_*` modules → `surface-explorer`,
+which computes the same grid *and* draws it; `surface-explorer` now declares `mode`/`greek`/
+`min_dte`/`option_type` params so one card reaches all five surfaces). The catalog publishes
+`pickable`/`superseded_by`, `index.html` hides unpickable entries and prunes them out of a saved
+layout, and `POST /api/widgets/{slug}/run` refuses one with **409** naming the replacement rather
+than letting `run()` raise a paragraph at the card. Adding a module to either hidden set is a
+UI-visible decision: `tests/test_module_pickability.py` pins that every unpickable slug declares a
+reason and that a `superseded_by` target is itself registered and pickable.
+
+**Dependencies are declared, expanded and skipped when already satisfied.** `ModuleSpec.requires`
+auto-pulls (`_expand_module_requires`) — the five equity VaR modules (`corr_sim`, `mc_sim`,
+`copulas`, `var_agg`, `hedge_optimizer`) require `correlation_matrix`, since without it they
+simulated a flat 0.25 vol and an identity matrix and reported it as a risk number. `forex_var` is
+deliberately excluded (currency pairs, not equities). To keep that affordable, `ModuleSpec.provides`
+declares the `context_patch` keys a module writes, and an *auto-added* dependency whose provides are
+all already in context is skipped (`_dependency_already_satisfied`) — the dashboard seeds the
+Context Store into every run first, so otherwise each click of a VaR card would re-run a 2-year
+whole-basket EOD pull. An explicitly selected module always runs. Pinned by
+`tests/test_module_requires_expansion.py`.
 
 Three things the run route does that it did NOT before, and which every widget depends on:
 `POST /api/widgets/{slug}/run` executes through `shared.module_execution.run_selected_modules`

@@ -161,6 +161,44 @@ def _map_ph_error(exc: PHClientError):
 # needs another CBOE-style cash index that isn't listed yet.
 _INDEX_ROOTS = frozenset({"SPX", "SPXW", "NDX", "VIX", "RUT", "DJX", "XSP", "OEX"})
 
+# Widest bid/ask spread, as a fraction of mid, that is still a price.
+_MAX_QUOTE_SPREAD_FRAC = 0.02
+
+
+def _usable_quote_price(quote: dict | None) -> float | None:
+    """A spot price from a stock NBBO snapshot, or None if it can't be trusted.
+
+    Off-hours the vendor returns stub quotes like bid 710.75 / ask 774.00 for
+    SPY (last trade 764.48). The old loop took the first positive field in
+    ("mid", "bid", "ask", "last") -- the snapshot carries no "mid", so it
+    returned the stub BID, and every IV solved from that spot came out wrong
+    (calls "rich", puts "cheap", EDGE DETECTED). A mid is only a price when
+    the market is two-sided and tight; otherwise the caller falls through to
+    the last trade print.
+    """
+    if not quote:
+        return None
+
+    def _num(key: str) -> float | None:
+        v = quote.get(key)
+        try:
+            f = float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+        return f if f and f > 0 else None
+
+    mid = _num("mid")
+    if mid is not None:
+        return mid
+    bid, ask = _num("bid"), _num("ask")
+    if bid is not None and ask is not None:
+        m = 0.5 * (bid + ask)
+        if ask >= bid and (ask - bid) / m <= _MAX_QUOTE_SPREAD_FRAC:
+            return m
+        return None
+    return _num("last")
+
+
 # Vendor quirk (confirmed live, commit 43b7c6a): some of the roots above are
 # options-chain-only aliases of a "real" index root -- SPXW is how this feed
 # lists SPX's PM-settled weekly OPTIONS CHAIN, but it has no separate index
@@ -1687,11 +1725,16 @@ class ThetaDataController:
 
         try:
             quote = self.stock_snapshot_quote(ticker)
-            for key in ["mid", "bid", "ask", "last"]:
-                v = quote.get(key)
-                if v not in (None, "") and float(v) > 0:
-                    return float(v)
-            if not quote:
+            usable = _usable_quote_price(quote)
+            if usable is not None:
+                return usable
+            if quote and quote.get("bid") and quote.get("ask"):
+                print(
+                    f"  [fetch_spot_price] {ticker}: live quote is crossed or too "
+                    f"wide to price from (bid {quote.get('bid')} / ask "
+                    f"{quote.get('ask')}) -- trying last trade print."
+                )
+            elif not quote:
                 print(
                     f"  [fetch_spot_price] {ticker}: empty quote response "
                     f"(no rows) -- trying last trade print."
@@ -1811,6 +1854,7 @@ class ThetaDataController:
         end_dt = datetime.strptime(end_date, fmt)
 
         all_rows: list[dict] = []
+        empty_windows: list[str] = []
         chunk_start = start_dt
         while chunk_start <= end_dt:
             chunk_end = min(chunk_start + timedelta(days=28), end_dt)
@@ -1822,8 +1866,34 @@ class ThetaDataController:
                 },
             )
             r.raise_for_status()
-            all_rows.extend(self._parse_rows(r))
+            try:
+                all_rows.extend(self._parse_rows(r))
+            except TypeError as exc:
+                # A null payload means the vendor has nothing for THIS
+                # 28-day window -- a coverage gap in one symbol's history,
+                # not a failed request. Letting it propagate threw away
+                # every chunk already fetched: confirmed live on SPCX, where
+                # 20260415-20260611 is empty and the other 24 chunks hold
+                # ~450 usable rows, and the whole 2-year pull came back as
+                # "Could not fetch price history for any of ['SPCX']" --
+                # which is what made GARCH, realized vol and the correlation
+                # matrix report the ticker as having no data at all.
+                # Anything else TypeError-shaped is still a real parse
+                # failure and still raises.
+                if "payload is None" not in str(exc):
+                    raise
+                empty_windows.append(
+                    f"{chunk_start.strftime(fmt)}-{chunk_end.strftime(fmt)}"
+                )
             chunk_start = chunk_end + timedelta(days=1)
+        if empty_windows:
+            # Say it out loud: the series returned has holes, and a caller
+            # computing returns across one is spanning a gap, not a day.
+            print(
+                f"  [ThetaData] {root} EOD: no data for "
+                f"{len(empty_windows)} window(s): {', '.join(empty_windows)}"
+                f" (returning {len(all_rows)} row(s) from the rest)"
+            )
         return all_rows
 
     def hist_stock_ohlc(self, root: str, start_date: str, end_date: str) -> list[dict]:

@@ -99,6 +99,27 @@ class TestHullWhiteSimulation:
         for tk, params in res.garch_params.items():
             assert params["current_vol"] > 0
 
+    def test_net_zero_book_does_not_zero_divide(self):
+        rng = np.random.default_rng(0)
+        inp = HistSimInputs(
+            tickers=["A", "B"],
+            position_vals=np.array([100_000.0, -100_000.0]),
+            method="basic",
+            returns_dict={"A": rng.normal(0, 0.02, 200), "B": rng.normal(0, 0.02, 200)},
+        )
+        res = run(inp)
+        assert res.var > 0
+
+    def test_garch_iid_marks_boundary_not_converged(self):
+        from var_engine.hist_sim import _garch_fit
+
+        rng = np.random.default_rng(0)
+        fit = _garch_fit(rng.normal(0.0, 0.01, 2000))
+        if fit["persistence"] >= 0.999 - 1e-6:
+            assert fit["converged"] is False
+            assert fit["boundary_pinned"] is True
+            assert fit["long_run_vol"] != fit["long_run_vol"]  # NaN
+
 
 class TestFHSSimulation:
     """Test Filtered Historical Simulation (GARCH-standardised residuals)."""

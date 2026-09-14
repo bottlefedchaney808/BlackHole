@@ -1,0 +1,911 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-09T13:57:47.415622+00:00",
+  "chain_verdict": "EDGE DETECTED",
+  "vol_regime": "CHEAP",
+  "current_price": 10.97,
+  "expiration_date": "20261218",
+  "strategies": [
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1514,
+        "gamma": 0.2142,
+        "theta": -0.0152,
+        "vega": 4.5026,
+        "vanna": 0.1746
+      },
+      "rank_score": 7.06
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1514,
+        "gamma": 0.2142,
+        "theta": -0.0152,
+        "vega": 4.5026,
+        "vanna": 0.1746
+      },
+      "rank_score": 7.06
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1514,
+        "gamma": 0.2142,
+        "theta": -0.0152,
+        "vega": 4.5026,
+        "vanna": 0.1746
+      },
+      "rank_score": 7.06
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1514,
+        "gamma": 0.2142,
+        "theta": -0.0152,
+        "vega": 4.5026,
+        "vanna": 0.1746
+      },
+      "rank_score": 7.06
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        3.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1585999999999999,
+        "gamma": 0.20450000000000002,
+        "theta": -0.0148,
+        "vega": 4.333600000000001,
+        "vanna": 0.16469999999999999
+      },
+      "rank_score": 6.792350000000001
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        5.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1585999999999999,
+        "gamma": 0.20450000000000002,
+        "theta": -0.0148,
+        "vega": 4.333600000000001,
+        "vanna": 0.16469999999999999
+      },
+      "rank_score": 6.792350000000001
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        6.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1585999999999999,
+        "gamma": 0.20450000000000002,
+        "theta": -0.0148,
+        "vega": 4.333600000000001,
+        "vanna": 0.16469999999999999
+      },
+      "rank_score": 6.792350000000001
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": 1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Long strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        4.0
+      ],
+      "greeks_summary": {
+        "delta": 1.1585999999999999,
+        "gamma": 0.20450000000000002,
+        "theta": -0.0148,
+        "vega": 4.333600000000001,
+        "vanna": 0.16469999999999999
+      },
+      "rank_score": 6.792350000000001
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 2.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 7.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 2.0 call, buy 7.0 call for protection",
+      "edge_strikes_used": [
+        2.0
+      ],
+      "greeks_summary": {
+        "delta": -0.06389999999999996,
+        "gamma": 0.0335,
+        "theta": -0.0028,
+        "vega": 0.7193,
+        "vanna": -0.2276
+      },
+      "rank_score": 1.1264
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 5.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 6.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 6.0 put, sell 5.0 put for cost reduction",
+      "edge_strikes_used": [
+        6.0
+      ],
+      "greeks_summary": {
+        "delta": -0.020600000000000063,
+        "gamma": 0.010499999999999999,
+        "theta": -0.0009,
+        "vega": 0.23810000000000003,
+        "vanna": -0.07150000000000001
+      },
+      "rank_score": 0.37200000000000005
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 2.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 5.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 2.0 put, buy 5.0 put for protection",
+      "edge_strikes_used": [
+        2.0
+      ],
+      "greeks_summary": {
+        "delta": -0.012499999999999956,
+        "gamma": 0.0075,
+        "theta": -0.001,
+        "vega": 0.1861,
+        "vanna": -0.0806
+      },
+      "rank_score": 0.2894
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 33.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 31.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 33.0 put, buy 31.0 put for protection",
+      "edge_strikes_used": [
+        33.0
+      ],
+      "greeks_summary": {
+        "delta": 0.005299999999999999,
+        "gamma": 0.0020999999999999994,
+        "theta": -0.00030000000000000014,
+        "vega": 0.057999999999999996,
+        "vanna": 0.022300000000000014
+      },
+      "rank_score": 0.08985
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 31.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 29.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 31.0 put, buy 29.0 put for protection",
+      "edge_strikes_used": [
+        31.0
+      ],
+      "greeks_summary": {
+        "delta": 0.0015999999999999973,
+        "gamma": 0.0013000000000000008,
+        "theta": 0.00010000000000000005,
+        "vega": 0.016300000000000037,
+        "vanna": 0.012999999999999984
+      },
+      "rank_score": 0.026300000000000056
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 5.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 4.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 4.0 put, sell 5.0 put for cost reduction",
+      "edge_strikes_used": [
+        4.0
+      ],
+      "greeks_summary": {
+        "delta": -0.000300000000000078,
+        "gamma": -0.0017000000000000001,
+        "theta": -0.00019999999999999987,
+        "vega": 0.0040000000000000036,
+        "vanna": 0.023200000000000005
+      },
+      "rank_score": 0.0032500000000000055
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 5.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 5.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 5.0 put, sell 5.0 put for cost reduction",
+      "edge_strikes_used": [
+        5.0
+      ],
+      "greeks_summary": {
+        "delta": 0.0,
+        "gamma": 0.0,
+        "theta": 0.0,
+        "vega": 0.0,
+        "vanna": 0.0
+      },
+      "rank_score": 0.0
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 32.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 30.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 32.0 put, buy 30.0 put for protection",
+      "edge_strikes_used": [
+        32.0
+      ],
+      "greeks_summary": {
+        "delta": -0.0032000000000000015,
+        "gamma": -9.99999999999994e-05,
+        "theta": 0.00030000000000000014,
+        "vega": -0.033999999999999975,
+        "vanna": -0.0011000000000000176
+      },
+      "rank_score": -0.05144999999999996
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 33.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 34.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 33.0 call, buy 34.0 call for protection",
+      "edge_strikes_used": [
+        33.0
+      ],
+      "greeks_summary": {
+        "delta": -0.004900000000000002,
+        "gamma": -0.0016000000000000007,
+        "theta": 0.0002999999999999999,
+        "vega": -0.05499999999999999,
+        "vanna": -0.0184
+      },
+      "rank_score": -0.08519999999999998
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 31.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 33.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 31.0 call, buy 33.0 call for protection",
+      "edge_strikes_used": [
+        31.0
+      ],
+      "greeks_summary": {
+        "delta": -0.005299999999999999,
+        "gamma": -0.0020999999999999994,
+        "theta": 0.00030000000000000014,
+        "vega": -0.057999999999999996,
+        "vanna": -0.022300000000000014
+      },
+      "rank_score": -0.09044999999999999
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 32.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 34.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Sell rich 32.0 call, buy 34.0 call for protection",
+      "edge_strikes_used": [
+        32.0
+      ],
+      "greeks_summary": {
+        "delta": -0.009800000000000003,
+        "gamma": -0.0031999999999999997,
+        "theta": 0.0006000000000000001,
+        "vega": -0.10830000000000001,
+        "vanna": -0.03570000000000001
+      },
+      "rank_score": -0.16785
+    },
+    {
+      "strategy_type": "put_spread",
+      "legs": [
+        {
+          "instrument_type": "put",
+          "strike": 5.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 3.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 3.0 put, sell 5.0 put for cost reduction",
+      "edge_strikes_used": [
+        3.0
+      ],
+      "greeks_summary": {
+        "delta": 0.012599999999999945,
+        "gamma": -0.0075,
+        "theta": 0.0011,
+        "vega": -0.1861,
+        "vanna": 0.0806
+      },
+      "rank_score": -0.2915
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 7.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 4.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 4.0 call, sell 7.0 call for cost reduction",
+      "edge_strikes_used": [
+        4.0
+      ],
+      "greeks_summary": {
+        "delta": 0.05109999999999992,
+        "gamma": -0.027700000000000002,
+        "theta": 0.0015999999999999999,
+        "vega": -0.5292000000000001,
+        "vanna": 0.1702
+      },
+      "rank_score": -0.8369500000000002
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 7.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 5.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 5.0 call, sell 7.0 call for cost reduction",
+      "edge_strikes_used": [
+        5.0
+      ],
+      "greeks_summary": {
+        "delta": 0.0514,
+        "gamma": -0.026000000000000002,
+        "theta": 0.0017999999999999997,
+        "vega": -0.5332000000000001,
+        "vanna": 0.147
+      },
+      "rank_score": -0.8406000000000002
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 7.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 3.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 3.0 call, sell 7.0 call for cost reduction",
+      "edge_strikes_used": [
+        3.0
+      ],
+      "greeks_summary": {
+        "delta": 0.06399999999999995,
+        "gamma": -0.0335,
+        "theta": 0.0029,
+        "vega": -0.7193,
+        "vanna": 0.2276
+      },
+      "rank_score": -1.1320999999999999
+    },
+    {
+      "strategy_type": "call_spread",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 8.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "call",
+          "strike": 6.0,
+          "quantity": 1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Buy cheap 6.0 call, sell 8.0 call for cost reduction",
+      "edge_strikes_used": [
+        6.0
+      ],
+      "greeks_summary": {
+        "delta": 0.09109999999999996,
+        "gamma": -0.038500000000000006,
+        "theta": 0.0023,
+        "vega": -0.7541999999999999,
+        "vanna": 0.11530000000000001
+      },
+      "rank_score": -1.1913499999999997
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        2.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1585999999999999,
+        "gamma": -0.20450000000000002,
+        "theta": 0.0148,
+        "vega": -4.333600000000001,
+        "vanna": -0.16469999999999999
+      },
+      "rank_score": -6.821950000000001
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        32.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1585999999999999,
+        "gamma": -0.20450000000000002,
+        "theta": 0.0148,
+        "vega": -4.333600000000001,
+        "vanna": -0.16469999999999999
+      },
+      "rank_score": -6.821950000000001
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        33.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1585999999999999,
+        "gamma": -0.20450000000000002,
+        "theta": 0.0148,
+        "vega": -4.333600000000001,
+        "vanna": -0.16469999999999999
+      },
+      "rank_score": -6.821950000000001
+    },
+    {
+      "strategy_type": "strangle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 12.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 10.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short strangle: 10.0 put / 12.0 call",
+      "edge_strikes_used": [
+        31.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1585999999999999,
+        "gamma": -0.20450000000000002,
+        "theta": 0.0148,
+        "vega": -4.333600000000001,
+        "vanna": -0.16469999999999999
+      },
+      "rank_score": -6.821950000000001
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1514,
+        "gamma": -0.2142,
+        "theta": 0.0152,
+        "vega": -4.5026,
+        "vanna": -0.1746
+      },
+      "rank_score": -7.0904
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1514,
+        "gamma": -0.2142,
+        "theta": 0.0152,
+        "vega": -4.5026,
+        "vanna": -0.1746
+      },
+      "rank_score": -7.0904
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1514,
+        "gamma": -0.2142,
+        "theta": 0.0152,
+        "vega": -4.5026,
+        "vanna": -0.1746
+      },
+      "rank_score": -7.0904
+    },
+    {
+      "strategy_type": "straddle",
+      "legs": [
+        {
+          "instrument_type": "call",
+          "strike": 11.0,
+          "quantity": -1
+        },
+        {
+          "instrument_type": "put",
+          "strike": 11.0,
+          "quantity": -1
+        }
+      ],
+      "vol_regime": "CHEAP",
+      "rationale": "Short straddle at 11.0 for gamma exposure",
+      "edge_strikes_used": [
+        11.0
+      ],
+      "greeks_summary": {
+        "delta": -1.1514,
+        "gamma": -0.2142,
+        "theta": 0.0152,
+        "vega": -4.5026,
+        "vanna": -0.1746
+      },
+      "rank_score": -7.0904
+    }
+  ],
+  "summary": {
+    "total_recommendations": 32,
+    "by_type": {},
+    "by_regime": "CHEAP"
+  }
+}
