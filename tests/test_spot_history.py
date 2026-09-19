@@ -320,14 +320,33 @@ def test_fetch_intraday_rejects_malformed_source_rows():
 
 
 def test_fetch_intraday_defaults_to_one_day_and_validates_lookback():
+    """Defaults to 1d; rejects nonsense; no longer rejects long windows.
+
+    This used to assert that `lookback="6m"` RAISED, because intraday was
+    capped at 30 days and only `<N>d`/`<N>w` parsed. That cap was never the
+    provider's -- it was httpx's default 5.0s timeout inside PHClient, which
+    made anything dense fail and get filed as vendor flakiness (see CLAUDE.md,
+    "the five-second lie"). With the timeout raised and `hist_stock_ohlc`
+    chunking at 21d, a long intraday window is a legitimate request.
+    """
     calls = []
     def provider(ticker, lookback):
         calls.append(lookback)
         return _intraday_rows()
     fetch_intraday_candles("SPY", provider=provider)
     assert calls == ["1d"]
-    with pytest.raises(ChartDataError, match="intraday lookback"):
-        fetch_intraday_candles("SPY", lookback="6m", provider=provider)
+
+    # Months and years now parse and are fetched, not refused.
+    fetch_intraday_candles("SPY", lookback="6m", provider=provider)
+    fetch_intraday_candles("SPY", lookback="2y", provider=provider)
+    assert calls == ["1d", "6m", "2y"]
+
+    # What must STILL be refused is input that cannot mean a window at all,
+    # and a non-positive one -- those fail identically every time, so retrying
+    # or fetching them just delays the real error.
+    for bad in ("0d", "-5d", "abc", "1x"):
+        with pytest.raises(ChartDataError, match="intraday lookback"):
+            fetch_intraday_candles("SPY", lookback=bad, provider=provider)
 
 
 def _as_of_payload() -> CandlePayload:

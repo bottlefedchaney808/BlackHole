@@ -7,10 +7,25 @@ description: Use when acquiring options history via ThetaData (option_bulk_hist_
 
 Guidance for ThetaData options-history acquisition. Invoked via `/rate-limit-options`.
 
-## Core rule
-**Transient 502s are RATE LIMITS, not missing data.** A 502 / empty response on an options bulk
-route usually means the proxy is rate-limited, not that the ticker/expiry has no data. Do NOT
-record a hard gap or impute a zero from a 502.
+## Core rule (AMENDED 2026-09-19 — read the amendment first)
+
+**AMENDMENT: a timeout at ~5.0s is NOT a rate limit. It was our own httpx
+default.** `PHClient` built its `httpx.Client` with no timeout, inheriting
+httpx's 5.0s default, and `ClientConfig` exposed no way to change it. Measured
+on SPY one-minute history, every span from 10 to 25 days failed at exactly
+5.0s and then served in **0.3-0.5s** once the timeout was raised. Those were
+filed as rate limits for a long time. They were not. Fixed in
+`shared/thetadata.py::_apply_http_timeout` (`THETADATA_HTTP_TIMEOUT_S`,
+default 120) — see the `phclient-v2` skill for the full table.
+
+**Diagnose with the clock before you diagnose with folklore:** a failure at
+almost exactly 5.0s is the old client default. An instant `PHAPIError` is a
+real `LARGE_REQUEST` refusal. A 502 after real work under load is a real rate
+limit.
+
+**Still true for genuine 502s:** a 502 / empty response on an options bulk
+route usually means the proxy is rate-limited, not that the ticker/expiry has
+no data. Do NOT record a hard gap or impute a zero from a 502.
 
 ## Acquisition discipline (from `Vol_Suite/seed_data_maker.py`)
 - `option_bulk_hist_oi_by_day` is the **proxy-fragile leg** — treat every response as possibly

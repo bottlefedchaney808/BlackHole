@@ -96,6 +96,43 @@ class _ClientConfig(ClientConfig):
     pass
 
 
+# PHClient builds `httpx.Client(follow_redirects=...)` with no timeout, so it
+# inherits httpx's 5.0s default -- and `ClientConfig` exposes no way to change
+# it. Five seconds is far too short for the dense routes: measured live
+# 2026-09-19 on SPY one-minute history, EVERY span at or above 10 days failed
+# at exactly 5.0s, while the same spans served in 0.3-8.5s once the timeout was
+# raised (25 days = 7,425 rows in 0.5s). The wall was ours, not the vendor's.
+#
+# This matters beyond one route: `PHTimeoutError` is treated across this repo
+# as transient rate-limit noise and retried (see chart_app/backtest_runner and
+# the `rate-limit-options` skill). Some unknown share of that "noise" is simply
+# a request that needed more than five seconds.
+#
+# The real vendor ceiling is separate and still there: 30 days of one-minute
+# data returns PHAPIError (LARGE_REQUEST) however long you wait, which is why
+# dense routes still chunk.
+_HTTP_TIMEOUT_S = float(os.environ.get("THETADATA_HTTP_TIMEOUT_S", "120"))
+
+
+def _apply_http_timeout(client: PHClient) -> None:
+    """Raise the httpx read timeout on a freshly built PHClient.
+
+    Reaches through to `SyncTransport._client` because the SDK offers no
+    supported hook. Never raises: a timeout we could not set is a slower
+    failure mode, not a reason to lose the client.
+    """
+    try:
+        transport = client._transport
+        http = getattr(transport, "_client", None)
+        if http is not None:
+            http.timeout = httpx.Timeout(_HTTP_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 -- best effort, see docstring
+        # Say it once rather than swallow it silently: a client stuck on the
+        # 5s default is exactly the failure this function exists to prevent,
+        # and a silent miss would look like the vendor being slow again.
+        print(f"  [ThetaData] could not raise HTTP timeout ({exc!r}); staying on the httpx default")
+
+
 def _freeze_to_python(obj):
     """Recursively convert PHClient FrozenMap/tuple leaves into plain Python
     dicts/lists so downstream callers see the same shapes they got from
@@ -700,6 +737,7 @@ class ThetaDataController:
         if client is None:
             client = PHClient(self._v2_config)
             client.__enter__()
+            _apply_http_timeout(client)
             self._v2_local.client = client
             with self._v2_lock:
                 self._v2_all.append(client)
@@ -1897,13 +1935,64 @@ class ThetaDataController:
         return all_rows
 
     def hist_stock_ohlc(self, root: str, start_date: str, end_date: str) -> list[dict]:
-        """One-minute stock OHLCV history from the verified stock/ohlc route."""
-        r = self._get_with_retry(
-            f"/api/theta/hist/stock/ohlc/{root}",
-            params={"start_date": start_date, "end_date": end_date},
-        )
-        r.raise_for_status()
-        return self._parse_rows(r)
+        """One-minute stock OHLCV history from the verified stock/ohlc route.
+
+        Paginates into <=28-day chunks, same as `hist_stock_eod` and for the
+        same reason -- a long un-chunked range 502s proxy-side. This route is
+        far denser than EOD (~390 rows per session against 1), so a year is
+        ~98,000 rows: it was previously unreachable because callers were capped
+        at 30 days rather than because the vendor refuses it.
+
+        An empty window is a coverage gap in one symbol's history, not a failed
+        request, and must not discard the chunks already fetched -- the lesson
+        from SPCX, where one empty window turned a working 2-year pull into
+        "no data at all".
+        """
+        fmt = "%Y%m%d"
+        start_dt = datetime.strptime(start_date, fmt)
+        end_dt = datetime.strptime(end_date, fmt)
+
+        all_rows: list[dict] = []
+        empty_windows: list[str] = []
+        chunk_start = start_dt
+        first = True
+        while chunk_start <= end_dt:
+            # 21 days, NOT the 28 the EOD routes use. Measured live 2026-09-19
+            # on SPY: 25d served (7,425 rows) and 30d returned PHAPIError
+            # however long the client waited, so the vendor ceiling for this
+            # route sits between them. One minute is ~390 rows a session
+            # against EOD's one, so the span that is safe for EOD is nowhere
+            # near safe here. 21d leaves margin against a denser symbol.
+            chunk_end = min(chunk_start + timedelta(days=21), end_dt)
+            # Serialise: the repo rule is never to fan out provider calls, and
+            # concurrent ThetaData callers reliably time each other out.
+            if not first:
+                time.sleep(0.35)
+            first = False
+            r = self._get_with_retry(
+                f"/api/theta/hist/stock/ohlc/{root}",
+                params={
+                    "start_date": chunk_start.strftime(fmt),
+                    "end_date": chunk_end.strftime(fmt),
+                },
+            )
+            r.raise_for_status()
+            try:
+                all_rows.extend(self._parse_rows(r))
+            except TypeError as exc:
+                if "payload is None" not in str(exc):
+                    raise
+                empty_windows.append(
+                    f"{chunk_start.strftime(fmt)}-{chunk_end.strftime(fmt)}"
+                )
+            chunk_start = chunk_end + timedelta(days=1)
+        if empty_windows:
+            print(
+                f"  [ThetaData] {root} 1-min: no data for "
+                f"{len(empty_windows)} window(s): {', '.join(empty_windows)}"
+                f" (returning {len(all_rows)} row(s) from the rest)"
+            )
+        return all_rows
 
     def hist_index_eod(self, root: str, start_date: str, end_date: str) -> list[dict]:
         """Daily index close history -- the fetch_spot_price fallback for an

@@ -81,20 +81,42 @@ def validate_lookback(lookback: Any) -> Any:
 
 
 def validate_intraday_lookback(lookback: Any) -> Any:
-    """Allow bounded day/week windows for dense intraday history."""
+    """Validate an intraday lookback. There is no upper bound.
+
+    There used to be one: `days > 30` was refused. It was OURS, not the
+    vendor's -- `hist_stock_ohlc` takes any start/end. The guard existed
+    because a long un-chunked request for one-minute rows (~390 a session)
+    502s proxy-side, and that is now handled where it belongs: the call
+    paginates into 28-day chunks and tolerates empty windows, exactly like
+    `hist_stock_eod`. With the size problem fixed at the fetch layer, a
+    ceiling here is just a refusal to answer a question the data can answer.
+
+    Removing it makes NOTHING fetch more on its own. Every caller still asks
+    for its own lookback and chart_app's intraday defaults are unchanged
+    (15m/30m 20d, 1h/4h 30d). It only means a longer window is no longer
+    refused when something explicitly asks for one.
+    """
     if isinstance(lookback, bool):
         raise ChartDataError("intraday lookback must be a positive day/week value")
     if isinstance(lookback, int) and lookback > 0:
         days = lookback
     elif isinstance(lookback, str):
-        match = re.fullmatch(r"(?P<amount>\d+)\s*(?P<unit>[dw])", lookback.strip(), re.I)
+        # Months and years parse now. While the cap was 30 days they could
+        # never pass, so only d/w were ever accepted here.
+        match = re.fullmatch(
+            r"(?P<amount>\d+)\s*(?P<unit>[dwmy])", lookback.strip(), re.I
+        )
         if not match:
-            raise ChartDataError("intraday lookback must use a value such as '1d' or '1w'")
-        days = int(match.group("amount")) * (7 if match.group("unit").lower() == "w" else 1)
+            raise ChartDataError(
+                "intraday lookback must use a value such as '1d', '1w', '6m' or '1y'"
+            )
+        days = int(match.group("amount")) * {
+            "d": 1, "w": 7, "m": 30, "y": 365
+        }[match.group("unit").lower()]
     else:
         raise ChartDataError("intraday lookback must use a value such as '1d' or '1w'")
-    if days <= 0 or days > 30:
-        raise ChartDataError("intraday lookback must be between 1 and 30 days")
+    if days <= 0:
+        raise ChartDataError("intraday lookback must be positive")
     return lookback
 
 

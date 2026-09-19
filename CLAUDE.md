@@ -466,6 +466,16 @@ widget runs from arbitrary text. Don't expose it beyond localhost without adding
   (`tests/test_thetadata_spxw_alias.py`). Keep chain-root SPXW vs price-root SPX.
 - **ThetaData mass pulls.** Any loop over `shared/thetadata.py` must rate-limit (sleep 0.3–0.5s,
   never 6-way parallel) per the `theta-data` skill. A no-delay ~8000-request pull gets throttled.
+- **A ThetaData timeout at ~5.0s is OUR bug, not the vendor's (measured 2026-09-19).** `PHClient`
+  built `httpx.Client(...)` with no timeout, inheriting httpx's **5.0s default**, and `ClientConfig`
+  exposes no way to set it. Years of "rate limits / transient 502s / the vendor can't serve that
+  range" were partly this. Measured on SPY one-minute history: every span from 10d to 25d failed at
+  exactly 5.0s, then served in **0.3–0.5s** with the timeout raised — 25d = 7,425 rows in 0.5s.
+  Fixed by `shared/thetadata.py::_apply_http_timeout` (`THETADATA_HTTP_TIMEOUT_S`, default 120).
+  **Diagnose with the clock:** a failure at almost exactly 5.0s is the old default; an instant
+  `PHAPIError` is a real `LARGE_REQUEST` refusal. Do NOT overcorrect — the vendor ceiling is real
+  (30d of one-minute fails at any timeout), so dense routes still chunk: **21d** for one-minute,
+  28d for EOD. Full table in the `phclient-v2` skill.
 - **Hermes tool rules (this host).** `search_files` patterns must not start with `-` (rg treats
   them as flags — `--modules` fails as `unrecognized flag`); escape regex metacharacters.
   Re-read a file immediately before `patch`; unique surrounding context. Foreground `terminal`

@@ -5,6 +5,55 @@ description: Use when reading, calling, or debugging shared/thetadata.py (ThetaD
 
 # PHClient v2 (ThetaData proxy client)
 
+## THE FIVE-SECOND LIE (measured 2026-09-19 — read this before blaming the vendor)
+
+**For years the answer to "why did that pull fail?" was "rate limits / transient
+proxy 502s / the vendor can't serve that range". For a large class of failures
+that was WRONG. It was `httpx`'s default timeout, on our side, five seconds.**
+
+`PHClient` builds `httpx.Client(follow_redirects=...)` with **no timeout**, so it
+inherits httpx's 5.0s default, and `ClientConfig` exposes no way to change it.
+Anything denser or slower than ~5s died and got filed as vendor flakiness.
+
+Measured live on SPY one-minute history (`market.stock_ohlc`):
+
+| span | httpx default (5.0s) | timeout raised to 120s |
+|---|---|---|
+| 7d  | OK | OK |
+| 10d | **PHTimeoutError at 5.0s** | **OK — 3,519 rows in 0.3s** |
+| 14d | **PHTimeoutError at 5.0s** | **OK — 3,909 rows in 0.3s** |
+| 21d | **PHTimeoutError at 5.0s** | **OK — 5,862 rows in 0.3s** |
+| 25d | **PHTimeoutError at 5.0s** | **OK — 7,425 rows in 0.5s** |
+| 30d+ | PHTimeoutError | PHAPIError (real vendor ceiling) |
+
+Same requests. Same proxy. The only change was our own client timeout. Several
+of these then returned in **0.3 seconds** — they were never slow, they were
+never rate-limited, and the data was there the whole time.
+
+**Fixed:** `shared/thetadata.py::_apply_http_timeout` sets the timeout on every
+thread-local `PHClient` (`THETADATA_HTTP_TIMEOUT_S`, default **120**).
+
+### The diagnostic that settles it in one look
+
+**Check the elapsed time.** A failure at *almost exactly 5.0s* is the old
+client default, not the vendor. A real vendor refusal either comes back fast
+(instant `PHAPIError` = `LARGE_REQUEST` rejected) or after a genuinely long
+wait. If something times out at 5.0s on the dot, the request was fine.
+
+### What is STILL real — do not overcorrect
+
+- **The `LARGE_REQUEST` ceiling exists.** 30 days of one-minute data returns
+  `PHAPIError` no matter how long you wait. Dense routes must still chunk:
+  **21 days** for one-minute (`hist_stock_ohlc`), 28 for EOD-density routes.
+  One minute is ~390 rows a session against EOD's one, so an EOD-safe span is
+  nowhere near safe on a minute route.
+- **Concurrency still bites.** Concurrent `PHClient` callers really do time
+  each other out; serialise, sleep 0.3–0.5s, never fan out.
+- Genuine 502s on options bulk routes under load are still real rate limits.
+
+**The rule: prove it with the clock before you call something a rate limit.**
+
+
 `shared/thetadata.py::ThetaDataController` is a **legacy-path shim over the real `potatohedge`
 v2 SDK** (`potatohedge.client_v2.PHClient`), not a hand-rolled REST client anymore (that was true
 pre-2026-08-18). Every one of `ThetaDataController`'s ~28 public methods builds an old-style
