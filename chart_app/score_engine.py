@@ -12,6 +12,38 @@ from Direction.trend_engine import adx, ma_alignment
 from shared.candlestick_chart import apply_position_gate
 from shared.chart_data import CandleRecord
 
+# Every tunable the chart's gear panels expose. Kept in ONE place so the
+# panel, the `/api/indicators` route and the defaults here can never disagree
+# -- the failure mode where a slider says 14 and the server quietly used 20.
+INDICATOR_DEFAULTS: dict[str, float] = {
+    "ema_fast": 20,
+    "ema_mid": 50,
+    "ema_slow": 200,
+    "bb_window": 20,
+    "bb_mult": 2.0,
+    "vwap_sigma": 1.0,
+    "atr_period": 14,
+    "atr_mult": 1.5,
+    "rsi_period": 14,
+    "cci_period": 20,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+}
+
+
+def _cfg(overrides: dict | None) -> dict[str, float]:
+    """Merge caller overrides onto the defaults, ignoring unknown keys."""
+    out = dict(INDICATOR_DEFAULTS)
+    for key, value in (overrides or {}).items():
+        if key in out and value is not None:
+            try:
+                out[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 _ADX_TREND_THRESHOLD = 25.0
 _MIN_SCORE_BARS = 50
 _BB_WINDOW = 20
@@ -58,11 +90,13 @@ def _vwap(records: list[CandleRecord]) -> list[float | None]:
     return out
 
 
-def _bb_overlays(closes: list[float], n: int) -> dict[str, list[float | None]]:
+def _bb_overlays(
+    closes: list[float], n: int, window: int = _BB_WINDOW, mult: float = 2.0
+) -> dict[str, list[float | None]]:
     mid: list[float | None] = [None] * n
     upper: list[float | None] = [None] * n
     lower: list[float | None] = [None] * n
-    bands = get_bands(closes, window=_BB_WINDOW)
+    bands = get_bands(closes, window=window)
     sma = bands.get("sma")
     up = bands.get("upper")
     lo = bands.get("lower")
@@ -73,8 +107,11 @@ def _bb_overlays(closes: list[float], n: int) -> dict[str, list[float | None]]:
         idx = offset + i
         if 0 <= idx < n:
             mid[idx] = float(value)
-            upper[idx] = float(up[i])
-            lower[idx] = float(lo[i])
+            # `get_bands` is hardcoded to 2 sigma, so rebuild the envelope from
+            # its own half-width rather than adding a second bands function.
+            half = (float(up[i]) - float(lo[i])) / 2.0
+            upper[idx] = float(value) + half * (mult / 2.0)
+            lower[idx] = float(value) - half * (mult / 2.0)
     return {"bb_mid": mid, "bb_upper": upper, "bb_lower": lower}
 
 
@@ -181,22 +218,36 @@ def _prior_day_levels(records: list[CandleRecord]) -> dict[str, list[float | Non
     return {"pdh": pdh, "pdl": pdl}
 
 
-def classic_overlays(records: list[CandleRecord]) -> dict[str, list[float | None]]:
+def classic_overlays(
+    records: list[CandleRecord], params: dict | None = None
+) -> dict[str, list[float | None]]:
+    """Price-pane overlays. `params` overrides `INDICATOR_DEFAULTS`.
+
+    The series KEYS stay fixed (`ema20`, `ema50`, `ema200`) even when the
+    periods are retuned -- they are the wire contract the client renders
+    against. The header/tooltip reports the period actually used; renaming the
+    key on every slider move would break every consumer instead.
+    """
+    cfg = _cfg(params)
     n = len(records)
     closes = _closes(records)
-    ema20 = _ema(closes, 20)
+    ema_fast = _ema(closes, int(cfg["ema_fast"]))
     vwap = _vwap(records)
     overlays: dict[str, list[float | None]] = {
-        "ema20": ema20,
-        "ema50": _ema(closes, 50),
+        "ema20": ema_fast,
+        "ema50": _ema(closes, int(cfg["ema_mid"])),
         # Added alongside the original three so the chart has trend context
         # beyond 50 bars and a volatility frame that is not just Bollinger.
-        "ema200": _ema(closes, 200),
+        "ema200": _ema(closes, int(cfg["ema_slow"])),
         "vwap": vwap,
     }
-    overlays.update(_bb_overlays(closes, n))
-    overlays.update(_vwap_bands(records, vwap))
-    overlays.update(_atr_channel(records, ema20))
+    overlays.update(
+        _bb_overlays(closes, n, int(cfg["bb_window"]), float(cfg["bb_mult"]))
+    )
+    overlays.update(_vwap_bands(records, vwap, float(cfg["vwap_sigma"])))
+    overlays.update(
+        _atr_channel(records, ema_fast, float(cfg["atr_mult"]))
+    )
     overlays.update(_prior_day_levels(records))
     return overlays
 
@@ -280,14 +331,29 @@ def _macd(
     return {"macd": line, "macd_signal": sig, "macd_hist": hist}
 
 
-def oscillators(records: list[CandleRecord]) -> dict[str, list[float | None]]:
-    """RSI(14), CCI(20) and MACD(12,26,9) for the bar series."""
+def oscillators(
+    records: list[CandleRecord], params: dict | None = None
+) -> dict[str, list[float | None]]:
+    """RSI, CCI and MACD. `params` overrides `INDICATOR_DEFAULTS`.
+
+    Defaults are the classic RSI(14), CCI(20), MACD(12,26,9); the gear panel
+    on each pane drives these, and `/api/indicators` recomputes them without
+    touching the bar cache or any data provider.
+    """
+    cfg = _cfg(params)
     closes = _closes(records)
     out: dict[str, list[float | None]] = {
-        "rsi": _rsi(closes),
-        "cci": _cci(records),
+        "rsi": _rsi(closes, int(cfg["rsi_period"])),
+        "cci": _cci(records, int(cfg["cci_period"])),
     }
-    out.update(_macd(closes))
+    out.update(
+        _macd(
+            closes,
+            int(cfg["macd_fast"]),
+            int(cfg["macd_slow"]),
+            int(cfg["macd_signal"]),
+        )
+    )
     return out
 
 
@@ -341,14 +407,75 @@ def direction_coverage(records: list[CandleRecord]) -> dict[str, Any]:
     }
 
 
+def price_legs_series(records: list[CandleRecord]) -> dict[str, list[bool]]:
+    """Per-bar wave3 / squeeze / trend, computed once over the whole series.
+
+    Replaces the per-bar `_price_legs(records[:i+1])` loop, which re-ran the
+    Elliott count, the Bollinger bands and a full ADX scan over the entire
+    prefix for **every** bar -- O(n^2) on a path that runs behind a 5-second
+    `/api/state` poll. At 250 daily bars that was ~31k redundant band
+    computations per poll.
+
+    The readings are not identical to the old loop, and deliberately so: the
+    squeeze test is now a trailing *percentile* of bandwidth rather than
+    `bollinger_analyzer.detect_squeeze`'s fixed "band width < 2% of price".
+    A fixed cut is not a timeframe-portable statement -- it fires on nearly
+    every 15m SPY bar and essentially never on a daily one. See
+    `signal_engine.bandwidth_pct_series`.
+    """
+    from chart_app.signal_engine import (
+        DEFAULTS as _SIG_DEFAULTS,
+    )
+    from chart_app.signal_engine import (
+        _ema as _sig_ema,
+    )
+    from chart_app.signal_engine import (
+        _wave_bias_series,
+        adx_series,
+        bandwidth_pct_series,
+    )
+
+    n = len(records)
+    empty = {"wave3": [False] * n, "squeeze": [False] * n, "trend": [False] * n}
+    if n < _MIN_SCORE_BARS:
+        return empty
+    try:
+        closes = _closes(records)
+        adx, _pdi, _mdi = adx_series(records, int(_SIG_DEFAULTS["adx_period"]))
+        ema20 = _sig_ema(closes, 20)
+        ema50 = _sig_ema(closes, 50)
+        _bw, bw_pct, _u, _l = bandwidth_pct_series(
+            closes, _BB_WINDOW, int(_SIG_DEFAULTS["bandwidth_window"])
+        )
+        waves = _wave_bias_series(
+            closes,
+            window=int(_SIG_DEFAULTS["wave_window"]),
+            stride=int(_SIG_DEFAULTS["wave_stride"]),
+        )
+        squeeze_cut = float(_SIG_DEFAULTS["squeeze_pct"])
+        out = {"wave3": [], "squeeze": [], "trend": []}
+        for i in range(n):
+            out["wave3"].append(bool(waves[i] > 0))
+            out["squeeze"].append(bw_pct[i] is not None and bw_pct[i] <= squeeze_cut)
+            bullish = (
+                ema20[i] is not None and ema50[i] is not None and ema20[i] > ema50[i]
+            )
+            out["trend"].append(
+                bool(adx[i] is not None and adx[i] > _ADX_TREND_THRESHOLD and bullish)
+            )
+        return out
+    except Exception:  # noqa: BLE001 — degrade to all-False; never raise
+        return empty
+
+
 def price_scores(records: list[CandleRecord]) -> list[dict[str, Any]]:
+    legs = price_legs_series(records)
     rows: list[dict[str, Any]] = []
     for index, record in enumerate(records):
         signals = _neutral_signals()
-        legs = _price_legs(records[: index + 1])
-        signals["wave3"] = bool(legs["wave3"])
-        signals["squeeze"] = bool(legs["squeeze"])
-        signals["trend"] = bool(legs["trend"])
+        signals["wave3"] = bool(legs["wave3"][index])
+        signals["squeeze"] = bool(legs["squeeze"][index])
+        signals["trend"] = bool(legs["trend"][index])
         rows.append(
             {
                 "ts": record.timestamp.isoformat(),

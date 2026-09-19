@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
-from shared.chart_data import CandleRecord
 from chart_app.flow_pane import bin_flow
+from shared.chart_data import CandleRecord
 
 
 def _bars():
@@ -40,9 +40,27 @@ def test_bin_flow_boundary_lands_in_bar():
 
 def test_bin_flow_zero_fill_and_empty():
     records = _bars()
-    assert bin_flow(records, []) == {"call": [0.0, 0.0, 0.0], "put": [0.0, 0.0, 0.0], "net": [0.0, 0.0, 0.0]}
-    assert bin_flow(records, None) == {"call": [0.0, 0.0, 0.0], "put": [0.0, 0.0, 0.0], "net": [0.0, 0.0, 0.0]}
-    assert bin_flow([], []) == {"call": [], "put": [], "net": []}
+    zeros = {
+        "call": [0.0, 0.0, 0.0],
+        "put": [0.0, 0.0, 0.0],
+        "net": [0.0, 0.0, 0.0],
+        "cum_net": [0.0, 0.0, 0.0],
+    }
+    assert bin_flow(records, []) == zeros
+    assert bin_flow(records, None) == zeros
+    assert bin_flow([], []) == {"call": [], "put": [], "net": [], "cum_net": []}
+
+
+def test_bin_flow_cum_net_is_a_running_total():
+    records = _bars()
+    trades = [
+        _trade("C", 500.0, "2026-08-18T09:30:00"),
+        _trade("P", 200.0, "2026-08-18T09:40:00"),
+        _trade("C", 100.0, "2026-08-18T09:55:00"),
+    ]
+    out = bin_flow(records, trades)
+    assert out["net"] == [500.0, -200.0, 100.0]
+    assert out["cum_net"] == [500.0, 300.0, 400.0]
 
 
 def test_bin_flow_skips_unknown_right_and_nonpositive_premium():

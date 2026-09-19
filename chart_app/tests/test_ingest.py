@@ -1,13 +1,15 @@
 from datetime import datetime
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 from fastapi.testclient import TestClient
-from shared.chart_data import CandleRecord, CandlePayload
-from shared.spot_history import fetch_daily_candles, fetch_intraday_candles
+
 from chart_app.bar_cache import BarCache
 from chart_app.ingest import refresh_cache
 from chart_app.server import create_app
+from shared.chart_data import CandlePayload, CandleRecord
+from shared.spot_history import fetch_daily_candles, fetch_intraday_candles
+
 
 def test_refresh_cache_upserts(tmp_path):
     rec = CandleRecord(datetime(2026, 8, 18), 1, 1, 1, 1, 1)

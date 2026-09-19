@@ -1,7 +1,9 @@
 from datetime import datetime
-from shared.chart_data import CandleRecord
+
 from chart_app.bar_cache import BarCache
 from chart_app.snapshot import build_state
+from shared.chart_data import CandleRecord
+
 
 def test_build_state_empty(tmp_path):
     st = build_state(BarCache(tmp_path / "b.db"), "SPY", "1d")

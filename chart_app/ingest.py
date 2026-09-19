@@ -6,27 +6,40 @@ import time
 from collections.abc import Callable
 
 from chart_app.bar_cache import BarCache
+from chart_app.crypto_source import fetch_crypto_candles, is_crypto
 from shared.chart_data import CandlePayload
 
-# Coarse intervals are aggregated from one-minute rows, so a 20-30 day pull is
-# a large request and the provider intermittently times out under load -- see
-# the repo's `rate-limit-options` guidance on distinguishing rate-limit noise
-# from genuinely missing data. A timeout used to end the refresh with zero
-# bars cached, which on a timeframe with no prior cache is indistinguishable
-# from "this interval has no data": an empty chart, no explanation. Retrying a
-# couple of times with backoff turns most of those into a normal load.
+# CORRECTED 2026-09-19. This used to read "a 20-30 day pull is a large request
+# and the provider intermittently times out under load". That was wrong about
+# the cause, and the retry was papering over OUR bug: PHClient built its
+# httpx.Client with no timeout and inherited httpx's 5.0s default, so anything
+# needing more than five seconds failed and got filed as provider load. With
+# the timeout raised (shared/thetadata.py::_apply_http_timeout) the same spans
+# return in 0.3-0.5s. See CLAUDE.md, "the five-second lie".
+#
+# The retry STAYS, for the reasons that are still real: the vendor's
+# LARGE_REQUEST ceiling, genuine 502s under load, and ordinary network blips.
+# A failure used to end the refresh with zero bars cached, which on a
+# timeframe with no prior cache is indistinguishable from "this interval has
+# no data" -- an empty chart with no explanation. It should just fire far less
+# often now. If you see it firing constantly, check the elapsed time before
+# blaming the vendor: ~5.0s means the timeout is not being applied.
 _RETRY_DELAYS_S = (1.5, 4.0)
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Whether an exception looks like provider load rather than bad input.
+    """Whether an exception is worth retrying rather than reporting.
 
     Matched on the message because the provider error (`PHTimeoutError`) is
     wrapped in `ChartDataError` by shared/spot_history.py before it gets
     here, so the concrete type is gone by this point. A validation failure
-    (bad ticker, unsupported interval, out-of-range lookback) must NOT be
+    (bad ticker, unsupported interval, non-positive lookback) must NOT be
     retried -- it will fail identically every time and just delays the real
     error reaching the caller.
+
+    Note "transient" is NOT a synonym for "the provider is busy". A timeout
+    here was, for a long time, our own 5.0s httpx default; retrying it three
+    times just meant waiting 5.5s longer to report the wrong cause.
     """
     text = f"{type(exc).__name__}: {exc}".lower()
     return any(
@@ -52,6 +65,14 @@ def refresh_cache(
     """
 
     def fetch() -> CandlePayload:
+        # Crypto and perps bypass the injected ThetaData fetchers entirely.
+        # ThetaData is an equities feed and will answer for a symbol like
+        # `BTC` with the Grayscale Mini Trust ETF -- a real instrument at a
+        # real price that is simply not bitcoin. Routing on the ticker shape
+        # (`BTC-PERP`, `ETH-USD`) keeps that confusion impossible rather than
+        # merely unlikely. See chart_app/crypto_source.py.
+        if is_crypto(ticker):
+            return fetch_crypto_candles(ticker, interval=interval, lookback=lookback)
         if interval == "1d":
             return daily_fn(ticker, lookback=lookback)
         return intrad_fn(ticker, interval=interval, lookback=lookback)
