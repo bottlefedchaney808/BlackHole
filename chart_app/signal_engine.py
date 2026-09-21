@@ -175,6 +175,12 @@ DEFAULTS: dict[str, Any] = {
     "squeeze_pct": 20.0,      # bandwidth percentile that counts as a squeeze
     "adx_period": 14,
     "rsi_period": 14,
+    # The momentum vote's MACD. These were hard-coded 12/26/9 while the chart's
+    # MACD pane took sliders, so a tune set to 6/13/4 on the pane never reached
+    # the conviction line or the tester's P&L (found 2026-09-21 on XE/SMR 5m).
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
     "wave_window": 200,       # cap on the Elliott prefix (keeps it O(n))
     "wave_stride": 5,         # recompute the wave count every N bars
     # Liquidity gate: conviction is multiplied by this when ELMo says the
@@ -552,7 +558,9 @@ def conviction_series(
         comp["trend"][i] = float(np.clip(stack, -1.0, 1.0)) * (0.35 + 0.65 * strength)
 
     # --- momentum: MACD histogram in ATR units + centred RSI ---------------
-    hist = macd_hist_series(closes)
+    hist = macd_hist_series(
+        closes, int(cfg["macd_fast"]), int(cfg["macd_slow"]), int(cfg["macd_signal"])
+    )
     rsi = rsi_series(closes, int(cfg["rsi_period"]))
     atr = atr_series(records, int(cfg["atr_period"]))
     for i in range(n):

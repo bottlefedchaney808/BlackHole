@@ -302,3 +302,53 @@ def test_dropping_the_left_edge_is_what_rewrites_history():
     b = {(f.decision_ts, f.ts) for f in slid.fills}
     # Not an equality assertion -- the point is that these CAN differ.
     assert a != b, "left-edge drift no longer perturbs decisions; re-check the store"
+
+
+# --- equities: naive US/Eastern stamps and late-assembled bars (2026-09-21) --
+
+_ET = __import__("zoneinfo").ZoneInfo("America/New_York")
+
+
+def _et_bar(hh: int, mm: int) -> CandleRecord:
+    """A ThetaData-shaped equity bar: naive wall-clock Eastern time."""
+    return CandleRecord(
+        timestamp=datetime(2026, 9, 21, hh, mm),  # noqa: DTZ001 - ThetaData stamps are naive ET
+        open=10.0,
+        high=10.1,
+        low=9.9,
+        close=10.0,
+        volume=1000.0,
+    )
+
+
+def test_a_naive_eastern_bar_is_not_read_as_utc():
+    # 10:00 ET = 14:00 UTC. At 14:02 UTC the 10:00-10:05 bar is still forming.
+    # Read as UTC it would look four hours old and be acted on -- repainting.
+    now = datetime(2026, 9, 21, 14, 2, tzinfo=UTC)
+    bar = _et_bar(10, 0)
+    assert bar_has_closed(bar, "5m", now)  # the old, wrong reading
+    assert not bar_has_closed(bar, "5m", now, tz=_ET)
+
+
+def test_grace_holds_a_bar_open_until_its_last_minute_row_can_land():
+    bar = _et_bar(10, 0)
+    just_after = datetime(2026, 9, 21, 14, 5, 30, tzinfo=UTC)
+    later = datetime(2026, 9, 21, 14, 6, 30, tzinfo=UTC)
+    assert bar_has_closed(bar, "5m", just_after, tz=_ET)
+    assert not bar_has_closed(bar, "5m", just_after, tz=_ET, grace_s=75)
+    assert bar_has_closed(bar, "5m", later, tz=_ET, grace_s=75)
+
+
+def test_journal_seed_cuts_in_the_bars_own_zone(tmp_path):
+    # Session started 09:45 ET (13:45 UTC). A fill at 09:40 ET is history; one
+    # at 10:00 ET is tonight's news. Compared in UTC, both would be "history".
+    from chart_app.perp_sleeve import Fill
+
+    def fill(hh: int, mm: int) -> Fill:
+        ts = datetime(2026, 9, 21, hh, mm).isoformat()  # noqa: DTZ001 - naive ET, as the feed stamps it
+        return Fill(ts, ts, "enter_long", "long", 10.0, 0, 1, "signal", None, 30.0)
+
+    book = Book(fills=[fill(9, 40), fill(10, 0)])
+    started = datetime(2026, 9, 21, 13, 45, tzinfo=UTC)
+    assert Journal(tmp_path / "a.jsonl").seed(book, started, tz=_ET) == 1
+    assert Journal(tmp_path / "b.jsonl").seed(book, started) == 2

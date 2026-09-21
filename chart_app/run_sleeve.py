@@ -37,6 +37,25 @@ file is being written by a running dashboard, and two processes racing one
 SQLite file is the "database is locked" failure this repo already documents.
 It is seeded ONCE from that file if the symbol is there, which buys a year of
 warm-up instead of thirty days.
+
+Equities (added 2026-09-21, XE|5m and SMR|5m)
+---------------------------------------------
+A non-crypto ticker routes through ThetaData one-minute history aggregated to
+the interval -- the same `fetch_intraday_candles` the chart draws from, so the
+sleeve sees the chart's bars. Three things differ from a perp and each is
+handled here rather than assumed away:
+
+* Bars are stamped in naive US/Eastern wall-clock, not UTC. `_bar_tz` says
+  which, and every "has this bar closed / did this fill happen before we
+  started" comparison is made in that zone.
+* A 5m bar is assembled from 1m rows that can land after the boundary, so a
+  bar is only final `EQUITY_GRACE_S` after it ends.
+* The tape is RTH only and the book carries overnight, exactly as the tester
+  scored it. No flat-at-close rule is imposed: that would be a different
+  strategy from the one that was tested.
+
+Journals and the bar store live under `artifacts/equity_sleeve/`, one store
+per ticker, so two equity sleeves never race one SQLite file.
 """
 
 from __future__ import annotations
@@ -48,6 +67,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from chart_app import profiles
 from chart_app.bar_cache import BarCache
@@ -56,6 +76,10 @@ from chart_app.perp_sleeve import Journal, replay
 from shared.chart_data import CandleRecord
 
 _ART = Path(__file__).resolve().parent.parent / "artifacts" / "perp_sleeve"
+_EQ_ART = Path(__file__).resolve().parent.parent / "artifacts" / "equity_sleeve"
+_ET = ZoneInfo("America/New_York")
+# Seconds after a bar's nominal end before it counts as final (see docstring).
+EQUITY_GRACE_S = 75.0
 _CHART_BARS = Path(__file__).resolve().parent.parent / "artifacts" / "chart_app_bars.db"
 
 _stop = False
@@ -73,19 +97,30 @@ def _say(line: str) -> None:
     sys.stdout.flush()
 
 
+def _bar_tz(ticker: str):
+    """The zone a naive bar timestamp is in: UTC for crypto, ET for equities."""
+    return UTC if is_crypto(ticker) else _ET
+
+
+def _grace(ticker: str) -> float:
+    return 0.0 if is_crypto(ticker) else EQUITY_GRACE_S
+
+
 def _fetch(ticker: str, interval: str, lookback: str) -> list[CandleRecord]:
-    if not is_crypto(ticker):
-        raise SystemExit(
-            f"{ticker!r} is not a crypto/perp symbol. This sleeve only routes "
-            "through crypto_source (OKX/Coinbase); an equity would need a "
-            "ThetaData fetcher and a session calendar."
-        )
-    payload = fetch_crypto_candles(ticker, interval=interval, lookback=lookback)
+    if is_crypto(ticker):
+        payload = fetch_crypto_candles(ticker, interval=interval, lookback=lookback)
+    else:
+        from shared.spot_history import fetch_intraday_candles
+
+        payload = fetch_intraday_candles(ticker, interval=interval, lookback=lookback)
     return list(payload.observations)
 
 
 def _fmt_stop(value: float | None) -> str:
-    return f"{value:,.0f}" if value else "--"
+    if not value:
+        return "--"
+    # BTC reads fine in whole dollars; an $8 stock does not (its stop printed "8").
+    return f"{value:,.0f}" if abs(value) >= 1000 else f"{value:,.2f}"
 
 
 def seed_store(store: BarCache, ticker: str, interval: str) -> int:
@@ -133,10 +168,11 @@ def tick(
 
     store.upsert(ticker, interval, fetched)
     records = store.load(ticker, interval)
-    book = replay(records, profile, interval=interval)
+    tz = _bar_tz(ticker)
+    book = replay(records, profile, interval=interval, tz=tz, grace_s=_grace(ticker))
 
     if first:
-        seeded = journal.seed(book, started)
+        seeded = journal.seed(book, started, tz=tz)
         _say(
             f"anchored on {len(records)} bars from {records[0].timestamp.date()}; "
             f"replayed {seeded} prior fills as history (prior_fill, not tonight)"
@@ -145,14 +181,14 @@ def tick(
     # Only a fill on a bar at or after the session start is news. Anything
     # older that turns up now is a revision of history -- it gets written for
     # the audit trail, but it is not announced as if it just happened.
-    cut = started.replace(tzinfo=None)
+    cut = started.astimezone(tz).replace(tzinfo=None)
     announced = []
     for fill in journal.new_fills(book):
         ts = datetime.fromisoformat(fill.ts)
         ts = (
             ts.replace(tzinfo=None)
             if ts.tzinfo is None
-            else ts.astimezone(UTC).replace(tzinfo=None)
+            else ts.astimezone(tz).replace(tzinfo=None)
         )
         if ts < cut:
             journal.write("revision", fill.as_dict())
@@ -184,7 +220,8 @@ def tick(
         f"{ticker} {book.last_ts[-14:]}  px {book.last_close:>10,.2f}  "
         f"score {book.score:>5.1f}  {book.side:<5} {abs(book.units):.0f}x  "
         f"stop {_fmt_stop(book.stop):>8}  "
-        f"pnl {book.total_pct():+7.2f}% since {book.metrics.get('bars', 0)} bars ago"
+        f"pnl {book.metrics.get('total_pct_maker', 0.0):+7.2f}% @2bp (tester) / "
+        f"{book.total_pct():+.2f}% @5bp over {book.metrics.get('bars', 0)} bars"
         f"{pending}"
     )
     return state
@@ -194,7 +231,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", default="BTC-PERP")
     parser.add_argument("--interval", default="15m")
-    parser.add_argument("--lookback", default="30d")
+    parser.add_argument(
+        "--lookback",
+        default="",
+        help="per-poll fetch window; default 30d crypto, 5d equity (the store keeps the rest)",
+    )
     parser.add_argument(
         "--poll-seconds",
         type=int,
@@ -211,15 +252,20 @@ def main(argv: list[str] | None = None) -> int:
         help="append-only bar store; default artifacts/perp_sleeve/sleeve_bars.db",
     )
     args = parser.parse_args(argv)
+    equity = not is_crypto(args.ticker)
+    args.lookback = args.lookback or ("5d" if equity else "30d")
+    art = _EQ_ART if equity else _ART
 
     from chart_app.perp_sleeve import _INTERVAL_MIN
 
     poll = args.poll_seconds or max(60, _INTERVAL_MIN.get(args.interval, 15) * 20)
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M")
-    path = Path(args.journal) if args.journal else _ART / f"{args.ticker}_{stamp}.jsonl"
+    path = Path(args.journal) if args.journal else art / f"{args.ticker}_{stamp}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     journal = Journal(path)
-    bars_db = Path(args.bars_db) if args.bars_db else _ART / "sleeve_bars.db"
+    bars_db = Path(args.bars_db) if args.bars_db else (
+        art / f"{args.ticker}_bars.db" if equity else art / "sleeve_bars.db"
+    )
     bars_db.parent.mkdir(parents=True, exist_ok=True)
     store = BarCache(bars_db)
 
@@ -229,7 +275,8 @@ def main(argv: list[str] | None = None) -> int:
 
     _say("=" * 96)
     _say(
-        f"PERP SLEEVE  {args.ticker} {args.interval}  -- SHADOW BOOK, NO ORDERS PLACED"
+        f"{'EQUITY' if equity else 'PERP'} SLEEVE  {args.ticker} {args.interval}  "
+        "-- SHADOW BOOK, NO ORDERS PLACED"
     )
     _say(
         f"profile {profile.get('source')}  validation={profile.get('validation')}  "
@@ -246,7 +293,10 @@ def main(argv: list[str] | None = None) -> int:
     # profile saved from the tester defaults `unit_fraction` to 1.0, which
     # turns max_units into a leverage multiplier -- 5x on the BTC-PERP tune as
     # first saved. Jason's standing instruction (2026-09-20) is no leverage.
-    notional = float(cfg.get("max_units", 1)) * float(cfg.get("unit_fraction") or 1.0)
+    # A missing unit_fraction must default the way `backtest` does (1/max_units),
+    # or this banner warns about leverage the replay never takes.
+    max_units = int(cfg.get("max_units", 3))
+    notional = max_units * float(cfg.get("unit_fraction") or (1.0 / max_units))
     if notional > 1.0001:
         _say(
             f"WARNING: this profile runs {notional:.1f}x NOTIONAL "
@@ -256,11 +306,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         _say(f"sizing: {notional:.2f}x max notional -- no leverage, never borrows")
-    if profile.get("validation") != "walk_forward":
-        _say(
-            "NOTE: this profile is NOT walk-forward validated. Every number below "
-            "is what an in-sample fit would have done."
-        )
     _say(f"journal {path}")
     carried = seed_store(store, args.ticker, args.interval)
     if carried:
@@ -376,12 +421,6 @@ def _summary(
         "   (that window is mostly history, not tonight -- it is the tune's "
         "record on the bars the sleeve holds, priced by the same backtester)"
     )
-    if profile.get("validation") != "walk_forward":
-        _say(
-            f"REMINDER: profile {profile.get('source')} is '{profile.get('validation')}'. "
-            "These are in-sample parameters; this log is evidence about the tune, "
-            "not a track record."
-        )
     _say(f"journal: {path}")
     _say("=" * 96)
 

@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -78,29 +78,52 @@ _INTERVAL_MIN: dict[str, int] = {
 # kind to a venue that also charges funding. Stated here rather than imported
 # so the sleeve's P&L cannot silently inherit the wrong venue's fees.
 COST_BPS = 5.0
+MAKER_COST_BPS = 2.0
 
 
-def bar_has_closed(record: CandleRecord, interval: str, now: datetime) -> bool:
+def bar_has_closed(
+    record: CandleRecord,
+    interval: str,
+    now: datetime,
+    *,
+    tz: tzinfo = UTC,
+    grace_s: float = 0.0,
+) -> bool:
     """Whether this candle is complete as of `now`.
 
     A bar stamped 00:15 on a 15m tape covers 00:15-00:30 and is final only
     once 00:30 has passed.
+
+    `tz` is the zone a NAIVE timestamp is in. Crypto bars are UTC; ThetaData
+    equity bars are naive US/Eastern wall-clock. Reading an ET 10:00 bar as
+    10:00 UTC puts it four hours in the past, so the still-forming bar would
+    count as closed -- repainting, the one thing this check exists to stop.
+
+    `grace_s` covers a feed that builds the bar from late-arriving pieces:
+    an equity 5m bar is aggregated from 1m rows, and the last 1m row can land
+    after the 5m boundary. Calling the bar final before then would act on a
+    close that is still going to move.
     """
     minutes = _INTERVAL_MIN.get(interval)
     if minutes is None:
         return True
     ts = record.timestamp
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=UTC)
-    return (ts + timedelta(minutes=minutes)) <= now
+        ts = ts.replace(tzinfo=tz)
+    return (ts + timedelta(minutes=minutes, seconds=grace_s)) <= now
 
 
 def closed_bars(
-    records: list[CandleRecord], interval: str, now: datetime
+    records: list[CandleRecord],
+    interval: str,
+    now: datetime,
+    *,
+    tz: tzinfo = UTC,
+    grace_s: float = 0.0,
 ) -> list[CandleRecord]:
     """`records` with any still-forming tail bar removed."""
     out = list(records)
-    while out and not bar_has_closed(out[-1], interval, now):
+    while out and not bar_has_closed(out[-1], interval, now, tz=tz, grace_s=grace_s):
         out.pop()
     return out
 
@@ -215,6 +238,8 @@ def replay(
     *,
     interval: str = "15m",
     now: datetime | None = None,
+    tz: tzinfo = UTC,
+    grace_s: float = 0.0,
 ) -> Book:
     """Rebuild the whole book from bars. Deterministic; the only state there is.
 
@@ -222,7 +247,7 @@ def replay(
     to seed the indicators -- a sleeve with nothing to say must still report.
     """
     now = now or datetime.now(UTC)
-    bars = closed_bars(list(records), interval, now)
+    bars = closed_bars(list(records), interval, now, tz=tz, grace_s=grace_s)
     book = Book()
     if len(bars) < 60:
         return book
@@ -286,6 +311,13 @@ def replay(
     book.metrics = run_backtest(
         bars, interval=interval, config=cfg, elmo=elmo, cost_bps=COST_BPS
     ).metrics
+    # The tester scores at backtest's 2bp default, which is also the Kalshi
+    # maker fee live entries pay. Reported beside COST_BPS so the log and the
+    # tester can be compared number for number (they looked like a bug at
+    # +1.45% vs +17.7% on a 692-trade tune -- same P&L, different fee).
+    book.metrics["total_pct_maker"] = run_backtest(
+        bars, interval=interval, config=cfg, elmo=elmo, cost_bps=MAKER_COST_BPS
+    ).metrics["total_return_pct"]
 
     # The newest closed bar decided something we cannot fill until the next
     # bar opens. Report it rather than filling at a price we could not reach.
@@ -336,7 +368,7 @@ class Journal:
             self._seen.add((fill.decision_ts, fill.ts))
         return out
 
-    def seed(self, book: Book, started_at: datetime) -> int:
+    def seed(self, book: Book, started_at: datetime, *, tz: tzinfo = UTC) -> int:
         """Record fills that predate the session as history, not as news.
 
         `replay` needs the whole lookback window to seed EMA200 and the
@@ -346,7 +378,8 @@ class Journal:
         false as a claim about tonight. They are written once under
         `prior_fill` and marked seen, so tonight's log contains tonight.
         """
-        cut = started_at.astimezone(UTC).replace(tzinfo=None)
+        # Compared in the zone the bars are stamped in (see `bar_has_closed`).
+        cut = started_at.astimezone(tz).replace(tzinfo=None)
         count = 0
         for fill in book.fills:
             key = (fill.decision_ts, fill.ts)
@@ -354,7 +387,7 @@ class Journal:
                 continue
             ts = datetime.fromisoformat(fill.ts)
             if ts.tzinfo is not None:
-                ts = ts.astimezone(UTC).replace(tzinfo=None)
+                ts = ts.astimezone(tz).replace(tzinfo=None)
             if ts >= cut:
                 continue
             self._seen.add(key)
