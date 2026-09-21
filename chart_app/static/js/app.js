@@ -225,20 +225,102 @@
 
   /* ------------------------------------------------------------- transport */
 
+  /* The poll is conditional now, and that is the whole performance story.
+
+     `/api/state` on a 35k-bar chart is a 32MB payload the server spends ~4s
+     building, and this ran every 5 seconds unconditionally -- so the browser
+     was re-downloading, re-parsing and re-rendering an identical frame
+     forever, while the server queued builds it had already done. Measured
+     2026-09-20 the endpoint answered in 30s against 5.6s in isolation: that
+     gap was the backlog this loop created, and every slider drag queued
+     behind it.
+
+     Now the server ETags the frame and we send it back. Nothing moved -> 304,
+     ~200 bytes, no parse, no render, no setOption. A new bar -> a normal 200
+     and everything below runs exactly as it did. */
+  let lastEtag = null;
+  let polling = false;
+
   async function poll() {
+    // A poll still in flight when the next tick fires used to start a second
+    // one; on a slow frame that stacked requests on the client too.
+    if (polling) return;
+    polling = true;
     try {
-      const res = await fetch("/api/state");
+      const headers = lastEtag ? { "If-None-Match": lastEtag } : {};
+      const res = await fetch("/api/state", { headers: headers, cache: "no-store" });
+      if (res.status === 304) return;   // identical frame; keep the one drawn
       if (!res.ok) return;
+      const etag = res.headers.get("ETag");
       const state = await res.json();
+      lastEtag = etag;
       lastState = state;
       render(state);
       if (state.ticker && document.activeElement.id !== "ticker") {
         document.getElementById("ticker").value = state.ticker;
       }
       if (state.interval) document.getElementById("interval").value = state.interval;
+      // Two different triggers, deliberately separated.
+      //
+      // The TAG repaints on every frame whose profile block moved, including
+      // one you just saved on the symbol already loaded -- the server bumps
+      // its epoch on a save, so that frame arrives on the next poll and the
+      // header has to stop claiming the old validation.
+      //
+      // The KNOBS reseed only when the SYMBOL changed, because reseeding is
+      // destructive: it throws away whatever is on the sliders. Doing that on
+      // a profile change would wipe the tuning you were mid-way through at the
+      // exact moment you saved a checkpoint of it.
+      if (state.profile) {
+        const stamp = JSON.stringify(state.profile);
+        if (stamp !== lastProfileStamp) {
+          lastProfileStamp = stamp;
+          paintProfile(state.profile);
+        }
+        const scope = state.ticker + "|" + state.interval;
+        if (seededFor !== scope) {
+          seededFor = scope;
+          if (window.CGear) window.CGear.seedProfile(state.profile);
+          if (window.CTest) window.CTest.seedProfile(state.profile);
+        }
+      }
     } catch (_e) {
       /* keep the last frame rather than blanking the chart */
+    } finally {
+      polling = false;
     }
+  }
+
+  /* ------------------------------------------------------------- profile */
+
+  let seededFor = null;        // which (ticker|interval) the knobs hold
+  let lastProfileStamp = null; // the profile block the tag is showing
+
+  /* Say which saved profile the chart is running, and how it was validated.
+
+     `snapshot.build_state` has published this block since profiles existed and
+     nothing on the page ever read it -- which is exactly why a restart looked
+     like it had lost the presets. The engine was running them; the UI just
+     never said so and never showed their values. */
+  function paintProfile(profile) {
+    const el = document.getElementById("profileTag");
+    if (!el) return;
+    const src = profile && profile.source;
+    if (!src || src === "defaults") {
+      el.textContent = "shipped defaults";
+      el.className = "prof none";
+      el.title = "no saved profile matches this symbol and timeframe";
+      return;
+    }
+    el.textContent = src;
+    // `in_sample` is a warning, not a credential -- a profile saved from a
+    // slider drag against visible bars IS an in-sample fit.
+    el.className = "prof " + (profile.validation || "none");
+    el.title =
+      "profile " + src +
+      " | validation: " + (profile.validation || "none") +
+      (profile.saved_at ? " | saved " + profile.saved_at : "") +
+      (profile.note ? " | " + profile.note : "");
   }
 
   async function loadSymbol() {
@@ -266,6 +348,8 @@
       });
       let body = null;
       try { body = await refreshRes.json(); } catch (_e) { /* non-JSON */ }
+      lastEtag = null;    // new symbol: never let the old frame's etag answer
+      seededFor = null;   // and reseed the knobs from the new symbol's profile
       await poll();
       window.CTest.rerun();   // new bars -> the tester's result is stale
       if (body && body.ok === false) {

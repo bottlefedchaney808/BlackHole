@@ -301,3 +301,81 @@ def test_percentile_of_a_random_member_averages_the_coinflip_null():
     # 50 is the null the rank-transfer stage reads its result against; if this
     # convention drifts, every "beats a coin flip" claim drifts with it.
     assert mean == pytest.approx(50.0)
+
+
+# --- annualisation: measured, not tabled ------------------------------------
+
+
+def _spaced(n: int, minutes: int) -> list[CandleRecord]:
+    """`n` flat bars exactly `minutes` apart -- a tape with no session gap."""
+    t0 = datetime(2026, 1, 2)
+    return [
+        CandleRecord(t0 + timedelta(minutes=minutes * i), 1.0, 1.0, 1.0, 1.0, 1.0)
+        for i in range(n)
+    ]
+
+
+def test_bars_per_year_measured_from_timestamps_not_the_table():
+    """A 24/7 perp is 96 bars a day at 15m; the equity table says 26.
+
+    The table (26 * 252 = 6552) made the engine read a one-year BTC-PERP
+    window as 5.37 years, which divided CAGR by 5 and Sharpe by 2.3.
+    """
+    from chart_app.backtest import BARS_PER_YEAR, _bars_per_year
+
+    perp = _spaced(96 * 400, 15)          # 400 days, continuous
+    measured = _bars_per_year(perp, "15m")
+    assert measured == pytest.approx(96 * 365.25, rel=0.01)
+    assert measured > 5 * BARS_PER_YEAR["15m"]
+
+
+def test_bars_per_year_reproduces_the_table_on_a_session_tape():
+    """The fix must not move the instruments the table already got right.
+
+    26 bars a day, five days a week, is the shape the 6552 was written for.
+    """
+    from chart_app.backtest import BARS_PER_YEAR, _bars_per_year
+
+    t0 = datetime(2026, 1, 5)             # a Monday
+    out: list[CandleRecord] = []
+    day = 0
+    while len(out) < 26 * 252:
+        d = t0 + timedelta(days=day)
+        day += 1
+        if d.weekday() >= 5:
+            continue
+        for b in range(26):
+            ts = d.replace(hour=9, minute=30) + timedelta(minutes=15 * b)
+            out.append(CandleRecord(ts, 1.0, 1.0, 1.0, 1.0, 1.0))
+    assert _bars_per_year(out, "15m") == pytest.approx(BARS_PER_YEAR["15m"], rel=0.05)
+
+
+def test_bars_per_year_falls_back_when_the_span_cannot_carry_the_claim():
+    """Under a day of bars, one gap swings the estimate -- use the table."""
+    from chart_app.backtest import BARS_PER_YEAR, _bars_per_year
+
+    assert _bars_per_year(_spaced(4, 15), "15m") == BARS_PER_YEAR["15m"]
+    assert _bars_per_year([], "15m") == BARS_PER_YEAR["15m"]
+    assert _bars_per_year(_spaced(1, 15), "15m") == BARS_PER_YEAR["15m"]
+
+
+def test_cagr_on_a_one_year_continuous_tape_equals_total_return():
+    """The end-to-end claim: one year of bars must annualise to ~itself."""
+    rng = np.random.default_rng(7)
+    n = 96 * 365
+    closes = list(100 * np.exp(np.cumsum(rng.normal(0.0002, 0.004, n))))
+    t0 = datetime(2026, 1, 1)
+    recs = [
+        CandleRecord(
+            t0 + timedelta(minutes=15 * i),
+            float(closes[i - 1]) if i else float(closes[i]),
+            float(closes[i]) * 1.002,
+            float(closes[i]) * 0.998,
+            float(closes[i]),
+            1.0,
+        )
+        for i in range(n)
+    ]
+    m = run_backtest(recs, interval="15m").metrics
+    assert m["years"] == pytest.approx(1.0, rel=0.02)
+    assert m["cagr_pct"] == pytest.approx(m["total_return_pct"], rel=0.05, abs=1.0)

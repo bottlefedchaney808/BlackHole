@@ -47,7 +47,8 @@ window.CGear = (function () {
     ],
   };
 
-  let defaults = null;      // from the server
+  let defaults = null;      // shipped values, from the server
+  let profile = null;       // the saved profile active for (ticker, interval)
   let values = {};          // key -> current value
   let open = null;          // which group's popover is showing
   let onChange = function () {};
@@ -69,14 +70,62 @@ window.CGear = (function () {
   function isDirty(group) {
     return (TABLE[group] || []).some(function (k) {
       const base = seed(k[0], k[5]);
-      return values[k[0]] != null && Math.abs(values[k[0]] - base) > 1e-9;
+      return base != null && values[k[0]] != null &&
+        Math.abs(values[k[0]] - base) > 1e-9;
     });
   }
 
+  /* The BASELINE for a knob: the saved profile's value if it has one, else
+     the shipped default.
+
+     This used to read shipped defaults only, and that was the whole "my
+     presets don't load" bug. `snapshot.build_state` has always resolved the
+     profile and fed it to the live chart -- so the chart was drawing the saved
+     parameters while every slider here sat at its shipped value. Worse, the
+     panel is all-or-nothing: `current()` posts EVERY key, so the first knob
+     you touched sent nine shipped ELMo values along with it and wiped the
+     profile out of the run. Hence "I have to reset everything".
+
+     Making the profile the baseline fixes both ends at once: the sliders open
+     where the chart actually is, the dirty dot means "differs from what is
+     saved" rather than "differs from shipped", and `reset` returns to the
+     profile rather than throwing it away. */
   function seed(key, target) {
+    if (profile) {
+      const saved = target === "elmo" ? profile.elmo : profile.config;
+      if (saved && saved[key] != null) return Number(saved[key]);
+    }
     if (!defaults) return null;
     const src = target === "elmo" ? defaults.elmo : defaults.indicators;
     return src && src[key] != null ? Number(src[key]) : null;
+  }
+
+  /* Re-seed from the profile now live on the chart. Called by `app.js` off
+     `state.profile` on the first frame and on every symbol change, so a knob
+     can never sit at a value the engine is not using. */
+  function seedProfile(next) {
+    const before = JSON.stringify(profile || {});
+    profile = next || null;
+    if (JSON.stringify(profile || {}) === before && Object.keys(values).length) {
+      return false;
+    }
+    // Reset to the new baseline wholesale rather than merging: a knob held
+    // over from the previous symbol is exactly the stale value this is meant
+    // to stop. Any live popover is showing the old numbers, so close it.
+    values = {};
+    applySeeds();
+    close();
+    return true;
+  }
+
+  function applySeeds() {
+    Object.keys(TABLE).forEach(function (g) {
+      TABLE[g].forEach(function (k) {
+        const base = seed(k[0], k[5]);
+        if (base != null && values[k[0]] == null) values[k[0]] = base;
+      });
+    });
+    markDirty();
   }
 
   async function load() {
@@ -86,13 +135,10 @@ window.CGear = (function () {
     } catch (_e) {
       defaults = { indicators: {}, elmo: {} };
     }
-    Object.keys(TABLE).forEach(function (g) {
-      TABLE[g].forEach(function (k) {
-        const base = seed(k[0], k[5]);
-        if (base != null && values[k[0]] == null) values[k[0]] = base;
-      });
-    });
-    markDirty();
+    // `seedProfile` can land before or after this fetch (it is driven by the
+    // first /api/state frame), so seeding is idempotent and order-free: it
+    // only fills keys that are still null.
+    applySeeds();
   }
 
   function markDirty() {
@@ -213,5 +259,8 @@ window.CGear = (function () {
     return out;
   }
 
-  return { attach: attach, current: current, applyTo: applyTo, close: close, has: has };
+  return {
+    attach: attach, current: current, applyTo: applyTo, close: close,
+    has: has, seedProfile: seedProfile,
+  };
 })();

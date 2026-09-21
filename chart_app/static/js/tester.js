@@ -44,10 +44,56 @@ window.CTest = (function () {
 
   // Shipped values from the server, so this panel never hardcodes a default.
   let shipped = {};
+  // The saved profile live on the chart, fed in by `app.js` from
+  // `state.profile`. It OVERRIDES shipped for every key it carries.
+  let profile = null;
 
+  /* A knob's baseline: the saved profile's value, else shipped, else the
+     table's fallback.
+
+     The profile layer is new, and its absence was half of "my presets don't
+     load". `server.post_backtest` has always merged the active profile under
+     the request -- but this panel posts every knob it owns, so the merge only
+     ever saw the shipped value this panel had put there. The chart drew the
+     profile, the tester scored shipped, and the two disagreed silently. */
   function seed(key, fallback) {
+    if (profile && profile.config && profile.config[key] != null) {
+      return profile.config[key];
+    }
     const v = shipped[key];
     return v == null ? fallback : v;
+  }
+
+  function paintKnobs() {
+    KNOBS.forEach(function (k) {
+      const base = seed(k[0], null);
+      if (base == null) return;
+      const el = document.getElementById("t_" + k[0]);
+      const out = document.getElementById("v_" + k[0]);
+      if (!el) return;
+      el.value = base;
+      if (out) out.textContent = el.value;
+    });
+    // The non-slider controls carry profile values too, and they were the
+    // easiest to miss: `allow_short` and `exit_style` are strategy, not
+    // cosmetics.
+    const shortEl = document.getElementById("t_allow_short");
+    if (shortEl && profile && profile.config && profile.config.allow_short != null) {
+      shortEl.checked = !!profile.config.allow_short;
+    }
+    const styleEl = document.getElementById("t_exit_style");
+    if (styleEl && profile && profile.config && profile.config.exit_style) {
+      styleEl.value = profile.config.exit_style;
+    }
+    const capEl = document.getElementById("t_capital");
+    if (capEl && profile && profile.capital != null) capEl.value = profile.capital;
+  }
+
+  /* Called by `app.js` on the first frame and on every symbol change. */
+  function seedProfile(next) {
+    profile = next || null;
+    paintKnobs();
+    if (enabled) schedule();   // the panel's numbers moved; rescore them
   }
 
   async function loadDefaults() {
@@ -55,18 +101,11 @@ window.CTest = (function () {
       const res = await fetch("/api/indicator-defaults");
       const body = await res.json();
       shipped = Object.assign({}, body.signal || {});
-      KNOBS.forEach(function (k) {
-        if (shipped[k[0]] == null) return;
-        const el = document.getElementById("t_" + k[0]);
-        const out = document.getElementById("v_" + k[0]);
-        if (!el) return;
-        el.value = shipped[k[0]];
-        if (out) out.textContent = el.value;
-      });
     } catch (e) {
       // The fallbacks in KNOBS still stand; the panel must not fail to build
       // because a defaults fetch did.
     }
+    paintKnobs();
   }
 
   /* INDICATOR periods are deliberately NOT here.
@@ -469,13 +508,14 @@ window.CTest = (function () {
       if (el) el.addEventListener("change", schedule);
     });
     document.getElementById("testerReset").addEventListener("click", function () {
-      KNOBS.forEach(function (k) {
-        // Reset to what the ENGINE ships, not to this table's fallback.
-        const base = seed(k[0], k[5]);
-        document.getElementById("t_" + k[0]).value = base;
-        document.getElementById("v_" + k[0]).textContent = base;
-      });
-      document.getElementById("t_allow_short").checked = false;
+      // Back to the BASELINE -- the saved profile if there is one, else what
+      // the engine ships. Resetting to shipped while a profile was loaded
+      // would silently discard it, which is the behaviour this whole change
+      // exists to remove.
+      paintKnobs();
+      if (!(profile && profile.config && profile.config.allow_short != null)) {
+        document.getElementById("t_allow_short").checked = false;
+      }
       schedule();
     });
   }
@@ -517,5 +557,8 @@ window.CTest = (function () {
 
   function rerun() { if (enabled) schedule(); }
 
-  return { build: build, setEnabled: setEnabled, applyTo: applyTo, rerun: rerun };
+  return {
+    build: build, setEnabled: setEnabled, applyTo: applyTo, rerun: rerun,
+    seedProfile: seedProfile,
+  };
 })();

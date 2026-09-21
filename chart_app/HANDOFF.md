@@ -622,6 +622,272 @@ sweep produces real ties (every combo disqualified by `min_trades` scores
 `-inf` together) and breaking them by array order would correlate the order
 the grid was expanded in.
 
+## 3.19 The poll was a queue, and the presets were write-only (2026-09-20)
+
+Two complaints, one shape: **a value with a write path and no read path.**
+
+### The chart was slow because the poll outran the build
+
+`GET /api/state` rebuilds entropy, ELMo, the conviction series and every
+overlay over the whole cached window. Measured live on BTC-PERP 15m
+(35,168 bars):
+
+| | |
+|---|---|
+| `build_state` | 3.9s |
+| FastAPI `jsonable_encoder` on the result | 1.2s |
+| `json.dumps` | 0.5s |
+| payload | **32 MB** |
+| `static/js/app.js` poll interval | **5 s**, unconditional |
+
+Six seconds of work arriving every five seconds is not a slow endpoint, it is
+an **unbounded queue**. FastAPI runs a sync route in a 40-thread pool, so the
+backlog grows for as long as the window is open and every build contends for
+the GIL with the ones stacked behind it. The same endpoint measured **30s**
+end-to-end from the browser against 5.6s in isolation — **that gap is the
+backlog, and it is the diagnostic**. If an endpoint is far slower in situ than
+standalone, stop optimising the endpoint and go count its callers.
+
+A slider drag (`POST /api/backtest`) queued behind that pile, which is the
+whole of "tuning takes forever".
+
+**Fixed** by not rebuilding what has not changed:
+
+- `BarCache.fingerprint()` — `(COUNT(*), MAX(ts))` in one indexed query. Count
+  **and** max, because a backfill can add bars behind the newest one without
+  moving the timestamp.
+- `session["epoch"]` — bumped by every mutation the bars cannot show: symbol
+  switch, refresh, RH position, profile save/delete, and a deferred flow pull
+  landing. A missed bump is worse than the original bug: it is a chart
+  silently drawing stale parameters. `tests/test_state_cache.py` pins one per
+  trigger.
+- The cache stores the **bytes**, not the dict, and the route returns a
+  `Response` — which skips `jsonable_encoder` entirely (the payload is already
+  JSON-native by the time `build_state` returns).
+- An **ETag**, with `app.js` sending `If-None-Match` and returning early on
+  304. `poll()` also drops a tick that is still in flight.
+
+| | before | after |
+|---|---|---|
+| first load | 30s / 29.6 MB | 4.8s / 32 MB |
+| steady poll | 30s / 29.6 MB | **0.01s / 0 bytes (304)** |
+| slider drag | queued behind the above | 3.5s |
+
+`GET /api/state/version` reports `(bars, last_ts, epoch, etag)` without
+building anything, for a caller that wants to ask "did it move?" cheaply.
+
+**`_epoch_lock` is separate from `_state_lock` on purpose.** `get_state` holds
+`_state_lock` across a build; a build calls `_deferred_flow`, which takes
+`_flow_lock`; the flow worker holds `_flow_lock` and then bumps the epoch.
+Bumping under `_state_lock` closes that into a lock-order inversion and hangs
+the chart. Do not merge them.
+
+### The slider drag still paid for ELMo twice
+
+`POST /api/backtest` computed ELMo to drive the chart's conviction line, then
+called `run_backtest`, which called `compute_elmo` again with the identical
+overrides over the identical records — ~2.3s of the 5.7s. `run_backtest` now
+takes an optional `elmo=` object; `elmo_overrides` stays for callers with
+nothing to hand over (the walk-forward runner sweeps parameters, so it wants
+the recompute). Drag: **5.7s → 3.5s**. Equivalence is pinned, because this is
+only allowed to be a saving, never a behaviour change.
+
+### The presets loaded into the engine and nowhere else
+
+`snapshot.build_state` has resolved the active profile and fed it to the live
+chart since profiles existed, and published a `profile` block saying so.
+**Nothing on the client ever read either.** `gears.js` and `tester.js` seeded
+their controls from `/api/indicator-defaults` — shipped values — and never
+called `GET /api/profiles`.
+
+So the chart drew the saved parameters while every slider sat at its shipped
+value, and because both panels post **all** their keys (`CGear.current()` sends
+nine ELMo windows; the tester sends fourteen config levels), the first knob you
+touched shipped 22 defaults along with it and wiped the profile out of the run.
+That is the whole of "I have to reset everything on restart". Measured on the
+BTC-PERP|15m profile, the knobs that were being silently discarded:
+`entry_long` 60→30, `exit_long` −60→−12, `trim_long` −40→12, `add_long` 57→55,
+`cooldown_bars` 1→3.
+
+**Fixed:** the baseline for a knob is now *the profile's value if it has one,
+else shipped*, in both panels. Consequences worth keeping:
+
+- the sliders open where the chart actually is;
+- the gear's dirty dot means "differs from what is **saved**", not "differs
+  from shipped";
+- `reset` returns to the **profile**, not past it;
+- `#profileTag` in the header names the active profile and colours it by
+  validation — `in_sample` is amber, because it is a warning, not a credential
+  (see §3.18: in-sample median +11.5pp vs out-of-sample +0.55pp).
+
+Knobs reseed only on a **symbol** change; the tag repaints on any profile
+change. Reseeding is destructive, and doing it on a save would wipe the tuning
+you were part-way through at the moment you checkpointed it.
+
+### "It needs a restart a dozen times to see a change"
+
+Two problems wearing one coat. A **Python** edit genuinely needs one — uvicorn
+is not run with `--reload`. A **JS/CSS** edit never did: `/static/js/app.js` is
+the same URL before and after an edit, so the browser served what it had, and
+restarting uvicorn does not change that URL either — which is why restarting
+appeared to work only sometimes. `root()` now rewrites `?v=__V__` to each
+file's mtime, so an edited asset is a different URL and a plain reload picks it
+up.
+
+### The one to not repeat
+
+Testing profile invalidation against the **live server** overwrote
+`artifacts/chart_app_profiles.json`'s BTC-PERP|15m record. That store is not in
+git; there is no undo. It was recoverable only because the identical parameters
+had been saved to `*|15m` six seconds earlier (same `metrics.bars` = 35128,
+confirming both came from the same panel state). `profiles.store_path()` reads
+**`CHART_APP_PROFILES`** — set it to a scratch file before any test that
+writes, as `tests/test_state_cache.py`'s fixture does.
+
+---
+
+## 3.20 The perp sleeve, and three numbers that were wrong (2026-09-20)
+
+Jason tuned `BTC-PERP|15m` in the tester and asked for an overnight sleeve
+running that profile. Building it surfaced three separate wrong numbers, each
+wrong in a different direction. None of them were the strategy.
+
+### (a) CAGR divided a one-year window by 5.37
+
+`BARS_PER_YEAR["15m"] = 26 * 252 = 6552` assumes a 6.5-hour US equity
+session. A perpetual swap trades 24/7, so 15m is **96 bars a day, not 26**.
+The engine read the cached BTC-PERP window (35,178 bars, 2025-09-19 ->
+2026-09-21, **1.003 years**) as **5.37 years**:
+
+| | stored | measured |
+|---|---|---|
+| CAGR | 21.9% | **188.2%** |
+| Sharpe | 0.67 | **1.55** |
+
+Fixed by `backtest._bars_per_year`, which MEASURES the span off the
+timestamps rather than extending the table. The reason to measure rather than
+add a `is_crypto` branch is that it self-checks where the table was already
+right: SPY 15m measures 6,697 bars/yr and QQQ 6,543 against a tabled 6,552,
+inside 2.3%. Metrics now publish `bars_per_year` and `years` so the
+annualisation can be audited instead of trusted. Pinned by four tests in
+`tests/test_backtest.py`.
+
+Both old errors were **conservative**, which is why this survived a year.
+Pessimistic bugs do not announce themselves.
+
+### (b) The edge was a fee assumption
+
+Same tune, same bars, only the cost per side moving:
+
+| cost/side | return | maxDD |
+|---|---|---|
+| 0 bp | +349.0% | -47.2% |
+| **2 bp** (`DEFAULT_COST_BPS`, an equity-ETF number) | +189.2% | -52.3% |
+| **5 bp** (perp taker) | **+49.5%** | -61.6% |
+| 7.5 bp | -13.8% | -67.9% |
+| 10 bp | -50.3% | -79.7% |
+
+Break-even is **~7bp/side** at 429 trades, and **perp funding is not modelled
+at all**. `DEFAULT_COST_BPS = 2.0` is right for a liquid ETF and overstates a
+perp result by ~4x. `perp_sleeve.COST_BPS = 5.0` is declared separately from
+the backtest default precisely so the sleeve cannot inherit the wrong venue's
+fees by accident.
+
+### (c) The sleeve's own P&L overstated by 2.3x
+
+The sleeve first kept a trade-level book -- P&L booked at each reduction
+against an average entry. On the same bars at the same 5bp it read **+133.8%**
+(summed), **+113.2%** (compounded), against the tester's **+49.5%**.
+
+Compounding closed part of the gap. The residual is **volatility drag**: the
+tester marks the position EVERY BAR at the leverage actually held, so variance
+compounds against a levered book roughly as `-(sigma^2/2)(L^2 - L)` per bar.
+Entry/exit accounting structurally cannot see it. The sleeve now has **no P&L
+implementation at all** and quotes `run_backtest`. One number, one place.
+
+### Leverage: `unit_fraction` is the knob, `max_units` is not
+
+**Jason's standing instruction (2026-09-20): sleeves run at 1x max notional.**
+
+Max notional is `max_units * unit_fraction`. A profile saved from the tester
+defaults `unit_fraction` to **1.0**, which silently turns `max_units` into a
+leverage multiplier -- the BTC-PERP tune as first saved was a **5x** book with
+a -61.6% in-sample drawdown. A cash account that never borrows is
+`unit_fraction = 1/max_units`.
+
+The tempting fix is to cut `max_units`. It is wrong, and monotonically so --
+all rows below capped at 1x, 5bp, four anchored folds:
+
+| max_units | first entry | in-sample | out-of-sample | maxDD | Sharpe |
+|---|---|---|---|---|---|
+| 1 | 100% | +1.9% | **-4.9%** (1/4) | -26.7% | 0.21 |
+| 2 | 50% | +8.8% | +6.0% (2/4) | -21.6% | 0.46 |
+| 3 | 33% | +14.8% | +9.5% (3/4) | -18.6% | 0.72 |
+| **5** | 20% | **+17.4%** | **+15.4%** (3/4) | **-15.7%** | 0.90 |
+
+**The scale-in/scale-out IS the risk control.** At `max_units=1` every false
+signal is taken at full size across 434 trades. Keep the units, cut the
+fraction. (6 and 8 measured better still -- +19.7% OOS, -13.2% DD at 8 -- but
+that is a new fit and needs its own refit-per-fold walk-forward first.)
+
+All four saved profiles are now 1.00x:
+
+| profile | max_units | unit_fraction | notional |
+|---|---|---|---|
+| `BTC-PERP|15m` | 5 | 0.2 | 1.00x |
+| `*|15m` | 5 | 0.2 | 1.00x |
+| `SPY|15m` | 3 | 0.333333 | 1.00x |
+| `QQQ|15m` | 3 | 0.333333 | 1.00x |
+
+`run_sleeve` prints sizing on every launch and **warns** above 1.0x, so this
+cannot drift back silently.
+
+### Does the tune survive out of sample?
+
+Fixed params, 4 anchored folds, 5bp, at the 1x sizing now saved:
+**+15.35% compounded vs buy-hold -4.96%**, 3/4 folds positive, worst fold
+-3.16%. Permutation (100 shuffles, at 5x): p = 0.0099.
+
+**The caveat that bounds all of it:** Jason hand-tuned these params against
+the *whole* year, so every "test" fold is data the tuner had seen. It is an
+upper bound, not an unbiased estimate. The clean test is a refit-per-fold grid
+search, which has NOT been run on this symbol. Report:
+`artifacts/perp_sleeve/BTC-PERP_validation.json`.
+
+### The sleeve itself
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME .venv/Scripts/python.exe -u   -m chart_app.run_sleeve --ticker BTC-PERP --interval 15m --hours 12
+```
+
+`perp_sleeve.py` + `run_sleeve.py`. **It places no orders** -- every venue in
+`crypto_source` is a public, unauthenticated, read-only endpoint, no key and
+no signing. It is a shadow book: position, stop, fills, pending, P&L, written
+to `artifacts/perp_sleeve/<ticker>_<stamp>.{log,jsonl}` with a morning
+summary.
+
+Three properties it is built around, each with a test:
+
+1. **The forming bar is dropped.** A 15m candle at minute 3 can print any
+   close by minute 15; acting on it is repainting.
+2. **A decision on bar `i` fills at bar `i+1`'s OPEN**, matching `backtest.py`.
+   The newest closed bar is therefore `pending`, not filled -- reporting it as
+   done would claim a price we could not have got.
+3. **The window's left edge must not move.** The first build re-fetched a
+   rolling 30d each poll. Measured: sliding the left edge by ONE bar changes
+   **14 of ~135 fills**, some weeks downstream, because dropping a bar
+   re-seeds the 200-bar ranks. Appending on the right with the left edge
+   fixed changes **0**. The sleeve therefore keeps its own **append-only** bar
+   store (`artifacts/perp_sleeve/sleeve_bars.db`, separate from
+   `chart_app_bars.db` so it never races the running server) and replays that.
+   Without this it announced revised history at 3am as live fills.
+
+The book is a **pure function of (bars, profile)** -- replayed from scratch
+every tick, never accumulated -- so a restart at 3am reproduces it exactly and
+the journal is just a diff. Fills predating the session are logged
+`prior_fill`; later revisions of old bars are logged `revision` and never
+announced.
+
 ---
 
 ## 4. Data integrity — READ THIS, IT IS NOT ONLY A CHART ISSUE
@@ -823,7 +1089,16 @@ Lookback / EMA200 / `liq_window` 5 are done (see §3.10). Still open:
 
 - **No order route.** There is no `/api/order` and there must never be one.
   Live Robinhood only via `mcp__robinhood__place_equity_order` when Jason says
-  so *in chat*, then `POST /api/rh` to display it.
+  so *in chat*, then `POST /api/rh` to display it. `perp_sleeve` is a shadow
+  book and must stay one — `crypto_source` is read-only public endpoints with
+  no key, and that is a feature.
+- **1x max notional.** `max_units * unit_fraction` must not exceed 1.0.
+  `unit_fraction` defaults to 1.0 when a profile is saved from the tester,
+  which turns `max_units` into a leverage multiplier — say the product out
+  loud whenever a profile is saved or reviewed. Fix leverage by cutting
+  `unit_fraction`, **never** `max_units`: the scale-in/scale-out is the risk
+  control, and collapsing it to 1 unit measured worse on every axis
+  (§3.20).
 - **Never call ThetaData per bar.** One flow query per session date, cached.
 - **Never fan out ThetaData calls.** Concurrent callers time each other out.
 - **Localhost only.** No auth exists by design.

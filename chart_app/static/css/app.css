@@ -74,6 +74,26 @@ html, body {
 }
 #stamp .warn { color: var(--warn); }
 
+/* ---- active profile --------------------------------------------------- */
+/* Which saved parameter set the chart is RUNNING. Colour is the validation,
+   not decoration: `in_sample` is a warning. A profile saved from a slider
+   drag against visible bars IS an in-sample fit, and the measured spread
+   between in-sample and out-of-sample on this engine is wide enough
+   (+11.5pp vs +0.55pp, 2026-09-18 walk-forward) that the difference has to
+   be visible without hovering. */
+#profileTag {
+  font: 11px/1 ui-monospace, Consolas, monospace;
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  cursor: help;
+}
+#profileTag.none         { color: var(--dim); }
+#profileTag.in_sample    { color: var(--warn); border-color: var(--warn); }
+#profileTag.walk_forward { color: var(--text); }
+#profileTag.permutation  { color: var(--text); }
+
 /* ---- mode switch ------------------------------------------------------ */
 
 #modes { display: flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }

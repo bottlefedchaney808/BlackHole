@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 
-from chart_app.elmo import compute_elmo
+from chart_app.elmo import ElmoResult, compute_elmo
 from chart_app.flow_pane import bin_flow
 from chart_app.signal_engine import (
     DEFAULTS,
@@ -48,7 +48,8 @@ from chart_app.signal_engine import (
 from shared.chart_data import CandleRecord
 
 # Bars per year per interval, for annualising Sharpe and CAGR. A US equity
-# session is 6.5 hours; 252 sessions a year.
+# session is 6.5 hours; 252 sessions a year. This table is the FALLBACK --
+# `_bars_per_year` measures the real thing off the timestamps. See there.
 _SESSIONS = 252
 BARS_PER_YEAR: dict[str, float] = {
     "3m": 130 * _SESSIONS,
@@ -60,6 +61,43 @@ BARS_PER_YEAR: dict[str, float] = {
     "4h": 2 * _SESSIONS,
     "1d": float(_SESSIONS),
 }
+
+
+def _bars_per_year(records: Sequence[CandleRecord], interval: str) -> float:
+    """Bars a year, MEASURED off the timestamps, with `BARS_PER_YEAR` as fallback.
+
+    The table assumes a 6.5-hour US equity session. A perpetual swap trades
+    24/7, so `15m` is 96 bars a day there and 26 here -- a 3.7x error in the
+    denominator of every annualised figure. Measured live 2026-09-20 on the
+    cached BTC-PERP 15m window (35,178 bars, 2025-09-19 -> 2026-09-21):
+
+        span              1.003 years (the bars say so)
+        table says        35178 / 6552 = 5.37 years
+        so CAGR read      21.9%  on a year whose total return was +189%
+        and Sharpe read   1 / sqrt(5.35) = 0.43x of the true figure
+
+    Both errors are conservative, which is why this survived a year of use --
+    but it makes a crypto number and an equity number incomparable, and CAGR
+    is the field a tune gets judged on.
+
+    Measuring instead of extending the table is the point: the bars already
+    know their own spacing, and a lookup keyed on interval alone cannot tell a
+    24/7 tape from a session one. It self-checks on the instruments where the
+    table was right -- SPY 15m measures 6,697/yr and QQQ 6,543/yr against a
+    tabled 6,552, inside 2.3%.
+
+    Falls back when the span cannot carry the claim: fewer than two bars, a
+    non-positive span, or under a day of history (where one gap would swing
+    the estimate wildly).
+    """
+    if len(records) < 2:
+        return BARS_PER_YEAR.get(interval, float(_SESSIONS))
+    span_s = (records[-1].timestamp - records[0].timestamp).total_seconds()
+    if span_s < 86_400.0:
+        return BARS_PER_YEAR.get(interval, float(_SESSIONS))
+    # n-1 intervals span n bars.
+    return float((len(records) - 1) * 365.25 * 86_400.0 / span_s)
+
 
 # Round-trip cost in basis points of notional, charged on each side. 2bp a
 # side is a realistic all-in for a liquid ETF through a retail broker once
@@ -122,6 +160,7 @@ def run_backtest(
     flow_observed: Sequence[bool] | None = None,
     cost_bps: float = DEFAULT_COST_BPS,
     elmo_overrides: dict[str, Any] | None = None,
+    elmo: ElmoResult | None = None,
     warmup_bars: int = 0,
     capital: float = DEFAULT_CAPITAL,
 ) -> BacktestResult:
@@ -145,9 +184,22 @@ def run_backtest(
     cfg = {**DEFAULTS, **(config or {})}
     n = len(records)
     if n < 60:
-        return BacktestResult(metrics={"error": f"need >=60 bars, have {n}"}, config=cfg)
+        return BacktestResult(
+            metrics={"error": f"need >=60 bars, have {n}"}, config=cfg
+        )
 
-    elmo = compute_elmo(records, **(elmo_overrides or {}))
+    # A caller that has ALREADY computed ELMo over these same bars passes it
+    # in rather than paying for it twice. `/api/backtest` is the case that
+    # matters: it computes ELMo to drive the chart's conviction line and then
+    # called this function, which recomputed the identical series from the
+    # identical records -- ~2.3s of the ~5.7s a slider drag cost on a 35k-bar
+    # chart, spent reproducing a result already in memory.
+    #
+    # `elmo_overrides` stays for callers that have no result to hand (the
+    # walk-forward runner sweeps parameters, so it wants the recompute). When
+    # both are given the object wins, because it is the thing actually scored.
+    if elmo is None:
+        elmo = compute_elmo(records, **(elmo_overrides or {}))
     # `flow_observed` decides the denominator PER BAR. Without it the whale
     # weight sits in the divisor for every bar of the window while the flow
     # pull only ever covers a handful of session dates -- on SPY 15m over a
@@ -199,15 +251,15 @@ def run_backtest(
     equity = [1.0]
     bar_returns: list[float] = []
     trades: list[dict[str, Any]] = []
-    units = 0           # >0 long units, <0 short units, 0 flat
-    entry_price = 0.0   # size-weighted average entry
+    units = 0  # >0 long units, <0 short units, 0 flat
+    entry_price = 0.0  # size-weighted average entry
     entry_index = 0
     peak_units = 0
-    realized = 0.0      # portfolio-return contribution booked by trims
+    realized = 0.0  # portfolio-return contribution booked by trims
     trail: float | None = None
     last_action_bar = -10_000
     bars_in_market = 0
-    unit_bars = 0.0     # sum of |units| per bar, for average-exposure reporting
+    unit_bars = 0.0  # sum of |units| per bar, for average-exposure reporting
 
     # `i` is the DECISION bar. The fill happens at `i+1`'s open, so the loop
     # stops one short of the end -- a signal on the final bar has no bar to
@@ -242,8 +294,10 @@ def run_backtest(
             if exit_price is None:
                 s = float(score[i])
                 hit = (
-                    units > 0 and s <= float(cfg["exit_long"])
-                    or units < 0 and s >= float(cfg["exit_short"])
+                    units > 0
+                    and s <= float(cfg["exit_long"])
+                    or units < 0
+                    and s >= float(cfg["exit_short"])
                 )
                 if hit and scale_out and abs(units) > 1:
                     scale_exit = True
@@ -308,8 +362,10 @@ def run_backtest(
         if scale_exit and can_act:
             # Shed one unit of whichever side is open, booking its slice.
             step = -1 if units > 0 else 1
-            realized += ((open_next - entry_price) / entry_price) * unit_fraction * (
-                1.0 if units > 0 else -1.0
+            realized += (
+                ((open_next - entry_price) / entry_price)
+                * unit_fraction
+                * (1.0 if units > 0 else -1.0)
             )
             units += step
             raw -= cost * unit_fraction
@@ -416,7 +472,9 @@ def run_backtest(
     # return that trails it while this reads 30% is not the same failure as one
     # that trails it while fully invested.
     metrics["avg_exposure_pct"] = float(100.0 * unit_bars * unit_fraction / scored_bars)
-    metrics["avg_units_when_in"] = float(unit_bars / bars_in_market) if bars_in_market else 0.0
+    metrics["avg_units_when_in"] = (
+        float(unit_bars / bars_in_market) if bars_in_market else 0.0
+    )
     return BacktestResult(
         trades=trades, equity=equity, returns=bar_returns, metrics=metrics, config=cfg
     )
@@ -442,7 +500,7 @@ def _metrics(
     first, last = float(records[0].close), float(records[-1].close)
     buy_hold = 100.0 * (last / first - 1.0) if first else 0.0
 
-    bpy = BARS_PER_YEAR.get(interval, float(_SESSIONS))
+    bpy = _bars_per_year(records, interval)
     arr = np.asarray(bar_returns, dtype=float)
     sharpe = 0.0
     if arr.size > 1 and arr.std() > 0:
@@ -462,7 +520,9 @@ def _metrics(
         # A profit factor with no losing trades is not infinite, it is
         # unmeasured -- report it as None so a sweep cannot rank on it.
         "profit_factor": (
-            float(gross_win / gross_loss) if gross_loss > 0 else (None if gross_win else 0.0)
+            float(gross_win / gross_loss)
+            if gross_loss > 0
+            else (None if gross_win else 0.0)
         ),
         "total_return_pct": float(total_return),
         "buy_hold_pct": float(buy_hold),
@@ -479,6 +539,11 @@ def _metrics(
         "excess_vs_bh_dollars": float(capital * (total_return - buy_hold) / 100.0),
         "max_drawdown_dollars": float(capital * _max_drawdown(equity) / 100.0),
         "cagr_pct": cagr,
+        # Published so a reader can audit the annualisation rather than trust
+        # it: a 24/7 perp and a 6.5h equity session disagree by 3.7x on what
+        # one 15m bar is worth, and `cagr_pct`/`sharpe` both divide by this.
+        "bars_per_year": float(bpy),
+        "years": float(years),
         "max_drawdown_pct": _max_drawdown(equity),
         "sharpe": sharpe,
         "exposure_pct": float(100.0 * bars_in_market / n) if n else 0.0,
@@ -497,7 +562,10 @@ def _metrics(
 
 def expand_grid(grid: dict[str, Sequence[Any]]) -> list[dict[str, Any]]:
     keys = list(grid)
-    return [dict(zip(keys, combo, strict=True)) for combo in itertools.product(*(grid[k] for k in keys))]
+    return [
+        dict(zip(keys, combo, strict=True))
+        for combo in itertools.product(*(grid[k] for k in keys))
+    ]
 
 
 def _objective(metrics: dict[str, Any], *, min_trades: int = 8) -> float:
@@ -537,7 +605,9 @@ def sweep(
             flow_net=flow_net,
             cost_bps=cost_bps,
         )
-        out.append((params, res.metrics, _objective(res.metrics, min_trades=min_trades)))
+        out.append(
+            (params, res.metrics, _objective(res.metrics, min_trades=min_trades))
+        )
     out.sort(key=lambda row: row[2], reverse=True)
     return out
 
@@ -584,7 +654,9 @@ def walk_forward(
         )
         best = next((row for row in ranked if row[2] > float("-inf")), None)
         if best is None:
-            results.append({"fold": fold, "error": "no parameter set cleared min_trades"})
+            results.append(
+                {"fold": fold, "error": "no parameter set cleared min_trades"}
+            )
             continue
         params = best[0]
         oos = run_backtest(

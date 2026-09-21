@@ -42,16 +42,30 @@ simply treated as continuous, which for a 24/7 tape is correct.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from shared.chart_data import CandlePayload, CandleRecord, ChartDataError
+from shared.chart_data import (
+    CandlePayload,
+    CandleQuality,
+    CandleRecord,
+    ChartDataError,
+)
 
 _UA = {"User-Agent": "Mozilla/5.0 (chart_app crypto_source)"}
 _TIMEOUT_S = 15.0
+
+# Paging budget. 300 rows a page is what both OKX candle routes serve, and 500
+# pages is 150,000 bars -- about 4 years of 15m. This is a runaway guard, not a
+# data limit: when it binds, the payload says so in `quality.warnings` instead
+# of returning a short series that looks complete.
+_PAGE_LIMIT = 300
+_MAX_PAGES = 500
+_PAGE_SLEEP_S = 0.12
 
 # Our interval -> (OKX bar, Coinbase granularity seconds, minutes)
 _INTERVALS: dict[str, tuple[str, int, int]] = {
@@ -151,7 +165,17 @@ def _bars_wanted(interval: str, lookback: str) -> int:
     days = {"d": 1, "w": 7, "m": 30, "y": 365}[unit] * amount
     minutes = _INTERVALS.get(interval, ("", 0, 15))[2]
     # 24/7: 1440 minutes a day, not 390.
-    return max(60, min(6000, int(days * 1440 / max(1, minutes))))
+    #
+    # There used to be a `min(6000, ...)` here, uncommented. It meant every
+    # crypto request capped at 6,000 bars: asking for 90d and asking for 1y
+    # both returned the same 62 days of 15m, and nothing said so -- a backtest
+    # would simply score a window it never asked for. The venue was never the
+    # limit; driven by hand, OKX paged straight back through `history-candles`
+    # 300 rows at a time. Same shape as the httpx 5s default (CLAUDE.md): our
+    # own ceiling, read as the provider's. The runaway guard now lives in
+    # `_okx_rows` as an explicit page budget, and a short answer is REPORTED
+    # via `CandleQuality.warnings` rather than passed off as a full one.
+    return max(60, int(days * 1440 / max(1, minutes)))
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +201,9 @@ def _okx_rows(inst: str, interval: str, want: int) -> list[dict[str, Any]]:
     after = ""
     base = "https://www.okx.com/api/v5"
     endpoint = "candles"
-    while len(out) < want:
-        url = f"{base}/market/{endpoint}?instId={inst}&bar={bar}&limit=300"
+    pages = 0
+    while len(out) < want and pages < _MAX_PAGES:
+        url = f"{base}/market/{endpoint}?instId={inst}&bar={bar}&limit={_PAGE_LIMIT}"
         if after:
             url += f"&after={after}"
         payload = _get_json(url)
@@ -187,6 +212,7 @@ def _okx_rows(inst: str, interval: str, want: int) -> list[dict[str, Any]]:
         rows = payload.get("data") or []
         if not rows:
             break
+        before = len(out)
         for row in rows:
             ts_ms = int(row[0])
             if ts_ms in seen:
@@ -206,12 +232,23 @@ def _okx_rows(inst: str, interval: str, want: int) -> list[dict[str, Any]]:
                     "volume": float(row[6]) if len(row) > 6 else float(row[5]),
                 }
             )
-        after = str(int(rows[-1][0]))
-        # `/candles` only serves the recent window; deeper pages come from
-        # `/history-candles`, which caps at 100 rows a call.
-        endpoint = "history-candles"
-        if len(rows) < 100:
+        pages += 1
+        # Nothing new on a full page means the venue is repeating itself or has
+        # run out of history. Stopping on "fewer rows than asked for" instead
+        # (what this did) breaks a pull the moment a page comes back short for
+        # any reason, which is how a deep request quietly became a shallow one.
+        if len(out) == before:
             break
+        after = str(int(rows[-1][0]))
+        # `/candles` serves only the recent window; deeper pages come from
+        # `/history-candles`. Both accept limit=300 -- measured 2026-09-19,
+        # 300 rows returned from each.
+        endpoint = "history-candles"
+        # Paced, not parallel. OKX allows ~20 requests / 2s on this route and a
+        # deep pull is hundreds of pages; the repo rule against fanning out
+        # applies to free endpoints too, because getting throttled mid-pull
+        # produces a short series, and a short series here is a wrong backtest.
+        time.sleep(_PAGE_SLEEP_S)
     return out
 
 
@@ -337,7 +374,26 @@ def fetch_crypto_candles(
         if not observations:
             errors.append(f"{source}: empty after trim")
             continue
+        # A venue that simply does not go back as far as the caller asked is a
+        # normal outcome -- a perp listed last year cannot serve three. What is
+        # NOT acceptable is returning it silently, because the consumer is a
+        # backtest that will report the short window's result as the answer to
+        # the question it asked. Under-delivery is stated here, in the payload.
+        warnings: tuple[str, ...] = ()
+        if len(observations) < want:
+            span_days = (
+                observations[-1].timestamp - observations[0].timestamp
+            ).days
+            warnings = (
+                (
+                    f"asked {want} bars for {lookback}, served "
+                    f"{len(observations)} ({span_days}d from "
+                    f"{observations[0].timestamp.date()}) -- {source} has no "
+                    f"more history at {interval}"
+                ),
+            )
         return CandlePayload(
+            quality=CandleQuality(row_count=len(observations), warnings=warnings),
             ticker=ticker.strip().upper(),
             interval=interval,
             lookback=lookback,

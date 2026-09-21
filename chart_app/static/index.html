@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>chart-app</title>
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/app.css?v=__V__">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
 <body>
@@ -32,6 +32,11 @@
             title="Live strategy tester: move a knob, re-score the loaded bars (key: t)">Test</button>
 
     <strong id="label">—</strong>
+    <!-- Which saved profile the chart is RUNNING. `build_state` has published
+         this since profiles existed and nothing displayed it, so a restart
+         looked like the presets had been lost when the engine was using them
+         all along. -->
+    <span id="profileTag" class="prof none">shipped defaults</span>
     <span id="stamp"></span>
 
     <div id="algo" title="Conviction, -100 to +100">
@@ -77,10 +82,10 @@
 
   <div id="chart"></div>
 
-  <script src="/static/js/theme.js"></script>
-  <script src="/static/js/render.js"></script>
-  <script src="/static/js/tester.js"></script>
-  <script src="/static/js/gears.js"></script>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/theme.js?v=__V__"></script>
+  <script src="/static/js/render.js?v=__V__"></script>
+  <script src="/static/js/tester.js?v=__V__"></script>
+  <script src="/static/js/gears.js?v=__V__"></script>
+  <script src="/static/js/app.js?v=__V__"></script>
 </body>
 </html>

@@ -10,17 +10,24 @@ Phase 1 semantics (honest):
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+# `/static/js/app.js?v=__V__` -> that file's mtime. The path comes out of
+# the tag itself rather than being encoded in the token, so adding an asset
+# to index.html needs no change here. See `root()`.
+_ASSET_TOKENS = re.compile(r"/static/([A-Za-z0-9._/-]+)\?v=__V__")
 
 from chart_app.bar_cache import BarCache
 from chart_app.ingest import refresh_cache
@@ -199,6 +206,10 @@ def create_app(
                 if len(_flow_done) > 12:
                     for stale in list(_flow_done)[:-12]:
                         _flow_done.pop(stale, None)
+            # Outside `_flow_lock`, deliberately -- see `_epoch_lock`. The
+            # cached frame says `whale: loading`; this is what makes the next
+            # poll rebuild it as `ready` instead of waiting for a new bar.
+            _bump_epoch()
 
         threading.Thread(target=_work, daemon=True, name="chart-flow").start()
         return None
@@ -209,8 +220,56 @@ def create_app(
         "interval": saved_session[1] if saved_session else default_interval,
         "rh": None,
         "flow_cache": {},
+        # Counts every mutation that can change a state payload WITHOUT a bar
+        # arriving: symbol switch, RH position, profile save/delete, and a
+        # deferred flow pull landing. Half the state cache key; see below.
+        "epoch": 0,
     }
     _refresh_task: asyncio.Task | None = None
+
+    # --- state cache ------------------------------------------------------
+    # Measured 2026-09-20, live, BTC-PERP 15m (35,168 bars): `build_state` is
+    # 3.9s of recompute, FastAPI's `jsonable_encoder` another 1.2s, and the
+    # payload is 32MB -- while `static/js/app.js` polls this endpoint every
+    # 5 seconds. Six seconds of work arriving every five is not a slow
+    # endpoint, it is an unbounded queue. FastAPI runs a sync route in a
+    # 40-thread pool, so the backlog grows for as long as the window is open
+    # and every build contends for the GIL with the ones stacked behind it:
+    # the same endpoint measured **30s** end-to-end from the browser against
+    # 5.6s in isolation, and that gap IS the backlog. A slider drag then
+    # queues behind the pile, which is why tuning crawled.
+    #
+    # Nothing in a rebuild moves unless a bar, the symbol, the profile, the RH
+    # position or a deferred flow pull moved. So fingerprint the bars, count
+    # the mutations, and serve the bytes we already built.
+    #
+    # Two further wins fall out of caching the BYTES rather than the dict:
+    # returning a `Response` skips `jsonable_encoder` entirely (the payload is
+    # already JSON-native -- timestamps are ISO strings by the time
+    # `build_state` returns), and an ETag lets an unchanged poll answer 304 in
+    # ~200 bytes instead of shipping 32MB the client already has.
+    _state_lock = threading.Lock()
+    _state_cache: dict[str, Any] = {"key": None, "body": b"", "etag": ""}
+    # The epoch gets its OWN lock, and that is not fussiness. `get_state` holds
+    # `_state_lock` across a build, and a build calls `_deferred_flow`, which
+    # takes `_flow_lock`; the flow worker holds `_flow_lock` and then bumps the
+    # epoch. Bumping under `_state_lock` would close that cycle into a textbook
+    # lock-order inversion and hang the chart. A lock nothing else is ever held
+    # across cannot participate in one.
+    _epoch_lock = threading.Lock()
+
+    def _bump_epoch() -> None:
+        """Invalidate the state cache for a change the bars cannot show."""
+        with _epoch_lock:
+            session["epoch"] += 1
+
+    def _state_key() -> tuple:
+        return (
+            session["ticker"],
+            session["interval"],
+            session["epoch"],
+            cache.fingerprint(session["ticker"], session["interval"]),
+        )
 
     def _refresh_now() -> None:
         interval = session["interval"]
@@ -223,19 +282,67 @@ def create_app(
             intrad_fn=intrad_fn,
         )
         session["flow_cache"].clear()
+        _bump_epoch()
 
     @app.get("/api/state")
-    def get_state() -> dict[str, Any]:
-        payload = build_state(
-            cache,
-            session["ticker"],
-            session["interval"],
-            session["rh"],
-            flow_fn=_deferred_flow if flow_fn is not None else None,
-            flow_cache=session["flow_cache"],
-        )
-        payload["ok"] = True
-        return payload
+    def get_state(request: Request) -> Response:
+        """The chart frame. Rebuilt only when one of its inputs moved.
+
+        The build runs UNDER the cache lock on purpose. Every caller of this
+        endpoint wants the identical bytes, so letting two polls miss and build
+        concurrently buys nothing and costs a second copy of a 4-second
+        recompute -- serialising them is the whole point. It is safe because a
+        build touches only the bar cache and the profile store, neither of
+        which re-enters here.
+        """
+        key = _state_key()
+        with _state_lock:
+            if _state_cache["key"] == key:
+                body, etag = _state_cache["body"], _state_cache["etag"]
+            else:
+                payload = build_state(
+                    cache,
+                    session["ticker"],
+                    session["interval"],
+                    session["rh"],
+                    flow_fn=_deferred_flow if flow_fn is not None else None,
+                    flow_cache=session["flow_cache"],
+                )
+                payload["ok"] = True
+                body = json.dumps(payload).encode("utf-8")
+                etag = '"' + hashlib.blake2b(body, digest_size=16).hexdigest() + '"'
+                # Re-read the key: `build_state` can take seconds, and a
+                # background refresh landing mid-build would otherwise leave
+                # this payload filed under a fingerprint it no longer matches.
+                _state_cache.update(key=_state_key(), body=body, etag=etag)
+
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        # `no-cache` means "revalidate", not "do not store" -- it is what makes
+        # the 304 path work at all.
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(content=body, media_type="application/json", headers=headers)
+
+    @app.get("/api/state/version")
+    def get_state_version() -> dict[str, Any]:
+        """The state's identity without building it. Two SQLite aggregates.
+
+        Lets a poller ask "has anything moved?" for microseconds, so the 5s
+        cadence stays responsive to a new bar without a rebuild ever being on
+        the critical path of the answer.
+        """
+        bars, last_ts = cache.fingerprint(session["ticker"], session["interval"])
+        with _state_lock:
+            etag = _state_cache["etag"] if _state_cache["key"] == _state_key() else ""
+        return {
+            "ok": True,
+            "ticker": session["ticker"],
+            "interval": session["interval"],
+            "bars": bars,
+            "last_ts": last_ts,
+            "epoch": session["epoch"],
+            "etag": etag,
+        }
 
     @app.post("/api/symbol")
     def post_symbol(body: _SymbolBody) -> dict[str, bool]:
@@ -249,6 +356,7 @@ def create_app(
         session["interval"] = body.interval
         session["flow_cache"].clear()
         cache.set_session(ticker, body.interval)
+        _bump_epoch()
         return {"ok": True}
 
     @app.post("/api/rh")
@@ -260,6 +368,7 @@ def create_app(
                 "avg_price": float(body.position.avg_price),
             }
         session["rh"] = {"position": position, "fills": list(body.fills)}
+        _bump_epoch()
         return {"ok": True}
 
     @app.post("/api/refresh")
@@ -291,6 +400,7 @@ def create_app(
                 "interval": session["interval"],
             }
         session["flow_cache"].clear()
+        _bump_epoch()
         # Report the span the cache now holds, so a "load history" caller can
         # rebind its date pickers without a second round trip -- and can see
         # that a deeper pull actually reached further back rather than just
@@ -417,6 +527,10 @@ def create_app(
                 flow_net=flow_net,
                 flow_observed=flow_observed,
                 cost_bps=body.cost_bps,
+                # The SAME object `evaluate` just scored, not a recompute of
+                # it -- see `run_backtest`. `elmo_cfg` still rides along so the
+                # result records what produced the series.
+                elmo=elmo,
                 elmo_overrides=elmo_cfg,
                 capital=body.capital,
             )
@@ -526,6 +640,11 @@ def create_app(
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        # The saved profile feeds the LIVE chart through `snapshot.build_state`,
+        # so the cached frame is now drawing the old parameters. Without this
+        # bump "takes effect at the next poll" would have quietly become "takes
+        # effect at the next new bar".
+        _bump_epoch()
         return {"ok": True, "saved": record}
 
     @app.delete("/api/profiles")
@@ -536,6 +655,8 @@ def create_app(
             ticker if ticker else session["ticker"],
             interval if interval else session["interval"],
         )
+        if removed:
+            _bump_epoch()
         return {"ok": True, "removed": removed}
 
     @app.get("/api/indicator-defaults")
@@ -562,7 +683,30 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def root() -> str:
-        return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        """The page, with every asset URL stamped by that file's mtime.
+
+        "I have to restart it a dozen times to see a change" was two different
+        problems wearing one coat. A PYTHON edit genuinely needs a restart --
+        uvicorn is not run with `--reload`. A JS or CSS edit never did: the
+        browser was simply serving what it already had, because
+        `/static/js/app.js` is the same URL before and after an edit and
+        nothing forced a revalidate. Restarting uvicorn does not change that
+        URL either, which is why restarting appeared to work only sometimes --
+        it was whether the reload happened to miss the cache.
+
+        Stamping `?v=<mtime>` makes an edited file a different URL, so a plain
+        reload picks it up and an unchanged one still comes from cache.
+        """
+        def stamp(match: re.Match[str]) -> str:
+            rel = match.group(1)           # e.g. "js/app.js", straight from the tag
+            try:
+                mtime = int((_STATIC_DIR / rel).stat().st_mtime)
+            except OSError:
+                mtime = 0                  # missing file: let the 404 be the error
+            return f"/static/{rel}?v={mtime}"
+
+        html = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        return _ASSET_TOKENS.sub(stamp, html)
 
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
