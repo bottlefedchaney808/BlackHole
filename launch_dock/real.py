@@ -1,0 +1,135 @@
+"""Wires the dock to the real world: Kalshi cancel, process liveness, journal readback.
+
+Imported only by the run path (`serve`). Unit tests never import this module,
+so a test run never touches Kalshi or starts a runner.
+"""
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+from chart_app.kalshi_perps import PerpsClient
+from launch_dock import spawn as spawn_mod
+from launch_dock.launch import EVENT_DESK, KALSHI
+from launch_dock.server import ARTIFACTS, create_server
+
+_PERP_ART = ARTIFACTS / "perp_live"
+_REPO = str(Path(__file__).resolve().parent.parent)
+
+
+def make_cancel(subaccount: int = 0):
+    """One client per call: a stop is rare and the credentials come from the lab .env."""
+    def cancel(kalshi_ticker: str) -> int:
+        client = PerpsClient(subaccount=subaccount, ticker=kalshi_ticker)
+        return client.cancel_resting()
+    return cancel
+
+
+def kill(pid: int) -> None:
+    import subprocess
+
+    subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=False, capture_output=True)
+
+
+def alive(pid: int) -> bool:
+    import subprocess
+
+    result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
+    return str(pid) in (result.stdout or "")
+
+
+def cmdline(pid: int) -> str | None:
+    import subprocess
+
+    result = subprocess.run(
+        ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
+        capture_output=True, text=True,
+    )
+    lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None
+    return lines[1]
+
+
+def read_session(journal: Path) -> dict | None:
+    """The first `session` record in a perp journal. Missing or empty is None."""
+    try:
+        text = journal.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("type") == "session":
+            return record
+    return None
+
+
+def _newest_journal(ticker: str, mode: str) -> Path | None:
+    candidates = sorted(
+        _PERP_ART.glob(f"{ticker}_{mode}_*.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def finish_launch(card: dict, argv: list[str], timeout_s: float = 15.0) -> dict:
+    """Spawn detached, then wait up to timeout_s for the session record to exist.
+
+    The session row the runner writes uses `type: session` (`Log.write` stamps
+    `type`, not `kind`); `finish_from_journal` matches on `kind`, so the row is
+    re-wrapped here before it is applied.
+    """
+    ticker = str(card.get("instrument") or "").upper()
+    kalshi = KALSHI.get(ticker, ticker)
+    mode = "live" if card.get("live") else "dry"
+    before = {p for p in _PERP_ART.glob(f"{kalshi}_{mode}_*.jsonl")} if _PERP_ART.exists() else set()
+    updated = spawn_mod.spawn(
+        card, argv, popen=_detached_popen, cwd=str(EVENT_DESK if card.get("seed") == "event_desk" else _REPO)
+    )
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(1.0)
+        journals = [p for p in _PERP_ART.glob(f"{kalshi}_{mode}_*.jsonl") if p not in before]
+        for journal in journals:
+            session = read_session(journal)
+            if session:
+                saved = None
+                try:
+                    from chart_app import profiles
+                    saved = profiles.resolve(
+                        updated.get("instrument"), updated.get("interval") or "15m"
+                    ).get("saved_at")
+                except Exception:
+                    saved = None
+                return spawn_mod.finish_from_journal(
+                    updated, json.dumps({"kind": "session", **session}) + "\n", saved_at=saved
+                )
+    return updated
+
+
+def _detached_popen(argv, **kw):
+    import subprocess
+
+    log_dir = ARTIFACTS / "launch_dock_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handle = open(log_dir / "launch.log", "ab", buffering=0)
+    return subprocess.Popen(argv, stdout=handle, stderr=subprocess.STDOUT, **kw)
+
+
+def build_dock():
+    return create_server(
+        ARTIFACTS,
+        cancel=make_cancel(),
+        kill=kill,
+        alive=alive,
+        popen=_detached_popen,
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    build_dock().serve()

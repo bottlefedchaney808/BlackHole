@@ -281,13 +281,9 @@ def _detached_popen(argv, **kw):
 
 
 def serve(directory: str | Path = ARTIFACTS) -> None:
-    dock = create_server(directory, popen=_detached_popen)
+    from launch_dock.real import build_dock
 
-    class Handler(_HTTPHandler):
-        pass
-
-    Handler.dock = dock
-    HTTPServer(("127.0.0.1", 8792), Handler).serve_forever()
+    build_dock().serve()
 
 
 if __name__ == "__main__":
