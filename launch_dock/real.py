@@ -112,6 +112,40 @@ def finish_launch(card: dict, argv: list[str], timeout_s: float = 15.0) -> dict:
     return updated
 
 
+def finish_launch_readback(card: dict, timeout_s: float = 15.0) -> dict:
+    """Poll the artifacts dir for the journal this launch just created.
+
+    The runner writes `type: session`; `finish_from_journal` matches `kind`,
+    so the row is re-wrapped before it is applied to the card.
+    """
+    ticker = str(card.get("instrument") or "").upper()
+    kalshi = KALSHI.get(ticker, ticker)
+    mode = "live" if card.get("live") else "dry"
+    pattern = f"{kalshi}_{mode}_*.jsonl"
+    if not _PERP_ART.exists():
+        return card
+    before = {p for p in _PERP_ART.glob(pattern)}
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(1.0)
+        journals = [p for p in _PERP_ART.glob(pattern) if p not in before]
+        for journal in journals:
+            session = read_session(journal)
+            if session:
+                try:
+                    from chart_app import profiles
+
+                    saved = profiles.resolve(
+                        card.get("instrument"), card.get("interval") or "15m"
+                    ).get("saved_at")
+                except Exception:
+                    saved = None
+                return spawn_mod.finish_from_journal(
+                    card, json.dumps({"kind": "session", **session}) + "\n", saved_at=saved
+                )
+    return card
+
+
 def _detached_popen(argv, **kw):
     import subprocess
 

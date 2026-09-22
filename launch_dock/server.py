@@ -17,6 +17,11 @@ STATIC_PAGE = Path(__file__).resolve().parent / "static" / "index.html"
 
 
 class _DockServer:
+    def serve_forever(self) -> None:
+        """Bind 127.0.0.1:8792 and block. The only place the dock listens."""
+        handler = type("Handler", (_HTTPHandler,), {"dock": self})
+        HTTPServer(("127.0.0.1", 8792), handler).serve_forever()
+
     def __init__(
         self,
         directory: Path,
@@ -42,6 +47,43 @@ class _DockServer:
     @staticmethod
     def _no_process_control(_value: Any) -> None:
         raise RuntimeError("no process control in unit test")
+
+    def _cmdline_for(self, card: dict, fallback: Any) -> str | None:
+        """The running pid's real command line when we can read it, else the
+        caller's value, else the card's argv. A None result means dead."""
+        pid = card.get("pid")
+        if pid:
+            from launch_dock.real import cmdline as pid_cmdline
+
+            try:
+                real = pid_cmdline(int(pid))
+            except Exception:
+                real = None
+            if real:
+                return real
+        if isinstance(fallback, str):
+            return fallback
+        if isinstance(fallback, list) and fallback:
+            return " ".join(str(a) for a in fallback)
+        argv = card.get("argv")
+        if argv:
+            return " ".join(str(a) for a in argv)
+        return None
+
+    def _finish_readback(self, updated: dict) -> dict:
+        """Block up to 15s for the runner's session record, then store its books.
+
+        A perp journal that never appears leaves the card `launching`; the
+        launch is not reported as success in that case.
+        """
+        if updated.get("seed") != "perp":
+            return updated
+        try:
+            from launch_dock.real import finish_launch_readback
+
+            return finish_launch_readback(updated, timeout_s=15.0)
+        except Exception:
+            return updated
 
     def _save_registry(self) -> None:
         registry.save(self.registry, self.card_path)
@@ -188,13 +230,19 @@ class _DockServer:
                     for item in self.registry["cards"]
                 ]
                 self._save_registry()
+                updated = self._finish_readback(updated)
+                self.registry["cards"] = [
+                    updated if item.get("id") == updated.get("id") else item
+                    for item in self.registry["cards"]
+                ]
+                self._save_registry()
                 return 200, {"argv": argv, "spawned": True, "card": updated}
 
             if method == "POST" and path == "/api/stop":
                 card = self._find_card(str(body["id"]))
                 updated = stop.stop_card(
                     card,
-                    cmdline=body.get("cmdline"),
+                    cmdline=self._cmdline_for(card, body.get("cmdline")),
                     cancel=self.cancel,
                     kill=self.kill,
                 )
@@ -283,7 +331,7 @@ def _detached_popen(argv, **kw):
 def serve(directory: str | Path = ARTIFACTS) -> None:
     from launch_dock.real import build_dock
 
-    build_dock().serve()
+    build_dock().serve_forever()
 
 
 if __name__ == "__main__":
