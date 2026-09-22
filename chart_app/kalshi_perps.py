@@ -73,7 +73,7 @@ def fmt_price(value: float) -> str:
 
 
 class PerpsClient:
-    def __init__(self, *, subaccount: int = 0, timeout: float = 15.0) -> None:
+    def __init__(self, *, subaccount: int = 0, ticker: str = TICKER, timeout: float = 15.0) -> None:
         _load_lab_env()
         self.keyid = os.environ.get("KALSHI_KEYID", "")
         key_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
@@ -83,6 +83,7 @@ class PerpsClient:
             )
         self._pem = Path(key_path).read_bytes()
         self.subaccount = subaccount
+        self.ticker = ticker
         self.timeout = timeout
         self._http = requests.Session()
 
@@ -122,14 +123,16 @@ class PerpsClient:
         return resp.json() if resp.content else {}
 
     # -- reads ----------------------------------------------------------------
-    def market(self, ticker: str = TICKER) -> dict[str, Any]:
+    def market(self, ticker: str | None = None) -> dict[str, Any]:
+        ticker = ticker or self.ticker
         return self._call("GET", f"/margin/markets/{ticker}")["market"]
 
-    def top_of_book(self, ticker: str = TICKER) -> tuple[float, float]:
+    def top_of_book(self, ticker: str | None = None) -> tuple[float, float]:
         m = self.market(ticker)
         return float(m["bid"]), float(m["ask"])
 
-    def position(self, ticker: str = TICKER) -> float:
+    def position(self, ticker: str | None = None) -> float:
+        ticker = ticker or self.ticker
         rows = self._call(
             "GET",
             "/margin/positions",
@@ -162,7 +165,8 @@ class PerpsClient:
             for row in bal.get("subaccount_balances", [])
         )
 
-    def unrealized_pnl(self, ticker: str = TICKER) -> float:
+    def unrealized_pnl(self, ticker: str | None = None) -> float:
+        ticker = ticker or self.ticker
         rows = self._call(
             "GET",
             "/margin/positions",
@@ -207,10 +211,11 @@ class PerpsClient:
         post_only: bool,
         tif: str = "good_till_canceled",
         reduce_only: bool = False,
-        ticker: str = TICKER,
+        ticker: str | None = None,
     ) -> dict[str, Any]:
         if side not in ("bid", "ask") or count <= 0:
             raise ValueError(f"bad order: side={side} count={count}")
+        ticker = ticker or self.ticker
         body = {
             "ticker": ticker,
             "client_order_id": f"perp-sleeve-{uuid.uuid4().hex}",
@@ -238,8 +243,25 @@ class PerpsClient:
             "DELETE", "/margin/orders", params={"subaccount": self.subaccount}
         )
 
-    def set_stop(self, stop_price: float, ticker: str = TICKER) -> dict[str, Any]:
+    def cancel_resting(self, ticker: str | None = None) -> int:
+        """Cancel this ticker's resting orders only. Never the other sleeve's."""
+        ticker = ticker or self.ticker
+        n = 0
+        data = self._call(
+            "GET", "/margin/orders", params={"subaccount": self.subaccount, "limit": 200}
+        )
+        for order in data.get("orders", []):
+            if order.get("ticker") != ticker:
+                continue
+            if float(order.get("remaining_count") or 0) <= 0:
+                continue
+            self.cancel(order["order_id"])
+            n += 1
+        return n
+
+    def set_stop(self, stop_price: float, ticker: str | None = None) -> dict[str, Any]:
         """Bracket stop-loss on the whole position; fires a reduce-only order."""
+        ticker = ticker or self.ticker
         return self._call(
             "PUT",
             f"/margin/cross/positions/{ticker}/exit_trigger",
@@ -247,7 +269,8 @@ class PerpsClient:
             body={"kind": "bracket", "stop_loss_price": fmt_price(stop_price)},
         )
 
-    def clear_stop(self, ticker: str = TICKER) -> dict[str, Any]:
+    def clear_stop(self, ticker: str | None = None) -> dict[str, Any]:
+        ticker = ticker or self.ticker
         return self._call(
             "DELETE",
             f"/margin/cross/positions/{ticker}/exit_trigger",
