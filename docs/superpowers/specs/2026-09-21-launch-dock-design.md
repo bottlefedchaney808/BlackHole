@@ -233,6 +233,11 @@ Copy, stocks and perp only: new id, new instrument, same seed, `live` false, emp
 - A second perp Launch of the same instrument while the first is `running` is refused.
 - Restart argv contains the stored `--pnl-since` and `--base-capital`, not the current time.
 
+## Operational notes
+
+- The dock loads `launch_dock.json` once at startup and never reloads it. Hand-editing the file while the dock is up is invisible until restart. Edit cards through the API (`POST /api/copy`, `/api/seed`, `/api/preset`) or restart the dock after hand edits.
+- Seeded cards on 2026-09-21: `perp-btc` (BTC-PERP, 6x, dry-run), `stocks-spy` (SPY scan), `desk-watch` (event-desk `churn.py watch`). The perp seed ships unset; a perp launch stays refused until `cap_dollars` is saved.
+
 ## Out of scope
 
 - Re-reading the profile inside `run_live_perp.py` or any other runner.
