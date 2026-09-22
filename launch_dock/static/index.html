@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Launch Dock</title>
+  <style>
+    :root { color-scheme: dark; font: 15px system-ui, sans-serif; }
+    body { margin: 0; background: #10151b; color: #e7edf3; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    h1 { margin-top: 0; }
+    section, article { background: #18212b; border: 1px solid #2c3b49; border-radius: 8px; padding: 16px; margin: 14px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+    label { display: grid; gap: 4px; color: #a9b7c5; }
+    input, textarea, button { border: 1px solid #405365; border-radius: 5px; padding: 8px; font: inherit; }
+    input, textarea { background: #0e141a; color: inherit; }
+    button { background: #2878b9; color: white; cursor: pointer; }
+    button:hover { background: #3592da; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .muted { color: #91a0ad; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #message { min-height: 1.4em; color: #9ed6a5; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Launch Dock</h1>
+  <p id="message" role="status"></p>
+  <section>
+    <h2>Perp seed</h2>
+    <div class="grid">
+      <label>Hours <input id="seed-hours" type="number" min="0" step="0.5" value="0"></label>
+      <label>Cap dollars <input id="seed-cap" type="number" min="0" step="0.01"></label>
+    </div>
+    <div class="actions"><button id="save-seed">Save seed</button></div>
+  </section>
+  <section>
+    <h2>Preset</h2>
+    <div class="grid">
+      <label>Ticker <input id="preset-ticker" value="SPY"></label>
+      <label>Interval <input id="preset-interval" value="15m"></label>
+      <label>Capital <input id="preset-capital" type="number" min="0" step="0.01"></label>
+    </div>
+    <label>Config JSON <textarea id="preset-config">{}</textarea></label>
+    <label>Elmo JSON <textarea id="preset-elmo">{}</textarea></label>
+    <div class="actions"><button id="save-preset">Save preset</button></div>
+  </section>
+  <section>
+    <h2>Copy card</h2>
+    <div class="grid">
+      <label>Source id <input id="copy-source"></label>
+      <label>New id <input id="copy-new"></label>
+      <label>Instrument <input id="copy-instrument"></label>
+    </div>
+    <div class="actions"><button id="copy-card">Copy</button></div>
+  </section>
+  <section>
+    <h2>Cards</h2>
+    <div id="cards" class="muted">Loading…</div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const message = (text, error = false) => {
+    $('message').textContent = text;
+    $('message').style.color = error ? '#f29b9b' : '#9ed6a5';
+  };
+  const request = async (method, path, body) => {
+    const response = await fetch(path, {
+      method,
+      headers: body ? {'Content-Type': 'application/json'} : {},
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
+    return value;
+  };
+  const jsonValue = (id) => {
+    try { return JSON.parse($(id).value || '{}'); }
+    catch (error) { throw new Error(`${id} is not valid JSON`); }
+  };
+  const refresh = async () => {
+    const data = await request('GET', '/api/cards');
+    $('seed-hours').value = data.seeds.perp.hours;
+    $('seed-cap').value = data.seeds.perp.cap_dollars ?? '';
+    const cards = $('cards');
+    cards.textContent = '';
+    for (const card of data.cards) {
+      const row = document.createElement('article');
+      const title = document.createElement('strong');
+      title.textContent = `${card.id} · ${card.seed} · ${card.instrument || 'watch'}`;
+      row.appendChild(title);
+      const info = document.createElement('p');
+      info.className = 'muted';
+      info.textContent = `state: ${card.state} · preset: ${card.preset_source}`;
+      row.appendChild(info);
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const launchButton = document.createElement('button');
+      launchButton.textContent = 'Launch';
+      launchButton.onclick = async () => {
+        try {
+          const result = await request('POST', '/api/launch', {id: card.id});
+          message(result.argv.join(' '));
+          await refresh();
+        } catch (error) { message(error.message, true); }
+      };
+      const stopButton = document.createElement('button');
+      stopButton.textContent = 'Stop';
+      stopButton.onclick = async () => {
+        try {
+          const result = await request('POST', '/api/stop', {id: card.id, cmdline: card.argv.join(' ')});
+          message(result.error || result.state);
+          await refresh();
+        } catch (error) { message(error.message, true); }
+      };
+      actions.append(launchButton, stopButton);
+      row.appendChild(actions);
+      cards.appendChild(row);
+    }
+  };
+  $('save-seed').onclick = async () => {
+    try {
+      await request('POST', '/api/seed', {
+        hours: Number($('seed-hours').value),
+        cap_dollars: $('seed-cap').value === '' ? null : Number($('seed-cap').value)
+      });
+      message('Seed saved');
+      await refresh();
+    } catch (error) { message(error.message, true); }
+  };
+  $('save-preset').onclick = async () => {
+    try {
+      await request('POST', '/api/preset', {
+        ticker: $('preset-ticker').value,
+        interval: $('preset-interval').value,
+        config: jsonValue('preset-config'),
+        elmo: jsonValue('preset-elmo'),
+        capital: $('preset-capital').value === '' ? null : Number($('preset-capital').value)
+      });
+      message('Preset saved');
+      await refresh();
+    } catch (error) { message(error.message, true); }
+  };
+  $('copy-card').onclick = async () => {
+    try {
+      await request('POST', '/api/copy', {
+        source_id: $('copy-source').value,
+        new_id: $('copy-new').value,
+        instrument: $('copy-instrument').value
+      });
+      message('Card copied');
+      await refresh();
+    } catch (error) { message(error.message, true); }
+  };
+  refresh().catch((error) => message(error.message, true));
+})();
+</script>
+</body>
+</html>
