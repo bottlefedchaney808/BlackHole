@@ -32,8 +32,10 @@ without anyone maintaining a profile for every pair:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,64 @@ VALIDATIONS = ("none", "in_sample", "walk_forward", "permutation")
 ANY = "*"
 
 _DEFAULT_STORE = Path("artifacts/chart_app_profiles.json")
+
+
+class ProfileLockTimeout(TimeoutError):
+    pass
+
+
+def _lock_path(path: Path) -> Path:
+    return (
+        path.with_name("chart_app_profiles.lock")
+        if path.name == "chart_app_profiles.json"
+        else path.with_name(path.name + ".lock")
+    )
+
+
+def _replace_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+@contextmanager
+def _file_lock(path: Path, timeout: float = 5.0):
+    lock = _lock_path(path)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock, "a+b")
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise ProfileLockTimeout(f"lock timeout: {lock}")
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        fh.close()
 
 
 def store_path() -> Path:
@@ -93,35 +153,35 @@ def save(
     if validation not in VALIDATIONS:
         raise ValueError(f"validation must be one of {VALIDATIONS}, got {validation!r}")
     p = path or store_path()
-    data = load_all(p)
-    record = {
-        "ticker": (ticker or ANY).upper(),
-        "interval": interval or ANY,
-        "config": dict(config or {}),
-        "elmo": dict(elmo or {}),
-        "capital": float(capital) if capital is not None else None,
-        # Provenance, house pattern. `metrics` is the run the profile was saved
-        # from, so a later reader can see what it was fitted against instead of
-        # guessing.
-        "validation": validation,
-        "metrics": dict(metrics or {}),
-        "note": note,
-        "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
-    }
-    data[_key(ticker, interval)] = record
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    with _file_lock(p):
+        data = load_all(p)
+        record = {
+            "ticker": (ticker or ANY).upper(),
+            "interval": interval or ANY,
+            "config": dict(config or {}),
+            "elmo": dict(elmo or {}),
+            "capital": float(capital) if capital is not None else None,
+            # Provenance, house pattern. `metrics` is the run the profile was saved
+            # from, so a later reader can see what it was fitted against instead of
+            # guessing.
+            "validation": validation,
+            "metrics": dict(metrics or {}),
+            "note": note,
+            "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        data[_key(ticker, interval)] = record
+        _replace_json(p, data)
     return record
 
 
 def delete(ticker: str | None, interval: str | None, path: Path | None = None) -> bool:
     p = path or store_path()
-    data = load_all(p)
-    if _key(ticker, interval) not in data:
-        return False
-    del data[_key(ticker, interval)]
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    with _file_lock(p):
+        data = load_all(p)
+        if _key(ticker, interval) not in data:
+            return False
+        del data[_key(ticker, interval)]
+        _replace_json(p, data)
     return True
 
 
