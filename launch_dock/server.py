@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from chart_app import profiles
 from launch_dock import launch, registry, status, stop, sync
+from launch_dock import spawn as spawn_mod
 
 
 CHART_PROFILES = sync.CHART_PROFILES
@@ -25,6 +26,7 @@ class _DockServer:
         chart_post: Callable[[str, dict], dict] | None = None,
         chart_probe: Callable[[], bool] | None = None,
         alive: Callable[[int], bool] | None = None,
+        popen: Callable | None = None,
     ) -> None:
         self.directory = Path(directory)
         self.card_path = self.directory / "launch_dock.json"
@@ -35,6 +37,7 @@ class _DockServer:
         self.chart_post = chart_post
         self.chart_probe = chart_probe
         self.alive = alive
+        self.popen = popen
 
     @staticmethod
     def _no_process_control(_value: Any) -> None:
@@ -174,9 +177,18 @@ class _DockServer:
                 else:
                     raise ValueError(f"unknown seed {card.get('seed')}")
                 card["argv"] = argv
-                card["state"] = "launching"
+                if self.popen is None:
+                    card["state"] = "launching"
+                    self._save_registry()
+                    return 200, {"argv": argv, "spawned": False, "card": card}
+                cwd = launch.EVENT_DESK if card.get("seed") == "event_desk" else launch.BLACKHOLE
+                updated = spawn_mod.spawn(card, argv, popen=self.popen, cwd=cwd)
+                self.registry["cards"] = [
+                    updated if item.get("id") == updated.get("id") else item
+                    for item in self.registry["cards"]
+                ]
                 self._save_registry()
-                return 200, {"argv": argv, "spawned": False, "card": card}
+                return 200, {"argv": argv, "spawned": True, "card": updated}
 
             if method == "POST" and path == "/api/stop":
                 card = self._find_card(str(body["id"]))
@@ -206,6 +218,7 @@ def create_server(
     chart_post: Callable[[str, dict], dict] | None = None,
     chart_probe: Callable[[], bool] | None = None,
     alive: Callable[[int], bool] | None = None,
+    popen: Callable | None = None,
 ) -> _DockServer:
     return _DockServer(
         Path(directory),
@@ -214,6 +227,7 @@ def create_server(
         chart_post=chart_post,
         chart_probe=chart_probe,
         alive=alive,
+        popen=popen,
     )
 
 
@@ -254,8 +268,20 @@ class _HTTPHandler(BaseHTTPRequestHandler):
         return
 
 
-def serve(directory: str | Path = "artifacts") -> None:
-    dock = create_server(directory)
+ARTIFACTS = Path(r"E:/BlackHole_Investments/BlackHole/artifacts")
+
+
+def _detached_popen(argv, **kw):
+    import subprocess
+
+    log_dir = ARTIFACTS / "launch_dock_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handle = open(log_dir / "launch.log", "ab", buffering=0)
+    return subprocess.Popen(argv, stdout=handle, stderr=subprocess.STDOUT, **kw)
+
+
+def serve(directory: str | Path = ARTIFACTS) -> None:
+    dock = create_server(directory, popen=_detached_popen)
 
     class Handler(_HTTPHandler):
         pass
