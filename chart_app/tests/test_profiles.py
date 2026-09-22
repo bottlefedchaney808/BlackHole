@@ -77,3 +77,18 @@ def test_ticker_case_does_not_create_a_second_profile(store):
     profiles.save("SPY", "15m", elmo={"liq_window": 4}, path=store)
     assert len(json.loads(store.read_text(encoding="utf-8"))) == 1
     assert profiles.resolve("SpY", "15m", path=store)["elmo"]["liq_window"] == 4
+
+
+def test_save_replaces_atomically_and_keeps_both_keys(store, tmp_path):
+    profiles.save("SPY", "15m", elmo={"liq_window": 3}, path=store)
+    profiles.save("NVDA", "15m", elmo={"liq_window": 9}, path=store)
+    data = json.loads(store.read_text(encoding="utf-8"))
+    assert data["SPY|15m"]["elmo"]["liq_window"] == 3
+    assert data["NVDA|15m"]["elmo"]["liq_window"] == 9
+    assert not store.with_name("profiles.json.tmp").exists()
+
+
+def test_delete_uses_the_same_replace(store):
+    profiles.save("SPY", "15m", elmo={"liq_window": 3}, path=store)
+    assert profiles.delete("SPY", "15m", path=store) is True
+    assert "SPY|15m" not in json.loads(store.read_text(encoding="utf-8"))
