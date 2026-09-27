@@ -48,6 +48,8 @@ from scanner.earnings_scanner import format_earnings_one as format_earnings_line
 from scanner.earnings_scanner import scan_ticker as _scan_earnings_ticker
 from scanner.report import ScannerReport
 
+_SENTIMENT_DIR = Path(__file__).resolve().parent
+
 
 def _find_vol_suite_python(vol_suite_dir: Path) -> str:
     """Locate Vol_Suite's own venv interpreter, cross-platform.
@@ -311,62 +313,122 @@ def scan_ticker(st, ticker, engine):
     return None
 
 
-def run_options_scanners(ticker, engine, benchmark="SPY", skip_gex=False, scanners=None):
-    """Run selected options scanners via registry (Phase 4).
-
-    scanners: list of slugs or None (all except gex if skip_gex).
-    Keeps engine.record_* and raw dict for compat.
-    --skip-gex kept as deprecated alias.
-    """
+def _load_ss_registry():
     import importlib.util
-    from pathlib import Path
+    path = _SENTIMENT_DIR / "module_registry.py"
+    spec = importlib.util.spec_from_file_location("ss_module_registry", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-    # Load THIS suite's registry by absolute path -- scanner.options_scanner_base
-    # pushes Vol_Suite onto sys.path[0], so a bare `import module_registry` would
-    # resolve to Vol_Suite/module_registry.py instead of the sentiment-scanner one.
-    _mreg_path = Path(__file__).resolve().parent / "module_registry.py"
-    _spec = importlib.util.spec_from_file_location("ss_module_registry", _mreg_path)
-    _mreg = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_mreg)
-    resolve_modules = _mreg.resolve_modules
+
+def _default_formatters():
+    from scanner.earnings_scanner import format_earnings_one
+    from scanner.gex_scanner import format_gex
+    from scanner.iv_rank_scanner import format_iv_rank
+    from scanner.max_pain_scanner import format_max_pain
+    from scanner.skew_scanner import format_skew
+    from scanner.unusual_oi_scanner import format_unusual_oi
+    from scanner.vol_dispersion_scanner import format_dispersion
+
+    return {
+        "gex": format_gex,
+        "unusual_oi": format_unusual_oi,
+        "iv_rank": format_iv_rank,
+        "skew": format_skew,
+        "max_pain": format_max_pain,
+        "vol_dispersion": format_dispersion,
+        "earnings": format_earnings_one,
+    }
+
+
+def run_options_scanners(
+    ticker,
+    engine,
+    benchmark="SPY",
+    skip_gex=False,
+    scanners=None,
+    registry=None,
+    formatters=None,
+):
+    reg = registry or _load_ss_registry()
+    fmts = formatters if formatters is not None else _default_formatters()
 
     if scanners is None:
-        all_slugs = ["gex", "unusual_oi", "iv_rank", "skew", "max_pain", "vol_dispersion", "earnings"]
-        if skip_gex:
-            scanners = [s for s in all_slugs if s != "gex"]
-        else:
-            scanners = all_slugs
+        all_slugs = [
+            "gex", "unusual_oi", "iv_rank", "skew",
+            "max_pain", "vol_dispersion", "earnings",
+        ]
+        scanners = [s for s in all_slugs if not (skip_gex and s == "gex")]
 
-    selected = resolve_modules(scanners)
-
+    selected = reg.resolve_modules(scanners)
     results = []
-    raw = {s: None for s in ["gex", "unusual_oi", "iv_rank", "skew", "max_pain", "dispersion", "earnings"]}
-
+    raw = {
+        "gex": None, "unusual_oi": None, "iv_rank": None, "skew": None,
+        "max_pain": None, "dispersion": None, "earnings": None,
+    }
     slug_to_record = {
-        "gex": ("record_gex", None),
-        "unusual_oi": ("record_oi", None),
-        "iv_rank": ("record_iv", None),
-        "skew": ("record_skew", None),
-        "max_pain": ("record_pain", None),
-        "vol_dispersion": ("record_dispersion", None),
-        "earnings": ("record_earnings", None),
+        "gex": "record_gex",
+        "unusual_oi": "record_oi",
+        "iv_rank": "record_iv",
+        "skew": "record_skew",
+        "max_pain": "record_pain",
+        "vol_dispersion": "record_dispersion",
+        "earnings": "record_earnings",
+    }
+    slug_to_label = {
+        "gex": "GEX",
+        "unusual_oi": "OI",
+        "iv_rank": "IV",
+        "skew": "SKEW",
+        "max_pain": "PAIN",
+        "vol_dispersion": "DISP",
+        "earnings": "EARN",
     }
 
     for spec in selected:
         slug = spec.slug
+        raw_key = "dispersion" if slug == "vol_dispersion" else slug
+        label = slug_to_label.get(slug, slug)
         try:
             res = spec.run({"ticker": ticker, "benchmark": benchmark})
-            raw_key = slug if slug != "vol_dispersion" else "dispersion"
-            raw[raw_key] = res.context_patch.get(slug + "_result") or res
-            # call engine if possible
-            rec_name, _ = slug_to_record.get(slug, (None, None))
-            if rec_name and hasattr(engine, rec_name):
-                val = raw[raw_key]
-                getattr(engine, rec_name)(ticker, val)
-            # format not wired here (legacy fns still used in other paths); results list simplified
-            results.append(f"  {ticker:6s} | {slug}: ok via registry")
         except Exception as e:
-            results.append(f"  {ticker:6s} | {slug}: ERROR — {e}")
+            results.append(f"  {ticker:6s} | {label}: ERROR — {e}")
+            raw[raw_key] = None
+            continue
+
+        if getattr(res, "status", None) == "failed":
+            err = (res.metrics or {}).get("error", "failed")
+            results.append(f"  {ticker:6s} | {label}: ERROR — {err}")
+            raw[raw_key] = None
+            continue
+
+        patch = res.context_patch or {}
+        val = patch.get(slug + "_result")
+        if val is None:
+            results.append(f"  {ticker:6s} | {label}: ERROR — empty_result")
+            raw[raw_key] = None
+            continue
+
+        err = getattr(val, "error", None)
+        if err:
+            fmt = fmts.get(slug)
+            results.append(fmt(val) if fmt else f"  {ticker:6s} | {slug}: ERROR — {err}")
+            raw[raw_key] = val
+            rec = slug_to_record.get(slug)
+            if rec and hasattr(engine, rec):
+                pass  # do not record errored scans
+            continue
+
+        raw[raw_key] = val
+        rec = slug_to_record.get(slug)
+        if rec and hasattr(engine, rec):
+            getattr(engine, rec)(ticker, val)
+        fmt = fmts.get(slug)
+        line = fmt(val) if fmt else f"  {ticker:6s} | {slug}: {getattr(val, 'ticker', ticker)}"
+        if "ok via registry" in line:
+            raise RuntimeError(f"{slug} formatter returned registry stub: {line!r}")
+        results.append(line)
 
     return results, raw
 

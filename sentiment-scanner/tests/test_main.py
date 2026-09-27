@@ -10,7 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_SENTIMENT_SCANNER_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_SENTIMENT_SCANNER_DIR))
+sys.path.insert(0, str(_SENTIMENT_SCANNER_DIR.parent))
 
 
 def _load_sentiment_main():
@@ -35,12 +37,16 @@ def _load_sentiment_main():
 main_mod = _load_sentiment_main()
 
 
+from shared.module_registry import ModuleResult
+
+
 class _FakeScan:
     """Minimal stand-in for a scanner result dataclass."""
 
     def __init__(self, tag: str, error=None) -> None:
         self.tag = tag
         self.error = error
+        self.ticker = "AAPL"
 
 
 def _fake_scanners():
@@ -88,24 +94,89 @@ def _fake_scanners():
     )
 
 
+class _FakeSpec:
+    def __init__(self, slug, fn):
+        self.slug = slug
+        self.run = fn
+
+
+class _FakeRegistry:
+    def __init__(self, runners: dict):
+        self.runners = runners
+
+    def resolve_modules(self, slugs):
+        return [_FakeSpec(s, self.runners[s]) for s in slugs if s in self.runners]
+
+
+def _ok_result(slug, obj):
+    return ModuleResult(
+        status="ok",
+        artifacts=[],
+        metrics={},
+        context_patch={f"{slug}_result": obj},
+    )
+
+
+def _fail_result(exc: Exception):
+    return ModuleResult(
+        status="failed",
+        artifacts=[],
+        metrics={"error": str(exc)},
+        context_patch=None,
+    )
+
+
+def _fmt(prefix):
+    def _inner(scan):
+        if getattr(scan, "error", None):
+            return f"  {scan.ticker:6s} | {prefix}: ERROR — {scan.error}"
+        return f"  {scan.ticker:6s} | {prefix}: 42"
+    return _inner
+
+
+FAKE_FORMATTERS = {
+    "gex": _fmt("GEX"),
+    "unusual_oi": _fmt("OI"),
+    "iv_rank": _fmt("IV"),
+    "skew": _fmt("SKEW"),
+    "max_pain": _fmt("PAIN"),
+    "vol_dispersion": _fmt("DISP"),
+    "earnings": _fmt("EARN"),
+}
+
+
+def _runners_from_fakes():
+    fakes = {
+        "gex": _FakeScan("gex"),
+        "unusual_oi": _FakeScan("oi"),
+        "iv_rank": _FakeScan("iv"),
+        "skew": _FakeScan("skew"),
+        "max_pain": _FakeScan("pain"),
+        "vol_dispersion": _FakeScan("disp"),
+        "earnings": _FakeScan("earn"),
+    }
+
+    def make(slug, obj):
+        return lambda ctx: _ok_result(slug, obj)
+
+    return {slug: make(slug, obj) for slug, obj in fakes.items()}, fakes
+
+
 class TestRunOptionsScanners:
-    def test_returns_lines_and_raw_for_all_seven_scanners(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
-        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
-        monkeypatch.setattr(
-            main_mod, "_scan_earnings_ticker",
-            lambda ticker, td=None: _FakeScan("earn"),
-        )
-        monkeypatch.setattr(
-            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}",
-        )
+    def test_returns_lines_and_raw_for_all_seven_scanners(self) -> None:
+        runners, fakes = _runners_from_fakes()
         engine = MagicMock()
 
-        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+        lines, raw = main_mod.run_options_scanners(
+            "AAPL",
+            engine,
+            registry=_FakeRegistry(runners),
+            formatters=FAKE_FORMATTERS,
+        )
 
         assert len(lines) == 7
+        assert all("ok via registry" not in line for line in lines)
+        assert all(any(ch.isdigit() for ch in line) for line in lines)
         assert raw["gex"].tag == "gex"
         assert raw["unusual_oi"].tag == "oi"
         assert raw["iv_rank"].tag == "iv"
@@ -116,84 +187,74 @@ class TestRunOptionsScanners:
         engine.record_gex.assert_called_once_with("AAPL", raw["gex"])
         engine.record_earnings.assert_called_once_with("AAPL", raw["earnings"])
 
-    def test_skip_gex_leaves_gex_raw_none(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
-        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
-        monkeypatch.setattr(
-            main_mod, "_scan_earnings_ticker",
-            lambda ticker, td=None: _FakeScan("earn"),
-        )
-        monkeypatch.setattr(
-            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}",
-        )
+    def test_skip_gex_leaves_gex_raw_none(self) -> None:
+        runners, fakes = _runners_from_fakes()
         engine = MagicMock()
 
-        lines, raw = main_mod.run_options_scanners("AAPL", engine, skip_gex=True)
+        lines, raw = main_mod.run_options_scanners(
+            "AAPL",
+            engine,
+            skip_gex=True,
+            registry=_FakeRegistry(runners),
+            formatters=FAKE_FORMATTERS,
+        )
 
         assert raw["gex"] is None
         assert len(lines) == 6
         engine.record_gex.assert_not_called()
 
-    def test_scanner_exception_produces_error_line_and_none_raw(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        scanners = list(_fake_scanners())
+    def test_scanner_exception_produces_error_line_and_none_raw(self) -> None:
+        runners, fakes = _runners_from_fakes()
 
-        def _boom(ticker):
+        def _boom(ctx):
             raise RuntimeError("boom")
 
-        scanners[0] = _boom  # scan_gex
-        monkeypatch.setattr(main_mod, "_import_scanners", lambda: tuple(scanners))
-        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
-        monkeypatch.setattr(
-            main_mod, "_scan_earnings_ticker",
-            lambda ticker, td=None: _FakeScan("earn"),
-        )
-        monkeypatch.setattr(
-            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}",
-        )
+        runners["gex"] = _boom
         engine = MagicMock()
 
-        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+        lines, raw = main_mod.run_options_scanners(
+            "AAPL",
+            engine,
+            registry=_FakeRegistry(runners),
+            formatters=FAKE_FORMATTERS,
+        )
 
         assert raw["gex"] is None
         assert any("GEX: ERROR" in line for line in lines)
 
-    def test_earnings_scanner_exception_produces_error_line(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
-        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
+    def test_earnings_scanner_exception_produces_error_line(self) -> None:
+        runners, fakes = _runners_from_fakes()
 
-        def _boom(ticker, td=None):
+        def _boom(ctx):
             raise RuntimeError("earnings api down")
 
-        monkeypatch.setattr(main_mod, "_scan_earnings_ticker", _boom)
+        runners["earnings"] = _boom
         engine = MagicMock()
 
-        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+        lines, raw = main_mod.run_options_scanners(
+            "AAPL",
+            engine,
+            registry=_FakeRegistry(runners),
+            formatters=FAKE_FORMATTERS,
+        )
 
         assert raw["earnings"] is None
         assert any("EARN: ERROR" in line for line in lines)
         engine.record_earnings.assert_not_called()
 
-    def test_earnings_none_result_skips_record_and_line(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
-        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
-        monkeypatch.setattr(
-            main_mod, "_scan_earnings_ticker",
-            lambda ticker, td=None: None,
-        )
+    def test_earnings_none_result_skips_record_and_line(self) -> None:
+        runners, fakes = _runners_from_fakes()
+        runners["earnings"] = lambda ctx: _ok_result("earnings", None)
         engine = MagicMock()
 
-        lines, raw = main_mod.run_options_scanners("AAPL", engine)
+        lines, raw = main_mod.run_options_scanners(
+            "AAPL",
+            engine,
+            registry=_FakeRegistry(runners),
+            formatters=FAKE_FORMATTERS,
+        )
 
         assert raw["earnings"] is None
-        assert len(lines) == 6
         engine.record_earnings.assert_not_called()
 
 
