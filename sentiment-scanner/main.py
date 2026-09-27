@@ -502,6 +502,27 @@ _HIGH_CONVICTION_SIGNALS = (
     "EARNINGS_VOL_PLUS_NARRATIVE",
 )
 
+_SCAN_FIELDS = (
+    "surge_detected", "regime", "skew_signal", "near_pin",
+    "max_pain_strike", "price_vs_pain_pct", "dispersion_signal",
+    "premium_pct", "atm_iv", "iv_rank", "total_oi", "call_oi", "put_oi",
+)
+
+
+def _scanner_row(name, result) -> dict | None:
+    if result is None:
+        return None
+    err = getattr(result, "error", None)
+    if err:
+        return {"status": "error", "error": str(err)}
+    d = {"status": "ok"}
+    for attr in _SCAN_FIELDS:
+        v = getattr(result, attr, None)
+        if v is None or callable(v):
+            continue
+        d[attr] = round(v, 4) if isinstance(v, float) else v
+    return d
+
 
 def run_directional_scan(tickers, engine, benchmark="SPY"):
     """Run the narrative + 6-scanner (GEX skipped -- expensive) + real-OI +
@@ -549,35 +570,14 @@ def run_directional_scan(tickers, engine, benchmark="SPY"):
             # 2. Options scanners (GEX skipped -- expensive; 6 remain)
             try:
                 _, raw = run_options_scanners(
-                    ticker, engine, benchmark=benchmark, skip_gex=True
+                    ticker, engine, benchmark=benchmark, skip_gex=True,
                 )
                 for name, r in raw.items():
-                    if r is None:
+                    if name == "gex":
                         continue
-                    err = getattr(r, "error", None)
-                    if err:
-                        row["scanners"][name] = {"status": "error", "error": str(err)}
-                    else:
-                        d = {"status": "ok"}
-                        for attr in (
-                            "surge_detected",
-                            "regime",
-                            "skew_signal",
-                            "near_pin",
-                            "max_pain_strike",
-                            "price_vs_pain_pct",
-                            "dispersion_signal",
-                            "premium_pct",
-                            "atm_iv",
-                            "iv_rank",
-                            "total_oi",
-                            "call_oi",
-                            "put_oi",
-                        ):
-                            v = getattr(r, attr, None)
-                            if v is not None and not callable(v):
-                                d[attr] = round(v, 4) if isinstance(v, float) else v
-                        row["scanners"][name] = d
+                    row_d = _scanner_row(name, r)
+                    if row_d is not None:
+                        row["scanners"][name] = row_d
             except Exception as e:
                 row["errors"].append(f"scanners:{e}")
 

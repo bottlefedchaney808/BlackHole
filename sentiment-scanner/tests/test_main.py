@@ -482,7 +482,7 @@ class TestRawResultToDict:
     def test_plain_object_converted_via_vars(self) -> None:
         obj = _FakeScan("gex", error=None)
         result = main_mod._raw_result_to_dict("gex", obj)
-        assert result == {"tag": "gex", "error": None}
+        assert result == {"tag": "gex", "error": None, "ticker": "AAPL"}
 
     def test_dict_passed_through(self) -> None:
         result = main_mod._raw_result_to_dict("gex", {"a": 1})
@@ -567,7 +567,7 @@ class TestMaybeBuildReport:
         main_mod._maybe_build_report(engine, cycle_raw)
 
         fake_report.add_ticker_results.assert_any_call(
-            "AAPL", "gex", {"tag": "gex", "error": None},
+            "AAPL", "gex", {"tag": "gex", "error": None, "ticker": "AAPL"},
         )
         fake_report.add_ticker_results.assert_any_call(
             "AAPL", "unusual_oi", {"error": "no_data"},
@@ -637,12 +637,18 @@ class TestRunDirectionalScan:
     signals over an explicit ticker list, one-shot, JSON output."""
 
     def _patch_common(self, monkeypatch, oi_snapshot=None, correlate_result=None):
-        monkeypatch.setattr(main_mod, "_import_scanners", _fake_scanners)
-        monkeypatch.setattr(main_mod, "get_td", lambda: "FAKE_TD")
-        monkeypatch.setattr(
-            main_mod, "_scan_earnings_ticker", lambda ticker, td=None: _FakeScan("earn"))
-        monkeypatch.setattr(
-            main_mod, "format_earnings_line", lambda r: f"  EARN:{r.tag}")
+        runners, fakes = _runners_from_fakes()
+        # drop gex from default --universe path: skip_gex=True already
+        fake_reg = _FakeRegistry(runners)
+        real = main_mod.run_options_scanners
+
+        def _wrapped(ticker, engine, benchmark="SPY", skip_gex=False, scanners=None, **kw):
+            return real(
+                ticker, engine, benchmark=benchmark, skip_gex=skip_gex,
+                scanners=scanners, registry=fake_reg, formatters=FAKE_FORMATTERS,
+            )
+
+        monkeypatch.setattr(main_mod, "run_options_scanners", _wrapped)
         monkeypatch.setattr(
             main_mod, "build_oi_snapshot",
             lambda ticker: oi_snapshot if oi_snapshot is not None else {"total_oi": 100})
@@ -663,7 +669,6 @@ class TestRunDirectionalScan:
     def test_writes_a_result_per_ticker_and_a_json_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
         self._patch_common(monkeypatch)
         engine = MagicMock()
         engine.correlate_with_oi.return_value = {"signals": [], "severity": "LOW"}
@@ -682,7 +687,6 @@ class TestRunDirectionalScan:
     def test_strong_flag_set_when_severity_is_high(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
         self._patch_common(monkeypatch)
         engine = MagicMock()
         engine.correlate_with_oi.return_value = {
@@ -695,7 +699,6 @@ class TestRunDirectionalScan:
     def test_strong_flag_false_on_low_severity_single_signal_low_cns(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
         self._patch_common(monkeypatch)
         engine = MagicMock()
         engine.correlate_with_oi.return_value = {
@@ -715,7 +718,6 @@ class TestRunDirectionalScan:
     def test_a_ticker_erroring_does_not_abort_the_rest_of_the_universe(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        monkeypatch.setattr(main_mod, "__file__", str(tmp_path / "main.py"))
         st = self._patch_common(monkeypatch)
 
         def _stream(ticker, max_pages=2):
@@ -731,6 +733,31 @@ class TestRunDirectionalScan:
 
         assert results["BAD"]["errors"] == ["narrative:stocktwits boom"]
         assert results["AAPL"]["narrative"]["cns"] == 55
+        assert all("module_registry.py" not in e for e in results["BAD"]["errors"])
+
+    def test_gex_is_omitted_even_when_raw_includes_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ) -> None:
+        self._patch_common(monkeypatch)
+        inner = main_mod.run_options_scanners
+
+        def _with_gex(ticker, engine, benchmark="SPY", skip_gex=False, scanners=None, **kw):
+            lines, raw = inner(
+                ticker, engine, benchmark=benchmark, skip_gex=skip_gex,
+                scanners=scanners, **kw,
+            )
+            raw = dict(raw)
+            raw["gex"] = _FakeScan("gex")
+            return lines, raw
+
+        monkeypatch.setattr(main_mod, "run_options_scanners", _with_gex)
+        engine = MagicMock()
+        engine.correlate_with_oi.return_value = {"signals": [], "severity": "LOW"}
+
+        results, _ = main_mod.run_directional_scan(["AAPL"], engine)
+
+        assert "gex" not in results["AAPL"]["scanners"]
+        assert results["AAPL"]["scanners"]["unusual_oi"]["status"] == "ok"
 
 
 class TestMainUniverseDispatch:
