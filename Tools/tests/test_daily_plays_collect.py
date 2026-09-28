@@ -86,3 +86,36 @@ def test_empty_universe_is_fatal(tmp_path):
 def test_default_enabled_excludes_reddit():
     assert orch.DEFAULT_ENABLED == ("rumors", "x", "sentiment")
     assert "reddit" not in orch.DEFAULT_ENABLED
+
+
+def test_map_sentiment_row_unusual_oi_missing_or_error_oi_surge_is_none():
+    missing = orch.map_sentiment_row({"oi": {"spot": 10.0, "atm_iv": 0.2, "skew_vol_pts": 1.0}})
+    assert missing["stats"]["oi_surge"] is None
+    errored = orch.map_sentiment_row(
+        {"scanners": {"unusual_oi": {"status": "error", "surge_detected": True}}}
+    )
+    assert errored["stats"]["oi_surge"] is None
+
+
+def test_map_sentiment_row_unusual_oi_ok_surge_false_is_measured_false():
+    out = orch.map_sentiment_row(
+        {"scanners": {"unusual_oi": {"status": "ok", "surge_detected": False}}}
+    )
+    assert out["stats"]["oi_surge"] is False
+
+
+def test_map_sentiment_row_skew_ok_uses_skew_signal():
+    out = orch.map_sentiment_row(
+        {
+            "oi": {"skew_vol_pts": 1.1},
+            "scanners": {"skew": {"status": "ok", "skew_signal": 2.5}},
+        }
+    )
+    assert out["stats"]["skew"] == 2.5
+
+
+def test_map_sentiment_row_max_pain_ok_uses_max_pain_strike():
+    out = orch.map_sentiment_row(
+        {"scanners": {"max_pain": {"status": "ok", "max_pain_strike": 150.0}}}
+    )
+    assert out["stats"]["max_pain"] == 150.0

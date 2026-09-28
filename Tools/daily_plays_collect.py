@@ -164,33 +164,40 @@ def parse_output_path(stdout: str) -> str | None:
     return None
 
 
+def _scanner_block(scanners: dict, slug: str) -> dict:
+    raw = scanners.get(slug)
+    return raw if isinstance(raw, dict) else {}
+
+
 def map_sentiment_row(row: dict | None) -> dict:
     src = row or {}
     narr_raw = src.get("narrative")
     narr = dict(narr_raw) if isinstance(narr_raw, dict) else {}
-    stats_raw = src.get("stats")
-    stats = dict(stats_raw) if isinstance(stats_raw, dict) else {}
     oi_raw = src.get("oi")
     oi = oi_raw if isinstance(oi_raw, dict) else {}
     scanners_raw = src.get("scanners")
     scanners = scanners_raw if isinstance(scanners_raw, dict) else {}
-    for key in ("spot", "atm_iv", "skew", "max_pain", "gex"):
-        if key not in stats and key in oi:
-            stats[key] = oi.get(key)
-    if "iv_rank" not in stats:
-        iv_raw = scanners.get("iv_rank")
-        iv = iv_raw if isinstance(iv_raw, dict) else {}
-        stats["iv_rank"] = iv.get("iv_rank") if iv.get("status") == "ok" else None
-    if "oi_surge" not in stats:
-        uoi_raw = scanners.get("unusual_oi")
-        uoi = uoi_raw if isinstance(uoi_raw, dict) else {}
-        if uoi.get("status") == "ok":
-            stats["oi_surge"] = bool(uoi.get("surge_detected"))
-        else:
-            stats["oi_surge"] = False
-    for key in ("spot", "atm_iv", "iv_rank", "skew", "max_pain", "gex"):
-        stats.setdefault(key, None)
-    stats.setdefault("oi_surge", False)
+    iv = _scanner_block(scanners, "iv_rank")
+    skew_scan = _scanner_block(scanners, "skew")
+    pain = _scanner_block(scanners, "max_pain")
+    uoi = _scanner_block(scanners, "unusual_oi")
+    if iv.get("status") == "ok" and iv.get("atm_iv") is not None:
+        atm_iv = iv.get("atm_iv")
+    else:
+        atm_iv = oi.get("atm_iv")
+    if skew_scan.get("status") == "ok":
+        skew = skew_scan.get("skew_signal")
+    else:
+        skew = oi.get("skew_vol_pts")
+    stats = {
+        "spot": oi.get("spot"),
+        "atm_iv": atm_iv,
+        "iv_rank": iv.get("iv_rank") if iv.get("status") == "ok" else None,
+        "skew": skew,
+        "max_pain": pain.get("max_pain_strike") if pain.get("status") == "ok" else None,
+        "gex": None,
+        "oi_surge": bool(uoi.get("surge_detected")) if uoi.get("status") == "ok" else None,
+    }
     return {
         "narrative": narr,
         "stats": stats,
