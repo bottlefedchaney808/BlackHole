@@ -45,6 +45,7 @@ from typing import Any
 from chart_app import profiles
 from chart_app.bar_cache import BarCache
 from chart_app.kalshi_perps import KalshiPerpsError, PerpsClient
+from launch_dock.launch import KALSHI
 from chart_app.perp_live import (
     book_target_units,
     full_contracts,
@@ -248,7 +249,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ticker", default="BTC-PERP")
     ap.add_argument("--interval", default="15m")
     ap.add_argument(
-        "--cap-dollars", type=float, required=True, help="max notional at 1.00x"
+        "--cap-dollars", type=float, help="fixed max notional at 1.00x"
+    )
+    ap.add_argument(
+        "--cap-fraction",
+        type=float,
+        help="share of live sleeve capital to deploy, 0-1, recomputed every tick",
+    )
+    ap.add_argument(
+        "--leverage",
+        type=float,
+        default=1.0,
+        help="notional multiple on min(cap, sleeve capital). 1 = no leverage.",
     )
     ap.add_argument(
         "--max-loss",
@@ -298,32 +310,49 @@ def main(argv: list[str] | None = None) -> int:
     store = BarCache(_ART / "live_bars.db")
     profile = profiles.resolve(args.ticker, args.interval)
     cfg = profile.get("config") or {}
-    unit_fraction = float(cfg.get("unit_fraction") or 1.0)
-    notional_x = float(cfg.get("max_units", 1)) * unit_fraction
+    max_units = float(cfg.get("max_units") or 1) or 1.0
+    raw_uf = cfg.get("unit_fraction")
+    unit_fraction = float(raw_uf) if raw_uf is not None else (1.0 / max_units)
+    notional_x = max_units * unit_fraction
     if notional_x > 1.0001:
         raise SystemExit(
             f"profile is {notional_x:.2f}x notional; live trading runs at 1.00x max "
             "(set unit_fraction = 1/max_units)"
         )
 
-    client = PerpsClient(subaccount=args.subaccount)
+    kalshi = KALSHI.get(args.ticker.upper())
+    if not kalshi:
+        raise SystemExit(f"no Kalshi perp mapped for {args.ticker}")
+    client = PerpsClient(subaccount=args.subaccount, ticker=kalshi)
     equity0 = args.base_capital or client.equity()
     since = (
         datetime.fromisoformat(args.pnl_since)
         if args.pnl_since
         else datetime.now(UTC)
     )
-    pnl0 = sleeve_pnl(client.fills(), since, client.unrealized_pnl())
+    pnl0 = sleeve_pnl(client.fills(), since, client.unrealized_pnl(), ticker=kalshi)
     position = round(client.position())
     bid, ask = client.top_of_book()
+    if (args.cap_dollars is None) == (args.cap_fraction is None):
+        raise SystemExit("pass exactly one of --cap-dollars or --cap-fraction")
+    if args.cap_fraction is not None and not 0.0 < args.cap_fraction <= 1.0:
+        raise SystemExit(f"--cap-fraction must be in (0, 1], got {args.cap_fraction}")
+    if args.leverage < 1.0:
+        raise SystemExit(f"--leverage must be >= 1, got {args.leverage}")
+
+    def cap_for(capital: float) -> float:
+        if args.cap_fraction is not None:
+            return max(0.0, capital) * args.cap_fraction
+        return float(args.cap_dollars)
+
     # 25% of what is actually at risk -- the cap is a ceiling, not the account.
-    max_loss = args.max_loss or 0.25 * min(args.cap_dollars, equity0)
+    max_loss = args.max_loss or 0.25 * min(cap_for(equity0), equity0)
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     _say("=" * 96)
     _say(
-        f"PERP SLEEVE LIVE  {args.ticker} {args.interval} -> KXBTCPERP  "
+        f"PERP SLEEVE LIVE  {args.ticker} {args.interval} -> {kalshi}  "
         f"{'*** REAL ORDERS ***' if args.live else 'DRY RUN, nothing sent'}"
     )
     _say(
@@ -336,7 +365,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     _say(
         f"sleeve capital ${equity0:,.2f} at {since:%m-%d %H:%MZ}, P&L since ${pnl0:+,.2f}  "
-        f"cap ${args.cap_dollars:,.2f}  kill at P&L -${max_loss:,.2f}  "
+        + (
+            f"cap {args.cap_fraction:.0%} of book (${cap_for(equity0):,.2f} now)  "
+            if args.cap_fraction is not None
+            else f"cap ${args.cap_dollars:,.2f}  "
+        )
+        + f"kill at P&L -${max_loss:,.2f}  "
         f"position {position:+d}  touch {bid:.4f}/{ask:.4f}"
     )
     if args.live and equity0 < 1.0:
@@ -352,7 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         "session",
         {
             "live": args.live,
-            "cap": args.cap_dollars,
+            "cap": cap_for(equity0),
+            "cap_fraction": args.cap_fraction,
             "max_loss": max_loss,
             "equity": equity0,
             "pnl_since": since.isoformat(),
@@ -382,15 +417,16 @@ def main(argv: list[str] | None = None) -> int:
                 last_bars = time.time()
             bid, ask = client.top_of_book()
             equity = client.equity()
-            pnl = sleeve_pnl(client.fills(), since, client.unrealized_pnl())
+            pnl = sleeve_pnl(client.fills(), since, client.unrealized_pnl(), ticker=kalshi)
             # Its own capital, and never more than the money that exists across
             # every subaccount -- 1x must stay 1x even if a manual trade loses.
             capital = min(equity0 + pnl, client.total_equity())
             position = round(client.position()) if args.live else ex.paper_pos
             full = full_contracts(
-                args.cap_dollars,
+                cap_for(capital),
                 capital,
                 (bid + ask) / 2,
+                args.leverage,
             )
             units = book_target_units(book)
             target = target_contracts(units, unit_fraction, full)

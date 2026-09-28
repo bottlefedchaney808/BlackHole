@@ -352,3 +352,87 @@ def test_journal_seed_cuts_in_the_bars_own_zone(tmp_path):
     started = datetime(2026, 9, 21, 13, 45, tzinfo=UTC)
     assert Journal(tmp_path / "a.jsonl").seed(book, started, tz=_ET) == 1
     assert Journal(tmp_path / "b.jsonl").seed(book, started) == 2
+
+
+# ---- 2026-09-21: whale flow reaches the sleeve, and the sleeve's own P&L ----
+
+
+def _fill(ts, price, before, after):
+    from chart_app.perp_sleeve import Fill
+
+    return Fill(
+        ts=ts,
+        decision_ts=ts,
+        action="x",
+        side="long" if after > 0 else "flat",
+        price=price,
+        units_before=before,
+        units_after=after,
+        reason="signal",
+        stop=None,
+        score=0.0,
+    )
+
+
+def test_session_pnl_counts_only_fills_after_launch_and_marks_the_rest():
+    from chart_app.perp_sleeve import session_pnl
+
+    book = Book()
+    book.fills = [
+        _fill("2026-09-21T09:40:00", 10.0, 0, 2),  # before launch: carried in
+        _fill("2026-09-21T10:30:00", 11.0, 2, 4),
+        _fill("2026-09-21T11:00:00", 12.0, 4, 0),
+    ]
+    book.last_close = 13.0
+    since = datetime(2026, 9, 21, 10, 0)  # noqa: DTZ001 - naive, in the bars zone
+    # $1,000 capital, 1/5 per unit = $200/unit. Carried 2 units from the
+    # 10.50 close at launch -- NOT from the 10.00 entry, which was history.
+    pnl = session_pnl(book, since, 10.5, capital=1000, unit_fraction=0.2, cost_bps=0)
+    want = 2 * 200 * (11 / 10.5 - 1) + 4 * 200 * (12 / 11 - 1)
+    assert abs(pnl - want) < 1e-9
+    # Fees: 2 units bought + 4 sold after launch = 6 units x $200 x 5bp.
+    fee = session_pnl(book, since, 10.5, capital=1000, unit_fraction=0.2, cost_bps=5)
+    assert abs((pnl - fee) - 6 * 200 * 5 / 1e4) < 1e-9
+
+
+def test_session_pnl_marks_an_open_position_at_the_last_close():
+    from chart_app.perp_sleeve import session_pnl
+
+    book = Book()
+    book.fills = [_fill("2026-09-21T10:30:00", 10.0, 0, 1)]
+    book.last_close = 9.0
+    since = datetime(2026, 9, 21, 10, 0)  # noqa: DTZ001 - naive, in the bars zone
+    pnl = session_pnl(book, since, None, capital=1000, unit_fraction=0.2, cost_bps=0)
+    assert abs(pnl - 200 * (9 / 10 - 1)) < 1e-9
+
+
+def test_replay_with_flow_is_what_the_tester_scores():
+    """Same bars, same flow -> the sleeve's P&L is run_backtest's with flow."""
+    from chart_app.backtest import run_backtest
+    from chart_app.flow_pane import bin_flow
+    from chart_app.flow_stamp import flow_observed_bars
+
+    # Naive stamps, like the equity tape this path exists for.
+    bars = _perp_bars(400, start=datetime(2026, 9, 1))  # noqa: DTZ001
+    rng = np.random.default_rng(5)
+    rows = [
+        {
+            "datetime": b.timestamp.replace(tzinfo=None).isoformat(),
+            "premium": float(rng.uniform(1e4, 5e5)),
+            "trade_right": "C" if rng.random() > 0.4 else "P",
+        }
+        for b in bars[::3]
+    ]
+    now = (bars[-1].timestamp + timedelta(hours=1)).replace(tzinfo=UTC)
+    with_flow = replay(bars, PROFILE, now=now, flow_rows=rows)
+    without = replay(bars, PROFILE, now=now)
+    want = run_backtest(
+        bars,
+        interval="15m",
+        config=PROFILE["config"],
+        cost_bps=5.0,
+        flow_net=bin_flow(bars, rows)["net"],
+        flow_observed=flow_observed_bars(bars, rows),
+    ).metrics["total_return_pct"]
+    assert abs(with_flow.metrics["total_return_pct"] - want) < 1e-9
+    assert with_flow.metrics["total_return_pct"] != without.metrics["total_return_pct"]

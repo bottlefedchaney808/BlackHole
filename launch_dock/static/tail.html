@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sleeve Tail</title>
+  <style>
+    :root { color-scheme: dark; font: 14px system-ui, sans-serif; }
+    body { margin: 0; background: #10151b; color: #e7edf3; display: flex; flex-direction: column; height: 100vh; }
+    header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px; background: #18212b; border-bottom: 1px solid #2c3b49; }
+    h1 { font-size: 16px; margin: 0; }
+    .badge { padding: 2px 10px; border-radius: 10px; font-weight: 600; background: #2c3b49; }
+    .live { background: #1f5d33; color: #b9f0c6; }
+    .dead { background: #6b2323; color: #ffd0d0; }
+    .quiet { background: #6b5a1f; color: #ffecb0; }
+    .muted { color: #91a0ad; }
+    button { border: 1px solid #405365; border-radius: 5px; padding: 5px 12px; background: #2878b9; color: white; cursor: pointer; font: inherit; }
+    #feed { flex: 1; margin: 0; padding: 10px 16px; overflow: auto; font: 12.5px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .warn { color: #ff9b9b; font-weight: 600; }
+    .trade { color: #8fd3ff; }
+    .held { color: #b9f0c6; }
+    .banner { color: #c9a8ff; }
+  </style>
+</head>
+<body>
+<header>
+  <h1 id="title">Tail</h1>
+  <span id="status" class="badge">…</span>
+  <span id="age" class="muted"></span>
+  <span id="path" class="muted"></span>
+  <button id="pause">Pause</button>
+</header>
+<pre id="feed">Loading…</pre>
+<script>
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const id = qs.get('id');
+  const kind = qs.get('kind') || '';
+  const $ = (x) => document.getElementById(x);
+  $('title').textContent = `${kind === 'tune' ? 'Walk-forward' : 'Tail'} · ${id}`;
+  document.title = `Tail ${id}`;
+  let paused = false;
+  let lastText = '';
+  $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; };
+
+  const classify = (line) => {
+    if (/KILL|Traceback|Error|!!|refus|failed|KEEP INCUMBENT/i.test(line)) return 'warn';
+    if (/ADOPT/.test(line)) return 'held';
+    if (/order|fill|cancel|stop set|bracket/i.test(line)) return 'trade';
+    if (/held [+-][1-9]/.test(line)) return 'held';
+    if (/^.{0,20}(=====|PERP SLEEVE|profile |walk-forward|sleeve capital|journal |bar store)/.test(line)) return 'banner';
+    return '';
+  };
+  // Runner lines start "MM-DD HH:MM:SSZ" (UTC); the year is the current one.
+  const lineAge = (line) => {
+    const m = /^(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)Z/.exec(line || '');
+    if (!m) return null;
+    const t = Date.UTC(new Date().getUTCFullYear(), +m[1] - 1, +m[2], +m[3], +m[4], +m[5]);
+    return (Date.now() - t) / 1000;
+  };
+  const fmtAge = (s) => s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
+
+  const render = (lines) => {
+    const feed = $('feed');
+    const atBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 30;
+    feed.textContent = '';
+    for (const line of lines) {
+      const span = document.createElement('span');
+      const cls = classify(line);
+      if (cls) span.className = cls;
+      span.textContent = line + '\n';
+      feed.appendChild(span);
+    }
+    if (atBottom) feed.scrollTop = feed.scrollHeight;
+  };
+
+  const poll = async () => {
+    if (!paused) {
+      try {
+        const r = await fetch(`/api/tail?id=${encodeURIComponent(id)}&kind=${kind}&lines=400`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        $('path').textContent = d.log;
+        const last = [...d.lines].reverse().find((l) => lineAge(l) !== null);
+        const age = lineAge(last);
+        const status = $('status');
+        if (d.alive === false || (!d.pid && d.state !== 'running')) {
+          status.textContent = kind === 'tune' ? 'finished' : `not running (${d.state})`; status.className = kind === 'tune' ? 'badge' : 'badge dead';
+        } else if (kind !== 'tune' && age !== null && age > 120) {
+          // Runner prints every ~20s; two minutes of silence is not healthy.
+          status.textContent = `pid ${d.pid} · SILENT`; status.className = 'badge quiet';
+        } else {
+          status.textContent = `${kind === 'tune' ? 'running' : 'live'} · pid ${d.pid}`; status.className = 'badge live';
+        }
+        $('age').textContent = age === null ? '' : `last line ${fmtAge(age)} ago`;
+        const text = d.lines.join('\n');
+        if (!d.exists) {
+          $('feed').textContent = kind === 'tune' ? 'No walk-forward has been run from the dock for this card yet.' : 'No log for this card yet. It gets its own log from the next Launch.';
+        } else if (text !== lastText) {
+          render(d.lines);
+        }
+        lastText = text;
+      } catch (e) {
+        $('status').textContent = `dock unreachable: ${e.message}`;
+        $('status').className = 'badge dead';
+      }
+    }
+    setTimeout(poll, 2000);
+  };
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -6,8 +6,9 @@ it has no signal logic of its own. This module is the translation layer:
     book units (-max_units..+max_units)  x unit_fraction  x full contracts
                                       -> target contracts on KXBTCPERP
 
-`full` is the whole cap at 1x: floor(min(cap, equity) / contract price), so the
-book at max size is at most 1.00x notional and never borrows (Jason, 2026-09-20).
+`full` is the whole cap at `leverage` x: floor(min(cap, equity) * leverage /
+contract price). Default leverage is 1.00 (Jason, 2026-09-20). The live runner
+lifts it with `--leverage` (Jason, 2026-09-21: turn it up).
 
 Order style is the fee finding: the walk-forward at 1x is +27% OOS at 2bp/side
 and -9.7% at 12bp/side, so every order starts post-only at the touch (maker,
@@ -27,15 +28,27 @@ CONTRACT_SIZE_BTC = 0.0001
 TICK = 0.0001
 
 
-def full_contracts(cap_dollars: float, equity: float, contract_price: float) -> int:
-    """Contracts at 1.00x of the smaller of the cap and the account's equity."""
-    budget = max(0.0, min(cap_dollars, equity))
+def full_contracts(
+    cap_dollars: float,
+    equity: float,
+    contract_price: float,
+    leverage: float = 1.0,
+) -> int:
+    """Contracts at `leverage` x of the smaller of the cap and equity."""
+    if leverage < 1.0:
+        raise ValueError(f"leverage must be >= 1, got {leverage}")
+    budget = max(0.0, min(cap_dollars, equity)) * leverage
     if contract_price <= 0:
         return 0
     return math.floor(budget / contract_price)
 
 
-def sleeve_pnl(fills: list[dict[str, Any]], since: datetime, unrealized: float) -> float:
+def sleeve_pnl(
+    fills: list[dict[str, Any]],
+    since: datetime,
+    unrealized: float,
+    ticker: str | None = None,
+) -> float:
     """The sleeve's own P&L: its subaccount's fills since launch, plus the open mark.
 
     Why not `equity - equity0`: a subaccount's equity also moves when
@@ -48,6 +61,8 @@ def sleeve_pnl(fills: list[dict[str, Any]], since: datetime, unrealized: float) 
     """
     total = unrealized
     for fill in fills:
+        if ticker and fill.get("ticker") != ticker:
+            continue
         ts = datetime.fromisoformat(str(fill["created_time"]))
         if ts < since:
             continue
@@ -77,11 +92,13 @@ def reduces_risk(current: int, target: int) -> bool:
     return (current > 0) == (target > 0) and abs(target) < abs(current)
 
 
-def kalshi_stop(book_stop: float | None) -> float | None:
-    """The book's stop is a BTC price; Kalshi quotes per 0.0001-BTC contract."""
+def kalshi_stop(
+    book_stop: float | None, contract_size: float = CONTRACT_SIZE_BTC
+) -> float | None:
+    """Book stop is the underlying price. Kalshi quotes per contract."""
     if not book_stop:
         return None
-    return round(book_stop * CONTRACT_SIZE_BTC, 4)
+    return round(book_stop * contract_size, 4)
 
 
 @dataclass(frozen=True)

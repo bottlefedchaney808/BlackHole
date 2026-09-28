@@ -20,6 +20,24 @@
     .muted { color: #91a0ad; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     #message { min-height: 1.4em; color: #9ed6a5; }
+    .wf { margin-top: 12px; padding-top: 10px; border-top: 1px solid #2c3b49; }
+    .wf .grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    select { border: 1px solid #405365; border-radius: 5px; padding: 8px; font: inherit; background: #0e141a; color: inherit; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 13px; }
+    th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid #2c3b49; }
+    th:first-child, td:first-child { text-align: left; }
+    .adopt { color: #9ed6a5; font-weight: 600; } .keep { color: #f2c46b; font-weight: 600; } .bad { color: #f29b9b; }
+    .table-wrap { overflow-x: auto; }
+    #message { position: sticky; top: 0; z-index: 5; background: #10151b; padding: 6px 0; }
+    .tune { margin: 6px 0; font-size: 14px; }
+    .tune.walk_forward { color: #9ed6a5; } .tune.in_sample { color: #f2c46b; } .tune.fallback { color: #f29b9b; font-weight: 600; }
+    .edit { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 10px; }
+    .edit label { display: flex; gap: 6px; align-items: center; }
+    .edit input[type=number] { width: 80px; }
+    .cardmsg { min-height: 1.2em; margin: 6px 0 0; }
+    button.danger { background: #8a2f2f; } button.danger:hover { background: #a83a3a; }
+    button.ghost { background: #2c3b49; }
+    td.note { text-align: left; color: #91a0ad; max-width: 420px; }
   </style>
 </head>
 <body>
@@ -46,13 +64,9 @@
     <div class="actions"><button id="save-preset">Save preset</button></div>
   </section>
   <section>
-    <h2>Copy card</h2>
-    <div class="grid">
-      <label>Source id <input id="copy-source"></label>
-      <label>New id <input id="copy-new"></label>
-      <label>Instrument <input id="copy-instrument"></label>
-    </div>
-    <div class="actions"><button id="copy-card">Copy</button></div>
+    <h2>Saved profiles</h2>
+    <p class="muted">Every tune in the store. A card runs the row whose key is exactly its TICKER|interval. Make card turns any row into a card: Kalshi names become perp cards, everything else a stock card.</p>
+    <div id="profiles" class="table-wrap muted">Loading…</div>
   </section>
   <section>
     <h2>Cards</h2>
@@ -80,45 +94,289 @@
     try { return JSON.parse($(id).value || '{}'); }
     catch (error) { throw new Error(`${id} is not valid JSON`); }
   };
+  const pct = (v) => v == null ? '–' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`;
+  const el = (tag, props = {}, kids = []) => {
+    const node = Object.assign(document.createElement(tag), props);
+    node.append(...kids);
+    return node;
+  };
+  const tunePolls = {};
+
+  /* Walk-forward for one perp or stock card: the same `backtest_runner --stage tune`
+     the tune-sleeve skill runs, always at the sleeve's 5bp. It scores the
+     running profile and a refit on the same out-of-sample folds; only an
+     ADOPT can be written back, and it is stamped walk_forward. */
+  const walkForward = (card) => {
+    const shorts = el('select', {}, ['keep', 'on', 'off'].map((v) =>
+      el('option', {value: v, textContent: v === 'keep' ? 'as saved' : v})));
+    const seed = el('input', {placeholder: `optional, e.g. BTC-USD|${card.interval}`});
+    const out = el('div', {className: 'muted', textContent: 'Loading walk-forward results…'});
+    const run = el('button', {textContent: 'Walk-forward'});
+    const log = el('button', {textContent: 'WF log'});
+    const box = el('div', {className: 'wf'}, [
+      el('strong', {textContent: 'Walk-forward (5bp, 4 folds)'}),
+      el('div', {className: 'grid'}, [
+        el('label', {}, ['Shorts', shorts]),
+        el('label', {title: 'Start the search from another saved preset (its MACD and ELMo included). The comparison is still against what this card runs.'}, ['Search from preset', seed]),
+      ]),
+      el('div', {className: 'actions'}, [run, log]),
+      out,
+    ]);
+    log.onclick = () => window.open(`/tail?id=${encodeURIComponent(card.id)}&kind=tune`, `tune-${card.id}`);
+
+    const paint = (data) => {
+      out.textContent = '';
+      if (data.running) {
+        out.append(el('p', {textContent: `Running (shorts ${data.job.shorts}${data.job.seed_from ? ', from ' + data.job.seed_from : ''})… this takes 10–25 min. WF log shows progress.`}));
+      }
+      const rows = Object.entries(data.results).filter(([, r]) => r);
+      if (!rows.length) {
+        if (!data.running) out.append(el('p', {textContent: 'No results yet.'}));
+        return;
+      }
+      const body = el('tbody');
+      for (const [key, r] of rows) {
+        if (r.error) { body.append(el('tr', {}, [el('td', {textContent: `shorts ${key}`}), el('td', {colSpan: 7, className: 'bad', textContent: r.error})])); continue; }
+        const verdict = el('td', {className: r.verdict === 'ADOPT' ? 'adopt' : 'keep', textContent: r.verdict});
+        const act = el('td');
+        if (r.verdict === 'ADOPT') {
+          const b = el('button', {textContent: 'Adopt'});
+          b.onclick = async () => {
+            if (!confirm(`Write this tune to ${r.ticker}|${r.interval} as walk_forward? The store is backed up first. A running sleeve keeps its old profile until relaunched.`)) return;
+            try {
+              const res = await request('POST', '/api/adopt', {id: card.id, shorts: key});
+              message(`Adopted into ${r.ticker}|${r.interval}. Backup: ${res.backup}`);
+              await refresh();
+            } catch (e) { message(e.message, true); }
+          };
+          act.append(b);
+        }
+        body.append(el('tr', {}, [
+          el('td', {textContent: `shorts ${key}${r.seed_source ? ' · from ' + r.seed_source : ''}`}),
+          el('td', {textContent: `${pct(r.incumbent.oos_pct)} (${r.incumbent.positive}, ${r.incumbent.trades}tr)`}),
+          el('td', {textContent: `${pct(r.tuned.oos_pct)} (${r.tuned.positive}, ${r.tuned.trades}tr)`}),
+          el('td', {textContent: pct(r.tuned.worst_pct)}),
+          el('td', {textContent: `${r.delta_pp >= 0 ? '+' : ''}${Number(r.delta_pp).toFixed(2)}pp`}),
+          verdict, act,
+        ]));
+      }
+      out.append(el('div', {className: 'table-wrap'}, [el('table', {}, [
+        el('thead', {}, [el('tr', {}, ['run', 'running now OOS', 'tuned OOS', 'worst fold', 'delta', 'verdict', ''].map((h) => el('th', {textContent: h})))]),
+        body,
+      ])]));
+    };
+    const load = async () => {
+      try {
+        const data = await request('GET', `/api/tune?id=${encodeURIComponent(card.id)}`);
+        paint(data);
+        clearTimeout(tunePolls[card.id]);
+        if (data.running) tunePolls[card.id] = setTimeout(load, 5000);
+      } catch (e) { out.textContent = e.message; }
+    };
+    run.onclick = async () => {
+      try {
+        await request('POST', '/api/tune', {id: card.id, shorts: shorts.value, seed_from: seed.value});
+        message(`Walk-forward started for ${card.instrument}`);
+        load();
+      } catch (e) { message(e.message, true); }
+    };
+    load();
+    return box;
+  };
+
+  let instruments = {perp: [], stocks: [], intervals: []};
+
+  /* Which tune a card will actually run. A perp card with no profile of its
+     own used to launch silently on `*|5m` -- say so in red instead. */
+  const tuneLine = (card) => {
+    const p = card.preset || {};
+    const want = `${(card.instrument || '').toUpperCase()}|${card.interval}`;
+    if (card.preset_source !== want) {
+      return el('p', {className: 'tune fallback',
+        textContent: `NO TUNE for ${want} — would run ${card.preset_source}.` +
+          (card.seed === 'perp' ? ` Launch is blocked until ${want} is tuned.` : ' Change the interval or make the card from a profile.')});
+    }
+    const m = p.metrics || {};
+    const held = (m.walk_forward && m.walk_forward.held) || null;
+    const oos = held ? held.oos_total_return_pct : (m.oos ? m.oos.oos_pct : null);
+    const bits = [`tune: ${want}`, p.validation || 'none', `saved ${(p.saved_at || '').replace('T', ' ').slice(0, 16)}`];
+    if (oos != null) bits.push(`OOS ${pct(oos)}`);
+    bits.push((p.config || {}).allow_short === false ? 'long-only' : 'long+short');
+    return el('p', {className: `tune ${p.validation || 'none'}`, textContent: bits.join(' · ')});
+  };
+
+  const cardEl = (card, all) => {
+    const row = el('article', {id: `card-${card.id}`});
+    const note = el('p', {className: 'cardmsg'});
+    // Errors land ON the card: the page-top line was out of view, so a failed
+    // copy looked like "nothing happened".
+    const say = (text, bad = false) => {
+      note.textContent = text;
+      note.style.color = bad ? '#f29b9b' : '#9ed6a5';
+      message(text, bad);
+    };
+    const act = (fn) => async () => { try { await fn(); } catch (e) { say(e.message, true); } };
+    const busy = card.state === 'running' || card.state === 'launching';
+
+    row.append(el('strong', {textContent: `${card.instrument || 'watch'} · ${card.interval} · ${card.seed}`}));
+    const share = card.cap_pct != null
+      ? `${Math.round(card.cap_pct * 100)}% of book`
+      : (card.seed === 'perp' || card.seed === 'stocks' ? 'share NOT SET' : '');
+    row.append(el('p', {className: 'muted', textContent: [
+      `state: ${card.state}`, card.live ? 'LIVE' : 'dry-run', share,
+      card.leverage != null ? `${card.leverage}x` : '', `id ${card.id}`,
+    ].filter(Boolean).join(' · ')}));
+    row.append(tuneLine(card));
+
+    const launchB = el('button', {textContent: 'Launch'});
+    launchB.onclick = act(async () => {
+      const r = await request('POST', '/api/launch', {id: card.id});
+      say(r.argv.join(' '));
+      await refresh();
+    });
+    const stopB = el('button', {textContent: 'Stop'});
+    stopB.onclick = act(async () => {
+      const r = await request('POST', '/api/stop', {id: card.id, cmdline: (card.argv || []).join(' ')});
+      say(r.error || r.state, !!r.error);
+      await refresh();
+    });
+    const tailB = el('button', {textContent: 'Tail', title: "Open this sleeve's live output in a new window"});
+    tailB.onclick = () => window.open(`/tail?id=${encodeURIComponent(card.id)}`, `tail-${card.id}`);
+    row.append(el('div', {className: 'actions'}, [launchB, stopB, tailB]));
+
+    // Ticker picker + "Copy as new card". Perps pick from the Kalshi map, stocks
+    // from tickers with a saved profile (/api/instruments `stocks`).
+    const copyControl = (tickers) => {
+      const pick = el('select', {}, [el('option', {value: '', textContent: 'pick ticker…'}),
+        ...tickers.map((t) => el('option', {value: t, textContent: t}))]);
+      const copyB = el('button', {className: 'ghost', textContent: 'Copy as new card'});
+      copyB.onclick = act(async () => {
+        if (!pick.value) throw new Error('pick a ticker to copy onto');
+        const r = await request('POST', '/api/copy', {source_id: card.id, instrument: pick.value});
+        if (!r.card || !r.card.id) throw new Error('copy returned no card');
+        await refresh();
+        const made = document.getElementById(`card-${r.card.id}`);
+        if (made) {
+          made.scrollIntoView({behavior: 'smooth', block: 'center'});
+          made.querySelector('.cardmsg').textContent = card.seed === 'perp'
+            ? 'New card: stopped, dry-run, 1x. Set Share %, tick Live, Save settings, then Launch.'
+            : 'New card: stopped, dry-run. Launch when ready.';
+        }
+        message(`made ${r.card.id}`);
+      });
+      return [pick, copyB];
+    };
+
+    if (card.seed === 'perp' || card.seed === 'stocks') {
+      // Perps (Kalshi) and stocks (agentic Robinhood) are separate books.
+      const others = all
+        .filter((c) => c.id !== card.id && c.seed === card.seed && (c.state === 'running' || c.state === 'launching'))
+        .reduce((t, c) => t + (c.cap_pct || 0), 0);
+      const used = Math.round(others * 100);
+      const pctIn = el('input', {type: 'number', min: 1, max: 100, step: 1,
+        value: card.cap_pct != null ? Math.round(card.cap_pct * 100) : '', disabled: busy});
+      const itv = el('select', {disabled: busy}, instruments.intervals.map((v) =>
+        el('option', {value: v, textContent: v, selected: v === card.interval})));
+      const live = el('input', {type: 'checkbox', checked: !!card.live, disabled: busy});
+      const levIn = el('input', {type: 'number', min: 1, max: 20, step: 0.5,
+        value: card.leverage != null ? card.leverage : (card.seed === 'perp' ? 1 : ''),
+        disabled: busy || card.seed !== 'perp'});
+      const save = el('button', {className: 'ghost', textContent: 'Save settings', disabled: busy});
+      save.onclick = act(async () => {
+        const fields = {
+          cap_pct: pctIn.value === '' ? null : Number(pctIn.value) / 100,
+          interval: itv.value,
+          live: live.checked,
+        };
+        if (card.seed === 'perp') {
+          if (levIn.value === '') throw new Error('set leverage (1 = no leverage)');
+          fields.leverage = Number(levIn.value);
+        }
+        await request('POST', '/api/card', {id: card.id, fields});
+        say(`${card.id} saved`);
+        await refresh();
+      });
+      row.append(el('div', {className: 'edit'}, [
+        el('label', {}, ['Share %', pctIn]),
+        el('label', {}, ['Leverage', levIn]),
+        el('label', {}, ['Interval', itv]),
+        el('label', {}, [live, 'Live (real money)']),
+        save,
+        el('span', {className: 'muted', textContent: busy
+          ? 'stop it to edit'
+          : `running sleeves use ${used}% — room for ${Math.max(0, 100 - used)}%`}),
+      ]));
+
+      const delB = el('button', {className: 'danger', textContent: 'Delete card', disabled: busy});
+      delB.onclick = act(async () => {
+        if (!confirm(`Delete card ${card.id}? Only the card goes; saved profiles are untouched.`)) return;
+        await request('POST', '/api/delete', {id: card.id});
+        message(`deleted ${card.id}`);
+        await refresh();
+      });
+      row.append(el('div', {className: 'edit'},
+        card.seed === 'perp' ? [...copyControl(instruments.perp), delB] : [delB]));
+    }
+    row.append(note);
+    if (card.seed === 'perp' || card.seed === 'stocks') row.appendChild(walkForward(card));
+    return row;
+  };
+
+  const paintProfiles = (rows) => {
+    const body = el('tbody');
+    for (const r of rows) {
+      body.append(el('tr', {}, [
+        el('td', {textContent: r.key}),
+        el('td', {className: r.validation === 'walk_forward' ? 'adopt' : 'keep', textContent: r.validation}),
+        el('td', {textContent: pct(r.oos_pct)}),
+        el('td', {textContent: pct(r.in_sample_pct)}),
+        el('td', {textContent: r.shorts === false ? 'long-only' : 'both'}),
+        el('td', {textContent: (r.saved_at || '').replace('T', ' ').slice(0, 16)}),
+        (() => {
+          const td = el('td');
+          if (r.used_by.length) { td.textContent = r.used_by.join(', '); return td; }
+          if (!r.carded) { td.textContent = '–'; td.title = 'a wildcard or crypto-seed profile, not a perp or a stock'; return td; }
+          const b = el('button', {className: 'ghost', textContent: 'Make card'});
+          b.onclick = async () => {
+            try {
+              const res = await request('POST', '/api/card-from-profile', {key: r.key});
+              await refresh();
+              const made = document.getElementById(`card-${res.card.id}`);
+              if (made) {
+                made.scrollIntoView({behavior: 'smooth', block: 'center'});
+                made.querySelector('.cardmsg').textContent = res.card.seed === 'perp'
+                  ? 'New card: stopped, dry-run, 1x. Set Share %, tick Live, Save settings, then Launch.'
+                  : 'New stock card: stopped, dry-run, agentic account. Walk-forward below; set Share %, tick Live, Save, then Launch.';
+              }
+              message(`made ${res.card.id} from ${r.key}`);
+            } catch (e) { message(e.message, true); }
+          };
+          td.append(b);
+          return td;
+        })(),
+        el('td', {className: 'note', textContent: r.note.slice(0, 160), title: r.note}),
+      ]));
+    }
+    const box = $('profiles');
+    box.textContent = '';
+    box.classList.remove('muted');
+    box.append(el('table', {}, [
+      el('thead', {}, [el('tr', {}, ['key', 'validation', 'OOS', 'in-sample', 'side', 'saved (UTC)', 'card', 'note']
+        .map((h) => el('th', {textContent: h})))]),
+      body,
+    ]));
+  };
+
   const refresh = async () => {
-    const data = await request('GET', '/api/cards');
+    const [data, profs] = await Promise.all([request('GET', '/api/cards'), request('GET', '/api/profiles')]);
+    if (!instruments.perp.length) instruments = await request('GET', '/api/instruments');
     $('seed-hours').value = data.seeds.perp.hours;
     $('seed-cap').value = data.seeds.perp.cap_dollars ?? '';
     const cards = $('cards');
     cards.textContent = '';
-    for (const card of data.cards) {
-      const row = document.createElement('article');
-      const title = document.createElement('strong');
-      title.textContent = `${card.id} · ${card.seed} · ${card.instrument || 'watch'}`;
-      row.appendChild(title);
-      const info = document.createElement('p');
-      info.className = 'muted';
-      info.textContent = `state: ${card.state} · preset: ${card.preset_source}`;
-      row.appendChild(info);
-      const actions = document.createElement('div');
-      actions.className = 'actions';
-      const launchButton = document.createElement('button');
-      launchButton.textContent = 'Launch';
-      launchButton.onclick = async () => {
-        try {
-          const result = await request('POST', '/api/launch', {id: card.id});
-          message(result.argv.join(' '));
-          await refresh();
-        } catch (error) { message(error.message, true); }
-      };
-      const stopButton = document.createElement('button');
-      stopButton.textContent = 'Stop';
-      stopButton.onclick = async () => {
-        try {
-          const result = await request('POST', '/api/stop', {id: card.id, cmdline: card.argv.join(' ')});
-          message(result.error || result.state);
-          await refresh();
-        } catch (error) { message(error.message, true); }
-      };
-      actions.append(launchButton, stopButton);
-      row.appendChild(actions);
-      cards.appendChild(row);
-    }
+    cards.classList.remove('muted');
+    for (const card of data.cards) cards.appendChild(cardEl(card, data.cards));
+    paintProfiles(profs.profiles);
   };
   $('save-seed').onclick = async () => {
     try {
@@ -140,17 +398,6 @@
         capital: $('preset-capital').value === '' ? null : Number($('preset-capital').value)
       });
       message('Preset saved');
-      await refresh();
-    } catch (error) { message(error.message, true); }
-  };
-  $('copy-card').onclick = async () => {
-    try {
-      await request('POST', '/api/copy', {
-        source_id: $('copy-source').value,
-        new_id: $('copy-new').value,
-        instrument: $('copy-instrument').value
-      });
-      message('Card copied');
       await refresh();
     } catch (error) { message(error.message, true); }
   };

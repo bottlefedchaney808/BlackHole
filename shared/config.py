@@ -27,6 +27,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 THETADATA_CF_ID = "THETADATA_CF_ACCESS_CLIENT_ID"
 THETADATA_CF_SECRET = "THETADATA_CF_ACCESS_CLIENT_SECRET"
 POTATOHEDGE_BASE_URL = "POTATOHEDGE_BASE_URL"
+# The one Robinhood account the stock sleeves may trade ("Agentic"). Kept in
+# `.env`, never in code: the repo is public and account numbers do not belong
+# in its history.
+ROBINHOOD_AGENTIC_ACCOUNT = "ROBINHOOD_AGENTIC_ACCOUNT"
+
+
+def robinhood_agentic_account() -> str:
+    """The agentic account number from `.env`, or "" when it is not set.
+
+    Callers must treat "" as "refuse to trade", never as a default."""
+    load_env_once()
+    return os.environ.get(ROBINHOOD_AGENTIC_ACCOUNT, "").strip()
 
 # ── Fallback constants (used when ThetaData / PotatoHedge can't supply a value)
 FALLBACK_RISK_FREE_RATE = 0.046  # ~current 3-6mo T-bill

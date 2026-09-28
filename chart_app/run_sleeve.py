@@ -64,7 +64,7 @@ import argparse
 import signal
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -72,7 +72,14 @@ from zoneinfo import ZoneInfo
 from chart_app import profiles
 from chart_app.bar_cache import BarCache
 from chart_app.crypto_source import fetch_crypto_candles, is_crypto
-from chart_app.perp_sleeve import Journal, replay
+from chart_app.perp_sleeve import (
+    _INTERVAL_MIN,
+    COST_BPS,
+    MAKER_COST_BPS,
+    Journal,
+    replay,
+    session_pnl,
+)
 from shared.chart_data import CandleRecord
 
 _ART = Path(__file__).resolve().parent.parent / "artifacts" / "perp_sleeve"
@@ -116,6 +123,30 @@ def _fetch(ticker: str, interval: str, lookback: str) -> list[CandleRecord]:
     return list(payload.observations)
 
 
+def _flow_rows(ticker: str, records: list[CandleRecord]) -> list[dict[str, Any]] | None:
+    """The whale tape the chart and tester score with, over the sleeve's bars.
+
+    Same function, floor and row budget as the tester (`flow_source`), so the
+    sleeve and the tune it runs see the same whale input. Per-day cached in
+    process; after the first poll only today's session is re-pulled. None for
+    a perp (no options tape) or when the pull fails -- whale then drops out of
+    the score for this poll, which the line says.
+    """
+    if is_crypto(ticker) or not records:
+        return None
+    from chart_app.flow_source import _production_flow_fn
+
+    try:
+        return _production_flow_fn(
+            ticker, records[0].timestamp, records[-1].timestamp, 0.0
+        )
+    except Exception as exc:  # noqa: BLE001 - a flow outage must not stop the book
+        _say(
+            f"   (whale flow pull failed: {type(exc).__name__}: {exc}; scoring without it)"
+        )
+        return None
+
+
 def _fmt_stop(value: float | None) -> str:
     if not value:
         return "--"
@@ -152,6 +183,7 @@ def tick(
     started: datetime,
     *,
     first: bool = False,
+    pnl_since: datetime | None = None,
 ) -> dict[str, Any] | None:
     """One poll. Returns the book as a dict, or None when the venue failed.
 
@@ -169,7 +201,15 @@ def tick(
     store.upsert(ticker, interval, fetched)
     records = store.load(ticker, interval)
     tz = _bar_tz(ticker)
-    book = replay(records, profile, interval=interval, tz=tz, grace_s=_grace(ticker))
+    flow = _flow_rows(ticker, records)
+    book = replay(
+        records,
+        profile,
+        interval=interval,
+        tz=tz,
+        grace_s=_grace(ticker),
+        flow_rows=flow,
+    )
 
     if first:
         seeded = journal.seed(book, started, tz=tz)
@@ -205,7 +245,35 @@ def tick(
             f"({fill.reason}, score {fill.score:.0f}, stop {_fmt_stop(fill.stop)})"
         )
 
+    # The sleeve's OWN P&L since launch (or --pnl-since), like the live perp's.
+    since = (pnl_since or started).astimezone(tz).replace(tzinfo=None)
+    # A position open at launch is carried in at the close of the last bar that
+    # had ENDED by then -- fixed, so it cannot drift tick to tick. Picking "the
+    # newest bar before `since`" took the still-forming bar and booked -$203 on
+    # SMR at launch with no trade (2026-09-21).
+    span = timedelta(minutes=_INTERVAL_MIN.get(interval, 15))
+    carry = next(
+        (r.close for r in reversed(records) if r.timestamp + span <= since), None
+    )
+    cfg = profile.get("config") or {}
+    max_units = int(cfg.get("max_units", 3))
+    uf = float(cfg.get("unit_fraction") or (1.0 / max_units))
+    capital = float(profile.get("capital") or 100_000.0)
+    own = {
+        bps: session_pnl(
+            book, since, carry, capital=capital, unit_fraction=uf, cost_bps=bps
+        )
+        for bps in (MAKER_COST_BPS, COST_BPS)
+    }
+
     state = book.as_dict()
+    state["session_pnl"] = {
+        "since": since.isoformat(),
+        "capital": capital,
+        "dollars_2bp": own[MAKER_COST_BPS],
+        "dollars_5bp": own[COST_BPS],
+    }
+    state["whale_rows"] = len(flow) if flow is not None else None
     journal.write("mark", state)
     # Carried back to the runner for the morning summary, deliberately AFTER
     # the mark is written so the journal's marks stay one flat shape.
@@ -216,12 +284,18 @@ def tick(
             f"  | PENDING {book.pending['action']} "
             f"-> {book.pending['units_after']:+.0f} at next open"
         )
+    whale = "" if flow is None else f"  whale {len(flow)} rows"
+    _say(
+        f"   OWN P&L since {since:%m-%d %H:%M}: ${own[MAKER_COST_BPS]:+,.2f} @2bp / "
+        f"${own[COST_BPS]:+,.2f} @5bp  ({100 * own[COST_BPS] / capital:+.2f}% of "
+        f"${capital:,.0f}){whale}"
+    )
     _say(
         f"{ticker} {book.last_ts[-14:]}  px {book.last_close:>10,.2f}  "
         f"score {book.score:>5.1f}  {book.side:<5} {abs(book.units):.0f}x  "
         f"stop {_fmt_stop(book.stop):>8}  "
         f"pnl {book.metrics.get('total_pct_maker', 0.0):+7.2f}% @2bp (tester) / "
-        f"{book.total_pct():+.2f}% @5bp over {book.metrics.get('bars', 0)} bars"
+        f"{book.total_pct():+.2f}% @5bp over the {book.metrics.get('bars', 0)}-bar replay window"
         f"{pending}"
     )
     return state
@@ -247,6 +321,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--journal", default="")
     parser.add_argument(
+        "--pnl-since",
+        default="",
+        help="ISO time the sleeve's own P&L counts from (default: launch); keeps it continuous across a restart",
+    )
+    parser.add_argument(
         "--bars-db",
         default="",
         help="append-only bar store; default artifacts/perp_sleeve/sleeve_bars.db",
@@ -263,8 +342,10 @@ def main(argv: list[str] | None = None) -> int:
     path = Path(args.journal) if args.journal else art / f"{args.ticker}_{stamp}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     journal = Journal(path)
-    bars_db = Path(args.bars_db) if args.bars_db else (
-        art / f"{args.ticker}_bars.db" if equity else art / "sleeve_bars.db"
+    bars_db = (
+        Path(args.bars_db)
+        if args.bars_db
+        else (art / f"{args.ticker}_bars.db" if equity else art / "sleeve_bars.db")
     )
     bars_db.parent.mkdir(parents=True, exist_ok=True)
     store = BarCache(bars_db)
@@ -328,6 +409,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     started = datetime.now(UTC)
+    pnl_since = datetime.fromisoformat(args.pnl_since) if args.pnl_since else None
+    if pnl_since is not None and pnl_since.tzinfo is None:
+        pnl_since = pnl_since.replace(tzinfo=UTC)
     deadline = time.time() + args.hours * 3600 if args.hours else None
     ticks = 0
     live_fills: list[dict[str, Any]] = []
@@ -342,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             store,
             started,
             first=(ticks == 0),
+            pnl_since=pnl_since,
         )
         if state:
             live_fills.extend(state.get("session_fills") or [])
@@ -411,6 +496,12 @@ def _summary(
         _say(
             f"   PENDING: {pend['action']} -> {pend['units_after']:+.0f} units, "
             "fills at the next bar's open"
+        )
+    own = state.get("session_pnl") or {}
+    if own:
+        _say(
+            f"OWN P&L since {own['since'][:16]}: ${own['dollars_2bp']:+,.2f} @2bp / "
+            f"${own['dollars_5bp']:+,.2f} @5bp on ${own['capital']:,.0f}"
         )
     _say(
         f"WHOLE REPLAY WINDOW ({state['trades']} trades, {state['cost_bps']:.0f}bp/side): "

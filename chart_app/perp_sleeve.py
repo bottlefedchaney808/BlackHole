@@ -240,11 +240,17 @@ def replay(
     now: datetime | None = None,
     tz: tzinfo = UTC,
     grace_s: float = 0.0,
+    flow_rows: list[dict[str, Any]] | None = None,
 ) -> Book:
     """Rebuild the whole book from bars. Deterministic; the only state there is.
 
     Returns an empty book rather than raising when there is not enough history
     to seed the indicators -- a sleeve with nothing to say must still report.
+
+    `flow_rows` is the raw whale tape (`scanner_trades` rows) for an equity.
+    Binned HERE, against the closed bars actually scored, so the whale
+    component sees exactly what the chart and tester feed it. Omitting it
+    (every perp) drops whale from the score's denominator, as before.
     """
     now = now or datetime.now(UTC)
     bars = closed_bars(list(records), interval, now, tz=tz, grace_s=grace_s)
@@ -254,7 +260,16 @@ def replay(
 
     cfg = {**DEFAULTS, **(profile.get("config") or {})}
     elmo = compute_elmo(bars, **(profile.get("elmo") or {}))
-    conv = conviction_series(bars, elmo=elmo, config=cfg)
+    flow_net = flow_observed = None
+    if flow_rows:
+        from chart_app.flow_pane import bin_flow
+        from chart_app.flow_stamp import flow_observed_bars
+
+        flow_net = bin_flow(bars, flow_rows)["net"]
+        flow_observed = flow_observed_bars(bars, flow_rows)
+    conv = conviction_series(
+        bars, elmo=elmo, flow_net=flow_net, flow_observed=flow_observed, config=cfg
+    )
     run = run_state_machine(bars, conv, config=cfg)
 
     pos = run.position
@@ -309,14 +324,26 @@ def replay(
     book.score = _score(n - 1)
     # One P&L implementation, reusing the ELMo we already paid for.
     book.metrics = run_backtest(
-        bars, interval=interval, config=cfg, elmo=elmo, cost_bps=COST_BPS
+        bars,
+        interval=interval,
+        config=cfg,
+        elmo=elmo,
+        cost_bps=COST_BPS,
+        flow_net=flow_net,
+        flow_observed=flow_observed,
     ).metrics
     # The tester scores at backtest's 2bp default, which is also the Kalshi
     # maker fee live entries pay. Reported beside COST_BPS so the log and the
     # tester can be compared number for number (they looked like a bug at
     # +1.45% vs +17.7% on a 692-trade tune -- same P&L, different fee).
     book.metrics["total_pct_maker"] = run_backtest(
-        bars, interval=interval, config=cfg, elmo=elmo, cost_bps=MAKER_COST_BPS
+        bars,
+        interval=interval,
+        config=cfg,
+        elmo=elmo,
+        cost_bps=MAKER_COST_BPS,
+        flow_net=flow_net,
+        flow_observed=flow_observed,
     ).metrics["total_return_pct"]
 
     # The newest closed bar decided something we cannot fill until the next
@@ -329,6 +356,47 @@ def replay(
             "score": book.score,
         }
     return book
+
+
+def session_pnl(
+    book: Book,
+    since: datetime,
+    carry_price: float | None,
+    *,
+    capital: float,
+    unit_fraction: float,
+    cost_bps: float,
+) -> float:
+    """Dollars the sleeve made since `since`: its fills, plus the open mark.
+
+    The equity analogue of `perp_live.sleeve_pnl` (2026-09-21). The book line
+    used to print only the WHOLE REPLAY WINDOW backtest -- months of history
+    the sleeve never ran through -- so there was no number for "what has it
+    done since I turned it on". This walks the book's own fills after `since`
+    at 1x (`unit_fraction` of `capital` per unit), charges `cost_bps` on every
+    unit that changes hands, and marks what is left at the last close.
+
+    A position already open at `since` is carried in at `carry_price` (the
+    last close before `since`), so a restart mid-trade does not book the whole
+    trade's P&L as if it happened tonight. `since` is naive, in the bars' zone.
+    """
+    per_unit = capital * unit_fraction
+    units = 0.0
+    ref = carry_price
+    pnl = 0.0
+    for fill in book.fills:
+        ts = datetime.fromisoformat(fill.ts).replace(tzinfo=None)
+        if ts < since:
+            units = fill.units_after
+            continue
+        if units and ref:
+            pnl += units * per_unit * (fill.price / ref - 1.0)
+        pnl -= abs(fill.units_after - units) * per_unit * cost_bps / 1e4
+        units = fill.units_after
+        ref = fill.price
+    if units and ref and book.last_close:
+        pnl += units * per_unit * (book.last_close / ref - 1.0)
+    return pnl
 
 
 class Journal:

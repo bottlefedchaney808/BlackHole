@@ -11,7 +11,11 @@ from .status import mark_stale, reap
 def spawn(card: dict, argv: Iterable[str], *, popen: Callable, cwd: str) -> dict:
     """Start a detached runner through the injected Popen implementation."""
     argv = list(argv)
-    process = popen(argv, creationflags=DETACH, cwd=cwd, stdin=DEVNULL)
+    # log_name gives each card its own stdout file, so a tail shows one
+    # sleeve; the shared launch.log interleaved them with no ticker on a line.
+    process = popen(
+        argv, creationflags=DETACH, cwd=cwd, stdin=DEVNULL, log_name=card.get("id")
+    )
     out = dict(card)
     out["pid"] = process.pid
     out["argv"] = argv

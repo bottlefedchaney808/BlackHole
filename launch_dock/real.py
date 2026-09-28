@@ -26,6 +26,13 @@ def make_cancel(subaccount: int = 0):
     return cancel
 
 
+def cancel_equity(ticker: str) -> int:
+    """Cancel a stock sleeve's resting non-stop orders on the agentic account."""
+    from chart_app.run_live_equity import cancel_resting
+
+    return cancel_resting(ticker)
+
+
 def kill(pid: int) -> None:
     import subprocess
 
@@ -77,6 +84,16 @@ def _newest_journal(ticker: str, mode: str) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _journal_paths(ticker: str, kalshi: str, mode: str) -> set[Path]:
+    """Journals the runner may have written. Chart ticker is what run_live_perp uses."""
+    if not _PERP_ART.exists():
+        return set()
+    found: set[Path] = set()
+    for name in {ticker, kalshi}:
+        found.update(_PERP_ART.glob(f"{name}_{mode}_*.jsonl"))
+    return found
+
+
 def finish_launch(card: dict, argv: list[str], timeout_s: float = 15.0) -> dict:
     """Spawn detached, then wait up to timeout_s for the session record to exist.
 
@@ -87,14 +104,15 @@ def finish_launch(card: dict, argv: list[str], timeout_s: float = 15.0) -> dict:
     ticker = str(card.get("instrument") or "").upper()
     kalshi = KALSHI.get(ticker, ticker)
     mode = "live" if card.get("live") else "dry"
-    before = {p for p in _PERP_ART.glob(f"{kalshi}_{mode}_*.jsonl")} if _PERP_ART.exists() else set()
+    # Runner journals are {chart ticker}_live_*.jsonl (BTC-PERP), not the Kalshi symbol.
+    before = _journal_paths(ticker, kalshi, mode)
     updated = spawn_mod.spawn(
         card, argv, popen=_detached_popen, cwd=str(EVENT_DESK if card.get("seed") == "event_desk" else _REPO)
     )
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         time.sleep(1.0)
-        journals = [p for p in _PERP_ART.glob(f"{kalshi}_{mode}_*.jsonl") if p not in before]
+        journals = [p for p in _journal_paths(ticker, kalshi, mode) if p not in before]
         for journal in journals:
             session = read_session(journal)
             if session:
@@ -121,14 +139,13 @@ def finish_launch_readback(card: dict, timeout_s: float = 15.0) -> dict:
     ticker = str(card.get("instrument") or "").upper()
     kalshi = KALSHI.get(ticker, ticker)
     mode = "live" if card.get("live") else "dry"
-    pattern = f"{kalshi}_{mode}_*.jsonl"
     if not _PERP_ART.exists():
         return card
-    before = {p for p in _PERP_ART.glob(pattern)}
+    before = _journal_paths(ticker, kalshi, mode)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         time.sleep(1.0)
-        journals = [p for p in _PERP_ART.glob(pattern) if p not in before]
+        journals = [p for p in _journal_paths(ticker, kalshi, mode) if p not in before]
         for journal in journals:
             session = read_session(journal)
             if session:
@@ -146,12 +163,12 @@ def finish_launch_readback(card: dict, timeout_s: float = 15.0) -> dict:
     return card
 
 
-def _detached_popen(argv, **kw):
+def _detached_popen(argv, log_name=None, **kw):
     import subprocess
 
     log_dir = ARTIFACTS / "launch_dock_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    handle = open(log_dir / "launch.log", "ab", buffering=0)
+    handle = open(log_dir / f"{log_name or 'launch'}.log", "ab", buffering=0)
     return subprocess.Popen(argv, stdout=handle, stderr=subprocess.STDOUT, **kw)
 
 
@@ -159,6 +176,7 @@ def build_dock():
     return create_server(
         ARTIFACTS,
         cancel=make_cancel(),
+        cancel_equity=cancel_equity,
         kill=kill,
         alive=alive,
         popen=_detached_popen,
@@ -166,4 +184,4 @@ def build_dock():
 
 
 if __name__ == "__main__":  # pragma: no cover
-    build_dock().serve()
+    build_dock().serve_forever()

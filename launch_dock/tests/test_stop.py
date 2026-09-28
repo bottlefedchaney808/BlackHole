@@ -81,3 +81,37 @@ def test_event_desk_stop_does_not_cancel():
     )
     assert calls == [7]
     assert out["state"] == "stopped"
+
+
+def test_live_stock_stop_cancels_resting_orders_then_kills():
+    calls = []
+    card = _card(id="stocks-fcel", seed="stocks", instrument="FCEL")
+    out = stop_card(
+        card,
+        cmdline="python -m chart_app.run_live_equity --ticker FCEL --interval 5m --live",
+        cancel=lambda t: calls.append(("kalshi", t)),
+        kill=lambda pid: calls.append(("kill", pid)),
+        cancel_equity=lambda t: calls.append(("rh", t)),
+    )
+    assert calls == [("rh", "FCEL"), ("kill", 42)] and out["state"] == "stopped"
+
+
+def test_live_stock_stop_keeps_running_when_cancel_fails():
+    killed = []
+
+    def boom(_t):
+        raise RuntimeError("rh down")
+
+    out = stop_card(
+        _card(seed="stocks", instrument="FCEL"),
+        cmdline="python -m chart_app.run_live_equity --ticker FCEL --live",
+        cancel=lambda t: None, kill=killed.append, cancel_equity=boom,
+    )
+    assert killed == [] and out["state"] == "running" and "rh down" in out["error"]
+    # A pid now running some other ticker is never killed.
+    out = stop_card(
+        _card(seed="stocks", instrument="FCEL"),
+        cmdline="python -m chart_app.run_live_equity --ticker GME --live",
+        cancel=lambda t: None, kill=killed.append, cancel_equity=lambda t: 0,
+    )
+    assert killed == [] and out["state"] == "unknown"
