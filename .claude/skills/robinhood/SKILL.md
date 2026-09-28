@@ -18,27 +18,28 @@ in the tool response itself, not duplicated here, since they can change server-s
 
 ## Accounts (inventory as of 2026-08-18)
 
-Two individual margin/limited-margin accounts, both option_level_3. Numbers below are unmasked for
-your reference only — mask to last 4 digits (`••••XXXX`) in any user-facing text, per the
-`get_accounts` guide.
+Two individual margin/limited-margin accounts, both option_level_3. Numbers are masked to the last
+4 digits because this repo is public: `get_accounts` returns the full numbers, and the agentic one is
+`ROBINHOOD_AGENTIC_ACCOUNT` in the root `.env`. Mask to `••••XXXX` in any user-facing text too, per
+the `get_accounts` guide.
 
 | Account | Number | Type | Nickname | Agentic (this agent can trade) | Default |
 |---|---|---|---|---|---|
-| A | 922308556 | margin | — | No | Yes |
-| B | 751521659 | limited_margin | "Agentic" | **Yes** | No |
+| A | ••••8556 | margin | — | No | Yes |
+| B | ••••1659 | limited_margin | "Agentic" | **Yes** | No |
 
-**Only account B (751521659, "Agentic") is `agentic_allowed: true`** — that's the one this agent can
+**Only account B (••••1659, "Agentic") is `agentic_allowed: true`** — that's the one this agent can
 place/cancel orders in. Account A is visible (read) but not tradable by this agent; if the user wants
 a trade in A, say it's not accessible to this agent, don't imply it needs enabling on Robinhood's side.
 
 Snapshot at inventory time (**stale the moment markets move — always re-fetch before making decisions,
 this is just orientation**):
 
-- **Account A (922308556)**: total value ~$53.88 (equity $6.27, options $37, cash $10.61). Positions:
+- **Account A (••••8556)**: total value ~$53.88 (equity $6.27, options $37, cash $10.61). Positions:
   0.028 sh NVDA (fractional, avg $211.94). Options: an SPY call spread (long/short $26/$23 avg,
   exp 2026-08-28), a long SPCX call (avg $13, exp 2026-10-16), an NVDA call spread (long $47 / short
   $37, exp 2026-11-20), a CRGY call spread (long $50 / short $16, exp 2026-09-18).
-- **Account B (751521659, Agentic)**: total value ~$527.27 (equity $121.97, cash $405.30, $350 pending
+- **Account B (••••1659, Agentic)**: total value ~$527.27 (equity $121.97, cash $405.30, $350 pending
   deposit). Positions: 3 sh UUUU (avg $14.17), 8 sh TGB (avg $8.86), 3 sh KOS (avg $2.57). No open
   options.
 

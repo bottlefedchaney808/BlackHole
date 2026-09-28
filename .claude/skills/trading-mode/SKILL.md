@@ -110,7 +110,7 @@ this before touching order tools.
 - Check **buying power and existing exposure** in the target account before sizing — `get_portfolio`
   for buying power, `get_option_positions`/`get_equity_positions` for what's already on, `VaR_Tools`
   correlated-sim if the new position meaningfully interacts with existing risk. Remember only account
-  **751521659 ("Agentic")** is tradable by this agent — see [[robinhood]].
+  **••••1659 ("Agentic")** is tradable by this agent — see [[robinhood]].
 - Call `review_option_order`/`review_equity_order` and present the cost/risk preview to the user.
   **Never call `place_option_order`/`place_equity_order` without explicit user go-ahead on that
   specific trade**, even if they said "trading mode" or "find me a trade" — that authorizes the hunt,
