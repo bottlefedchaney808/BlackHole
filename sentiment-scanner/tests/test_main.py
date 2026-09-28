@@ -636,7 +636,7 @@ class TestRunDirectionalScan:
     scrape: narrative + 6 scanners (GEX skipped) + real OI + composite
     signals over an explicit ticker list, one-shot, JSON output."""
 
-    def _patch_common(self, monkeypatch, oi_snapshot=None, correlate_result=None):
+    def _patch_common(self, monkeypatch, tmp_path, oi_snapshot=None, correlate_result=None):
         runners, fakes = _runners_from_fakes()
         # drop gex from default --universe path: skip_gex=True already
         fake_reg = _FakeRegistry(runners)
@@ -664,12 +664,21 @@ class TestRunDirectionalScan:
                 "bullish_pct": 60.0, "bearish_pct": 20.0, "volume": len(msgs),
             },
         )
+        isolated = str(tmp_path)
+        real_join = main_mod.os.path.join
+
+        def _join(a, *parts):
+            if parts == ("outputs",):
+                return isolated
+            return real_join(a, *parts)
+
+        monkeypatch.setattr(main_mod.os.path, "join", _join)
         return st
 
     def test_writes_a_result_per_ticker_and_a_json_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        self._patch_common(monkeypatch)
+        self._patch_common(monkeypatch, tmp_path)
         engine = MagicMock()
         engine.correlate_with_oi.return_value = {"signals": [], "severity": "LOW"}
 
@@ -677,9 +686,14 @@ class TestRunDirectionalScan:
 
         assert set(results) == {"AAPL", "NVDA"}
         assert results["AAPL"]["narrative"]["cns"] == 55
-        assert results["AAPL"]["scanners"]["unusual_oi"]["status"] == "ok"
-        assert "gex" not in results["AAPL"]["scanners"]  # GEX always skipped here
+        scanners = results["AAPL"]["scanners"]
+        assert set(scanners) == {
+            "unusual_oi", "iv_rank", "skew", "max_pain", "dispersion", "earnings",
+        }
+        assert "gex" not in scanners
+        assert scanners["unusual_oi"]["status"] == "ok"
         assert Path(out_path).exists()
+        assert Path(out_path).resolve().parent == Path(tmp_path).resolve()
         saved = json.loads(Path(out_path).read_text(encoding="utf-8"))
         assert saved["universe_size"] == 2
         assert set(saved["results"]) == {"AAPL", "NVDA"}
@@ -687,7 +701,7 @@ class TestRunDirectionalScan:
     def test_strong_flag_set_when_severity_is_high(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        self._patch_common(monkeypatch)
+        self._patch_common(monkeypatch, tmp_path)
         engine = MagicMock()
         engine.correlate_with_oi.return_value = {
             "signals": ["GAMMA_SQUEEZE_RISK"], "severity": "HIGH"}
@@ -699,7 +713,7 @@ class TestRunDirectionalScan:
     def test_strong_flag_false_on_low_severity_single_signal_low_cns(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        self._patch_common(monkeypatch)
+        self._patch_common(monkeypatch, tmp_path)
         engine = MagicMock()
         engine.correlate_with_oi.return_value = {
             "signals": ["OI_SURGE_WITH_NARRATIVE"], "severity": "LOW"}
@@ -718,7 +732,7 @@ class TestRunDirectionalScan:
     def test_a_ticker_erroring_does_not_abort_the_rest_of_the_universe(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        st = self._patch_common(monkeypatch)
+        st = self._patch_common(monkeypatch, tmp_path)
 
         def _stream(ticker, max_pages=2):
             if ticker == "BAD":
@@ -738,7 +752,7 @@ class TestRunDirectionalScan:
     def test_gex_is_omitted_even_when_raw_includes_it(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path,
     ) -> None:
-        self._patch_common(monkeypatch)
+        self._patch_common(monkeypatch, tmp_path)
         inner = main_mod.run_options_scanners
 
         def _with_gex(ticker, engine, benchmark="SPY", skip_gex=False, scanners=None, **kw):
