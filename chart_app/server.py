@@ -132,9 +132,8 @@ class _BacktestBody(BaseModel):
 
     config: dict[str, Any] = {}
     elmo: dict[str, Any] = {}
-    # Notional the percent metrics are scaled by for the dollar figures the
-    # tester shows. Not an account balance -- see `backtest.DEFAULT_CAPITAL`.
-    capital: float = 100_000.0
+    # The backtest pool the ledger starts with -- see `backtest.DEFAULT_CAPITAL`.
+    capital: float = 1_000_000.0
     # Inclusive ISO dates (YYYY-MM-DD) bounding the bars to score. Omitted =
     # the whole loaded window. This is what makes an out-of-sample check
     # possible by hand: fit on one span, score another. It can only ever narrow
@@ -533,6 +532,9 @@ def create_app(
                 elmo=elmo,
                 elmo_overrides=elmo_cfg,
                 capital=body.capital,
+                # The symbol decides the venue, and the venue decides what can
+                # be borrowed and what it costs (`chart_app/sizing.py`).
+                ticker=session["ticker"],
             )
         except Exception as exc:  # noqa: BLE001 -- reported to the caller, never a 500
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -554,6 +556,8 @@ def create_app(
             # duplicate silently clobbered one of the two.
             "cache_span": cache_span,
             "trades": result.trades,
+            # Every fill the ledger made: shares, price, dollars, fee, loan.
+            "orders": result.orders,
             "equity": result.equity,
             # Drawn by the chart.
             "score": conv.score,

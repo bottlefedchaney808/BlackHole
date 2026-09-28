@@ -109,7 +109,18 @@ window.CR = (function () {
     cover:{ color: C.long,  text: "COVER", rotate: 0,   size: 26, below: true },
   };
 
-  function markerSeries(bars, actions, atr, priceFmt) {
+  function markerSeries(bars, actions, atr, priceFmt, orders) {
+    /* With the tester on, each mark also carries the ORDER the backtest
+       ledger placed for it -- "BUY 1,052" -- keyed by the bar the chart draws
+       the mark on (`order.bar`). The price stays the signal bar's close, as
+       before; the fill price is in the tester's order list. */
+    const qtyAt = {};
+    (orders || []).forEach(function (o) {
+      qtyAt[o.bar] = (qtyAt[o.bar] || 0) + o.qty;
+    });
+    const qtyFmt = function (q) {
+      return q >= 100 || q === Math.floor(q) ? Math.round(q).toLocaleString() : q.toPrecision(3);
+    };
     /* Transitions only, and deliberately LOUD.
 
        Two earlier versions of this were wrong in opposite directions. The
@@ -144,7 +155,10 @@ window.CR = (function () {
           show: true,
           position: spec.below ? "bottom" : "top",
           distance: 6,
-          formatter: spec.text + "  " + priceFmt(bars[i].close),
+          formatter:
+            spec.text +
+            (qtyAt[i] ? " " + qtyFmt(qtyAt[i]) : "") +
+            "  " + priceFmt(bars[i].close),
           color: "#04070c",
           backgroundColor: spec.color,
           padding: [3, 6],
@@ -584,7 +598,9 @@ window.CR = (function () {
       if (w) series.push(w);
     }
     if (mode !== "clean" && algo.actions) {
-      series.push(markerSeries(bars, algo.actions, algo.atr || null, priceFmt));
+      series.push(
+        markerSeries(bars, algo.actions, algo.atr || null, priceFmt, algo.orders || null)
+      );
     }
 
     /* volume -- inside the price pane, under the candles */

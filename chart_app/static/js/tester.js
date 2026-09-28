@@ -30,15 +30,33 @@ window.CTest = (function () {
   const KNOBS = [
     ["entry_long",      "entry",        0,  100,  1,   30,   "config"],
     ["add_long",        "add",          0,  100,  1,   55,   "config"],
-    ["trim_long",       "trim",       -40,   80,  1,   12,   "config"],
+    // "de-risk", not "trim": it sells one exit chunk when conviction WEAKENS
+    // to this level. Profit-taking is the separate `take profit %` box.
+    ["trim_long",       "de-risk",    -40,   80,  1,   12,   "config"],
     ["exit_long",       "exit",       -60,   20,  1,  -12,   "config"],
     ["entry_short",     "entry short", -100,  0,  1,  -35,   "config"],
     ["add_short",       "add short",   -100,  0,  1,  -55,   "config"],
-    ["trim_short",      "trim short",   -80, 40,  1,  -12,   "config"],
+    ["trim_short",      "de-risk short", -80, 40, 1,  -12,   "config"],
     ["exit_short",      "exit short",  -40,  40,  1,    8,   "config"],
-    ["max_units",       "max units",      1,  5,  1,    3,   "config"],
+    /* SIZING, as two gates plus an exit and a financing dial -- see
+       `chart_app/sizing.py`. All percents here, fractions in the config, so a
+       saved profile means the same thing on any pool size.
+         invest %   gate 1: how much of the capital the full position is
+         order %    gate 2: how much of THAT each entry/add order buys
+                    (100 = all in at once)
+         exit %     how much of the full position each trim / scale-out
+                    order sells (12.5 = eighths)
+         borrowed % share of each buy that is a margin loan. Same shares,
+                    less cash, plus interest. 0 = cash; the server caps it
+                    at 80% and at what the venue lends (Reg T 50%). */
+    ["position_size",   "invest %",       1, 100,  1,  100,  "pct"],
+    ["entry_slice",     "order %",        1, 100,  1,   33,  "pct"],
+    ["exit_slice",      "exit %",         1, 100, 0.5,  33,  "pct"],
+    ["margin_pct",      "borrowed %",     0,  80,  5,    0,  "pct"],
     ["atr_stop_mult",   "atr stop",     0.5, 12,  0.5,  4.0, "config"],
-    ["cooldown_bars",   "cooldown",     0,   30,  1,    3,   "config"],
+    // Bars between ANY two orders -- so with a scaled exit it is the spacing
+    // of the sells. A stop, a margin call or an all-out exit ignores it.
+    ["cooldown_bars",   "cooldown bars", 0,  30,  1,    3,   "config"],
     ["cost_bps",        "cost bps",     0,   50,  0.5,  2.0, "cost"],
   ];
 
@@ -64,8 +82,62 @@ window.CTest = (function () {
     return v == null ? fallback : v;
   }
 
+  /* The sizing knobs in PERCENT, from whichever config is in force.
+
+     A profile saved before the sizing model has no `position_size`; it has
+     `max_units` x `unit_fraction`, and the engine resolves that to the same
+     ladder (`sizing.resolve_sizing`). Showing it the same way here keeps a
+     loaded old profile from silently re-scoring as the shipped 100/33/33. */
+  function sizingPct() {
+    const cfg = Object.assign({}, shipped, (profile && profile.config) || {});
+    if (cfg.position_size != null) {
+      return {
+        position_size: 100 * cfg.position_size,
+        entry_slice: cfg.entry_style === "all" ? 100 : 100 * (cfg.entry_slice || 1),
+        exit_slice: 100 * (cfg.exit_slice || 1 / 3),
+        margin_pct: 100 * (cfg.margin_pct || 0),
+      };
+    }
+    const m = Math.max(1, parseInt(cfg.max_units || 3, 10));
+    const uf = cfg.unit_fraction ? Number(cfg.unit_fraction) : 1 / m;
+    const size = m * uf;
+    return {
+      position_size: 100 * size,
+      entry_slice: 100 / m,
+      exit_slice: 100 / m,
+      margin_pct: size > 1 ? Math.min(80, 100 * (1 - 1 / size)) : 0,
+    };
+  }
+
+  /* Gate 1's ceiling follows the borrowing dial: at 0% borrowed you can
+     invest at most 100% of the capital; at 50% borrowed, 200%. */
+  function boundInvest() {
+    const inv = document.getElementById("t_position_size");
+    const mar = document.getElementById("t_margin_pct");
+    if (!inv || !mar) return;
+    const m = Math.min(80, Math.max(0, parseFloat(mar.value) || 0));
+    inv.max = String(Math.round(100 / (1 - m / 100)));
+    if (parseFloat(inv.value) > parseFloat(inv.max)) inv.value = inv.max;
+    const out = document.getElementById("v_position_size");
+    if (out) out.textContent = inv.value;
+  }
+
   function paintKnobs() {
-    KNOBS.forEach(function (k) {
+    const pct = sizingPct();
+    // The borrow dial first, so gate 1's ceiling is right before it is set.
+    const order = KNOBS.slice().sort(function (a, b) {
+      return (a[0] === "margin_pct" ? -1 : 0) - (b[0] === "margin_pct" ? -1 : 0);
+    });
+    order.forEach(function (k) {
+      if (k[6] === "pct") {
+        const el = document.getElementById("t_" + k[0]);
+        const out = document.getElementById("v_" + k[0]);
+        if (!el) return;
+        if (k[0] === "position_size") boundInvest();
+        el.value = Math.round(pct[k[0]] * 10) / 10;
+        if (out) out.textContent = el.value;
+        return;
+      }
       const base = seed(k[0], null);
       if (base == null) return;
       const el = document.getElementById("t_" + k[0]);
@@ -83,7 +155,15 @@ window.CTest = (function () {
     }
     const styleEl = document.getElementById("t_exit_style");
     if (styleEl && profile && profile.config && profile.config.exit_style) {
-      styleEl.value = profile.config.exit_style;
+      // Old profiles say "full"; the model calls it "all".
+      styleEl.value = profile.config.exit_style === "scale" ? "scale" : "all";
+    }
+    const fracEl = document.getElementById("t_fractional");
+    if (fracEl) fracEl.checked = !!(profile && profile.config && profile.config.fractional);
+    const tpEl = document.getElementById("t_take_profit");
+    if (tpEl) {
+      const tp = profile && profile.config && profile.config.take_profit;
+      tpEl.value = Array.isArray(tp) ? tp.join(", ") : tp || "";
     }
     const capEl = document.getElementById("t_capital");
     if (capEl && profile && profile.capital != null) capEl.value = profile.capital;
@@ -131,7 +211,7 @@ window.CTest = (function () {
       config: {},
       elmo: gears.elmo || {},
       cost_bps: 2.0,
-      capital: 100000,
+      capital: 1000000,
     };
     const capEl = document.getElementById("t_capital");
     if (capEl) {
@@ -149,6 +229,7 @@ window.CTest = (function () {
       const v = parseFloat(el.value);
       if (isNaN(v)) return;
       if (k[6] === "config") out.config[k[0]] = v;
+      else if (k[6] === "pct") out.config[k[0]] = v / 100;
       else if (k[6] === "elmo") out.elmo[k[0]] = v;
       else out.cost_bps = v;
     });
@@ -158,10 +239,16 @@ window.CTest = (function () {
     const styleEl = document.getElementById("t_exit_style");
     if (styleEl) out.config.exit_style = styleEl.value;
 
-    // `unit_fraction` null means "1/max_units", which the engine resolves.
-    const capEl2 = document.getElementById("t_capital_model");
-    if (capEl2) {
-      out.config.unit_fraction = capEl2.value === "pyramiding" ? 1.0 : null;
+    // Gate 2 at 100% IS all-in; there is no separate switch to disagree with it.
+    out.config.entry_style = "scale";
+    const fracEl = document.getElementById("t_fractional");
+    if (fracEl) out.config.fractional = !!fracEl.checked;
+    const tpEl = document.getElementById("t_take_profit");
+    if (tpEl) {
+      out.config.take_profit = String(tpEl.value)
+        .split(/[,;\s]+/)
+        .map(function (x) { return parseFloat(String(x).replace("%", "")); })
+        .filter(function (x) { return !isNaN(x) && x > 0; });
     }
     return out;
   }
@@ -207,8 +294,24 @@ window.CTest = (function () {
         "capital used",
         (m.avg_exposure_pct == null ? "-" : m.avg_exposure_pct.toFixed(0) + "%") +
           "  " + (m.capital_model || ""),
-        m.capital_model === "pyramiding" ? "warn" : ""
+        m.capital_model && m.capital_model !== "cash" ? "warn" : ""
       ) +
+      // What the ledger paid to trade and to borrow. Interest is only ever
+      // non-zero with the borrowed dial up on a venue that charges it.
+      stat("fees", money(-(m.fees_dollars || 0)), (m.fees_dollars || 0) > 0 ? "bad" : "") +
+      stat(
+        "margin interest",
+        money(-(m.interest_dollars || 0)) +
+          (m.margin_calls ? "  " + m.margin_calls + " margin call" + (m.margin_calls > 1 ? "s" : "") : ""),
+        m.margin_calls ? "bad" : (m.interest_dollars || 0) > 0 ? "warn" : ""
+      ) +
+      (m.margin_capped && m.venue
+        ? stat(
+            "borrow capped",
+            (100 * m.sizing.margin_pct).toFixed(0) + "% max on " + m.venue.name,
+            "warn"
+          )
+        : "") +
       stat("avg hold", m.avg_bars_held.toFixed(0) + "b", "") +
       // Which bars this actually scored. A narrowed window is called out,
       // because an out-of-sample check is only meaningful if you can see the
@@ -220,6 +323,45 @@ window.CTest = (function () {
             win.narrowed ? "warn" : ""
           )
         : "");
+  }
+
+  /* Every fill the ledger made, newest at the bottom: the thing the old unit
+     ladder could never show. "BUY 1,052 @ 95.20  $100.2k" is an order a
+     broker would print; ".33 of a unit" was not. */
+  function paintOrders(orders) {
+    const el = document.getElementById("testerOrders");
+    if (!el) return;
+    if (!orders || !orders.length) {
+      el.innerHTML = "";
+      return;
+    }
+    const qtyFmt = function (q) {
+      return q >= 100 || q === Math.floor(q)
+        ? Math.round(q).toLocaleString()
+        : q.toPrecision(4);
+    };
+    const tail = orders.slice(-60);
+    el.innerHTML =
+      (orders.length > tail.length
+        ? '<div class="o"><i>' + (orders.length - tail.length) + " earlier orders</i></div>"
+        : "") +
+      tail
+        .map(function (o) {
+          const cls = o.side === "buy" ? "buy" : "sell";
+          return (
+            '<div class="o"><span>' + String(o.ts).slice(0, 16).replace("T", " ") + "</span>" +
+            '<b class="' + cls + '">' + o.action.toUpperCase() + "</b>" +
+            "<span>" + qtyFmt(o.qty) + " @ " + o.price.toFixed(o.price < 10 ? 4 : 2) +
+            (o.borrowed > 0 ? "  (loan $" + compact(o.borrowed) + ")" : "") +
+            (o.reason === "atr_stop" || o.reason === "margin_call" || o.reason === "take_profit"
+              ? "  " + o.reason
+              : "") +
+            "</span>" +
+            "<span>$" + compact(o.notional) + "</span></div>"
+          );
+        })
+        .join("");
+    el.scrollTop = el.scrollHeight;
   }
 
   function stat(label, value, cls) {
@@ -245,6 +387,7 @@ window.CTest = (function () {
         lastResult = null;
       } else {
         paintStats(out.metrics, null, out.window);
+        paintOrders(out.orders);
         boundDates(out.cache_span);
         lastResult = out;
       }
@@ -259,6 +402,13 @@ window.CTest = (function () {
 
   async function saveProfile(scope) {
     const v = values();
+    /* The live runners (`run_live_perp`, `run_live_equity`, `perp_sleeve`)
+       still size with `units x unit_fraction`. Publishing max_units=1 and
+       unit_fraction=position_size makes that product the real exposure, and
+       keeps their leverage guard (refuse above 1.0x) honest. The engine itself
+       ignores both whenever `position_size` is set. */
+    v.config.max_units = 1;
+    v.config.unit_fraction = v.config.position_size;
     const body = {
       config: v.config,
       elmo: v.elmo,
@@ -404,38 +554,38 @@ window.CTest = (function () {
     parts.push(
       '<label class="knob chk"><input type="checkbox" id="t_allow_short"><i>allow short</i></label>'
     );
-    /* Two CHOICES, not ranges -- they change what a return means, so they are
-       selects rather than sliders you can drift across by accident.
+    /* A CHOICE, not a range: "all" sells everything on an exit signal;
+       "scale" sells one `exit %` order per action until it is gone. A STOP
+       or a margin call always closes everything either way.
 
-       capital model: "fractional" makes one unit 1/max_units of the book, so
-       full conviction is 100% invested and it never borrows. "pyramiding"
-       makes one unit the whole book and the adds lever it to max_units x --
-       which raised SPY 1d from 17.3% to 55.5% purely by taking 3x the
-       exposure and 3x the drawdown. That is leverage, not edge.
-
-       exit style: "full" closes on an exit signal; "scale" sheds one unit per
-       action, so a position built in three steps comes off in three. A STOP
-       always closes everything either way. */
-    parts.push(
-      '<label class="knob box"><i>capital</i>' +
-      '<select id="t_capital_model">' +
-      '<option value="fractional">fractional (no margin)</option>' +
-      '<option value="pyramiding">pyramiding (levers up)</option>' +
-      "</select></label>"
-    );
+       The old "capital model" select is gone on purpose. "Pyramiding" made
+       each added unit a whole extra book of exposure with no loan and no
+       interest -- leverage that looked like conviction. Borrowing is now the
+       `borrowed %` dial, and it never changes the share count. */
     parts.push(
       '<label class="knob box"><i>exit</i>' +
       '<select id="t_exit_style">' +
-      '<option value="full">full exit</option>' +
+      '<option value="all">all out</option>' +
       '<option value="scale">scale out</option>' +
       "</select></label>"
+    );
+    /* "Take profit at 5% and 10%": gains off the average entry. Each level
+       sells one `exit %` chunk as a resting order, once per trade. Without it
+       the only ways out of a winner are the score turning and the trail. */
+    parts.push(
+      '<label class="knob box"><i>take profit %</i>' +
+      '<input type="text" id="t_take_profit" placeholder="e.g. 5, 10" size="8"></label>'
+    );
+    /* Whole shares unless ticked -- for a BRK-A, where one share is an order. */
+    parts.push(
+      '<label class="knob chk"><input type="checkbox" id="t_fractional"><i>fractional shares</i></label>'
     );
     /* Capital scales the dollar figures; the dates narrow the scored span.
        Both are text/date boxes rather than sliders -- they are not things you
        drag, and a stray drag on a date would re-run the engine per pixel. */
     parts.push(
       '<label class="knob box"><i>capital $</i>' +
-      '<input type="text" id="t_capital" value="100000" size="8"></label>'
+      '<input type="text" id="t_capital" value="1000000" size="8"></label>'
     );
     /* THE BUTTON THIS WHOLE THREAD STARTED FOR.
        The date pickers only ever NARROW bars already cached, deliberately --
@@ -484,17 +634,21 @@ window.CTest = (function () {
       '<button type="button" id="testerClose" title="close (key: t)">×</button>' +
       "</div>" +
       '<div id="testerKnobs">' + parts.join("") + "</div>" +
-      '<div id="testerStats">move a knob to score the loaded bars</div>';
+      '<div id="testerStats">move a knob to score the loaded bars</div>' +
+      '<div id="testerOrders"></div>';
 
     KNOBS.forEach(function (k) {
       const el = document.getElementById("t_" + k[0]);
       const out = document.getElementById("v_" + k[0]);
       el.addEventListener("input", function () {
+        if (k[0] === "margin_pct") boundInvest();
         out.textContent = el.value;
         schedule();
       });
     });
+    boundInvest();
     document.getElementById("t_allow_short").addEventListener("change", schedule);
+    document.getElementById("t_fractional").addEventListener("change", schedule);
     loadDefaults();
     document.getElementById("loadHistory").addEventListener("click", loadHistory);
     document.getElementById("profSaveSym")
@@ -503,7 +657,7 @@ window.CTest = (function () {
       .addEventListener("click", function () { saveProfile("timeframe"); });
     document.getElementById("profClear")
       .addEventListener("click", clearProfile);
-    ["t_capital", "t_start", "t_end", "t_capital_model", "t_exit_style"].forEach(function (id) {
+    ["t_capital", "t_start", "t_end", "t_exit_style", "t_take_profit"].forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", schedule);
     });
@@ -549,6 +703,7 @@ window.CTest = (function () {
       components: lastResult.components,
       available: lastResult.available,
       trades: lastResult.trades,
+      orders: lastResult.orders,
       config: Object.assign({}, (state.algo || {}).config, lastResult.config),
     });
     out.elmo = lastResult.elmo || state.elmo;

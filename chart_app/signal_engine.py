@@ -38,6 +38,7 @@ from typing import Any
 import numpy as np
 
 from chart_app.elmo import ElmoResult, _percentile_rank
+from chart_app.sizing import resolve_sizing
 from shared.chart_data import CandleRecord
 
 Series = list[float | None]
@@ -150,17 +151,29 @@ DEFAULTS: dict[str, Any] = {
     "trim_short": -12.0,
     "exit_short": 8.0,
     "allow_short": False,
-    # How many units a full-conviction position is, both sides.
-    "max_units": 3,
-    # Share of capital per unit. None = 1/max_units (fractional, never
-    # borrows: first entry 1/3, full conviction 100%). Set 1.0 for pyramiding,
-    # where the first entry is already the whole book and adds lever it up.
-    "unit_fraction": None,
-    # "full"  -- an exit signal closes the whole position at once (default).
-    # "scale" -- an exit signal sheds ONE unit per action, so a position that
-    #            was built in three steps comes off in three. A STOP always
-    #            closes everything regardless: a stop is a stop.
-    "exit_style": "full",
+    # SIZING -- see `chart_app/sizing.py` for the whole model.
+    # The full position as a share of equity. None = resolve an OLD profile's
+    # `max_units` x `unit_fraction` ladder exactly (3 x 1/3 when neither is
+    # set, which is the same as the new defaults below).
+    "position_size": None,
+    # "all" buys the full position on entry; "scale" buys `entry_slice` of it
+    # per entry/add order until it is all on.
+    "entry_style": "scale",
+    "entry_slice": 1.0 / 3.0,
+    # "all"   -- an exit signal closes the whole position at once (default).
+    # "scale" -- an exit signal sells `exit_slice` of the full position per
+    #            action. A trim is always one `exit_slice`. A STOP (or a
+    #            margin call) always closes everything: a stop is a stop.
+    "exit_style": "all",
+    "exit_slice": 1.0 / 3.0,
+    # Share of each buy that is BORROWED. 0 = cash. Never changes the share
+    # count; capped at 80% and at what the venue lends (Reg T 50% on stock).
+    "margin_pct": 0.0,
+    # Whole shares unless ticked -- for a BRK-A, where one share is an order.
+    "fractional": False,
+    # Take-profit levels, % gain off the average entry: [5, 10] sells one exit
+    # chunk at +5% and another at +10%. Empty = no profit target.
+    "take_profit": [],
     # ATR trailing stop (the published ELMo uses "configurable ATR values").
     # 4.0, not 2.5: at 2.5 the trail was doing nearly all the exiting and
     # median return across the daily universe was +4.4% against +30.2% at 4.0.
@@ -782,13 +795,25 @@ def run_state_machine(
     ready = conviction.ready or [True] * n
     mult = float(cfg["atr_stop_mult"])
     cooldown = int(cfg["cooldown_bars"])
-    max_units = int(cfg.get("max_units", 3))
-    scale_out = str(cfg.get("exit_style", "full")).lower() == "scale"
+    # The same ladder `backtest.run_backtest` walks (`chart_app/sizing.py`),
+    # so the marks and the P&L cannot disagree about how big a position gets.
+    # `qty` is the signed share of the FULL position; `position` publishes it
+    # times `position_scale` (max_units for an old profile, whose live runners
+    # multiply by unit_fraction; 1 for a new one).
+    sz = resolve_sizing(cfg)
+    scale_out = sz.scale_out
 
-    qty = 0.0            # >0 long units, <0 short units
+    qty = 0.0            # >0 long, <0 short, as a share of the full position
     trail: float | None = None
     last_action_bar = -10_000
     open_trade: Trade | None = None
+    avg_entry = 0.0      # size-weighted, at the closes this machine acts on
+    tp_fired: set[int] = set()
+
+    def _grow(old: float, new: float, price: float) -> None:
+        nonlocal avg_entry
+        if abs(new) > abs(old) > 0:
+            avg_entry = (avg_entry * abs(old) + price * (abs(new) - abs(old))) / abs(new)
 
     def _close(i: int, reason: str) -> None:
         nonlocal qty, trail, open_trade
@@ -822,48 +847,52 @@ def run_state_machine(
         # 2. Score-driven transitions. Long and short are mirrors.
         elif qty > 0:
             if s <= float(cfg["exit_long"]):
-                if scale_out and qty > 1 and can_act:
+                if scale_out and sz.more_than_one_exit(qty) and can_act:
                     actions[i] = "trim"
-                    qty -= 1
+                    qty = sz.shed(qty)
                     last_action_bar = i
-                elif scale_out and qty > 1:
+                elif scale_out and sz.more_than_one_exit(qty):
                     pass          # cooling down; shed the next unit later
                 else:
                     actions[i] = "sell"
                     _close(i, "score_exit")
                     last_action_bar = i
-            elif s <= float(cfg["trim_long"]) and can_act and qty > 1:
+            elif s <= float(cfg["trim_long"]) and can_act and sz.more_than_one_exit(qty):
                 actions[i] = "trim"
-                qty -= 1
+                qty = sz.shed(qty)
                 last_action_bar = i
-            elif s >= float(cfg["add_long"]) and can_act and qty < max_units:
+            elif s >= float(cfg["add_long"]) and can_act and sz.can_add(qty):
                 actions[i] = "add"
-                qty += 1
+                _grow(qty, sz.add(qty), price)
+                qty = sz.add(qty)
                 last_action_bar = i
         elif qty < 0:
             if s >= float(cfg["exit_short"]):
-                if scale_out and qty < -1 and can_act:
+                if scale_out and sz.more_than_one_exit(qty) and can_act:
                     actions[i] = "trim"
-                    qty += 1
+                    qty = sz.shed(qty)
                     last_action_bar = i
-                elif scale_out and qty < -1:
+                elif scale_out and sz.more_than_one_exit(qty):
                     pass
                 else:
                     actions[i] = "cover"
                     _close(i, "score_exit")
                     last_action_bar = i
-            elif s >= float(cfg["trim_short"]) and can_act and qty < -1:
+            elif s >= float(cfg["trim_short"]) and can_act and sz.more_than_one_exit(qty):
                 actions[i] = "trim"
-                qty += 1
+                qty = sz.shed(qty)
                 last_action_bar = i
-            elif s <= float(cfg["add_short"]) and can_act and qty > -max_units:
+            elif s <= float(cfg["add_short"]) and can_act and sz.can_add(qty):
                 actions[i] = "add"
-                qty -= 1
+                _grow(qty, sz.add(qty), price)
+                qty = sz.add(qty)
                 last_action_bar = i
         else:
             if s >= float(cfg["entry_long"]) and can_act:
                 actions[i] = "buy"
-                qty = 1.0
+                qty = sz.first()
+                avg_entry = price
+                tp_fired.clear()
                 open_trade = Trade(
                     side="long",
                     entry_index=i,
@@ -878,7 +907,9 @@ def run_state_machine(
                 and can_act
             ):
                 actions[i] = "short"
-                qty = -1.0
+                qty = -sz.first()
+                avg_entry = price
+                tp_fired.clear()
                 open_trade = Trade(
                     side="short",
                     entry_index=i,
@@ -886,6 +917,32 @@ def run_state_machine(
                     entry_price=price,
                 )
                 trades.append(open_trade)
+                last_action_bar = i
+
+        # 2b. Take-profit levels ("take profit at 5% and 10%"): a resting order
+        #     per level off the average entry, one exit chunk each, once per
+        #     trade, cooldown-free. Same rule `backtest.run_backtest` fills;
+        #     marked only on a bar with no other action, since a bar carries
+        #     one mark.
+        if qty != 0 and actions[i] == "none" and sz.take_profit and avg_entry:
+            for k, pct in enumerate(sz.take_profit):
+                if k in tp_fired or qty == 0:
+                    continue
+                reached = (
+                    high >= avg_entry * (1.0 + pct / 100.0)
+                    if qty > 0
+                    else low <= avg_entry * (1.0 - pct / 100.0)
+                )
+                if not reached:
+                    break
+                tp_fired.add(k)
+                new = sz.shed(qty)
+                if new == 0:
+                    actions[i] = "sell" if qty > 0 else "cover"
+                    _close(i, "take_profit")
+                else:
+                    actions[i] = "trim"
+                    qty = new
                 last_action_bar = i
 
         # 3. Ratchet the trail. Only ever in the favourable direction.
@@ -896,7 +953,7 @@ def run_state_machine(
             else:
                 candidate = price + mult * float(a)
                 trail = candidate if trail is None else min(trail, candidate)
-        position[i] = qty
+        position[i] = qty * sz.position_scale
         stop[i] = trail
 
     return SignalRun(actions, position, stop, trades)

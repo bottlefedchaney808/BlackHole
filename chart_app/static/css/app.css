@@ -361,6 +361,21 @@ html, body {
 #testerStats .good { color: var(--long); }
 #testerStats .bad { color: var(--down); }
 
+/* The ledger's fills, newest last: what was actually bought and sold. */
+#testerOrders {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+  max-height: 150px;
+  overflow-y: auto;
+  font: 10.5px/1.45 ui-monospace, Consolas, monospace;
+  color: var(--dim);
+}
+#testerOrders .o { display: grid; grid-template-columns: 78px 44px 1fr 62px; gap: 6px; }
+#testerOrders .o b { font-weight: 600; }
+#testerOrders .buy { color: var(--long); }
+#testerOrders .sell { color: var(--down); }
+
 /* The chart's top offset depends on which strips are showing. The tester is
    no longer one of them -- it floats, so it never reflows the plot. */
 #chart { position: absolute; top: var(--bar-h); left: 0; right: 0; bottom: 0; }

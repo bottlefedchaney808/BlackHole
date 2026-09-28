@@ -1046,6 +1046,50 @@ being applied.
 
 ---
 
+## 9b. Sizing model (2026-09-28) — supersedes the `max_units` × `unit_fraction` notes above
+
+The backtest is a **ledger** now: cash, shares and a margin loan, in dollars,
+from a **$1,000,000** pool (`backtest.DEFAULT_CAPITAL`). Every fill is in
+`BacktestResult.orders` / `/api/backtest` `orders` and in the tester's order
+list: `BUY 150 SPY @ 663.41 = $99.5k`, not "1/3 of a unit". Model and venue
+terms live in `sizing.py`.
+
+| key (fraction in config, % in the panel) | meaning |
+|---|---|
+| `position_size` | gate 1 — the full position as a share of equity |
+| `entry_slice` | gate 2 — share of THAT per entry/add order; 1.0 = all in at once |
+| `exit_style` `all`/`scale`, `exit_slice` | exit all at once, or sell `exit_slice` of the full position per action (cooldown bars apart) |
+| `trim_long`/`trim_short` (panel: **de-risk**) | sell one `exit_slice` when conviction WEAKENS to this level |
+| `take_profit` e.g. `[5, 10]` | resting limit sells, one `exit_slice` each at +5% / +10% off the average entry, once per trade, cooldown-free |
+| `margin_pct` | share of each buy that is BORROWED. Never changes the share count. Hard cap 80%; venue caps: stock 50% (Reg T), perp 1−1/max-lev, spot crypto 0% |
+| `fractional` | whole shares unless ticked (BRK-A) |
+
+Why: the unit ladder made an order a fraction of a position rather than an
+amount of money, so a 5-unit cap turned every order into a fifth of a share
+on a small book (the live ADA sleeve printed $0.25 buys and sells). It also made
+"pyramiding" into leverage nobody financed: each added unit was a whole extra
+book, with no loan and no interest.
+
+Margin is real now: interest on the loan every bar at Robinhood's tiered rate
+(5.0/4.8/4.5%, first $1k free), a maintenance line (25% stock, ~0.9/max-lev on a
+perp) that forces a `margin_call` sale, repayment pro rata as the position comes
+off. Perps charge no interest; **funding is not modelled** (no history).
+
+**Old profiles** (no `position_size`) resolve to the exact ladder they always
+walked, and `position` still publishes `level × max_units`, so
+`position × unit_fraction` stays the exposure for the live runners. The one
+deliberate difference: a pyramiding profile (`unit_fraction=1.0`) is now a
+margin account, borrowed share capped by the venue, and pays interest.
+The tester saves new profiles with `max_units=1, unit_fraction=position_size`
+so the live runners' 1x guard still reads the real exposure.
+
+**Not done yet:** the live runners (`run_live_perp`, `run_live_equity`,
+`run_sleeve`) still size with `units × unit_fraction × full` and do not place
+take-profit orders, and `perp_sleeve.replay` calls `run_backtest` without a
+`ticker`, so its quoted metrics use stock (Reg T) terms on a perp.
+
+---
+
 ## 10. Open items, highest value first
 
 Lookback / EMA200 / `liq_window` 5 are done (see §3.10). Still open:

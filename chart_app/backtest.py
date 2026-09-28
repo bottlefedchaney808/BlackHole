@@ -45,6 +45,7 @@ from chart_app.signal_engine import (
     atr_series,
     conviction_series,
 )
+from chart_app.sizing import MAX_BORROW, order_quantity, resolve_sizing, venue_for
 from shared.chart_data import CandleRecord
 
 # Bars per year per interval, for annualising Sharpe and CAGR. A US equity
@@ -104,10 +105,10 @@ def _bars_per_year(records: Sequence[CandleRecord], interval: str) -> float:
 # spread crossing is included; single names are worse.
 DEFAULT_COST_BPS = 2.0
 
-# Notional the percent returns are scaled by for the dollar figures. A round
-# number on purpose: it is a readability aid for tuning, not a claim about the
-# account. Override per call / per request.
-DEFAULT_CAPITAL = 100_000.0
+# The backtest pool: what the ledger starts with, in dollars. Orders are sized
+# off it (and off equity as it compounds), so it is a real starting balance
+# now, not a label on a percent. Override per call / per request.
+DEFAULT_CAPITAL = 1_000_000.0
 
 # Bars an indicator set needs before it is fully seeded: EMA200 plus the
 # 200-bar percentile ranks in `elmo.rank_series`, with a little headroom.
@@ -121,13 +122,15 @@ class BacktestResult:
     returns: list[float] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
+    # Every fill: action, side, quantity, price, dollars, fee, loan taken.
+    orders: list[dict[str, Any]] = field(default_factory=list)
 
     def summary(self) -> str:
         m = self.metrics
         return (
             f"trades={m.get('trades', 0):>4}  "
             f"win={m.get('win_rate', 0):>5.1f}%  "
-            f"pf={m.get('profit_factor', 0):>5.2f}  "
+            f"pf={m.get('profit_factor') or 0:>5.2f}  "
             f"ret={m.get('total_return_pct', 0):>7.2f}%  "
             f"bh={m.get('buy_hold_pct', 0):>7.2f}%  "
             f"mdd={m.get('max_drawdown_pct', 0):>6.2f}%  "
@@ -163,6 +166,7 @@ def run_backtest(
     elmo: ElmoResult | None = None,
     warmup_bars: int = 0,
     capital: float = DEFAULT_CAPITAL,
+    ticker: str | None = None,
 ) -> BacktestResult:
     """One symbol, one parameter set, next-bar-open fills.
 
@@ -222,44 +226,197 @@ def run_backtest(
     cooldown = int(cfg["cooldown_bars"])
     allow_short = bool(cfg["allow_short"])
 
-    # HOW MUCH CAPITAL IS AT RISK PER UNIT.
+    # HOW BIG, HOW IN, HOW OUT, HOW PAID FOR -- see `chart_app/sizing.py`.
     #
-    # This used to be implicit and wrong: `in_pos` was +1/-1, so every entry
-    # was 100% of capital and a 1-unit and a 3-unit conviction were the same
-    # bet. Meanwhile the LIVE machine scales 1 -> 3 units, so `add_long` and
-    # `trim_long` moved the chart's marks and had exactly zero effect on the
-    # reported P&L -- the tester was scoring a different strategy than the one
-    # on screen.
+    # This is a LEDGER now: cash, shares and a margin loan, in dollars, from a
+    # `capital` pool. It used to be a percent-return series where a position
+    # was N "units" of 1/N of capital each. That made an order a fraction of a
+    # position instead of an amount of money, so a 5-unit cap meant every buy
+    # was a fifth of the position -- and on a small book, a fifth of a share.
+    # It also made pyramiding into silent leverage: each unit above the book
+    # was exposure nobody paid for, with no loan and no interest.
     #
-    # `max_units` is the cap the live machine uses (3). `unit_fraction` is what
-    # one unit costs, as a share of capital:
+    # `level` is the ladder the signal walks, a signed share of the FULL
+    # position in [-1, 1]. `qty` is what the ledger actually holds. An order's
+    # size comes from equity at the moment it fills:
     #
-    #   1/max_units (DEFAULT) -- fractional. First buy is 33%, full conviction
-    #                            is 100%, never borrows. A cash account.
-    #   1.0                   -- pyramiding. First buy is 100% and adds lever
-    #                            to 300%. Needs margin; returns and drawdowns
-    #                            both scale by ~3x.
+    #   entry/add   buys  entry_slice x position_size x equity, in whole
+    #               shares unless `fractional` is ticked
+    #   trim/scale  sells exit_slice / |level| of what is held (equal chunks)
+    #   exit/stop   sells everything
     #
-    # It is explicit precisely because it is not a detail: it sets what every
-    # return in this module MEANS, and buy-and-hold is 100% invested for
-    # comparison.
-    max_units = int(cfg.get("max_units", 3))
-    unit_fraction = float(cfg.get("unit_fraction") or (1.0 / max_units))
-    scale_out = str(cfg.get("exit_style", "full")).lower() == "scale"
+    # Borrowing (`margin_pct`) never changes the share count, only how it is
+    # paid for: the borrowed share of each buy is a loan, charged the venue's
+    # rate every bar, and repaid pro rata as the position comes off.
+    venue = venue_for(ticker)
+    sz = resolve_sizing(cfg, venue)
+    scale = sz.position_scale
+    borrow = sz.margin_pct
+    maint = venue.maintenance
 
     warmup = max(0, min(int(warmup_bars), n - 2))
-    equity = [1.0]
-    bar_returns: list[float] = []
-    trades: list[dict[str, Any]] = []
-    units = 0  # >0 long units, <0 short units, 0 flat
-    entry_price = 0.0  # size-weighted average entry
+    cash = float(capital)
+    qty = 0.0  # signed shares/contracts held
+    loan = 0.0  # margin loan outstanding (long side)
+    level = 0.0  # signed share of the full position the ladder is on
+    peak_level = 0.0
+    peak_qty = 0.0
+    peak_notional = 0.0
     entry_index = 0
-    peak_units = 0
-    realized = 0.0  # portfolio-return contribution booked by trims
+    trade_start_equity = 0.0
+    trade_orders = 0
     trail: float | None = None
     last_action_bar = -10_000
     bars_in_market = 0
-    unit_bars = 0.0  # sum of |units| per bar, for average-exposure reporting
+    level_bars = 0.0  # sum of |level| x scale per in-market bar
+    gross_frac_sum = 0.0  # sum of gross notional / equity per scored bar
+    max_gross = 0.0
+    fees = 0.0
+    interest_paid = 0.0
+    margin_calls = 0
+    busted = False
+    equity = [1.0]
+    bar_returns: list[float] = []
+    trades: list[dict[str, Any]] = []
+    orders: list[dict[str, Any]] = []
+    prev_equity = float(capital)
+
+    def _equity_at(price: float) -> float:
+        return cash + qty * price - loan
+
+    def _fill(
+        target_qty: float,
+        price: float,
+        action: str,
+        reason: str,
+        *,
+        mark: int,
+        fill: int,
+    ) -> None:
+        """Move the ledger from `qty` to `target_qty` at `price`."""
+        nonlocal cash, qty, loan, fees, trade_orders, peak_qty, peak_notional
+        delta = target_qty - qty
+        if abs(delta) < 1e-12:
+            return
+        notional = abs(delta) * price
+        fee = cost * notional
+        borrowed = 0.0
+        if abs(target_qty) > abs(qty) and qty * target_qty >= 0:
+            # Opening or adding. A long pays cash for the unborrowed share and
+            # takes a loan for the rest; a short receives the proceeds.
+            if target_qty > 0:
+                borrowed = notional * borrow
+                cash -= notional - borrowed
+                loan += borrowed
+            else:
+                cash += notional
+        else:
+            # Reducing. Repay the loan in proportion to the shares sold, so a
+            # half-closed position carries half its loan.
+            share = abs(delta) / abs(qty) if qty else 1.0
+            if qty > 0:
+                repay = loan * share
+                cash += notional - repay
+                loan -= repay
+            else:
+                cash -= notional
+        cash -= fee
+        fees += fee
+        qty = 0.0 if abs(target_qty) < 1e-12 else target_qty
+        if qty == 0.0:
+            loan = 0.0
+        trade_orders += 1
+        peak_qty = max(peak_qty, abs(qty))
+        peak_notional = max(peak_notional, abs(qty) * price)
+        orders.append(
+            {
+                "bar": mark,
+                "fill_index": fill,
+                "ts": records[fill].timestamp.isoformat(),
+                "action": action,
+                "side": "buy" if delta > 0 else "sell",
+                "qty": float(abs(delta)),
+                "price": float(price),
+                "notional": float(notional),
+                "fee": float(fee),
+                "borrowed": float(borrowed),
+                "reason": reason,
+                "position_qty": float(qty),
+                "level": float(level),
+            }
+        )
+
+    def _buy_qty(new_level: float, price: float) -> float:
+        """Target holding for `new_level`, sized off equity, capped at buying power."""
+        eq = max(0.0, _equity_at(price))
+        want = abs(new_level) * sz.position_size * eq
+        cap = eq * sz.buying_power
+        dollars_more = min(want, cap) - abs(qty) * price
+        extra = order_quantity(dollars_more, price, sz.fractional)
+        side = 1.0 if new_level > 0 else -1.0
+        return qty + side * extra
+
+    def _shed_qty(old_level: float, new_level: float) -> float:
+        """Holding after selling (old-new)/old of it -- equal chunks of the
+        full position, whole shares where the venue fills whole shares."""
+        if abs(new_level) < 1e-12:
+            return 0.0
+        sell = abs(qty) * (abs(old_level) - abs(new_level)) / abs(old_level)
+        if not sz.fractional:
+            sell = float(math.floor(sell + 1e-9))
+        side = 1.0 if qty > 0 else -1.0
+        return side * max(0.0, abs(qty) - sell)
+
+    def _close_trade(exit_i: int, exit_price: float, reason: str) -> None:
+        nonlocal level, peak_level, trail, trade_orders, peak_qty, peak_notional
+        side = "long" if level > 0 else "short"
+        avg_entry = float(trades_entry_price[0])
+        pnl = _equity_at(exit_price) - trade_start_equity
+        trades.append(
+            {
+                "side": side,
+                "entry_index": entry_index,
+                "entry_ts": records[entry_index].timestamp.isoformat(),
+                "entry_price": avg_entry,
+                "exit_index": exit_i,
+                "exit_ts": records[exit_i].timestamp.isoformat(),
+                "exit_price": float(exit_price),
+                "exit_reason": reason,
+                "bars": exit_i - entry_index,
+                # Portfolio-return CONTRIBUTION: the trade's dollars (fees and
+                # margin interest included) over equity when it opened.
+                "pnl_pct": float(100.0 * pnl / trade_start_equity)
+                if trade_start_equity > 0
+                else 0.0,
+                "pnl_dollars": float(pnl),
+                "peak_units": float(peak_level * scale),
+                "peak_qty": float(peak_qty),
+                "peak_notional": float(peak_notional),
+                "orders": int(trade_orders),
+            }
+        )
+        level = 0.0
+        peak_level = 0.0
+        peak_qty = 0.0
+        peak_notional = 0.0
+        trade_orders = 0
+        trail = None
+
+    # Size-weighted average entry of the open trade, held in a one-slot list so
+    # the closures above can read it without another nonlocal.
+    trades_entry_price = [0.0]
+    tp_fired: set[int] = set()  # take-profit levels already taken this trade
+
+    def _record_entry_price(before_qty: float, price: float) -> None:
+        added = abs(qty) - abs(before_qty)
+        if added <= 0:
+            return
+        held = abs(qty)
+        trades_entry_price[0] = (
+            price
+            if abs(before_qty) < 1e-12
+            else (trades_entry_price[0] * abs(before_qty) + price * added) / held
+        )
 
     # `i` is the DECISION bar. The fill happens at `i+1`'s open, so the loop
     # stops one short of the end -- a signal on the final bar has no bar to
@@ -269,187 +426,224 @@ def run_backtest(
         open_next = float(nxt.open)
         low_next, high_next = float(nxt.low), float(nxt.high)
         close_next = float(nxt.close)
-        prev_close = float(records[i].close)
 
         exit_price: float | None = None
         exit_reason = ""
         scale_exit = False
 
-        if units != 0:
+        if level != 0:
             bars_in_market += 1
-            unit_bars += abs(units)
-            # 1. Stop, checked against the NEXT bar's range and filled at the
-            #    stop level -- or at the open when the bar gaps through it.
+            level_bars += abs(level) * scale
+            # 1. Stop and margin call, checked against the NEXT bar's range.
+            #    Whichever trigger a moving price reaches first wins; a gap
+            #    through it fills at the open.
+            triggers: list[tuple[float, str]] = []
             if trail is not None:
-                if units > 0 and low_next <= trail:
-                    exit_price = min(trail, open_next)
-                    exit_reason = "atr_stop"
-                elif units < 0 and high_next >= trail:
-                    exit_price = max(trail, open_next)
-                    exit_reason = "atr_stop"
+                triggers.append((trail, "atr_stop"))
+            if qty > 0 and loan - cash > 0:
+                triggers.append(((loan - cash) / (qty * (1.0 - maint)), "margin_call"))
+            elif qty < 0 and cash > 0:
+                triggers.append((cash / (abs(qty) * (1.0 + maint)), "margin_call"))
+            if level > 0:
+                hit = [t for t in triggers if low_next <= t[0]]
+                if hit:
+                    price, exit_reason = max(hit)
+                    exit_price = min(price, open_next)
+            else:
+                hit = [t for t in triggers if high_next >= t[0]]
+                if hit:
+                    price, exit_reason = min(hit)
+                    exit_price = max(price, open_next)
             # 2. Score exit, filled at the next open. With exit_style="scale"
-            #    a position bigger than one unit sheds a single unit here
-            #    instead of closing -- built in three steps, out in three. The
-            #    stop above is deliberately NOT scaled: a stop is a stop.
+            #    a position bigger than one exit order sheds one order's worth
+            #    here instead of closing. The stop above is deliberately NOT
+            #    scaled: a stop is a stop, and a margin call is not optional.
             if exit_price is None:
                 s = float(score[i])
-                hit = (
-                    units > 0
+                hit_exit = (
+                    level > 0
                     and s <= float(cfg["exit_long"])
-                    or units < 0
+                    or level < 0
                     and s >= float(cfg["exit_short"])
                 )
-                if hit and scale_out and abs(units) > 1:
+                if hit_exit and sz.scale_out and sz.more_than_one_exit(level):
                     scale_exit = True
-                elif hit:
+                elif hit_exit:
                     exit_price, exit_reason = open_next, "score_exit"
 
-        # --- mark the bar, at the exposure actually held into it -----------
-        # `units` here is the position carried INTO the bar, before any of this
-        # bar's decisions fill at the next open. Exposure is units * fraction,
-        # so max_units at the default 1/max_units is a fully-invested book and
-        # directly comparable to buy-and-hold.
-        if units != 0:
-            mark_to = exit_price if exit_price is not None else close_next
-            raw = (mark_to - prev_close) / prev_close * units * unit_fraction
-        else:
-            raw = 0.0
-
         if exit_price is not None:
-            # Closing costs the whole remaining position.
-            raw -= cost * abs(units) * unit_fraction
-            side_sign = 1.0 if units > 0 else -1.0
-            slice_pnl = ((exit_price - entry_price) / entry_price) * side_sign
-            # Contribution to portfolio return: this slice plus anything
-            # already booked by trims, net of entry+exit cost on every unit
-            # that was ever opened.
-            pnl = (
-                realized
-                + slice_pnl * abs(units) * unit_fraction
-                - 2 * cost * peak_units * unit_fraction
+            action = "sell" if level > 0 else "cover"
+            _fill(
+                0.0,
+                exit_price,
+                action,
+                exit_reason,
+                mark=i + 1 if exit_reason != "score_exit" else i,
+                fill=i + 1,
             )
-            trades.append(
-                {
-                    "side": "long" if units > 0 else "short",
-                    "entry_index": entry_index,
-                    "entry_ts": records[entry_index].timestamp.isoformat(),
-                    "entry_price": entry_price,
-                    "exit_index": i + 1,
-                    "exit_ts": nxt.timestamp.isoformat(),
-                    "exit_price": exit_price,
-                    "exit_reason": exit_reason,
-                    "bars": i + 1 - entry_index,
-                    # Portfolio-return CONTRIBUTION, not the move on one share:
-                    # a 1-unit winner and a 3-unit winner of the same size are
-                    # different amounts of money, and the old model called them
-                    # equal.
-                    "pnl_pct": float(100.0 * pnl),
-                    "peak_units": int(peak_units),
-                }
-            )
-            units = 0
-            peak_units = 0
-            realized = 0.0
-            trail = None
+            if exit_reason == "margin_call":
+                margin_calls += 1
+            _close_trade(i + 1, exit_price, exit_reason)
             last_action_bar = i
 
         # 3. Transitions, decided on bar i, filled at i+1 open. Mirrors
-        #    `signal_engine.run_state_machine`: add above `add_long`, trim
-        #    below `trim_long`, capped at `max_units`, long side only -- the
-        #    live machine does not pyramid shorts either.
-        can_act = (i - last_action_bar) >= cooldown and ready[i]
+        #    `signal_engine.run_state_machine` step for step, using the same
+        #    `Sizing` ladder so the two cannot disagree about size.
+        can_act = (i - last_action_bar) >= cooldown and ready[i] and not busted
         s_now = float(score[i])
+        before = qty
         if scale_exit and can_act:
-            # Shed one unit of whichever side is open, booking its slice.
-            step = -1 if units > 0 else 1
-            realized += (
-                ((open_next - entry_price) / entry_price)
-                * unit_fraction
-                * (1.0 if units > 0 else -1.0)
-            )
-            units += step
-            raw -= cost * unit_fraction
+            new = sz.shed(level)
+            target = _shed_qty(level, new)
+            level = new
+            _fill(target, open_next, "trim", "scale_out", mark=i, fill=i + 1)
             last_action_bar = i
-        elif units > 0 and can_act:
-            if s_now <= float(cfg["trim_long"]) and units > 1:
-                # Book the trimmed unit and shrink the position.
-                realized += ((open_next - entry_price) / entry_price) * unit_fraction
-                units -= 1
-                raw -= cost * unit_fraction
+        elif level > 0 and can_act:
+            if s_now <= float(cfg["trim_long"]) and sz.more_than_one_exit(level):
+                new = sz.shed(level)
+                target = _shed_qty(level, new)
+                level = new
+                _fill(target, open_next, "trim", "trim", mark=i, fill=i + 1)
                 last_action_bar = i
-            elif s_now >= float(cfg["add_long"]) and units < max_units:
-                # Size-weighted average entry, so a later add cannot make an
-                # earlier unit look like it was bought at the add price.
-                entry_price = (entry_price * units + open_next) / (units + 1)
-                units += 1
-                peak_units = max(peak_units, units)
-                raw -= cost * unit_fraction
+            elif s_now >= float(cfg["add_long"]) and sz.can_add(level):
+                level = sz.add(level)
+                peak_level = max(peak_level, abs(level))
+                _fill(
+                    _buy_qty(level, open_next),
+                    open_next,
+                    "add",
+                    "add",
+                    mark=i,
+                    fill=i + 1,
+                )
+                _record_entry_price(before, open_next)
                 last_action_bar = i
-        elif units < 0 and can_act:
+        elif level < 0 and can_act:
             # Mirror of the long ladder: a short adds as conviction falls
             # further and trims as it recovers toward zero.
-            if s_now >= float(cfg["trim_short"]) and units < -1:
-                realized += ((entry_price - open_next) / entry_price) * unit_fraction
-                units += 1
-                raw -= cost * unit_fraction
+            if s_now >= float(cfg["trim_short"]) and sz.more_than_one_exit(level):
+                new = sz.shed(level)
+                target = _shed_qty(level, new)
+                level = new
+                _fill(target, open_next, "trim", "trim", mark=i, fill=i + 1)
                 last_action_bar = i
-            elif s_now <= float(cfg["add_short"]) and units > -max_units:
-                entry_price = (entry_price * abs(units) + open_next) / (abs(units) + 1)
-                units -= 1
-                peak_units = max(peak_units, abs(units))
-                raw -= cost * unit_fraction
+            elif s_now <= float(cfg["add_short"]) and sz.can_add(level):
+                level = sz.add(level)
+                peak_level = max(peak_level, abs(level))
+                _fill(
+                    _buy_qty(level, open_next),
+                    open_next,
+                    "add",
+                    "add",
+                    mark=i,
+                    fill=i + 1,
+                )
+                _record_entry_price(before, open_next)
                 last_action_bar = i
-        elif units == 0 and can_act:
+        elif level == 0 and can_act:
+            side = 0.0
             if s_now >= float(cfg["entry_long"]):
-                units, entry_price, entry_index = 1, open_next, i + 1
-                peak_units = 1
-                raw -= cost * unit_fraction
-                last_action_bar = i
+                side = 1.0
             elif allow_short and s_now <= float(cfg["entry_short"]):
-                units, entry_price, entry_index = -1, open_next, i + 1
-                peak_units = 1
-                raw -= cost * unit_fraction
+                side = -1.0
+            if side:
+                trade_start_equity = _equity_at(open_next)
+                entry_index = i + 1
+                level = side * sz.first()
+                peak_level = abs(level)
+                trades_entry_price[0] = open_next
+                tp_fired.clear()
+                _fill(
+                    _buy_qty(level, open_next),
+                    open_next,
+                    "buy" if side > 0 else "short",
+                    "entry",
+                    mark=i,
+                    fill=i + 1,
+                )
                 last_action_bar = i
 
-        # 4. Ratchet the trail off the bar we just marked to.
+        # 3b. Take-profit levels: resting limit orders, "take profit at 5% and
+        #     10%" off the average entry. Each sells one exit chunk, fires once
+        #     per trade, fills at its price (or the open if the bar gaps
+        #     through it), and ignores cooldown -- a resting order does not
+        #     wait. Checked after the open's fills because it is intrabar, and
+        #     only when no stop fired this bar: with both inside one bar the
+        #     order is unknowable, and assuming the stop is the safe reading.
+        if level != 0 and qty != 0 and exit_price is None and sz.take_profit:
+            avg = trades_entry_price[0]
+            for k, pct in enumerate(sz.take_profit):
+                if k in tp_fired or level == 0:
+                    continue
+                if level > 0:
+                    target_px = avg * (1.0 + pct / 100.0)
+                    if high_next < target_px:
+                        break
+                    px = max(target_px, open_next)
+                else:
+                    target_px = avg * (1.0 - pct / 100.0)
+                    if low_next > target_px:
+                        break
+                    px = min(target_px, open_next)
+                tp_fired.add(k)
+                new = sz.shed(level)
+                closing = new == 0
+                action = ("sell" if level > 0 else "cover") if closing else "trim"
+                _fill(
+                    _shed_qty(level, new),
+                    px,
+                    action,
+                    "take_profit",
+                    mark=i + 1,
+                    fill=i + 1,
+                )
+                if closing:
+                    _close_trade(i + 1, px, "take_profit")
+                else:
+                    level = new
+
+        # 4. Margin interest for the time this bar spans. Calendar time, not
+        #    bar count: a loan accrues over a weekend the tape does not see.
+        if loan > 0:
+            years = (nxt.timestamp - records[i].timestamp).total_seconds() / (
+                365.25 * 86_400.0
+            )
+            charge = venue.interest(loan, years)
+            cash -= charge
+            interest_paid += charge
+
+        # 5. Ratchet the trail off the bar we just marked to.
         a = atr[i + 1] if i + 1 < len(atr) else None
-        if units != 0 and a:
-            if units > 0:
+        if level != 0 and a:
+            if level > 0:
                 candidate = close_next - mult * float(a)
                 trail = candidate if trail is None else max(trail, candidate)
             else:
                 candidate = close_next + mult * float(a)
                 trail = candidate if trail is None else min(trail, candidate)
 
-        bar_returns.append(float(raw))
-        equity.append(equity[-1] * (1.0 + raw))
+        # 6. Mark to the close, in dollars.
+        eq_now = _equity_at(close_next)
+        if eq_now > 0:
+            gross = abs(qty) * close_next / eq_now
+            gross_frac_sum += gross
+            max_gross = max(max_gross, gross)
+        elif not busted:
+            # The account is gone. A real broker would have liquidated before
+            # this; a gap can still carry it through zero. Stop trading.
+            busted = True
+        bar_returns.append(
+            float(eq_now / prev_equity - 1.0) if prev_equity > 0 else 0.0
+        )
+        prev_equity = eq_now
+        equity.append(eq_now / capital)
 
     # Force-close anything still open at the last bar, so an open winner is
-    # not silently counted as realised.
-    if units != 0:
+    # not silently counted as realised. Priced at the close, no fee: it is a
+    # mark, not a trade anyone placed.
+    if level != 0:
         last = float(records[-1].close)
-        side_sign = 1.0 if units > 0 else -1.0
-        slice_pnl = ((last - entry_price) / entry_price) * side_sign
-        pnl = (
-            realized
-            + slice_pnl * abs(units) * unit_fraction
-            - 2 * cost * peak_units * unit_fraction
-        )
-        trades.append(
-            {
-                "side": "long" if units > 0 else "short",
-                "entry_index": entry_index,
-                "entry_ts": records[entry_index].timestamp.isoformat(),
-                "entry_price": entry_price,
-                "exit_index": n - 1,
-                "exit_ts": records[-1].timestamp.isoformat(),
-                "exit_price": last,
-                "exit_reason": "end_of_data",
-                "bars": n - 1 - entry_index,
-                "pnl_pct": float(100.0 * pnl),
-                "peak_units": int(peak_units),
-            }
-        )
+        _close_trade(n - 1, last, "end_of_data")
 
     metrics = _metrics(
         records[warmup:],
@@ -461,22 +655,49 @@ def run_backtest(
         capital=capital,
     )
     metrics["warmup_bars"] = warmup
-    # What the returns above MEAN, in capital terms.
-    metrics["max_units"] = max_units
-    metrics["unit_fraction"] = unit_fraction
-    metrics["capital_model"] = (
-        "fractional" if unit_fraction * max_units <= 1.0 + 1e-9 else "pyramiding"
-    )
     scored_bars = max(1, len(records[warmup:]) - 1)
-    # Average share of capital actually invested. Buy-and-hold is 100%, so a
+    # What the returns above MEAN, in capital terms.
+    metrics["sizing"] = {
+        "position_size": sz.position_size,
+        "entry_slice": sz.entry_slice,
+        "exit_slice": sz.exit_slice,
+        "scale_out": sz.scale_out,
+        "fractional": sz.fractional,
+        "take_profit": list(sz.take_profit),
+        "margin_pct": sz.margin_pct,
+        "margin_pct_asked": sz.margin_pct_asked,
+        "legacy_units": sz.legacy_units,
+    }
+    metrics["venue"] = {
+        "name": venue.name,
+        "max_borrow_pct": 100.0
+        * min(MAX_BORROW, max(0.0, 1.0 - 1.0 / max(1.0, venue.max_leverage))),
+        "maintenance_pct": 100.0 * maint,
+        "note": venue.note,
+    }
+    metrics["capital_model"] = (
+        "cash" if sz.margin_pct <= 0 else f"margin {100 * sz.margin_pct:.0f}% borrowed"
+    )
+    metrics["margin_capped"] = sz.margin_pct < sz.margin_pct_asked - 1e-9
+    metrics["fees_dollars"] = float(fees)
+    metrics["interest_dollars"] = float(interest_paid)
+    metrics["margin_calls"] = int(margin_calls)
+    metrics["orders"] = len(orders)
+    metrics["max_gross_exposure_pct"] = float(100.0 * max_gross)
+    # Average share of EQUITY actually invested. Buy-and-hold is 100%, so a
     # return that trails it while this reads 30% is not the same failure as one
     # that trails it while fully invested.
-    metrics["avg_exposure_pct"] = float(100.0 * unit_bars * unit_fraction / scored_bars)
+    metrics["avg_exposure_pct"] = float(100.0 * gross_frac_sum / scored_bars)
     metrics["avg_units_when_in"] = (
-        float(unit_bars / bars_in_market) if bars_in_market else 0.0
+        float(level_bars / bars_in_market) if bars_in_market else 0.0
     )
     return BacktestResult(
-        trades=trades, equity=equity, returns=bar_returns, metrics=metrics, config=cfg
+        trades=trades,
+        equity=equity,
+        returns=bar_returns,
+        metrics=metrics,
+        config=cfg,
+        orders=orders,
     )
 
 
@@ -527,12 +748,9 @@ def _metrics(
         "total_return_pct": float(total_return),
         "buy_hold_pct": float(buy_hold),
         "excess_vs_bh_pct": float(total_return - buy_hold),
-        # Dollars, so a tuning pass can be read at a glance instead of in
-        # percentage points. This is the percent SCALED by `capital` -- one
-        # fully-invested unit compounded, not a position-sizing model: there is
-        # no share count, no partial fill and no margin here. `capital` is
-        # published alongside so the figure can never be read as an account
-        # balance that came from somewhere.
+        # Dollars off the ledger's own starting pool: `run_backtest` sizes
+        # every order from `capital` and the equity it compounds into, so
+        # these are the balance the simulated account actually ended on.
         "capital": float(capital),
         "pnl_dollars": float(capital * total_return / 100.0),
         "buy_hold_dollars": float(capital * buy_hold / 100.0),
