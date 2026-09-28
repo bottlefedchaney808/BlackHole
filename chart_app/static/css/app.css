@@ -366,13 +366,31 @@ html, body {
   margin-top: 6px;
   padding-top: 5px;
   border-top: 1px solid var(--border);
-  max-height: 150px;
+  max-height: 190px;
   overflow-y: auto;
-  font: 10.5px/1.45 ui-monospace, Consolas, monospace;
+  overflow-x: hidden;
+  padding-right: 4px;
+  font: 10px/1.45 ui-monospace, Consolas, monospace;
   color: var(--dim);
 }
-#testerOrders .o { display: grid; grid-template-columns: 78px 44px 1fr 62px; gap: 6px; }
+/* time | action | qty @ price | $ | shares held | account after */
+#testerOrders .o { display: grid; grid-template-columns: 62px 34px 1fr 42px 38px 78px; gap: 4px; white-space: nowrap; }
+#testerOrders .o span:nth-child(n+4) { text-align: right; }
+#testerOrders .o.head { color: var(--dim); position: sticky; top: 0; z-index: 1; background: var(--bg); }
+#testerOrders .o span:last-child { color: var(--text); }
 #testerOrders .o b { font-weight: 600; }
+
+/* The running portfolio: equity curve over buy-and-hold, and the ending account. */
+#testerEquity { margin-top: 6px; }
+#testerEquity svg { width: 100%; height: 70px; display: block; }
+#testerEquity path { fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+#testerEquity path.up { stroke: var(--long); }
+#testerEquity path.dn { stroke: var(--down); }
+#testerEquity line { stroke-width: 1; vector-effect: non-scaling-stroke; }
+#testerEquity line.base { stroke: var(--border); }
+#testerEquity line.bh { stroke: var(--dim); stroke-dasharray: 3 3; }
+#testerEquity .end { font: 10.5px/1.4 ui-monospace, Consolas, monospace; color: var(--text); margin-top: 2px; }
+#testerEquity .end i { color: var(--dim); font-style: normal; }
 #testerOrders .buy { color: var(--long); }
 #testerOrders .sell { color: var(--down); }
 

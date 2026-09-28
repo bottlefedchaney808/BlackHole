@@ -340,8 +340,10 @@ window.CTest = (function () {
         ? Math.round(q).toLocaleString()
         : q.toPrecision(4);
     };
-    const tail = orders.slice(-60);
+    const tail = orders.slice(-200);
     el.innerHTML =
+      '<div class="o head"><span>time</span><span></span><span>order</span>' +
+      "<span>$</span><span>held</span><span>account</span></div>" +
       (orders.length > tail.length
         ? '<div class="o"><i>' + (orders.length - tail.length) + " earlier orders</i></div>"
         : "") +
@@ -349,7 +351,9 @@ window.CTest = (function () {
         .map(function (o) {
           const cls = o.side === "buy" ? "buy" : "sell";
           return (
-            '<div class="o"><span>' + String(o.ts).slice(0, 16).replace("T", " ") + "</span>" +
+            // MM-DD HH:MM -- the year is in the window line; a wrapped
+            // two-line timestamp made every row twice as tall.
+            '<div class="o"><span>' + String(o.ts).slice(5, 16).replace("T", " ") + "</span>" +
             '<b class="' + cls + '">' + o.action.toUpperCase() + "</b>" +
             "<span>" + qtyFmt(o.qty) + " @ " + o.price.toFixed(o.price < 10 ? 4 : 2) +
             (o.borrowed > 0 ? "  (loan $" + compact(o.borrowed) + ")" : "") +
@@ -357,11 +361,62 @@ window.CTest = (function () {
               ? "  " + o.reason
               : "") +
             "</span>" +
-            "<span>$" + compact(o.notional) + "</span></div>"
+            "<span>$" + compact(o.notional) + "</span>" +
+            // Running portfolio: shares still held, and the whole account
+            // (cash + position - loan) right after this fill.
+            "<span>" + qtyFmt(Math.abs(o.position_qty || 0)) + "</span>" +
+            // To the dollar: "$1.0M" on every row hid the very movement a
+            // running total is for.
+            "<span>$" + Math.round(o.equity_after == null ? 0 : o.equity_after).toLocaleString() +
+            "</span></div>"
           );
         })
         .join("");
     el.scrollTop = el.scrollHeight;
+  }
+
+  /* The running portfolio: the account's value bar by bar as an equity curve,
+     buy-and-hold on the same dollars behind it for comparison, and where the
+     account ended -- cash, shares, what they are worth, what is borrowed. */
+  function paintEquity(out) {
+    const el = document.getElementById("testerEquity");
+    if (!el) return;
+    const m = out && out.metrics;
+    const eq = out && out.equity;
+    if (!m || !eq || eq.length < 2) {
+      el.innerHTML = "";
+      return;
+    }
+    const cap = m.capital || 1;
+    const W = 320, H = 70;
+    // Thin the curve to the panel's pixel width; a 35k-bar path buys nothing.
+    const step = Math.max(1, Math.floor(eq.length / W));
+    const pts = [];
+    for (let i = 0; i < eq.length; i += step) pts.push(eq[i]);
+    pts.push(eq[eq.length - 1]);
+    const bhEnd = 1 + (m.buy_hold_pct || 0) / 100;
+    const lo = Math.min.apply(null, pts.concat([1, bhEnd]));
+    const hi = Math.max.apply(null, pts.concat([1, bhEnd]));
+    const y = function (v) { return H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8); };
+    const x = function (i, n) { return (i / (n - 1)) * W; };
+    const path = pts.map(function (v, i) {
+      return (i ? "L" : "M") + x(i, pts.length).toFixed(1) + " " + y(v).toFixed(1);
+    }).join(" ");
+    const end = m.ending || {};
+    const up = eq[eq.length - 1] >= 1;
+    el.innerHTML =
+      '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none">' +
+      '<line x1="0" x2="' + W + '" y1="' + y(1) + '" y2="' + y(1) + '" class="base"/>' +
+      '<line x1="0" x2="' + W + '" y1="' + y(1) + '" y2="' + y(bhEnd) + '" class="bh"/>' +
+      '<path d="' + path + '" class="' + (up ? "up" : "dn") + '"/>' +
+      "</svg>" +
+      '<div class="end">account $' +
+      Math.round(end.equity == null ? cap * eq[eq.length - 1] : end.equity).toLocaleString() +
+      "  =  cash $" + compact(end.cash || 0) +
+      (end.shares ? "  +  " + Math.round(Math.abs(end.shares)).toLocaleString() + " sh $" +
+        compact(Math.abs(end.position_value || 0)) : "") +
+      (end.loan ? "  −  loan $" + compact(end.loan) : "") +
+      '  <i>(dashed: buy &amp; hold)</i></div>';
   }
 
   function stat(label, value, cls) {
@@ -388,6 +443,7 @@ window.CTest = (function () {
       } else {
         paintStats(out.metrics, null, out.window);
         paintOrders(out.orders);
+        paintEquity(out);
         boundDates(out.cache_span);
         lastResult = out;
       }
@@ -635,6 +691,7 @@ window.CTest = (function () {
       "</div>" +
       '<div id="testerKnobs">' + parts.join("") + "</div>" +
       '<div id="testerStats">move a knob to score the loaded bars</div>' +
+      '<div id="testerEquity"></div>' +
       '<div id="testerOrders"></div>';
 
     KNOBS.forEach(function (k) {
@@ -657,6 +714,8 @@ window.CTest = (function () {
       .addEventListener("click", function () { saveProfile("timeframe"); });
     document.getElementById("profClear")
       .addEventListener("click", clearProfile);
+    // Take profit re-scores as you type (debounced), not only on leaving the box.
+    document.getElementById("t_take_profit").addEventListener("input", schedule);
     ["t_capital", "t_start", "t_end", "t_exit_style", "t_take_profit"].forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", schedule);

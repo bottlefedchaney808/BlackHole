@@ -342,6 +342,12 @@ def run_backtest(
                 "borrowed": float(borrowed),
                 "reason": reason,
                 "position_qty": float(qty),
+                # The account right after this fill, marked at the fill price:
+                # the running portfolio the order list shows.
+                "cash_after": float(cash),
+                "loan_after": float(loan),
+                "position_value": float(qty * price),
+                "equity_after": float(cash + qty * price - loan),
                 "level": float(level),
             }
         )
@@ -683,6 +689,16 @@ def run_backtest(
     metrics["interest_dollars"] = float(interest_paid)
     metrics["margin_calls"] = int(margin_calls)
     metrics["orders"] = len(orders)
+    # Where the account ended, marked at the last close: what the pool turned
+    # into, split into the parts a brokerage statement would show.
+    last_px = float(records[-1].close)
+    metrics["ending"] = {
+        "cash": float(cash),
+        "shares": float(qty),
+        "position_value": float(qty * last_px),
+        "loan": float(loan),
+        "equity": float(cash + qty * last_px - loan),
+    }
     metrics["max_gross_exposure_pct"] = float(100.0 * max_gross)
     # Average share of EQUITY actually invested. Buy-and-hold is 100%, so a
     # return that trails it while this reads 30% is not the same failure as one
