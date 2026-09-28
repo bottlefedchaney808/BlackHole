@@ -145,9 +145,8 @@ class ScannerProcess:
 
         cmd = [python_exe, str(MAIN_PY),
                "--skip-sector-prompt", "--skip-report-prompt"]
-        # Pass ticker as first CLI arg if given.
         if self.ticker:
-            cmd.append(self.ticker)
+            cmd.extend(["--universe", self.ticker])
 
         # Use a process group so we can kill the whole tree (main.py spawns
         # subprocess children for Vol_Suite, sector rotation, etc.).
